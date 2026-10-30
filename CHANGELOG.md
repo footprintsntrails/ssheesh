@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.4 — drop files anywhere
+
+- **Drop files on a server's terminal to upload them.** SSHeesh asks where to put them, starting with the folder that terminal is in, and you can change it before uploading.
+- **Drop files on a file manager** and they go straight into the folder it has open, on a server or on this computer.
+- Dropping files on this computer's terminal types their paths, like any terminal app.
+- While you drag, the pane under your files lights up and says what will happen.
+- The **Root** place is now called **Disk**, so it doesn't read like the root user's folder. Home's tooltip shows its real path (`/root` when you sign in as root).
+- ssh's notes about its shared connection ("Shared connection to … closed.") no longer show up in terminals or error messages.
+
 ## 0.3.3 — set it up your way
 
 ### A guided setup

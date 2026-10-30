@@ -314,7 +314,12 @@ fn read_loop(mut reader: Box<dyn Read + Send>, sink: EventSink) -> (String, bool
                         let cut = (cut..tail.len()).find(|&i| tail.is_char_boundary(i)).unwrap_or(tail.len());
                         tail.drain(..cut);
                     }
-                    sink(SessionEvent::Output { data: clean });
+                    // tail keeps ssh's notes for working out why a session ended;
+                    // the screen doesn't need them.
+                    let shown = crate::text::strip_ssh_mux_noise(&clean).into_owned();
+                    if !shown.is_empty() {
+                        sink(SessionEvent::Output { data: shown });
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,

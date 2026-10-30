@@ -252,12 +252,12 @@ function metricsFor(t: TargetRef): Metrics {
 
 export const mockBackend: Backend = {
   isDemo: true,
-  appVersion: async () => "0.3.3",
+  appVersion: async () => "0.3.4",
   localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
     return {
-      version: "0.3.4",
+      version: "0.3.5",
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
       date: new Date().toISOString(),
     };
@@ -490,8 +490,13 @@ export const mockBackend: Backend = {
   async pickFiles() {
     return [];
   },
-  onFileDrop() {
-    return () => {};
+  onFileDrop(handler) {
+    // The browser demo has no desktop drag and drop; tests and recordings
+    // play one through this hook instead.
+    (window as unknown as { __ssheeshDrop?: typeof handler }).__ssheeshDrop = handler;
+    return () => {
+      delete (window as unknown as { __ssheeshDrop?: typeof handler }).__ssheeshDrop;
+    };
   },
 
   async listContainers(target) {

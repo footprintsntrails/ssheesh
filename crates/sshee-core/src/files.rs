@@ -272,6 +272,30 @@ pub fn rename(target: &Target, env: &SshEnv, from: &str, to: &str) -> Result<(),
     }
 }
 
+fn copy_here(from: &Path, dir: &Path, overwrite: bool) -> Result<(), OpError> {
+    let name = from.file_name().ok_or_else(|| OpError::failed("That path has no file name."))?;
+    let dest = dir.join(name);
+    if dest == from {
+        return Err(OpError::failed("That's already in this folder."));
+    }
+    if dest.exists() && !overwrite {
+        return Err(OpError::new(ErrorCode::Exists, format!("\"{}\" already exists in this folder.", name.to_string_lossy())));
+    }
+    fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
+        if from.is_dir() {
+            std::fs::create_dir_all(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                copy_all(&entry.path(), &to.join(entry.file_name()))?;
+            }
+            Ok(())
+        } else {
+            std::fs::copy(from, to).map(|_| ())
+        }
+    }
+    Ok(copy_all(from, &dest)?)
+}
+
 /// Packs `names` (all inside `dir`) into `dir/archive` as a .tar.gz.
 pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archive: &str) -> Result<(), OpError> {
     if names.is_empty() {
@@ -386,8 +410,12 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
 }
 
 /// Copies a local file or folder into `remote_dir`.
+/// Copies a file or folder from this computer into `dir` on the target: over
+/// ssh for a server, a plain copy for this computer's own file manager.
 pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str, overwrite: bool) -> Result<(), OpError> {
-    let t = ssh_only(target).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "Uploading works for servers."))?;
+    let Some(t) = ssh_only(target) else {
+        return copy_here(local_path, &resolve_local(remote_dir), overwrite);
+    };
     let name = local_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -486,6 +514,22 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copies_into_a_folder_on_this_computer() {
+        let base = std::env::temp_dir().join(format!("sshee-copy-{}", std::process::id()));
+        let (src, dst) = (base.join("src"), base.join("dst"));
+        std::fs::create_dir_all(src.join("site")).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("site/index.html"), "hi").unwrap();
+        let env = SshEnv::default();
+        let d = dst.display().to_string();
+        upload(&Target::Local, &env, &src.join("site"), &d, false).unwrap();
+        assert_eq!(std::fs::read_to_string(dst.join("site/index.html")).unwrap(), "hi");
+        let again = upload(&Target::Local, &env, &src.join("site"), &d, false);
+        assert_eq!(again.unwrap_err().code, ErrorCode::Exists);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn archives_files_on_this_computer() {

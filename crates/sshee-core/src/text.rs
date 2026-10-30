@@ -129,11 +129,29 @@ pub fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// ssh's own notes about the shared (multiplexed) connection: "Shared
+/// connection to x closed.", "mux_client_…", "ControlSocket … disabling
+/// multiplexing". They're about ssh's plumbing, not the server.
+pub fn is_ssh_mux_noise(line: &str) -> bool {
+    let t = line.trim_matches(|c: char| c.is_whitespace() || c.is_control());
+    (t.starts_with("Shared connection to ") && t.ends_with("closed."))
+        || t.starts_with("mux_client_")
+        || (t.starts_with("ControlSocket ") && t.contains("multiplexing"))
+}
+
+/// Terminal output without ssh's shared-connection notes.
+pub fn strip_ssh_mux_noise(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("Shared connection") && !text.contains("mux_client") && !text.contains("ControlSocket") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(text.split_inclusive('\n').filter(|l| !is_ssh_mux_noise(l)).collect())
+}
+
 pub fn last_meaningful_line(s: &str) -> String {
     strip_ansi(s)
         .lines()
         .map(|l| l.trim_matches(|c: char| c.is_whitespace() || c.is_control()))
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && !is_ssh_mux_noise(l))
         .last()
         .unwrap_or("")
         .chars()
@@ -144,6 +162,16 @@ pub fn last_meaningful_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hides_shared_connection_notes() {
+        let out = "bye\r\nShared connection to 203.0.113.10 closed.\r\n";
+        assert_eq!(strip_ssh_mux_noise(out), "bye\r\n");
+        let busy = "mux_client_request_session: session request failed: Session open refused by peer\r\nControlSocket /x/cm/ab already exists, disabling multiplexing\r\nWelcome\r\n";
+        assert_eq!(strip_ssh_mux_noise(busy), "Welcome\r\n");
+        assert_eq!(strip_ssh_mux_noise("plain output"), "plain output");
+        assert_eq!(last_meaningful_line("Permission denied\nShared connection to x closed.\n"), "Permission denied");
+    }
 
     #[test]
     fn utf8_split_across_chunks() {

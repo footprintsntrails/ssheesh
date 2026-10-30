@@ -1,4 +1,4 @@
-import { ChevronDown, CircleAlert, History, RotateCw, ShieldAlert, ShieldQuestion, Wifi, X } from "lucide-react";
+import { ChevronDown, CircleAlert, FileUp, History, RotateCw, ShieldAlert, ShieldQuestion, Wifi, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/format";
 import { useStore, type PaneState, type Recap } from "../lib/store";
@@ -214,6 +214,7 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
   const backOnline = useBackOnline(state);
   const recap = useStore((s) => s.recaps[pane.id]);
   const hostKey = useStore((s) => s.hostKeyPrompts[pane.id]);
+  const dropping = useStore((s) => s.dropPane === pane.id);
   const names = useNames();
   const setRecap = useStore((s) => s.setRecap);
   const [recapOpen, setRecapOpen] = useState(false);
@@ -321,6 +322,18 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
             <span className="text-fg-3">
               {backOnline.kind === "connected" && backOnline.durable ? "everything's where you left it" : "started a new shell"}
             </span>
+          </div>
+        </div>
+      )}
+
+      {dropping && (
+        <div className="pointer-events-none absolute inset-1.5 z-20 flex items-center justify-center rounded-[10px] border-2 border-dashed border-accent/60 bg-accent/[0.07]">
+          <div className="glass rounded-xl px-4 py-3 text-center">
+            <FileUp size={18} className="mx-auto text-accent" />
+            <p className="mt-1.5 text-[13px] font-medium text-fg">
+              {pane.target?.kind === "host" ? `Drop to upload to ${names.target(pane.target)}` : "Drop to type the paths"}
+            </p>
+            {pane.target?.kind === "host" && <p className="mt-0.5 text-[11px] text-fg-3">You'll pick the folder next</p>}
           </div>
         </div>
       )}

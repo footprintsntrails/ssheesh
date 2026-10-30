@@ -3,6 +3,9 @@ import { AddHostDialog } from "./components/AddServerDialog";
 import { ConfigImportDialog } from "./components/ConfigImport";
 import { Welcome } from "./components/Welcome";
 import { WhatsNew } from "./components/WhatsNew";
+import { UploadDialog, useUploadAsk } from "./components/UploadDialog";
+import { findTerminal } from "./lib/terminals";
+import { shellQuote } from "./lib/format";
 import { EdgeReveal } from "./components/EdgeReveal";
 import { CommandPalette, ConfirmDialog, Toasts } from "./components/Overlays";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -80,15 +83,24 @@ function useFileDrop() {
       backend.onFileDrop((e) => {
         const s = useStore.getState();
         if (e.type === "leave") return s.setDropPane(null);
-        const el = document.elementFromPoint(e.x, e.y)?.closest<HTMLElement>('[data-pane-kind="files"]');
-        const paneId = el?.dataset.paneId ?? null;
-        const remote = paneId ? s.panes[paneId]?.target?.kind === "host" : false;
-        if (e.type === "over") return s.setDropPane(remote ? paneId : null);
+        // Files land in a file manager's open folder, or, on a server's
+        // terminal, wherever you confirm (it starts at the terminal's folder).
+        const el = document.elementFromPoint(e.x, e.y)?.closest<HTMLElement>("[data-pane-id]");
+        const pane = el?.dataset.paneId ? s.panes[el.dataset.paneId] : undefined;
+        const takes = !!pane?.target && (pane.kind === "files" || pane.kind === "terminal");
+        if (e.type === "over") return s.setDropPane(takes && pane ? pane.id : null);
         s.setDropPane(null);
-        if (paneId && remote && e.paths.length) {
-          window.dispatchEvent(new CustomEvent("sshee:drop", { detail: { paneId, paths: e.paths } }));
-        } else if (e.paths.length) {
-          s.toast({ tone: "info", title: "Drop files onto a server's Files pane to upload them" });
+        if (!e.paths.length) return;
+        if (pane?.kind === "files" && pane.target) {
+          window.dispatchEvent(new CustomEvent("sshee:drop", { detail: { paneId: pane.id, paths: e.paths } }));
+        } else if (pane?.kind === "terminal" && pane.target?.kind === "host") {
+          useUploadAsk.getState().ask({ target: pane.target, paths: e.paths, sessionKey: pane.sessionKey });
+        } else if (pane?.kind === "terminal") {
+          // This computer's terminal: type the paths, like any terminal app does.
+          backend.writeSession(pane.id, `${e.paths.map(shellQuote).join(" ")} `);
+          findTerminal(pane.id)?.focus();
+        } else {
+          s.toast({ tone: "info", title: "Drop files on a terminal or a file manager", body: "On a server they're uploaded; you pick the folder." });
         }
       }),
     [],
@@ -140,6 +152,7 @@ export function App() {
       <ConfigImportDialog />
       <Welcome />
       <WhatsNew />
+      <UploadDialog />
       <ConfirmDialog />
       <Toasts />
     </div>

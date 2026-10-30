@@ -11,6 +11,7 @@ import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
 import { Button, IconButton, ResizeHandle, Spinner } from "./ui";
 import { useNames } from "../lib/privacy";
 import { findTerminal } from "../lib/terminals";
+import { filesLabel, uploadTo } from "../lib/upload";
 
 type SortKey = "name" | "size" | "modified";
 
@@ -202,7 +203,32 @@ const NARROW_WIDTH = 64;
 /** Dragging the wide column narrower than this folds it into the narrow one. */
 const FOLD_AT = 118;
 
+/** Each machine's home folder, looked up once, for the Home place. */
+const homes = new Map<string, string>();
+function useHomeFolder(target: TargetRef): string | null {
+  const key = targetKey(target);
+  const [home, setHome] = useState(homes.get(key) ?? null);
+  useEffect(() => {
+    if (homes.has(key)) return;
+    let live = true;
+    backend
+      .listDir(target, "~")
+      .then((l) => {
+        homes.set(key, l.path);
+        if (live) setHome(l.path);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // target is identified by its key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return home;
+}
+
 function Places({
+  target,
   remote,
   dir,
   pins,
@@ -212,6 +238,7 @@ function Places({
   onForgetRecent,
   compact,
 }: {
+  target: TargetRef;
   remote: boolean;
   dir: string;
   pins: string[];
@@ -260,6 +287,7 @@ function Places({
   }, [dragWidth]);
 
   const hidden = useSettings((st) => st.hiddenPlaces);
+  const home = useHomeFolder(target);
   const shown = (id: string) => !hidden.includes(id);
   const column = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -319,8 +347,9 @@ function Places({
   );
 
   const places: { id: string; label: string; icon: typeof File; path: string; title: string }[] = [
-    { id: "home", label: "Home", icon: House, path: "~", title: "Your home folder" },
-    { id: "root", label: "Root", icon: HardDrive, path: "/", title: "/" },
+    { id: "home", label: "Home", icon: House, path: home ?? "~", title: home ? `Your home folder: ${home}` : "Your home folder" },
+    // "Root" would read like the root user's folder; this is the top of the disk.
+    { id: "root", label: "Disk", icon: HardDrive, path: "/", title: "/ — the top of the whole disk" },
     ...(remote ? LINUX_PLACES.map((p) => ({ id: p.path, label: p.label, icon: PLACE_ICONS[p.path] ?? Folder, path: p.path, title: p.path })) : []),
   ];
   const visiblePlaces = places.filter((p) => shown(p.id));
@@ -369,7 +398,7 @@ function Places({
       <div className={cn("min-h-0 flex-1 overflow-y-auto pb-2", narrow ? "flex flex-col gap-0.5 px-1.5 pt-1.5" : "px-1.5")}>
         {!narrow && visiblePlaces.length > 0 && <div className={heading}>Places</div>}
         {visiblePlaces.map((p) =>
-          entry(`place:${p.id}`, { icon: p.icon, label: p.label, title: p.title, active: p.path !== "~" && dir === p.path, onClick: () => onGo(p.path) }),
+          entry(`place:${p.id}`, { icon: p.icon, label: p.label, title: names.text(p.title), active: p.path !== "~" && dir === p.path, onClick: () => onGo(p.path) }),
         )}
 
         <div className={heading}>{!narrow && "Bookmarks"}</div>
@@ -565,25 +594,9 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   };
 
   const upload = async (paths: string[]) => {
-    if (!remote || paths.length === 0) return;
-    const label = paths.length === 1 ? paths[0].split(/[\\/]/).pop() : `${paths.length} items`;
-    setBusy(`Uploading ${label}…`);
-    try {
-      await backend.uploadPaths(target, paths, dir, false);
-      toast({ tone: "success", title: `Uploaded ${label}`, body: dir });
-    } catch (e) {
-      const err = toOpError(e);
-      if (err.code === "exists" && (await confirm({ title: "Replace existing files?", body: err.message, confirmLabel: "Replace" }))) {
-        try {
-          await backend.uploadPaths(target, paths, dir, true);
-          toast({ tone: "success", title: `Uploaded ${label}`, body: dir });
-        } catch (e2) {
-          fail("Upload failed", e2);
-        }
-      } else if (err.code !== "exists") {
-        fail("Upload failed", err);
-      }
-    }
+    if (paths.length === 0) return;
+    setBusy(`${remote ? "Uploading" : "Copying"} ${filesLabel(paths)}…`);
+    await uploadTo(target, dir, paths);
     setBusy(null);
     refresh();
   };
@@ -892,6 +905,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       <div className="flex min-h-0 flex-1">
         {placesMode !== "hidden" && (
           <Places
+            target={target}
             compact={!!preview}
             remote={remote}
             dir={dir}
@@ -1058,7 +1072,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             <div className="pointer-events-none absolute inset-1.5 z-20 flex items-center justify-center rounded-[10px] border-2 border-dashed border-accent/60 bg-accent/[0.07]">
               <div className="glass rounded-xl px-4 py-3 text-center">
                 <Upload size={18} className="mx-auto text-accent" />
-                <p className="mt-1.5 text-[13px] font-medium text-fg">Drop to upload</p>
+                <p className="mt-1.5 text-[13px] font-medium text-fg">{remote ? "Drop to upload here" : "Drop to copy here"}</p>
                 <p className="mt-0.5 max-w-[260px] truncate font-mono text-[11px] text-fg-3">{dir}</p>
               </div>
             </div>
