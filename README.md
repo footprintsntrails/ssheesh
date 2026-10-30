@@ -22,18 +22,24 @@ SSHeesh is a terminal for your servers that you make your own. Choose how it loo
 
 SSHeesh is made for people who'd rather not become Linux admins to look after a VPS or a homelab.
 
-- **A short welcome.** Pick a look, choose which servers to bring along, and learn the three things worth knowing. Or skip it.
+- **A guided setup.** The welcome walks you through colors, the terminal, the layout and how SSHeesh behaves, with a live preview of every choice. Or skip it.
 - **Paste and go.** Paste `root@1.2.3.4` or a whole `ssh -p 2222 -i key user@host` command, and every field fills in. Already have servers in `~/.ssh/config`? SSHeesh asks which ones you want.
 - **Test before you add.** One click checks that the server answers, signs in, and has `tmux` for sessions that survive a dropped connection. If it doesn't, you get the command to install it.
 - **Errors in plain words.** Instead of `Permission denied (publickey)` you read "The server didn't accept your login. Check the user name and key."
 - **No commands to memorize.** Click a container to get a shell inside it. Click Logs or Config in the file manager. Right-click anything to see what you can do with it.
 - **Good defaults, easy undo.** It looks and works fine untouched. When you do tweak things, Settings has a search box and every section has a Reset.
 
+<p align="center"><img src="docs/media/welcome.gif" alt="The first-launch welcome: picking a theme, a terminal color scheme and a layout, with a live preview of the app"></p>
+
 ## Make it yours
 
 Four app themes, or let the theme follow your system's light and dark mode. Accent colors, nine terminal color schemes, fonts, cursor, spacing, interface size. Give every server its own icon and color. Fold the sidebar into a rail of icons, or switch on compact mode and let everything but your panes slide away until you point at the window's edge.
 
 <p align="center"><img src="docs/media/customize.gif" alt="Switching app themes, accent colors and terminal color schemes live, then finding a setting by search"></p>
+
+Compact mode keeps just your panes on screen. Point at the window's edge and the server list or the toolbar slides in; move away and it's gone again.
+
+<p align="center"><img src="docs/media/compact.gif" alt="Compact mode: the sidebar slides in from the left edge and the toolbar from the top"></p>
 
 Split panes any way you like and drag them around by their title bar. Fill the window with one pane, and fade the ones you're not using.
 

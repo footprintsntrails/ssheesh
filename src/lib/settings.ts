@@ -27,6 +27,8 @@ export interface Settings {
   compactMode: boolean;
   /** The first-launch hello has been seen (or skipped). */
   onboarded: boolean;
+  /** The version whose "What's new" you've seen, to show notes after an update. */
+  lastSeenVersion: string;
   accent: string;
   terminalScheme: string;
   terminalFont: string;
@@ -75,6 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   logo: "winking",
   compactMode: false,
   onboarded: false,
+  lastSeenVersion: "",
   accent: ACCENTS[0].value,
   terminalScheme: "auto",
   terminalFont: "system",

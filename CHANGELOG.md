@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3 — set it up your way
+
+### A guided setup
+- **The welcome walks you through making SSHeesh yours.** Colors and accent; the terminal's color scheme, font, text size and cursor; the layout (server list as names or icons, which side the sidebar sits on, the bookmarks column, vitals, compact mode); and how it behaves (reconnecting, "Needs you" alerts, highlighting, the logo). A live preview of the app shows every choice as you make it. Skip any step, or the whole thing.
+
+### What's new, right in the app
+- **After an update, SSHeesh shows what changed**, including every version you skipped. See it again any time in Settings → About, or search for "What's new".
+
 ## 0.3.2 — friendlier and tidier
 
 ### A proper hello

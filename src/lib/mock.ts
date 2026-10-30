@@ -252,12 +252,12 @@ function metricsFor(t: TargetRef): Metrics {
 
 export const mockBackend: Backend = {
   isDemo: true,
-  appVersion: async () => "0.3.2",
+  appVersion: async () => "0.3.3",
   localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
     return {
-      version: "0.3.3",
+      version: "0.3.4",
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
       date: new Date().toISOString(),
     };

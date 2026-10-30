@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { AddHostDialog } from "./components/AddServerDialog";
 import { ConfigImportDialog } from "./components/ConfigImport";
 import { Welcome } from "./components/Welcome";
+import { WhatsNew } from "./components/WhatsNew";
 import { EdgeReveal } from "./components/EdgeReveal";
 import { CommandPalette, ConfirmDialog, Toasts } from "./components/Overlays";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -138,6 +139,7 @@ export function App() {
       <AddHostDialog />
       <ConfigImportDialog />
       <Welcome />
+      <WhatsNew />
       <ConfirmDialog />
       <Toasts />
     </div>

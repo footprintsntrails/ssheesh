@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, SquareTerminal, Star, X } from "lucide-react";
+import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, Sparkles, SquareTerminal, Star, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
@@ -7,6 +7,7 @@ import { folderName, useBookmarks } from "../lib/bookmarks";
 import { useSettings } from "../lib/settings";
 import { useStore } from "../lib/store";
 import { toggleStreamer, useNames } from "../lib/privacy";
+import { showCurrentNotes } from "./WhatsNew";
 import { useUpdates } from "../lib/updates";
 import { targetKey, type TargetRef } from "../lib/types";
 import { Button, Kbd } from "./ui";
@@ -168,6 +169,7 @@ export function CommandPalette() {
             hint={shortcutLabel("streamer")}
             onSelect={run(toggleStreamer)}
           />
+          <Item icon={Sparkles} value="what's new changelog release notes" label="What's new in SSHeesh" onSelect={run(showCurrentNotes)} />
           <Item
             icon={RefreshCw}
             label="Check for updates"

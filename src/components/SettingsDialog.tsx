@@ -15,6 +15,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Sparkles,
   Rows3,
   Server,
   ShieldCheck,
@@ -31,6 +32,7 @@ import { useStore } from "../lib/store";
 import { ACCENTS, APP_THEMES, resolveScheme, TERMINAL_FONTS, TERMINAL_SCHEMES, fontStack, type AppThemeId } from "../lib/themes";
 import { useUpdates } from "../lib/updates";
 import { useConfigImport } from "./ConfigImport";
+import { showCurrentNotes } from "./WhatsNew";
 import { compileRule, HIGHLIGHT_COLORS, type HighlightColor, type HighlightRule } from "../lib/highlight";
 import { Button, Logo, Spinner } from "./ui";
 
@@ -99,7 +101,7 @@ function Row({ label, hint, children, stack }: { label: string; hint?: string; c
   );
 }
 
-function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button
       role="switch"
@@ -121,7 +123,7 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
-function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
+export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
   return (
     <div className="flex h-8 items-center rounded-[9px] bg-ink/[0.05] p-[3px] ring-1 ring-inset ring-ink/[0.06]">
       {options.map((o) => (
@@ -140,7 +142,7 @@ function Segmented<T extends string>({ value, options, onChange }: { value: T; o
   );
 }
 
-function Slider({
+export function Slider({
   value,
   min,
   max,
@@ -311,7 +313,7 @@ function Appearance({ s, set, reset }: SectionProps) {
   );
 }
 
-function TerminalPreview({ s }: { s: Settings }) {
+export function TerminalPreview({ s }: { s: Settings }) {
   const t = resolveScheme(s.terminalScheme, s.theme, s.accent);
   return (
     <div
@@ -831,8 +833,11 @@ function About() {
         <Button size="sm" onClick={() => open(`${REPO}/issues/new/choose`)}>
           <ExternalLink size={12.5} /> Request a feature
         </Button>
+        <Button size="sm" onClick={showCurrentNotes}>
+          <Sparkles size={12.5} /> What's new
+        </Button>
         <Button size="sm" onClick={() => open(`${REPO}/releases`)}>
-          <ExternalLink size={12.5} /> Release notes
+          <ExternalLink size={12.5} /> All releases
         </Button>
       </div>
     </>
