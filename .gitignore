@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/
+*.log
+.DS_Store
+
+# Claude Code skills (installed locally, not part of the project)
+.claude/skills/
+
+# Agent sessions and local tool data never get published
+.claude/
+.entire/
+CLAUDE.local.md
+*.jsonl

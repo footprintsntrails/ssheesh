@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SSHeesh",
+  "version": "0.1.0",
+  "identifier": "io.github.footprintsntrails.ssheesh",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SSHeesh",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 880,
+        "minHeight": 540,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#0b0c0e"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Servers, terminals and files that don't fall over",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "publisher": "SSHeesh contributors",
+    "homepage": "https://github.com/footprintsntrails/ssheesh",
+    "copyright": "\u00a9 2026 footprintsntrails. CC BY-NC-SA 4.0",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIyMzlCOEJDMURBOUQ3NDQKUldSRTE2a2R2TGc1c3Z6V3NjSDk1QlVTM01qZ2tRdyswMStJUlVteE9FRzBtSjloQVlQWUZ0WUwK",
+      "endpoints": [
+        "https://github.com/footprintsntrails/ssheesh/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

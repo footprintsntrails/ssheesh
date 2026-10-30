@@ -1,0 +1,376 @@
+// Demo backend for running the UI in a plain browser (`npm run dev`).
+// Everything here is sample data: documentation IP ranges, made-up servers.
+
+import type { Backend } from "./backend";
+import type { Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
+
+const hosts: Host[] = [
+  { id: "cfg:prod-api", name: "prod-api", hostname: "203.0.113.24", user: "deploy", port: null, identityFile: null, source: "sshConfig" },
+  { id: "cfg:homelab", name: "homelab", hostname: "192.168.1.20", user: "root", port: null, identityFile: null, source: "sshConfig" },
+  { id: "cfg:pi", name: "pi", hostname: "raspberrypi.local", user: "pi", port: null, identityFile: null, source: "sshConfig" },
+  { id: "saved:db", name: "db-replica", hostname: "198.51.100.7", user: "postgres", port: 2222, identityFile: null, source: "saved" },
+];
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const now = Math.floor(Date.now() / 1000);
+
+function dir(name: string, ago: number, mode = "drwxr-xr-x"): FileEntry {
+  return { name, kind: "dir", isLink: false, size: 4096, modified: now - ago, mode };
+}
+function file(name: string, size: number, ago: number, mode = "-rw-r--r--"): FileEntry {
+  return { name, kind: "file", isLink: false, size, modified: now - ago, mode };
+}
+
+const tree: Record<string, FileEntry[]> = {
+  "/home/deploy": [
+    dir(".ssh", 86400 * 40, "drwx------"),
+    dir("app", 3600 * 2),
+    dir("backups", 86400 * 3),
+    dir("logs", 600),
+    file(".bashrc", 3771, 86400 * 90),
+    file(".profile", 807, 86400 * 90),
+    file("docker-compose.yml", 1843, 3600 * 5),
+    file("deploy.sh", 2210, 86400 * 2, "-rwxr-xr-x"),
+    file(".env", 612, 86400 * 6, "-rw-------"),
+  ],
+  "/var/www/app": [
+    dir("config", 86400 * 4),
+    dir("public", 3600 * 3),
+    dir("src", 1200),
+    dir("node_modules", 86400),
+    file(".env.production", 1024, 86400 * 6, "-rw-------"),
+    file("Dockerfile", 864, 86400 * 12),
+    file("README.md", 4210, 86400 * 30),
+    file("docker-compose.yml", 1843, 3600 * 5),
+    file("nginx.conf", 2311, 86400 * 8),
+    file("package.json", 1932, 86400 * 2),
+    file("release-2026-10-29.tar.gz", 48_211_332, 3600 * 20),
+    file("server.log", 7_340_032, 45),
+  ],
+};
+
+const textFiles: Record<string, string> = {
+  "docker-compose.yml": `services:
+  api:
+    image: ghcr.io/acme/api:2.14.0
+    restart: unless-stopped
+    env_file: .env.production
+    ports:
+      - "8080:8080"
+    depends_on: [db, cache]
+  db:
+    image: postgres:17
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  cache:
+    image: redis:8-alpine
+
+volumes:
+  pgdata:
+`,
+};
+
+function listing(path: string): DirListing {
+  const resolved = path === "~" || path === "" ? "/home/deploy" : path;
+  const entries = tree[resolved] ?? [dir("bin", 86400 * 200), dir("etc", 86400 * 2), dir("home", 86400 * 30), dir("var", 3600)];
+  return { path: resolved, entries };
+}
+
+// ---- fake terminal
+
+const C = {
+  dim: "\x1b[2m",
+  b: "\x1b[1m",
+  g: "\x1b[32m",
+  y: "\x1b[33m",
+  bl: "\x1b[34m",
+  c: "\x1b[36m",
+  r: "\x1b[0m",
+};
+
+function banner(name: string, user: string): string {
+  const prompt = `${C.g}${user}@${name}${C.r}:${C.bl}~${C.r}$ `;
+  return [
+    `${C.dim}Last login: Thu Oct 29 22:41:07 2026 from 198.51.100.3${C.r}`,
+    "",
+    `${prompt}docker compose ps`,
+    `${C.b}NAME          IMAGE                 STATUS               PORTS${C.r}`,
+    `app-api-1     acme/api:2.14.0       ${C.g}Up 3 days (healthy)${C.r}  8080/tcp`,
+    `app-db-1      postgres:17           ${C.g}Up 3 days${C.r}            5432/tcp`,
+    `app-cache-1   redis:8-alpine        ${C.g}Up 3 days${C.r}            6379/tcp`,
+    `${prompt}tail -n 4 logs/api.log`,
+    `${C.dim}2026-10-29T23:10:02Z${C.r} ${C.c}INFO${C.r}  GET /v1/orders 200 18ms`,
+    `${C.dim}2026-10-29T23:10:04Z${C.r} ${C.c}INFO${C.r}  POST /v1/checkout 201 64ms`,
+    `${C.dim}2026-10-29T23:10:05Z${C.r} ${C.y}WARN${C.r}  slow query: orders_by_customer (412ms)`,
+    `${C.dim}2026-10-29T23:10:09Z${C.r} ${C.c}INFO${C.r}  GET /healthz 200 1ms`,
+    prompt,
+  ].join("\r\n");
+}
+
+interface FakeSession {
+  emit: (e: SessionEvent) => void;
+  line: string;
+  prompt: string;
+  timers: number[];
+}
+
+const sessions = new Map<string, FakeSession>();
+
+function hostFor(t: TargetRef): { name: string; user: string } {
+  if (t.kind === "local") return { name: "macbook", user: "me" };
+  const h = hosts.find((x) => x.id === t.hostId);
+  return { name: h?.name ?? "server", user: h?.user ?? "root" };
+}
+
+let autoReconnect = true;
+
+function simulateDrop(s: FakeSession) {
+  s.emit({ type: "output", data: "\r\nConnection to 203.0.113.24 closed by remote host.\r\n" });
+  if (!autoReconnect) {
+    s.emit({ type: "status", state: { kind: "disconnected", reason: "The server stopped responding" } });
+    return;
+  }
+  s.emit({
+    type: "status",
+    state: { kind: "reconnecting", attempt: 1, retryInMs: 4000, reason: "The server stopped responding" },
+  });
+  s.timers.push(
+    window.setTimeout(() => {
+      s.emit({ type: "status", state: { kind: "connecting", attempt: 2 } });
+      s.emit({ type: "status", state: { kind: "connected", durable: true } });
+      s.emit({ type: "output", data: s.prompt });
+    }, 4000),
+  );
+}
+
+// ---- containers
+
+const containers: Record<string, Container[]> = {
+  "cfg:prod-api": [
+    { engine: "docker", id: "a1b2c3d4e5f6", name: "app-api-1", image: "ghcr.io/acme/api:2.14.0", running: true, state: "running", status: "Up 3 days (healthy)", ports: "0.0.0.0:8080->8080/tcp", project: "app" },
+    { engine: "docker", id: "b2c3d4e5f6a1", name: "app-db-1", image: "postgres:17", running: true, state: "running", status: "Up 3 days", ports: "5432/tcp", project: "app" },
+    { engine: "docker", id: "c3d4e5f6a1b2", name: "app-cache-1", image: "redis:8-alpine", running: true, state: "running", status: "Up 3 days", ports: "6379/tcp", project: "app" },
+    { engine: "docker", id: "d4e5f6a1b2c3", name: "nightly-backup", image: "restic/restic:0.18", running: false, state: "exited", status: "Exited (0) 6 hours ago", ports: "", project: null },
+  ],
+  "cfg:homelab": [
+    { engine: "docker", id: "e5f6a1b2c3d4", name: "jellyfin", image: "jellyfin/jellyfin", running: true, state: "running", status: "Up 12 days", ports: "8096/tcp", project: "media" },
+    { engine: "docker", id: "f6a1b2c3d4e5", name: "pihole", image: "pihole/pihole", running: true, state: "running", status: "Up 12 days (healthy)", ports: "53/udp", project: null },
+    { engine: "docker", id: "a1b2c3d4e5f7", name: "home-assistant", image: "homeassistant/home-assistant", running: true, state: "running", status: "Up 4 days", ports: "", project: null },
+  ],
+};
+
+// ---- metrics
+
+const counters = new Map<string, { cpuT: number; cpuI: number; rx: number; tx: number }>();
+
+function metricsFor(t: TargetRef): Metrics {
+  const key = t.kind === "local" ? "local" : t.hostId;
+  const c = counters.get(key) ?? { cpuT: 1e7, cpuI: 8e6, rx: 2.31e12, tx: 1.12e12 };
+  const busy = 0.18 + 0.14 * Math.sin(Date.now() / 9000) + Math.random() * 0.08;
+  c.cpuT += 1200;
+  c.cpuI += 1200 * (1 - busy);
+  c.rx += 1.4e6 + Math.random() * 2.6e6;
+  c.tx += 2.5e5 + Math.random() * 7e5;
+  counters.set(key, c);
+  const name = hostFor(t).name;
+  return {
+    atMs: Date.now(),
+    hostname: name,
+    kernel: "Linux 6.12.0-28-generic",
+    cores: 8,
+    uptimeSecs: 86400 * 37 + 3600 * 5,
+    load: [1.42 + Math.random() * 0.3, 1.18, 0.97],
+    cpuTotal: c.cpuT,
+    cpuIdle: c.cpuI,
+    memTotal: 32 * 2 ** 30,
+    memAvailable: 19.6 * 2 ** 30 + Math.random() * 2 ** 28,
+    swapTotal: 4 * 2 ** 30,
+    swapFree: 3.7 * 2 ** 30,
+    netRx: c.rx,
+    netTx: c.tx,
+    netIfaces: ["eth0"],
+    month: { month: "2026-10", rx: 412.6 * 2 ** 30, tx: 128.3 * 2 ** 30 },
+    disks: [
+      { mount: "/", size: 480 * 2 ** 30, used: 211 * 2 ** 30 },
+      { mount: "/var/lib/postgresql", size: 960 * 2 ** 30, used: 702 * 2 ** 30 },
+    ],
+  };
+}
+
+export const mockBackend: Backend = {
+  isDemo: true,
+  appVersion: async () => "0.1.0",
+  async checkUpdate() {
+    await wait(900);
+    return {
+      version: "0.1.1",
+      notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
+      date: new Date().toISOString(),
+    };
+  },
+  async installUpdate(onProgress) {
+    for (let i = 1; i <= 20; i++) {
+      await wait(90);
+      onProgress(i / 20);
+    }
+  },
+  async relaunch() {
+    location.reload();
+  },
+  async openExternal(url) {
+    window.open(url, "_blank");
+  },
+  listHosts: async () => hosts.slice(),
+  async addHost(input) {
+    const [userPart, hostPart] = input.address.includes("@") ? input.address.split("@") : [null, input.address];
+    const h: Host = {
+      id: `saved:${Date.now()}`,
+      name: input.name || hostPart,
+      hostname: hostPart,
+      user: userPart,
+      port: null,
+      identityFile: input.identityFile ?? null,
+      source: "saved",
+    };
+    hosts.push(h);
+    return h;
+  },
+  async removeHost(id) {
+    const i = hosts.findIndex((h) => h.id === id);
+    if (i >= 0) hosts.splice(i, 1);
+  },
+
+  async openSession(paneId, target, _key, _cols, _rows, container, onEvent) {
+    const { name, user } = hostFor(target);
+    const prompt = container
+      ? `${C.g}root@${container.id}${C.r}:${C.bl}/app${C.r}# `
+      : `${C.g}${user}@${name}${C.r}:${C.bl}~${C.r}$ `;
+    const s: FakeSession = { emit: onEvent, line: "", prompt, timers: [] };
+    sessions.set(paneId, s);
+    onEvent({ type: "status", state: { kind: "connecting", attempt: 1 } });
+    s.timers.push(
+      window.setTimeout(() => {
+        onEvent({ type: "status", state: { kind: "connected", durable: target.kind !== "local" } });
+        onEvent({
+          type: "output",
+          data: container?.run === "logs"
+            ? "2026-10-29T23:10:02Z INFO  GET /v1/orders 200 18ms\r\n2026-10-29T23:10:04Z INFO  POST /v1/checkout 201 64ms\r\n"
+            : container || target.kind === "local"
+              ? prompt
+              : banner(name, user),
+        });
+        if (new URLSearchParams(location.search).get("scene") === "reconnect" && target.kind !== "local") {
+          s.timers.push(window.setTimeout(() => simulateDrop(s), 600));
+        }
+      }, 350),
+    );
+  },
+  writeSession(paneId, data) {
+    const s = sessions.get(paneId);
+    if (!s) return;
+    for (const ch of data) {
+      if (ch === "\r") {
+        const cmd = s.line.trim();
+        s.line = "";
+        s.emit({ type: "output", data: "\r\n" });
+        if (cmd === "drop") return simulateDrop(s);
+        const canned: Record<string, string> = {
+          ls: `${C.bl}dist${C.r}  Dockerfile  ${C.bl}node_modules${C.r}  package.json  README.md  ${C.bl}src${C.r}`,
+          uptime: " 23:14:02 up 37 days,  5:02,  1 user,  load average: 1.42, 1.18, 0.97",
+          whoami: "root",
+          "node -v": "v22.11.0",
+        };
+        if (cmd && canned[cmd]) s.emit({ type: "output", data: `${canned[cmd]}\r\n` });
+        else if (cmd) s.emit({ type: "output", data: `${C.dim}(demo) try “drop” to see a reconnect${C.r}\r\n` });
+        s.emit({ type: "output", data: s.prompt });
+      } else if (ch === "\x7f") {
+        if (s.line) {
+          s.line = s.line.slice(0, -1);
+          s.emit({ type: "output", data: "\b \b" });
+        }
+      } else if (ch >= " ") {
+        s.line += ch;
+        s.emit({ type: "output", data: ch });
+      }
+    }
+  },
+  resizeSession() {},
+  setAutoReconnect(enabled) {
+    autoReconnect = enabled;
+  },
+  reconnectSession(paneId) {
+    const s = sessions.get(paneId);
+    if (!s) return;
+    s.emit({ type: "status", state: { kind: "connected", durable: true } });
+    s.emit({ type: "output", data: s.prompt });
+  },
+  closeSession(paneId) {
+    sessions.get(paneId)?.timers.forEach(clearTimeout);
+    sessions.delete(paneId);
+  },
+
+  async listDir(_t, path) {
+    await wait(140);
+    return listing(path);
+  },
+  async readFile(_t, path): Promise<TextFile> {
+    await wait(120);
+    const name = path.split("/").pop() ?? "";
+    if (name.endsWith(".gz")) return { path, content: null, binary: true, size: 48_211_332 };
+    return { path, content: textFiles[name] ?? `# ${name}\n\nSample content from the demo backend.\n`, binary: false, size: 1843 };
+  },
+  async writeFile() {
+    await wait(200);
+  },
+  async makeDir(_t, path) {
+    await wait(120);
+    const parent = path.slice(0, path.lastIndexOf("/")) || "/";
+    tree[parent] = [...(tree[parent] ?? []), dir(path.split("/").pop()!, 0)];
+  },
+  async renamePath(_t, from, to) {
+    await wait(120);
+    const parent = from.slice(0, from.lastIndexOf("/")) || "/";
+    const e = tree[parent]?.find((x) => x.name === from.split("/").pop());
+    if (e) e.name = to.split("/").pop()!;
+  },
+  async deletePath(_t, path) {
+    await wait(120);
+    const parent = path.slice(0, path.lastIndexOf("/")) || "/";
+    tree[parent] = (tree[parent] ?? []).filter((x) => x.name !== path.split("/").pop());
+  },
+  async downloadPath(_t, path) {
+    await wait(600);
+    return `~/Downloads/${path.split("/").pop()}`;
+  },
+  async uploadPaths() {
+    await wait(800);
+  },
+  async sessionCwd() {
+    return "/var/www/app";
+  },
+  async pickFiles() {
+    return [];
+  },
+  onFileDrop() {
+    return () => {};
+  },
+
+  async listContainers(target) {
+    await wait(300);
+    const list = target.kind === "host" ? (containers[target.hostId] ?? []) : [];
+    return { engines: list.length ? ["docker"] : [], containers: list.map((c) => ({ ...c })), problems: [] };
+  },
+  async containerAction(target, _engine, id, action) {
+    await wait(500);
+    const c = target.kind === "host" ? containers[target.hostId]?.find((x) => x.id === id) : undefined;
+    if (!c) return;
+    c.running = action !== "stop";
+    c.state = c.running ? "running" : "exited";
+    c.status = c.running ? "Up 1 second" : "Exited (0) 1 second ago";
+  },
+
+  async fetchMetrics(target) {
+    await wait(60);
+    return metricsFor(target);
+  },
+};

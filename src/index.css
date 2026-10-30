@@ -1,0 +1,265 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@xterm/xterm/css/xterm.css";
+@import "tailwindcss";
+
+/* Every color is a runtime variable, so themes and the accent can change
+   live from Settings. `ink` is the overlay color: white on dark themes,
+   black on light ones (bg-ink/[0.05] = a faint tint either way).
+   Apple system fonts on macOS; Inter / JetBrains Mono as close stand-ins elsewhere. */
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono Variable", Consolas, monospace;
+  --font-serif: ui-serif, "New York", "Iowan Old Style", "Palatino", Georgia, serif;
+
+  --color-window: var(--ui-window);
+  --color-canvas: var(--ui-canvas);
+  --color-surface: var(--ui-surface);
+  --color-raised: var(--ui-raised);
+  --color-ink: rgb(var(--ui-ink));
+  --color-line: rgb(var(--ui-ink) / 0.075);
+  --color-line-strong: rgb(var(--ui-ink) / 0.13);
+  --color-fg: var(--ui-fg);
+  --color-fg-2: var(--ui-fg-2);
+  --color-fg-3: var(--ui-fg-3);
+  --color-accent: var(--ui-accent);
+  --color-ok: var(--ui-ok);
+  --color-warn: var(--ui-warn);
+  --color-bad: var(--ui-bad);
+}
+
+@theme {
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-slide-up: slide-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+/* ---------------------------------------------------------------- themes */
+
+:root,
+[data-theme="midnight"] {
+  --ui-window: #0f1013;
+  --ui-canvas: #0a0b0d;
+  --ui-surface: #131518;
+  --ui-raised: #1a1c20;
+  --ui-ink: 255 255 255;
+  --ui-fg: #eceef1;
+  --ui-fg-2: #a2a8b1;
+  --ui-fg-3: #8a919b;
+  --ui-glass: rgb(26 28 33 / 0.62);
+  --ui-glass-soft: rgb(19 21 24 / 0.5);
+  --ui-glow: 0.13;
+  color-scheme: dark;
+}
+
+[data-theme="graphite"] {
+  --ui-window: #161616;
+  --ui-canvas: #101010;
+  --ui-surface: #1a1a1a;
+  --ui-raised: #222222;
+  --ui-fg: #ededed;
+  --ui-fg-2: #a6a6a6;
+  --ui-fg-3: #8e8e8e;
+  --ui-glass: rgb(34 34 34 / 0.66);
+  --ui-glass-soft: rgb(24 24 24 / 0.5);
+  --ui-glow: 0.06;
+}
+
+[data-theme="oled"] {
+  --ui-window: #000000;
+  --ui-canvas: #000000;
+  --ui-surface: #070707;
+  --ui-raised: #111111;
+  --ui-fg: #f2f2f2;
+  --ui-fg-2: #a0a0a0;
+  --ui-fg-3: #8a8a8a;
+  --ui-glass: rgb(18 18 18 / 0.7);
+  --ui-glass-soft: rgb(0 0 0 / 0.4);
+  --ui-glow: 0;
+}
+
+[data-theme="daylight"] {
+  --ui-window: #eceef2;
+  --ui-canvas: #ffffff;
+  --ui-surface: #f6f7f9;
+  --ui-raised: #ffffff;
+  --ui-ink: 15 23 42;
+  --ui-fg: #14171c;
+  --ui-fg-2: #4d5560;
+  --ui-fg-3: #626973;
+  --ui-glass: rgb(255 255 255 / 0.72);
+  --ui-glass-soft: rgb(255 255 255 / 0.45);
+  --ui-glow: 0.16;
+  color-scheme: light;
+}
+
+:root {
+  --ui-accent: #5b9dff;
+  --ui-ok: #3dd68c;
+  --ui-warn: #f5b841;
+  --ui-bad: #ff6159;
+  --ui-gap: 6px;
+  --ui-radius: 11px;
+}
+
+[data-theme="daylight"] {
+  --ui-ok: #16a34a;
+  --ui-warn: #d97706;
+  --ui-bad: #e5484d;
+}
+
+/* Frosted layers that float above terminals: palette, menus, dialogs, banners. */
+@utility glass {
+  background: var(--ui-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(175%);
+  backdrop-filter: blur(28px) saturate(175%);
+  border: 1px solid rgb(var(--ui-ink) / 0.1);
+  box-shadow:
+    0 24px 64px -18px rgb(0 0 0 / 0.55),
+    0 2px 8px rgb(0 0 0 / 0.2),
+    inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+
+/* Lighter frost for surfaces that sit in the layout (the sidebar). */
+@utility glass-soft {
+  background: var(--ui-glass-soft);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--ui-window);
+    color: var(--ui-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Desktop apps don't select their chrome. */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+    overflow: hidden;
+  }
+  input,
+  textarea,
+  .selectable {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  button {
+    cursor: default;
+  }
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ui-accent) 70%, transparent);
+    outline-offset: 1px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--ui-accent) 35%, transparent);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--ui-ink) / 0.12);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--ui-ink) / 0.2);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* Split handles: a gap that lights up on hover/drag. */
+.split-handle {
+  position: relative;
+  flex: 0 0 max(var(--ui-gap), 4px);
+  outline: none;
+}
+.split-handle::after {
+  content: "";
+  position: absolute;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.split-handle[aria-orientation="vertical"]::after {
+  inset: 10px calc(50% - 1px);
+}
+.split-handle[aria-orientation="horizontal"]::after {
+  inset: calc(50% - 1px) 10px;
+}
+.split-handle:hover::after,
+.split-handle[data-separator="active"]::after,
+.split-handle[data-separator="hover"]::after,
+.split-handle[data-separator="focus"]::after {
+  background: color-mix(in srgb, var(--ui-accent) 70%, transparent);
+}
+
+/* xterm: let our padding and background show. */
+.term-host {
+  width: 100%;
+  height: 100%;
+}
+.term-host .xterm {
+  height: 100%;
+}
+.term-host .xterm-viewport {
+  background-color: transparent !important;
+}
+.term-host .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: rgb(var(--ui-ink) / 0.12) !important;
+  border-radius: 8px;
+}
+
+/* Range sliders in Settings. */
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 4px;
+  background: linear-gradient(to right, var(--ui-accent) var(--fill, 50%), rgb(var(--ui-ink) / 0.12) var(--fill, 50%));
+  outline: none;
+}
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(0 0 0 / 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

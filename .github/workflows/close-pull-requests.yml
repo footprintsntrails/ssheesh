@@ -1,0 +1,38 @@
+# SSHeesh doesn't take code contributions. Pull requests from anyone other
+# than the owner are closed with a pointer to Issues, where feature requests
+# and bug reports are welcome. Nothing from the pull request is checked out
+# or run.
+
+name: Close pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  close:
+    if: github.event.pull_request.user.login != github.repository_owner
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request.number;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: [
+                "Thanks for taking the time! 🙏",
+                "",
+                "SSHeesh is open source, but it's built by one person following one vision, so code contributions aren't accepted. This pull request has been closed automatically.",
+                "",
+                `If you have an idea or found a bug, please [open an issue](https://github.com/${owner}/${repo}/issues/new/choose). Feature requests are very welcome. See [CONTRIBUTING.md](https://github.com/${owner}/${repo}/blob/main/CONTRIBUTING.md) for details.`,
+              ].join("\n"),
+            });
+            await github.rest.pulls.update({ owner, repo, pull_number: number, state: "closed" });

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="1024" height="1024">
+  <!-- >_< : a terminal prompt that winces when the connection drops.
+       Drawn on Apple's icon grid (824 of 1024 px) so it sits right in the Dock. -->
+  <g transform="translate(19.5 19.5) scale(0.805)">
+    <rect x="8" y="8" width="184" height="184" rx="44" fill="#232428"/>
+    <path d="M52 8 H148 A44 44 0 0 1 192 52 V46 H8 V52 A44 44 0 0 1 52 8 Z" fill="#2f3136"/>
+    <rect x="8.5" y="8.5" width="183" height="183" rx="43.5" fill="none" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="35" cy="27" r="5.5" fill="#5c5f67"/>
+    <circle cx="52" cy="27" r="5.5" fill="#5c5f67"/>
+    <circle cx="69" cy="27" r="5.5" fill="#5c5f67"/>
+    <path d="M32 86 L61 112 L32 138" fill="none" stroke="#f2f0ea" stroke-width="20" stroke-linecap="square" stroke-linejoin="miter"/>
+    <path d="M168 86 L139 112 L168 138" fill="none" stroke="#f2f0ea" stroke-width="20" stroke-linecap="square" stroke-linejoin="miter"/>
+    <rect x="76" y="140" width="48" height="20" fill="#3dd68c"/>
+  </g>
+</svg>

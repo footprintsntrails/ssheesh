@@ -1,0 +1,109 @@
+# Builds SSHeesh for macOS, Windows and Linux and publishes a GitHub release.
+# Runs when a version tag is pushed (git tag v0.1.1 && git push --tags),
+# or by hand from the Actions tab.
+#
+# Needs two repository secrets for signed auto-updates:
+#   TAURI_SIGNING_PRIVATE_KEY           contents of the private key file
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-24.04
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: create
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("fs");
+            const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            const tag = context.ref.startsWith("refs/tags/") ? context.ref.slice("refs/tags/".length) : `v${version}`;
+            const body = fs.readFileSync(".github/release-notes.md", "utf8").replaceAll("{{version}}", version);
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `SSHeesh ${version}`,
+              body,
+              draft: true,
+            });
+            return data.id;
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            platform: macos-latest
+            args: --target universal-apple-darwin
+          - name: Windows
+            platform: windows-latest
+            args: ""
+          - name: Linux
+            platform: ubuntu-24.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build libraries
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.name == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+          updaterJsonPreferNsis: true
+
+  publish-release:
+    name: Publish release
+    needs: [create-release, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+            });

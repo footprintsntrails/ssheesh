@@ -1,0 +1,12 @@
+[package]
+name = "sshee-core"
+version = "0.1.0"
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+description = "Connections, durable SSH sessions, remote files and metrics for SSHeesh"
+
+[dependencies]
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
