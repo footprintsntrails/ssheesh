@@ -148,9 +148,9 @@ export function StatsPane({ pane, target }: { pane: PaneState; target: TargetRef
   );
 }
 
-function Vital({ label, children }: { label: string; children: ReactNode }) {
+function Vital({ label, children, className = "flex" }: { label: string; children: ReactNode; className?: string }) {
   return (
-    <span className="flex min-w-0 shrink-0 items-center gap-1.5">
+    <span className={cn("min-w-0 shrink-0 items-center gap-1.5", className)}>
       <span className="text-fg-3">{label}</span>
       {children}
     </span>
@@ -165,7 +165,7 @@ export function VitalsBar({ target, onDetails, onHide }: { target: TargetRef; on
   const max = netMax(samples);
 
   return (
-    <div className="@container flex h-8 shrink-0 items-center gap-5 overflow-hidden px-3 text-[12px] tabular-nums text-fg">
+    <div className="@container flex h-8 shrink-0 items-center gap-5 overflow-hidden pr-1.5 pl-3 text-[12px] tabular-nums text-fg">
       {error && !m ? (
         <span className="truncate text-fg-3">Stats aren't available here: {error.message}</span>
       ) : (
@@ -180,14 +180,15 @@ export function VitalsBar({ target, onDetails, onHide }: { target: TargetRef; on
             <span>{m ? percent(memFraction(m)) : "…"}</span>
             <span className="hidden w-10 @xl:block">{m && <Meter value={memFraction(m)} height={4} />}</span>
           </Vital>
-          <Vital label="Network">
+          {/* Narrow windows keep CPU and memory; network and disk come back as room allows. */}
+          <Vital label="Network" className="hidden @xl:flex">
             <span>{last ? `↓ ${rate(last.rx)}  ↑ ${rate(last.tx)}` : "…"}</span>
             <span className="hidden w-12 @3xl:block">
               <Sparkline series={samples.map((s) => s.rx)} max={max} color="var(--ui-accent)" height={14} width={48} fill={false} />
             </span>
           </Vital>
           {root && (
-            <Vital label="Disk">
+            <Vital label="Disk" className="hidden @md:flex">
               <span>{percent(root.size ? root.used / root.size : 0)}</span>
             </Vital>
           )}

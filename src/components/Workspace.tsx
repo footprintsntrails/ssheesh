@@ -1,11 +1,11 @@
-import { Activity, ArrowDownToLine, Minimize2, Columns2, Columns3, EyeOff, FolderOpen, LayoutDashboard, LayoutGrid, PanelLeft, PanelRight, RotateCw, Rows2, Rows3, Settings, SquareTerminal } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Activity, ArrowDownToLine, Minimize2, Columns2, EyeOff, FolderOpen, PanelLeft, PanelRight, RotateCw, Rows2, Settings, SquareTerminal } from "lucide-react";
+import { Fragment } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn } from "../lib/format";
 import { isMac, shortcutLabel } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
-import type { Arrangement, LayoutNode } from "../lib/layout";
+import type { LayoutNode } from "../lib/layout";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { useEnv } from "../lib/labels";
 import { useStore, type PaneKind } from "../lib/store";
@@ -41,77 +41,6 @@ const VIEWS: { kind: Exclude<PaneKind, "empty">; label: string; icon: typeof Squ
   { kind: "stats", label: "Stats", icon: Activity },
 ];
 
-/** Ready-made layouts: a full workspace for this machine, or a new shape for what's open. */
-function ArrangeMenu() {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const target = useStore((s) => s.panes[s.focused]?.target ?? null);
-  const names = useNames();
-  const openWorkspace = useStore((s) => s.openWorkspace);
-  const arrangePanes = useStore((s) => s.arrangePanes);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", esc);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", esc);
-    };
-  }, [open]);
-
-  const shapes: { id: Arrangement; label: string; icon: typeof Columns3 }[] = [
-    { id: "main", label: "Main + stack", icon: LayoutDashboard },
-    { id: "columns", label: "Columns", icon: Columns3 },
-    { id: "rows", label: "Rows", icon: Rows3 },
-    { id: "grid", label: "Grid", icon: LayoutGrid },
-  ];
-  const item = "flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2 text-left text-[12.5px] text-fg hover:bg-accent hover:text-white";
-
-  return (
-    <div ref={ref} className="relative">
-      <IconButton label="Layouts" active={open} onClick={() => setOpen((v) => !v)}>
-        <LayoutDashboard size={15} />
-      </IconButton>
-      {open && (
-        <div className="glass absolute top-9 right-0 z-40 w-[250px] animate-pop-in rounded-[12px] p-1">
-          {target && (
-            <>
-              <button
-                className={item}
-                onClick={() => {
-                  setOpen(false);
-                  openWorkspace(target);
-                }}
-              >
-                <SquareTerminal size={14} className="opacity-80" />
-                <span className="flex-1 truncate">Workspace for {names.target(target)}</span>
-              </button>
-              <div className="px-2 pb-1 text-[11px] leading-snug text-fg-3">Terminal, files and stats side by side</div>
-              <div className="mx-2 my-1 h-px bg-ink/[0.08]" />
-            </>
-          )}
-          <div className="px-2 pt-1 pb-0.5 text-[11px] font-semibold text-fg-3">Arrange open panes</div>
-          {shapes.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              className={item}
-              onClick={() => {
-                setOpen(false);
-                arrangePanes(id);
-              }}
-            >
-              <Icon size={14} className="opacity-80" />
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /** While one pane fills the window, a way back to the full layout. */
 function ZoomBadge() {
@@ -191,7 +120,6 @@ function Toolbar() {
   const sidebarSide = useSettings((s) => s.sidebarSide);
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const updateSettings = useSettings((s) => s.update);
-  const showVitals = useSettings((s) => s.showVitals);
   // macOS draws the window buttons at the top left, over whatever is there.
   const narrowRail = useSettings((s) => s.sidebarMode === "narrow");
   const compactMode = useSettings((s) => s.compactMode);
@@ -208,7 +136,7 @@ function Toolbar() {
   };
 
   return (
-    <header data-tauri-drag-region className={cn("flex h-[46px] shrink-0 items-center gap-3 pr-3", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}>
+    <header data-tauri-drag-region className={cn("@container flex h-[46px] shrink-0 items-center gap-3 pr-3", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}>
       <IconButton
         label={`${sidebarVisible ? "Hide" : "Show"} sidebar (${shortcutLabel("sidebar")})`}
         onClick={() => updateSettings({ sidebarVisible: !sidebarVisible })}
@@ -219,7 +147,7 @@ function Toolbar() {
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-baseline gap-2">
         <span className="truncate text-[13px] font-semibold text-fg">{target ? names.target(target) : "SSHeesh"}</span>
         <EnvChip env={env} className="self-center" />
-        {host && !names.on && <span className="truncate text-[12px] text-fg-3">{names.address(host)}</span>}
+        {host && !names.on && <span className="hidden truncate text-[12px] text-fg-3 @2xl:inline">{names.address(host)}</span>}
       </div>
 
       <div
@@ -237,6 +165,8 @@ function Toolbar() {
               key={kind}
               role="tab"
               aria-selected={active}
+              aria-label={label}
+              title={label}
               onClick={() => show(kind)}
               className={cn(
                 "flex h-[22px] items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium transition-all",
@@ -246,7 +176,7 @@ function Toolbar() {
               )}
             >
               <Icon size={12.5} strokeWidth={2} />
-              {label}
+              <span className="hidden @xl:inline">{label}</span>
             </button>
           );
         })}
@@ -256,14 +186,6 @@ function Toolbar() {
         <StreamerBadge />
         <ZoomBadge />
         <UpdateButton />
-        <IconButton
-          label={`${showVitals ? "Hide" : "Show"} server vitals (${shortcutLabel("vitals")})`}
-          active={showVitals}
-          onClick={() => updateSettings({ showVitals: !showVitals })}
-        >
-          <Activity size={15} />
-        </IconButton>
-        <ArrangeMenu />
         <IconButton label={`Split right (${shortcutLabel("splitRight")})`} onClick={() => pane && split(pane.id, "row")}>
           <Columns2 size={15} />
         </IconButton>

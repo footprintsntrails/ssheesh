@@ -2,8 +2,9 @@ import { Activity, Box, ChevronRight, Circle, Copy, EyeOff, KeyRound, Palette, F
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
-import { isMac, shortcutLabel } from "../lib/keys";
+import { shortcutLabel } from "../lib/keys";
 import { useSettings } from "../lib/settings";
+import { useUpdates } from "../lib/updates";
 import { hostAddress, useStore } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import { ENV_LABELS, ENV_ORDER, HOST_COLORS, useEnv, useHostLook, useLabels, useVisibleHosts } from "../lib/labels";
@@ -378,6 +379,7 @@ export function Sidebar() {
   const wideWidth = useSettings((s) => s.sidebarWidth);
   const narrow = useSettings((s) => s.sidebarMode === "narrow");
   const logoShown = useSettings((s) => s.logo !== "hidden");
+  const version = useUpdates((u) => u.current);
   const update = useSettings((s) => s.update);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const live = useRef<number | null>(null);
@@ -434,14 +436,8 @@ export function Sidebar() {
         onReset={() => update({ sidebarMode: "wide", sidebarWidth: 232 })}
       />
       {/* Title bar space; on macOS the window buttons sit here. */}
-      <div
-        data-tauri-drag-region
-        className={cn("flex h-[46px] shrink-0 items-center gap-2", narrow ? "justify-center" : "px-3.5", isMac && side === "left" && !narrow && "pl-[84px]")}
-      >
-        {/* On a Mac the window buttons fill the top of a narrow rail. */}
-        {!(narrow && isMac && side === "left") && <AppLogo size={narrow ? 22 : 18} />}
-        {!narrow && logoShown && <span className="pointer-events-none text-[13px] font-semibold tracking-tight text-fg-2">SSHeesh</span>}
-      </div>
+      {/* Title bar space, left empty: on macOS the window buttons sit here. */}
+      <div data-tauri-drag-region className="h-[46px] shrink-0" />
 
       {narrow ? (
         <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pb-3">
@@ -479,11 +475,27 @@ export function Sidebar() {
             <div className="mt-0.5 flex flex-col gap-px">{rows}</div>
             {loaded && hosts.length === 0 && (
               <p className="mt-3 px-2 text-[12px] leading-snug text-fg-3">
-                Add a server with the plus button. Hosts in ~/.ssh/config appear here on their own.
+                Add a server with the plus button. Servers from ~/.ssh/config show up here once you pick them.
               </p>
             )}
           </nav>
         </>
+      )}
+      {logoShown && (
+        <button
+          type="button"
+          title="About SSHeesh"
+          onClick={() => useStore.getState().openSettings("about")}
+          className={cn("flex shrink-0 items-center gap-2.5 pb-3.5 pt-2 text-left", narrow ? "justify-center" : "px-4")}
+        >
+          <AppLogo size={narrow ? 36 : 42} />
+          {!narrow && (
+            <span className="min-w-0">
+              <span className="block text-[13.5px] font-semibold leading-tight tracking-tight text-fg">SSHeesh</span>
+              {version && <span className="block text-[11px] leading-tight text-fg-3">{version}</span>}
+            </span>
+          )}
+        </button>
       )}
     </aside>
   );

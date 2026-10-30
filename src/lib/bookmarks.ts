@@ -13,6 +13,7 @@ interface BookmarksState {
   toggle(target: string, path: string): void;
   remove(target: string, path: string): void;
   visit(target: string, path: string): void;
+  forgetRecent(target: string, path: string): void;
 }
 
 export const useBookmarks = create<BookmarksState>()(
@@ -26,6 +27,7 @@ export const useBookmarks = create<BookmarksState>()(
           return { pins: { ...s.pins, [t]: list.includes(path) ? list.filter((p) => p !== path) : [...list, path] } };
         }),
       remove: (t, path) => set((s) => ({ pins: { ...s.pins, [t]: (s.pins[t] ?? []).filter((p) => p !== path) } })),
+      forgetRecent: (t, path) => set((s) => ({ recent: { ...s.recent, [t]: (s.recent[t] ?? []).filter((p) => p !== path) } })),
       visit: (t, path) =>
         set((s) => {
           const list = s.recent[t] ?? [];

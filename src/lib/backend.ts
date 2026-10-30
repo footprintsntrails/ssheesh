@@ -77,6 +77,8 @@ export interface Backend {
   writeFile(target: TargetRef, path: string, content: string): Promise<void>;
   makeDir(target: TargetRef, path: string): Promise<void>;
   renamePath(target: TargetRef, from: string, to: string): Promise<void>;
+  /** Packs `names` from `dir` into `dir/archive` (.tar.gz). */
+  archivePaths(target: TargetRef, dir: string, names: string[], archive: string): Promise<void>;
   deletePath(target: TargetRef, path: string): Promise<void>;
   downloadPath(target: TargetRef, path: string, isDir: boolean): Promise<string>;
   uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean): Promise<void>;
@@ -178,6 +180,7 @@ async function tauriBackend(): Promise<Backend> {
     writeFile: (target, path, content) => call("write_file", { target, path, content }),
     makeDir: (target, path) => call("make_dir", { target, path }),
     renamePath: (target, from, to) => call("rename_path", { target, from, to }),
+    archivePaths: (target, dir, names, archive) => call("archive_paths", { target, dir, names, archive }),
     deletePath: (target, path) => call("delete_path", { target, path }),
     downloadPath: (target, path, isDir) => call("download_path", { target, path, isDir }),
     uploadPaths: (target, paths, remoteDir, overwrite) =>

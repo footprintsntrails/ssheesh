@@ -88,6 +88,20 @@ const C = {
   r: "\x1b[0m",
 };
 
+/** A short, friendly session for the README's first picture. */
+function simpleBanner(name: string, user: string): string {
+  const prompt = `${C.g}${user}@${name}${C.r}:${C.bl}~${C.r}$ `;
+  return [
+    `${C.dim}Welcome back to ${name}.${C.r}`,
+    "",
+    `${prompt}uptime`,
+    " 14:02:11 up 37 days,  1 user,  load average: 0.12",
+    `${prompt}ls`,
+    `${C.bl}app${C.r}  ${C.bl}backups${C.r}  ${C.bl}logs${C.r}  docker-compose.yml  notes.txt`,
+    prompt,
+  ].join("\r\n");
+}
+
 function banner(name: string, user: string): string {
   const prompt = `${C.g}${user}@${name}${C.r}:${C.bl}~${C.r}$ `;
   return [
@@ -238,12 +252,12 @@ function metricsFor(t: TargetRef): Metrics {
 
 export const mockBackend: Backend = {
   isDemo: true,
-  appVersion: async () => "0.3.0",
+  appVersion: async () => "0.3.2",
   localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
     return {
-      version: "0.3.1",
+      version: "0.3.3",
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
       date: new Date().toISOString(),
     };
@@ -312,7 +326,9 @@ export const mockBackend: Backend = {
             ? "2026-10-29T23:10:02Z INFO  GET /v1/orders 200 18ms\r\n2026-10-29T23:10:04Z INFO  POST /v1/checkout 201 64ms\r\n"
             : container || target.kind === "local"
               ? prompt
-              : banner(name, user),
+              : new URLSearchParams(location.search).get("scene") === "simple"
+                ? simpleBanner(name, user)
+                : banner(name, user),
         });
         if (new URLSearchParams(location.search).get("scene") === "reconnect" && target.kind !== "local") {
           s.timers.push(window.setTimeout(() => simulateDrop(s), 600));
@@ -435,8 +451,15 @@ export const mockBackend: Backend = {
     if (name.endsWith(".gz")) return { path, content: null, binary: true, size: 48_211_332 };
     return { path, content: textFiles[name] ?? `# ${name}\n\nSample content from the demo backend.\n`, binary: false, size: 1843 };
   },
-  async writeFile() {
+  async writeFile(_t, path) {
     await wait(200);
+    const parent = path.slice(0, path.lastIndexOf("/")) || "/";
+    const name = path.split("/").pop()!;
+    if (!(tree[parent] ?? []).some((x) => x.name === name)) tree[parent] = [...(tree[parent] ?? []), file(name, 0, 0)];
+  },
+  async archivePaths(_t, dir, _names, archive) {
+    await wait(700);
+    tree[dir] = [...(tree[dir] ?? []), file(archive, 18 * 2 ** 20, 0)];
   },
   async makeDir(_t, path) {
     await wait(120);

@@ -14,7 +14,7 @@
 > [!WARNING]
 > **Version 0.3 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
-<p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh with a terminal, a file browser and live server stats side by side"></p>
+<p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a short list of servers with their own icons, and a terminal"></p>
 
 SSHeesh is a terminal for your servers that you make your own. Choose how it looks, down to an icon for each server. Keep files, stats and Docker containers next to your shell. And stop losing work to bad Wi-Fi.
 
@@ -22,6 +22,7 @@ SSHeesh is a terminal for your servers that you make your own. Choose how it loo
 
 SSHeesh is made for people who'd rather not become Linux admins to look after a VPS or a homelab.
 
+- **A short welcome.** Pick a look, choose which servers to bring along, and learn the three things worth knowing. Or skip it.
 - **Paste and go.** Paste `root@1.2.3.4` or a whole `ssh -p 2222 -i key user@host` command, and every field fills in. Already have servers in `~/.ssh/config`? SSHeesh asks which ones you want.
 - **Test before you add.** One click checks that the server answers, signs in, and has `tmux` for sessions that survive a dropped connection. If it doesn't, you get the command to install it.
 - **Errors in plain words.** Instead of `Permission denied (publickey)` you read "The server didn't accept your login. Check the user name and key."
@@ -138,7 +139,7 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 What's planned next. The order may still change.
 
-- **0.3.1: a tidier file manager.** Drag a place or bookmark out of the column to remove it, and choose which ones show with a right-click. A New menu for files, folders and archives. A toolbar that keeps the address bar when the pane gets narrow, and a calmer top bar.
+- **0.3.2: a friendlier start and a tidier file manager.** A welcome on first launch. Pane title bars that fit any width. Drag a place or bookmark out of the column to remove it, and choose which ones show with a right-click. A New menu for files, folders and archives. A toolbar that keeps the address bar when the pane gets narrow, and a calmer top bar.
 - **0.4: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
 - **0.5: Docker, files and disk.** Compose stacks with per-container stats, and updates you can roll back. "What's eating my disk", systemd services and a one-click security check-up. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
 - **0.6: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.

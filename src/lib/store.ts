@@ -398,6 +398,11 @@ export function seedDemoLayout() {
   const t: TargetRef = { kind: "host", hostId: "cfg:prod-api" };
   const a = newId("p");
   const b = newId("p");
+  // ?scene=simple: one calm terminal, for the README's first picture.
+  if (new URLSearchParams(location.search).get("scene") === "simple") {
+    useStore.setState({ root: { kind: "pane", id: a }, panes: { [a]: { id: a, kind: "terminal", target: t, sessionKey: "demo" } }, focused: a });
+    return;
+  }
   useStore.setState({
     root: { kind: "split", id: newId("s"), dir: "row", children: [{ kind: "pane", id: a }, { kind: "pane", id: b }] },
     panes: {

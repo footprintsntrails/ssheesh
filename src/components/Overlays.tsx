@@ -194,7 +194,13 @@ export function Modal({ open, onClose, children, width = 420 }: { open: boolean;
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[16vh] animate-fade-in" onMouseDown={onClose}>
-      <div role="dialog" aria-modal className="glass animate-pop-in rounded-[16px]" style={{ width, maxWidth: "100%" }} onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        role="dialog"
+        aria-modal
+        className="glass max-h-[calc(84vh-16px)] animate-pop-in overflow-y-auto rounded-[16px]"
+        style={{ width, maxWidth: "100%" }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         {children}
       </div>
     </div>

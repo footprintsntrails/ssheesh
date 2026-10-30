@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AddHostDialog } from "./components/AddServerDialog";
 import { ConfigImportDialog } from "./components/ConfigImport";
+import { Welcome } from "./components/Welcome";
 import { EdgeReveal } from "./components/EdgeReveal";
 import { CommandPalette, ConfirmDialog, Toasts } from "./components/Overlays";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -136,6 +137,7 @@ export function App() {
       <CommandPalette />
       <AddHostDialog />
       <ConfigImportDialog />
+      <Welcome />
       <ConfirmDialog />
       <Toasts />
     </div>

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2 — friendlier and tidier
+
+### A proper hello
+- **A short welcome on first launch.** Pick a theme and an accent, choose which servers from `~/.ssh/config` to bring along, and three tips worth knowing. Every step can be skipped, and everything in it can be changed later in Settings.
+
+### Fits any size
+- **Pane title bars keep their Close button**, however many panes you open. In narrow panes the other buttons fold into a ⋯ menu, and labels shorten before buttons disappear.
+
+### A tidier file manager
+- **Take places out of the column.** Hold a place, bookmark or recent folder and drag it out of the column to remove it. Right-click the column to tick which places show, or bring them all back.
+- **A New menu** (the + button): a new file, a new folder, or an archive of what you selected (or of everything here) as a `.tar.gz`. Right-click any file or folder to archive it too.
+- **A toolbar that fits.** In a narrow file manager the address bar keeps its room; the filter, bookmark, upload and refresh buttons step aside into the ⋯ menu, which always has them all.
+- "Show hidden files" moved from the toolbar to the ⋯ menu and the right-click menu.
+
+### Also
+- **The logo moved to the bottom of the sidebar**, bigger, with the version next to it. On a Mac it no longer sits under the window buttons. Click it for About.
+- **A calmer top bar.** The layouts and vitals buttons are gone: layouts live in Settings and the command palette, and the vitals bar has its own close button (⌘J or Ctrl+Shift+J brings it back).
+
 ## 0.3.0 — make it yours
 
 A big one. SSHeesh is about a terminal you can shape to the way you work, and this release adds a lot of that, plus a much friendlier way to add servers, and guard rails for the servers that matter.
@@ -39,7 +57,7 @@ A big one. SSHeesh is about a terminal you can shape to the way you work, and th
 - When the connection drops, SSHeesh now asks before reconnecting by default. Settings → Terminal switches it back to automatic.
 
 ### Coming next
-- 0.3.1 tidies up the file manager: drag places and bookmarks out to remove them, a New menu for files, folders and archives, and a toolbar that adapts to narrow panes. See the [roadmap](README.md#roadmap) for what follows.
+- 0.3.2 tidies up the file manager and adds a first-launch welcome. See the [roadmap](README.md#roadmap) for what follows.
 
 ### Fixes
 - The sidebar and the bookmarks column can be dragged narrower again; the drag used to get stuck.

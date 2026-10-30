@@ -23,7 +23,7 @@ body:
     attributes:
       label: SSHeesh version
       description: Settings → About
-      placeholder: "0.3.0"
+      placeholder: "0.3.2"
     validations:
       required: true
   - type: dropdown

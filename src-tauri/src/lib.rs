@@ -266,6 +266,13 @@ async fn make_dir(state: State<'_, AppState>, target: TargetSpec, path: String) 
     blocking(move || files::make_dir(&t, &env, &path)).await
 }
 
+/// Packs files and folders into a .tar.gz next to them.
+#[tauri::command]
+async fn archive_paths(state: State<'_, AppState>, target: TargetSpec, dir: String, names: Vec<String>, archive: String) -> Result<(), OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || files::archive(&t, &env, &dir, &names, &archive)).await
+}
+
 #[tauri::command]
 async fn rename_path(state: State<'_, AppState>, target: TargetSpec, from: String, to: String) -> Result<(), OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
@@ -405,6 +412,7 @@ pub fn run() {
             write_file,
             make_dir,
             rename_path,
+            archive_paths,
             delete_path,
             download_path,
             upload_paths,

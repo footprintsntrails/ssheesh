@@ -272,6 +272,41 @@ pub fn rename(target: &Target, env: &SshEnv, from: &str, to: &str) -> Result<(),
     }
 }
 
+/// Packs `names` (all inside `dir`) into `dir/archive` as a .tar.gz.
+pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archive: &str) -> Result<(), OpError> {
+    if names.is_empty() {
+        return Err(OpError::failed("Pick something to put in the archive first."));
+    }
+    let exists = || OpError::new(ErrorCode::Exists, "Something with that name already exists here.");
+    match ssh_only(target) {
+        Some(t) => {
+            let items = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
+            let script = format!(
+                r#"cd -- {dir} || exit 1; [ -e {name} ] && {{ echo EXISTS >&2; exit 5; }}; tar -czf {name} -- {items}"#,
+                dir = shell_quote(dir),
+                name = shell_quote(archive),
+            );
+            run_remote(t, env, &script, None).map(|_| ()).map_err(|e| if e.message == "EXISTS" { exists() } else { e })
+        }
+        None => {
+            let base = resolve_local(dir);
+            if base.join(archive).exists() {
+                return Err(exists());
+            }
+            // tar ships with macOS, Linux and Windows 10 and newer.
+            let mut cmd = std::process::Command::new("tar");
+            cmd.current_dir(&base).arg("-czf").arg(archive).arg("--").args(names);
+            crate::ssh::hide_console(&mut cmd);
+            let out = cmd.output()?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(OpError::failed(format!("Couldn't make the archive: {}", String::from_utf8_lossy(&out.stderr).trim())))
+            }
+        }
+    }
+}
+
 pub fn delete(target: &Target, env: &SshEnv, path: &str) -> Result<(), OpError> {
     let trimmed = path.trim().trim_end_matches('/');
     if trimmed.is_empty() || trimmed == "~" || trimmed == "/" || !trimmed.contains('/') {
@@ -451,6 +486,22 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archives_files_on_this_computer() {
+        let dir = std::env::temp_dir().join(format!("sshee-archive-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("conf")).unwrap();
+        std::fs::write(dir.join("conf/app.toml"), "port = 8080").unwrap();
+        std::fs::write(dir.join("notes.txt"), "hi").unwrap();
+        let d = dir.display().to_string();
+        let env = SshEnv::default();
+        archive(&Target::Local, &env, &d, &["conf".into(), "notes.txt".into()], "backup.tar.gz").unwrap();
+        assert!(dir.join("backup.tar.gz").metadata().unwrap().len() > 0);
+        // A second archive with the same name is refused, not overwritten.
+        let again = archive(&Target::Local, &env, &d, &["notes.txt".into()], "backup.tar.gz");
+        assert_eq!(again.unwrap_err().code, ErrorCode::Exists);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn parses_find_output() {

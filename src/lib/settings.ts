@@ -25,6 +25,8 @@ export interface Settings {
   logo: "winking" | "still" | "hidden";
   /** Hides the sidebar, toolbar and vitals; they slide in at the window's edges. */
   compactMode: boolean;
+  /** The first-launch hello has been seen (or skipped). */
+  onboarded: boolean;
   accent: string;
   terminalScheme: string;
   terminalFont: string;
@@ -44,6 +46,8 @@ export interface Settings {
   placesWidth: number;
   /** The file manager's places and bookmarks column. */
   placesMode: "wide" | "narrow" | "hidden";
+  /** Places you took out of the file manager's column ("home", "/var/log", "recent"…). */
+  hiddenPlaces: string[];
   previewWidth: number;
   paneGap: number;
   paneRadius: number;
@@ -70,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   animations: true,
   logo: "winking",
   compactMode: false,
+  onboarded: false,
   accent: ACCENTS[0].value,
   terminalScheme: "auto",
   terminalFont: "system",
@@ -86,6 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   expanded: [],
   placesWidth: 172,
   placesMode: "narrow",
+  hiddenPlaces: [],
   previewWidth: 420,
   paneGap: 6,
   paneRadius: 11,

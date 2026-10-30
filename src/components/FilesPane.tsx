@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronLeft, Clock, Copy, CornerDownRight, Download, Eye, EyeOff, File, FileArchive, FileCode, FileImage, FileTerminal, FileText, Folder, FolderPlus, Globe, HardDrive, House, Link, Package, PanelLeft, Pencil, RefreshCw, ScrollText, Search, Settings2, SquareTerminal, Star, Timer, Trash, Upload, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, Clock, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, Globe, HardDrive, House, Link, Package, PanelLeft, Pencil, Plus, RefreshCw, RotateCcw, ScrollText, Search, Settings2, SquareTerminal, Star, Timer, Trash, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { folderName, LINUX_PLACES, useBookmarks } from "../lib/bookmarks";
@@ -209,6 +209,7 @@ function Places({
   recent,
   onGo,
   onUnpin,
+  onForgetRecent,
   compact,
 }: {
   remote: boolean;
@@ -217,6 +218,7 @@ function Places({
   recent: string[];
   onGo: (path: string) => void;
   onUnpin: (path: string) => void;
+  onForgetRecent: (path: string) => void;
   /** Make room for the preview when the pane is narrow. */
   compact: boolean;
 }) {
@@ -257,10 +259,107 @@ function Places({
     return () => window.removeEventListener("pointerup", done);
   }, [dragWidth]);
 
-  const item = (props: Omit<Parameters<typeof PlaceItem>[0], "narrow">) => <PlaceItem {...props} narrow={narrow} />;
+  const hidden = useSettings((st) => st.hiddenPlaces);
+  const shown = (id: string) => !hidden.includes(id);
+  const column = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const [drag, setDrag] = useState<{ id: string; label: string; icon: typeof File; x: number; y: number; out: boolean } | null>(null);
+  const justDragged = useRef(false);
+
+  /** Takes something out of the column: a place hides, a bookmark or recent folder goes. */
+  const takeOut = (id: string) => {
+    const [kind, ...rest] = id.split(":");
+    const path = rest.join(":");
+    if (kind === "pin") onUnpin(path);
+    else if (kind === "recent") onForgetRecent(path);
+    else useSettings.getState().update({ hiddenPlaces: [...new Set([...useSettings.getState().hiddenPlaces, path])] });
+  };
+
+  // Hold an item and drag it out of the column to take it out, like the macOS Dock.
+  const startDrag = (e: React.PointerEvent, id: string, label: string, icon: typeof File) => {
+    if (e.button !== 0) return;
+    const from = { x: e.clientX, y: e.clientY };
+    let moved = false;
+    const outside = (x: number, y: number) => {
+      const r = column.current?.getBoundingClientRect();
+      return !!r && (x < r.left - 16 || x > r.right + 16 || y < r.top - 16 || y > r.bottom + 16);
+    };
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - from.x, ev.clientY - from.y) < 6) return;
+      moved = true;
+      setDrag({ id, label, icon, x: ev.clientX, y: ev.clientY, out: outside(ev.clientX, ev.clientY) });
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDrag(null);
+      if (!moved) return;
+      justDragged.current = true;
+      setTimeout(() => (justDragged.current = false), 0);
+      if (outside(ev.clientX, ev.clientY)) takeOut(id);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const entry = (id: string, props: Omit<Parameters<typeof PlaceItem>[0], "narrow">) => (
+    <div
+      key={id}
+      onPointerDown={(e) => startDrag(e, id, props.label, props.icon)}
+      onClickCapture={(e) => {
+        if (justDragged.current) {
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      }}
+      className={cn(drag?.id === id && "opacity-40")}
+    >
+      <PlaceItem {...props} narrow={narrow} />
+    </div>
+  );
+
+  const places: { id: string; label: string; icon: typeof File; path: string; title: string }[] = [
+    { id: "home", label: "Home", icon: House, path: "~", title: "Your home folder" },
+    { id: "root", label: "Root", icon: HardDrive, path: "/", title: "/" },
+    ...(remote ? LINUX_PLACES.map((p) => ({ id: p.path, label: p.label, icon: PLACE_ICONS[p.path] ?? Folder, path: p.path, title: p.path })) : []),
+  ];
+  const visiblePlaces = places.filter((p) => shown(p.id));
+  const showRecent = shown("recent") && recentShown.length > 0;
+
+  // Right-click: tick what the column shows.
+  const menuItems: (MenuItem | "sep")[] = [
+    ...places.map((p) => ({
+      label: p.label,
+      icon: p.icon,
+      checked: shown(p.id),
+      run: () => {
+        const st = useSettings.getState();
+        st.update({ hiddenPlaces: shown(p.id) ? [...st.hiddenPlaces, p.id] : st.hiddenPlaces.filter((h) => h !== p.id) });
+      },
+    })),
+    "sep",
+    {
+      label: "Recent folders",
+      icon: Clock,
+      checked: shown("recent"),
+      run: () => {
+        const st = useSettings.getState();
+        st.update({ hiddenPlaces: shown("recent") ? [...st.hiddenPlaces, "recent"] : st.hiddenPlaces.filter((h) => h !== "recent") });
+      },
+    },
+    ...(hidden.length ? ["sep" as const, { label: "Show everything", icon: RotateCcw, run: () => useSettings.getState().update({ hiddenPlaces: [] }) }] : []),
+  ];
 
   return (
-    <div style={{ width }} className={cn("relative shrink-0 flex-col border-r border-line", compact ? "hidden @3xl:flex" : "flex")}>
+    <div
+      ref={column}
+      style={{ width }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+      className={cn("relative shrink-0 flex-col border-r border-line", compact ? "hidden @3xl:flex" : "hidden @xs:flex")}
+    >
       <ResizeHandle
         edge="right"
         label="Resize places"
@@ -268,15 +367,10 @@ function Places({
         onReset={() => useSettings.getState().update({ placesMode: "wide", placesWidth: 172 })}
       />
       <div className={cn("min-h-0 flex-1 overflow-y-auto pb-2", narrow ? "flex flex-col gap-0.5 px-1.5 pt-1.5" : "px-1.5")}>
-        {!narrow && <div className={heading}>Places</div>}
-        {item({ icon: House, label: "Home", title: "Your home folder", active: false, onClick: () => onGo("~") })}
-        {item({ icon: HardDrive, label: "Root", title: "/", active: dir === "/", onClick: () => onGo("/") })}
-        {remote &&
-          LINUX_PLACES.map((p) => (
-            <div key={p.path}>
-              {item({ icon: PLACE_ICONS[p.path] ?? Folder, label: p.label, title: p.path, active: dir === p.path, onClick: () => onGo(p.path) })}
-            </div>
-          ))}
+        {!narrow && visiblePlaces.length > 0 && <div className={heading}>Places</div>}
+        {visiblePlaces.map((p) =>
+          entry(`place:${p.id}`, { icon: p.icon, label: p.label, title: p.title, active: p.path !== "~" && dir === p.path, onClick: () => onGo(p.path) }),
+        )}
 
         <div className={heading}>{!narrow && "Bookmarks"}</div>
         {pins.length === 0
@@ -285,33 +379,48 @@ function Places({
                 Star a folder <Star size={10.5} className="inline -translate-y-px" /> to keep it here.
               </p>
             )
-          : pins.map((p) => (
-              <div key={p}>
-                {item({
-                  icon: narrow ? Folder : Star,
-                  iconClass: narrow ? undefined : "fill-warn text-warn",
-                  starred: true,
-                  label: names.text(folderName(p)),
-                  title: names.text(p),
-                  active: dir === p,
-                  onClick: () => onGo(p),
-                  onRemove: () => onUnpin(p),
-                })}
-              </div>
-            ))}
+          : pins.map((p) =>
+              entry(`pin:${p}`, {
+                icon: narrow ? Folder : Star,
+                iconClass: narrow ? undefined : "fill-warn text-warn",
+                starred: true,
+                label: names.text(folderName(p)),
+                title: names.text(p),
+                active: dir === p,
+                onClick: () => onGo(p),
+                onRemove: () => onUnpin(p),
+              }),
+            )}
 
-        {recentShown.length > 0 && (
+        {showRecent && (
           <>
             <div className={heading}>{!narrow && "Recent"}</div>
-            {recentShown.map((p) => (
-              <div key={p}>{item({ icon: Clock, label: names.text(folderName(p)), title: names.text(p), active: false, onClick: () => onGo(p) })}</div>
-            ))}
+            {recentShown.map((p) =>
+              entry(`recent:${p}`, { icon: Clock, label: names.text(folderName(p)), title: names.text(p), active: false, onClick: () => onGo(p) }),
+            )}
           </>
         )}
       </div>
+      {menu && <ContextMenu menu={menu} items={menuItems} onClose={() => setMenu(null)} />}
+      {drag && (
+        <div
+          aria-hidden
+          style={{ left: drag.x + 10, top: drag.y + 8 }}
+          className={cn(
+            "glass pointer-events-none fixed z-50 flex items-center gap-1.5 rounded-[8px] px-2 py-1 text-[12px] text-fg",
+            drag.out && "ring-1 ring-bad/50",
+          )}
+        >
+          <drag.icon size={13} />
+          {drag.label}
+          {drag.out && <span className="text-[11px] text-bad">· remove</span>}
+        </div>
+      )}
     </div>
   );
 }
+
+type Creating = { kind: "file" | "folder" } | { kind: "archive"; names: string[] } | null;
 
 export function FilesPane({ pane, target, focused }: { pane: PaneState; target: TargetRef; focused: boolean }) {
   const setPane = useStore((s) => s.setPane);
@@ -332,7 +441,9 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  /** A new file, folder or archive being named in the list. */
+  const [creating, setCreating] = useState<Creating>(null);
+  const [toolMenu, setToolMenu] = useState<{ x: number; y: number; items: (MenuItem | "sep")[] } | null>(null);
   const [menu, setMenu] = useState<(Menu & { entry: FileEntry | null }) | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -508,16 +619,65 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     }
   };
 
-  const finishCreate = async (name: string | null) => {
-    setCreating(false);
-    if (!name) return;
+  const finishCreate = async (typed: string | null) => {
+    const c = creating;
+    setCreating(null);
+    if (!typed || !c) return;
+    const name = c.kind === "archive" && !/\.(tar\.gz|tgz)$/.test(typed) ? `${typed}.tar.gz` : typed;
+    if (listing?.entries.some((e) => e.name === name)) {
+      toast({ tone: "error", title: `“${name}” already exists here`, body: "Pick another name." });
+      return;
+    }
+    const what = c.kind === "folder" ? "the folder" : c.kind === "file" ? "the file" : "the archive";
     try {
-      await backend.makeDir(target, joinPath(dir, name));
+      if (c.kind === "archive") {
+        setBusy(`Packing ${name}…`);
+        await backend.archivePaths(target, dir, c.names, name);
+        toast({ tone: "success", title: `Made ${name}`, body: `${c.names.length} item${c.names.length === 1 ? "" : "s"} packed` });
+      } else if (c.kind === "folder") await backend.makeDir(target, joinPath(dir, name));
+      else await backend.writeFile(target, joinPath(dir, name), "");
       setSelected([name]);
       refresh();
     } catch (e) {
-      fail("Couldn't create the folder", e);
+      fail(`Couldn't create ${what}`, e);
+    } finally {
+      if (c.kind === "archive") setBusy(null);
     }
+  };
+
+  /** Archive the selection, or everything in this folder when nothing's selected. */
+  const archiveItem = (): MenuItem => {
+    const names = selectedEntries.length ? selectedEntries.map((e) => e.name) : visible.map((e) => e.name);
+    return {
+      label: selectedEntries.length === 1 ? `Archive “${selectedEntries[0].name}”` : selectedEntries.length ? `Archive ${names.length} items` : "Archive everything here",
+      icon: FileArchive,
+      disabled: names.length === 0,
+      run: () => setCreating({ kind: "archive", names }),
+    };
+  };
+
+  const newItems = (): (MenuItem | "sep")[] => [
+    { label: "New file", icon: FilePlus, run: () => setCreating({ kind: "file" }) },
+    { label: "New folder", icon: FolderPlus, run: () => setCreating({ kind: "folder" }) },
+    "sep",
+    archiveItem(),
+  ];
+
+  /** Everything the toolbar holds, for the ⋯ menu; narrow panes hide some buttons. */
+  const moreItems = (): (MenuItem | "sep")[] => [
+    { label: "Back", icon: ChevronLeft, disabled: history.current.length === 0, run: goBack },
+    { label: "Up one folder", icon: ArrowUp, disabled: dir === "/", run: () => navigate(parentPath(dir)) },
+    "sep",
+    { label: "Show hidden files", icon: Eye, checked: showHidden, run: () => setShowHidden((v) => !v) },
+    "sep",
+    { label: pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder", icon: Star, run: () => toggleBookmark(tk, dir) },
+    ...(remote ? [{ label: "Upload files…", icon: Upload, run: pickAndUpload }] : []),
+    { label: "Refresh", icon: RefreshCw, run: refresh },
+  ];
+
+  const openToolMenu = (e: React.MouseEvent<HTMLButtonElement>, items: (MenuItem | "sep")[]) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setToolMenu({ x: r.left, y: r.bottom + 4, items });
   };
 
   const copyPath = (p: string) => {
@@ -608,13 +768,15 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const menuItems = (entry: FileEntry | null): (MenuItem | "sep")[] => {
     if (!entry) {
       return [
-        { label: "New folder", icon: FolderPlus, run: () => setCreating(true) },
+        { label: "New file", icon: FilePlus, run: () => setCreating({ kind: "file" }) },
+        { label: "New folder", icon: FolderPlus, run: () => setCreating({ kind: "folder" }) },
         ...(remote ? [{ label: "Upload files…", icon: Upload, run: pickAndUpload }] : []),
         { label: "Open in main terminal", icon: CornerDownRight, run: () => mainTerminalHere(dir) },
         { label: "Open new terminal here", icon: SquareTerminal, run: () => terminalHere(dir) },
         "sep",
         { label: pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder", icon: Star, run: () => toggleBookmark(tk, dir) },
         { label: "Copy folder path", icon: Copy, run: () => copyPath(dir) },
+        { label: "Show hidden files", icon: Eye, checked: showHidden, run: () => setShowHidden((v) => !v) },
         { label: "Refresh", icon: RefreshCw, run: refresh },
       ];
     }
@@ -627,6 +789,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       ...(!many
         ? [
             { label: "Rename", icon: Pencil, run: () => setRenaming(entry.name), hint: "F2" },
+            { label: `Archive “${entry.name}”`, icon: FileArchive, run: () => setCreating({ kind: "archive", names: [entry.name] }) },
             { label: "Copy path", icon: Copy, run: () => copyPath(full) },
             ...(entry.kind === "dir"
               ? [{ label: pins.includes(full) ? "Remove bookmark" : "Add to bookmarks", icon: Star, run: () => toggleBookmark(tk, full) }]
@@ -661,25 +824,31 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     <div className="@container absolute inset-0 flex flex-col">
       {/* toolbar */}
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-1.5">
-        <IconButton
-          label={`Places: ${placesMode}. Click for ${placesMode === "wide" ? "narrow" : placesMode === "narrow" ? "hidden" : "wide"}`}
-          active={placesMode !== "hidden"}
-          onClick={() =>
-            useSettings.getState().update({ placesMode: placesMode === "wide" ? "narrow" : placesMode === "narrow" ? "hidden" : "wide" })
-          }
-          className="size-6"
-        >
-          <PanelLeft size={14} />
-        </IconButton>
-        <div className="mx-0.5 h-4 w-px bg-ink/[0.08]" />
-        <IconButton label="Back" onClick={goBack} disabled={history.current.length === 0} className="size-6">
-          <ChevronLeft size={15} />
-        </IconButton>
-        <IconButton label="Up one folder" onClick={() => navigate(parentPath(dir))} disabled={dir === "/"} className="size-6">
-          <ArrowUp size={14} />
-        </IconButton>
+        <span className="hidden @xs:flex">
+          <IconButton
+            label={`Places: ${placesMode}. Click for ${placesMode === "wide" ? "narrow" : placesMode === "narrow" ? "hidden" : "wide"}`}
+            active={placesMode !== "hidden"}
+            onClick={() =>
+              useSettings.getState().update({ placesMode: placesMode === "wide" ? "narrow" : placesMode === "narrow" ? "hidden" : "wide" })
+            }
+            className="size-6"
+          >
+            <PanelLeft size={14} />
+          </IconButton>
+        </span>
+        <div className="mx-0.5 hidden h-4 w-px bg-ink/[0.08] @xs:block" />
+        <span className="hidden items-center @xs:flex">
+          <IconButton label="Back" onClick={goBack} disabled={history.current.length === 0} className="size-6">
+            <ChevronLeft size={15} />
+          </IconButton>
+          <IconButton label="Up one folder" onClick={() => navigate(parentPath(dir))} disabled={dir === "/"} className="size-6">
+            <ArrowUp size={14} />
+          </IconButton>
+        </span>
         <AddressBar path={dir} onGo={(p) => navigate(p)} />
-        <div className="relative ml-1 hidden w-[140px] shrink-0 items-center @3xl:flex">
+        {/* The address bar always stays. As the pane narrows, the filter and the
+            less-used buttons step out first; the ⋯ menu always has them all. */}
+        <div className="relative ml-1 hidden w-[120px] shrink-0 items-center @lg:flex @3xl:w-[160px]">
           <Search size={12.5} className="pointer-events-none absolute left-2 text-fg-3" />
           <input
             ref={filterRef}
@@ -691,33 +860,33 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             className="h-7 w-full rounded-md bg-ink/[0.045] pl-7 pr-2 text-[12.5px] text-fg outline-none ring-1 ring-inset ring-ink/[0.06] placeholder:text-fg-3 focus:ring-accent/60"
           />
         </div>
-        <IconButton
-          label={showHidden ? "Hide hidden files" : "Show hidden files"}
-          active={showHidden}
-          onClick={() => setShowHidden((v) => !v)}
-          className="size-6"
-        >
-          {showHidden ? <Eye size={14} /> : <EyeOff size={14} />}
-        </IconButton>
-        <IconButton
-          label={pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder"}
-          active={pins.includes(dir)}
-          onClick={() => toggleBookmark(tk, dir)}
-          className="size-6"
-        >
-          <Star size={14} className={cn(pins.includes(dir) && "fill-warn text-warn")} />
-        </IconButton>
-        <IconButton label="New folder" onClick={() => setCreating(true)} className="size-6">
-          <FolderPlus size={14} />
-        </IconButton>
-        {remote && (
-          <IconButton label="Upload files" onClick={pickAndUpload} className="size-6">
-            <Upload size={14} />
+        <span className="hidden items-center gap-1 @2xl:flex">
+          <IconButton
+            label={pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder"}
+            active={pins.includes(dir)}
+            onClick={() => toggleBookmark(tk, dir)}
+            className="size-6"
+          >
+            <Star size={14} className={cn(pins.includes(dir) && "fill-warn text-warn")} />
           </IconButton>
-        )}
-        <IconButton label="Refresh" onClick={refresh} className="size-6">
-          <RefreshCw size={13} className={cn(loading && listing && "animate-spin")} />
+          {remote && (
+            <IconButton label="Upload files" onClick={pickAndUpload} className="size-6">
+              <Upload size={14} />
+            </IconButton>
+          )}
+        </span>
+        <span className="hidden @3xl:flex">
+          <IconButton label="Refresh" onClick={refresh} className="size-6">
+            <RefreshCw size={13} className={cn(loading && listing && "animate-spin")} />
+          </IconButton>
+        </span>
+        <IconButton label="New file, folder or archive" onClick={(e) => openToolMenu(e, newItems())} className="size-6">
+          <Plus size={15} />
         </IconButton>
+        <IconButton label="More" onClick={(e) => openToolMenu(e, moreItems())} className="size-6">
+          <Ellipsis size={15} />
+        </IconButton>
+        {toolMenu && <ContextMenu menu={toolMenu} items={toolMenu.items} onClose={() => setToolMenu(null)} />}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -730,6 +899,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             recent={recent}
             onGo={(p) => navigate(p)}
             onUnpin={(p) => removeBookmark(tk, p)}
+            onForgetRecent={(p) => useBookmarks.getState().forgetRecent(tk, p)}
           />
         )}
         {/* list */}
@@ -784,8 +954,23 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
                 {creating && (
                   <div className="mx-1.5 flex h-7 items-center gap-2.5 rounded-md bg-ink/[0.04] px-2.5">
-                    <Folder size={15} strokeWidth={1.7} className="text-accent" fill="currentColor" fillOpacity={0.18} />
-                    <InlineName initial="New folder" onDone={finishCreate} />
+                    {creating.kind === "folder" ? (
+                      <Folder size={15} strokeWidth={1.7} className="text-accent" fill="currentColor" fillOpacity={0.18} />
+                    ) : creating.kind === "file" ? (
+                      <FileText size={15} strokeWidth={1.7} className="text-fg-3" />
+                    ) : (
+                      <FileArchive size={15} strokeWidth={1.7} className="text-[var(--ui-file-archive)]" />
+                    )}
+                    <InlineName
+                      initial={
+                        creating.kind === "archive"
+                          ? `${creating.names.length === 1 ? creating.names[0] : folderName(dir) || "archive"}.tar.gz`
+                          : creating.kind === "folder"
+                            ? "New folder"
+                            : "untitled.txt"
+                      }
+                      onDone={finishCreate}
+                    />
                   </div>
                 )}
 

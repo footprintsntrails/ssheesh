@@ -8,6 +8,7 @@ import { backend } from "../lib/backend";
 import { hostAddress } from "../lib/store";
 import { useLabels, useUndecidedConfig } from "../lib/labels";
 import { useStore } from "../lib/store";
+import { useSettings } from "../lib/settings";
 import type { Host } from "../lib/types";
 import { Modal } from "./Overlays";
 import { Button } from "./ui";
@@ -31,14 +32,13 @@ export function ConfigImportDialog() {
 
   const list: Host[] = mode === "all" ? allHosts.filter((h) => h.source === "sshConfig") : undecided;
 
-  // First launch: ask right away. The demo skips this unless asked to show it.
+  // The first launch asks inside the welcome. The demo takes every config server
+  // unless it's showing the first launch.
   useEffect(() => {
     if (!hostsLoaded || seen.length || !undecided.length) return;
     if (backend.isDemo && !new URLSearchParams(location.search).has("firstrun")) {
       useLabels.getState().chooseConfig(undecided.map((h) => h.id), undecided.map((h) => h.id));
-      return;
     }
-    useConfigImport.getState().show("new");
   }, [hostsLoaded, seen.length, undecided]);
 
   useEffect(() => {
@@ -112,8 +112,8 @@ export function ConfigImportDialog() {
 /** After the first launch, new servers in ~/.ssh/config get a quiet note, not a dialog. */
 export function ConfigNotice() {
   const undecided = useUndecidedConfig();
-  const seen = useLabels((s) => s.configSeen);
-  if (!undecided.length || !seen.length) return null;
+  const onboarded = useSettings((s) => s.onboarded);
+  if (!undecided.length || !onboarded) return null;
   return (
     <button
       type="button"

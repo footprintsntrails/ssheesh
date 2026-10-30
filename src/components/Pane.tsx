@@ -1,5 +1,6 @@
-import { Activity, BellRing, Box, Check, Columns2, FolderOpen, Maximize2, Minimize2, RotateCw, Rows2, ShieldCheck, SquareTerminal, X } from "lucide-react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { Activity, BellRing, Box, Check, Columns2, Ellipsis, FolderOpen, Maximize2, Minimize2, RotateCw, Rows2, ShieldCheck, SquareTerminal, X } from "lucide-react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ContextMenu, type Menu } from "./ContextMenu";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
@@ -31,7 +32,7 @@ function AttentionPill({ id }: { id: string }) {
       )}
     >
       {input ? <BellRing size={11} strokeWidth={2.2} /> : <Check size={11} strokeWidth={2.4} />}
-      {input ? "Needs you" : "Went quiet"}
+      <span className="hidden @xs:inline">{input ? "Needs you" : "Went quiet"}</span>
     </span>
   );
 }
@@ -70,11 +71,12 @@ function SessionPill({ state, local }: { state: SessionState | undefined; local:
   return (
     <span
       title={tip}
-      className="inline-flex h-[20px] items-center gap-1.5 text-[11.5px] font-medium text-fg-2"
+      aria-label={label}
+      className="inline-flex h-[20px] shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-fg-2"
     >
       <Face mood={moodOf(state)} />
-      {label}
-      {durable && <ShieldCheck size={11.5} className="-mr-0.5 text-ok/80" />}
+      <span className="hidden @xs:inline">{label}</span>
+      {durable && <ShieldCheck size={11.5} className="-mr-0.5 hidden text-ok/80 @xs:inline" />}
     </span>
   );
 }
@@ -91,6 +93,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const toast = useStore((s) => s.toast);
   const Icon = ICONS[pane.kind];
   const toggleZoom = useStore((s) => s.toggleZoom);
+  const [menu, setMenu] = useState<Menu | null>(null);
   const zoomed = useStore((s) => s.zoomed === pane.id);
 
   // Drag a pane by its title bar onto another pane: a side to dock there,
@@ -148,60 +151,92 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
       onDoubleClick={(e) => !(e.target as HTMLElement).closest("button") && toggleZoom(pane.id)}
       title="Drag to move, double-click to fill the window"
       className={cn(
-        "relative flex h-9 shrink-0 items-center gap-2 border-b pl-3 pr-1.5",
+        "@container relative flex h-9 shrink-0 items-center gap-2 border-b pr-1 pl-2 @2xs:pr-1.5 @2xs:pl-3",
         pane.kind === "terminal" ? "border-ink/[0.06]" : "border-line",
       )}
     >
-      {pane.kind !== "terminal" && <Icon size={13.5} strokeWidth={1.9} className={focused ? "text-fg-2" : "text-fg-3"} />}
+      {pane.kind !== "terminal" && <Icon size={13.5} strokeWidth={1.9} className={cn("shrink-0 @max-[9rem]:hidden", focused ? "text-fg-2" : "text-fg-3")} />}
       {pane.container && <Box size={13.5} strokeWidth={1.9} className="shrink-0 text-accent" />}
-      <span className={cn("max-w-[60%] shrink-0 truncate text-[12.5px] font-medium", focused ? "text-fg" : "text-fg-2")}>
+      <span className={cn("min-w-0 shrink truncate text-[12.5px] font-medium", focused ? "text-fg" : "text-fg-2")}>
         {pane.kind === "empty" ? "New pane" : pane.container ? pane.container.name : names.target(pane.target)}
       </span>
       {pane.container && (
-        <span className="min-w-0 truncate text-[11.5px] text-fg-3">
+        <span className="hidden min-w-0 truncate text-[11.5px] text-fg-3 @sm:inline">
           {pane.container.run === "logs" ? "logs on" : "on"} {names.target(pane.target)}
         </span>
       )}
-      {pane.kind !== "empty" && <EnvChip env={env} />}
+      {pane.kind !== "empty" && <EnvChip env={env} className="hidden @2xs:inline" />}
       {pane.kind === "terminal" && <AttentionPill id={pane.id} />}
-      {pane.kind === "terminal" && <SessionPill state={state} local={pane.target?.kind === "local"} />}
+      {pane.kind === "terminal" && (
+        <span className="contents @max-[10rem]:hidden">
+          <SessionPill state={state} local={pane.target?.kind === "local"} />
+        </span>
+      )}
       {pane.kind === "terminal" && <ProgressLine id={pane.id} />}
       {pane.kind === "terminal" && state?.kind === "disconnected" && (
         <button
           type="button"
           onClick={() => getTerminal(pane).reconnectNow()}
-          className="flex h-6 items-center gap-1 rounded-[6px] bg-accent px-2 text-[11.5px] font-medium text-white hover:brightness-110"
+          title="Reconnect"
+          className="flex h-6 shrink-0 items-center gap-1 rounded-[6px] bg-accent px-2 text-[11.5px] font-medium text-white hover:brightness-110"
         >
-          <RotateCw size={11.5} /> Reconnect
+          <RotateCw size={11.5} /> <span className="hidden @xs:inline">Reconnect</span>
         </button>
       )}
       {pane.kind === "files" && pane.path && (
-        <span className="truncate font-mono text-[11px] text-fg-3">{pane.path}</span>
+        <span className="hidden min-w-0 truncate font-mono text-[11px] text-fg-3 @sm:inline">{pane.path}</span>
       )}
       <div className="flex-1" />
-      <div className={cn("flex items-center transition-opacity", focused ? "opacity-100" : "opacity-0 group-hover/pane:opacity-100")}>
-        {pane.kind === "terminal" && (
-          <IconButton label="Browse files in this folder" onClick={openFilesHere} className="size-6">
-            <FolderOpen size={13.5} />
+      <div className="flex shrink-0 items-center">
+        {/* Wide enough: every button. Narrow: they fold into ⋯, and Close stays put. */}
+        <div className={cn("hidden items-center transition-opacity @sm:flex", focused ? "opacity-100" : "opacity-0 group-hover/pane:opacity-100")}>
+          {pane.kind === "terminal" && (
+            <IconButton label="Browse files in this folder" onClick={openFilesHere} className="size-6">
+              <FolderOpen size={13.5} />
+            </IconButton>
+          )}
+          <IconButton label="Split right" onClick={() => split(pane.id, "row")} className="size-6">
+            <Columns2 size={13.5} />
           </IconButton>
-        )}
-        <IconButton label="Split right" onClick={() => split(pane.id, "row")} className="size-6">
-          <Columns2 size={13.5} />
-        </IconButton>
-        <IconButton label="Split down" onClick={() => split(pane.id, "col")} className="size-6">
-          <Rows2 size={13.5} />
-        </IconButton>
-        <IconButton
-          label={`${zoomed ? "Show all panes" : "Fill the window"} (${shortcutLabel("zoomPane")})`}
-          onClick={() => toggleZoom(pane.id)}
-          className="size-6"
-        >
-          {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-        </IconButton>
+          <IconButton label="Split down" onClick={() => split(pane.id, "col")} className="size-6">
+            <Rows2 size={13.5} />
+          </IconButton>
+          <IconButton
+            label={`${zoomed ? "Show all panes" : "Fill the window"} (${shortcutLabel("zoomPane")})`}
+            onClick={() => toggleZoom(pane.id)}
+            className="size-6"
+          >
+            {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </IconButton>
+        </div>
+        <span className="@sm:hidden">
+          <IconButton
+            label="More"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu({ x: r.left, y: r.bottom + 4 });
+            }}
+            className="size-6"
+          >
+            <Ellipsis size={14} />
+          </IconButton>
+        </span>
         <IconButton label="Close pane" onClick={() => closePane(pane.id)} className="size-6">
           <X size={14} />
         </IconButton>
       </div>
+      {menu && (
+        <ContextMenu
+          menu={menu}
+          onClose={() => setMenu(null)}
+          items={[
+            ...(pane.kind === "terminal" ? [{ label: "Browse files in this folder", icon: FolderOpen, run: () => void openFilesHere() }] : []),
+            { label: "Split right", icon: Columns2, run: () => split(pane.id, "row") },
+            { label: "Split down", icon: Rows2, run: () => split(pane.id, "col") },
+            { label: zoomed ? "Show all panes" : "Fill the window", icon: zoomed ? Minimize2 : Maximize2, hint: shortcutLabel("zoomPane"), run: () => toggleZoom(pane.id) },
+          ]}
+        />
+      )}
     </div>
   );
 }
