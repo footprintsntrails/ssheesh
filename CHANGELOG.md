@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.4.1 — the portable app updates itself
+## 0.4.2 — the portable app updates itself
 
-- **The portable Windows app updates itself**, like the installed one: it downloads the new version, checks its signature, takes its place, and asks you to restart. Your servers and settings stay put. This works from 0.4.1 on, so getting 0.4.1 itself is one last manual download.
+- **The portable Windows app updates itself**, like the installed one: it downloads the new version, checks its signature, takes its place, and asks you to restart. Your servers and settings stay put. This works from 0.4.2 on, so getting 0.4.2 itself is one last manual download.
 - The security check-up and "What's using the disk" windows have a close button.
 
 ## 0.4.0 — know your server

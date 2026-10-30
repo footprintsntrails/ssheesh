@@ -60,7 +60,7 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
       await (portable ? backend.installPortableUpdate(onProgress) : backend.installUpdate(onProgress));
       set({ status: { kind: "ready", version: s.version } });
     } catch (e) {
-      // Releases before 0.4.1 have no signed portable file; the download page always works.
+      // Releases before 0.4.2 have no signed portable file; the download page always works.
       const fallback = portable ? " Get the new file from the download page instead." : "";
       set({ status: { kind: "error", message: `The update didn't install: ${toOpError(e).message}${fallback}` } });
       if (portable) void backend.openExternal(RELEASES);
