@@ -2,7 +2,7 @@
 // using the disk. Fixes and cleanups are commands you run yourself; a button
 // pastes one into the server's terminal without pressing Enter.
 
-import { CircleAlert, CircleCheck, CircleHelp, Copy, File, Folder, FolderOpen, HardDrive, RefreshCw, ShieldCheck, SquareTerminal, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleHelp, Copy, File, Folder, FolderOpen, HardDrive, RefreshCw, ShieldCheck, SquareTerminal, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { create } from "zustand";
 import { backend } from "../lib/backend";
@@ -12,7 +12,7 @@ import { useStore } from "../lib/store";
 import { findTerminal } from "../lib/terminals";
 import { targetKey, toOpError, type Check, type OpError, type TargetRef } from "../lib/types";
 import { Modal } from "./Overlays";
-import { Button, Spinner } from "./ui";
+import { Button, IconButton, Spinner } from "./ui";
 
 type Tool = "checkup" | "disk";
 
@@ -62,6 +62,9 @@ function Header({ icon: Icon, title, sub, loading, onReload }: { icon: LucideIco
       <Button size="sm" variant="ghost" onClick={onReload} disabled={loading}>
         <RefreshCw size={12.5} className={cn(loading && "animate-spin")} /> Check again
       </Button>
+      <IconButton label="Close" onClick={close} className="-mr-1.5 size-7">
+        <X size={15} />
+      </IconButton>
     </div>
   );
 }

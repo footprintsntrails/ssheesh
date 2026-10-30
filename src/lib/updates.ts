@@ -19,7 +19,7 @@ export const RELEASES = "https://github.com/footprintsntrails/ssheesh/releases/l
 
 interface UpdatesState {
   current: string;
-  /** The portable Windows build: updates are a download, not an install. */
+  /** The portable Windows build: it updates by swapping in a new .exe. */
   portable: boolean;
   status: UpdateStatus;
   lastChecked: number | null;
@@ -43,7 +43,7 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
       set({ lastChecked: Date.now() });
       if (!info) return set({ status: { kind: "upToDate" } });
       set({ status: { kind: "available", version: info.version, notes: info.notes } });
-      if (useSettings.getState().updateMode === "auto" && !get().portable) await get().install();
+      if (useSettings.getState().updateMode === "auto") await get().install();
     } catch (e) {
       // Background checks fail quietly (offline, server down); manual ones say why.
       set({ status: quiet ? { kind: "idle" } : { kind: "error", message: toOpError(e).message } });
@@ -53,14 +53,17 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
   async install() {
     const s = get().status;
     if (s.kind !== "available") return;
-    // A portable .exe can't replace itself while it runs: get the new one instead.
-    if (get().portable) return void backend.openExternal(RELEASES);
+    const portable = get().portable;
     set({ status: { kind: "downloading", version: s.version, progress: 0 } });
+    const onProgress = (progress: number | null) => set({ status: { kind: "downloading", version: s.version, progress } });
     try {
-      await backend.installUpdate((progress) => set({ status: { kind: "downloading", version: s.version, progress } }));
+      await (portable ? backend.installPortableUpdate(onProgress) : backend.installUpdate(onProgress));
       set({ status: { kind: "ready", version: s.version } });
     } catch (e) {
-      set({ status: { kind: "error", message: `The update didn't install: ${toOpError(e).message}` } });
+      // Releases before 0.4.1 have no signed portable file; the download page always works.
+      const fallback = portable ? " Get the new file from the download page instead." : "";
+      set({ status: { kind: "error", message: `The update didn't install: ${toOpError(e).message}${fallback}` } });
+      if (portable) void backend.openExternal(RELEASES);
     }
   },
 

@@ -296,6 +296,9 @@ export const mockBackend: Backend = {
       onProgress(i / 20);
     }
   },
+  async installPortableUpdate(onProgress) {
+    await this.installUpdate(onProgress);
+  },
   async relaunch() {
     location.reload();
   },

@@ -783,7 +783,7 @@ function Updates({ s, set }: SectionProps) {
           </div>
           {status.kind === "available" && (
             <Button variant="primary" size="sm" onClick={install}>
-              <Download size={13} /> {portable ? "Download" : "Install"}
+              <Download size={13} /> Install
             </Button>
           )}
           {status.kind === "ready" && (
@@ -820,7 +820,7 @@ function Updates({ s, set }: SectionProps) {
         label="Install updates"
         hint={
           portable
-            ? "This is the portable version: when there's an update, SSHeesh tells you and Download opens the new file. Your servers and settings stay put."
+            ? "This is the portable version. It updates itself too: the new file takes this one's place, and your servers and settings stay put. Restarting reconnects your terminals."
             : "Updates are checked when the app starts and every few hours. Restarting reconnects your terminals."
         }
       >

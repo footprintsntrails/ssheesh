@@ -98,6 +98,18 @@ jobs:
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
 
+      # Signed with the update key, so the portable app can update itself
+      # and check the new file the same way installed apps do.
+      - name: Sign the portable Windows app
+        if: matrix.name == 'Windows'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          exe=$(ls target/release/ssheesh.exe src-tauri/target/release/ssheesh.exe 2>/dev/null | head -1)
+          npx tauri signer sign "$exe"
+
       # The same app as one file to run without installing.
       - name: Attach the portable Windows app
         if: matrix.name == 'Windows'
@@ -110,14 +122,18 @@ jobs:
             const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
             const exe = ["target/release/ssheesh.exe", "src-tauri/target/release/ssheesh.exe"].find((p) => fs.existsSync(p));
             if (!exe) throw new Error("Couldn't find the built ssheesh.exe");
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: Number(process.env.RELEASE_ID),
-              name: `SSHeesh_${version}_x64-portable.exe`,
-              data: fs.readFileSync(exe),
-              headers: { "content-type": "application/octet-stream", "content-length": fs.statSync(exe).size },
-            });
+            const upload = (path, name) =>
+              github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: Number(process.env.RELEASE_ID),
+                name,
+                data: fs.readFileSync(path),
+                headers: { "content-type": "application/octet-stream", "content-length": fs.statSync(path).size },
+              });
+            await upload(exe, `SSHeesh_${version}_x64-portable.exe`);
+            // Read by the publish job, which puts it into latest.json.
+            await upload(`${exe}.sig`, `SSHeesh_${version}_x64-portable.exe.sig`);
 
   publish-release:
     name: Publish release
@@ -131,8 +147,32 @@ jobs:
           script: |
             const release_id = Number(process.env.RELEASE_ID);
             const { owner, repo } = context.repo;
+            let assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
+            // The portable app updates itself from its own entry in latest.json. Added
+            // here, after every build, so no build job's own latest.json upload can drop it.
+            const exe = assets.find((a) => a.name.endsWith("_x64-portable.exe"));
+            const sig = assets.find((a) => a.name.endsWith("_x64-portable.exe.sig"));
+            const manifest = assets.find((a) => a.name === "latest.json");
+            if (exe && sig && manifest) {
+              const read = async (a) => {
+                const { data } = await github.request("GET /repos/{owner}/{repo}/releases/assets/{asset_id}", {
+                  owner, repo, asset_id: a.id, headers: { accept: "application/octet-stream" },
+                });
+                return Buffer.from(data).toString("utf8");
+              };
+              const latest = JSON.parse(await read(manifest));
+              // The API address, like the other entries: unlike a draft's download
+              // link it stays the same once the release is published.
+              latest.platforms["windows-x86_64-portable"] = { signature: (await read(sig)).trim(), url: exe.url };
+              const body = JSON.stringify(latest, null, 2);
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: manifest.id });
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id, name: "latest.json", data: body,
+                headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+              });
+              assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
+            }
             // Signatures are already inside latest.json; one file per system is enough.
-            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
             for (const a of assets.filter((a) => a.name.endsWith(".sig"))) {
               await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
             }

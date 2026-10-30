@@ -368,7 +368,7 @@ async fn upload_paths(
 }
 
 /// The portable Windows .exe: run straight from a download, not installed.
-/// It can't replace itself while running, so updates mean a new download.
+/// It updates itself with `install_portable_update`.
 #[tauri::command]
 fn is_portable() -> bool {
     cfg!(windows)
@@ -376,6 +376,76 @@ fn is_portable() -> bool {
             .ok()
             .and_then(|exe| exe.parent().map(|dir| !dir.join("uninstall.exe").exists()))
             .unwrap_or(false)
+}
+
+/// The portable .exe's update: downloaded and checked against the release's
+/// signature like any update, then swapped in for the running one. A
+/// restart runs it.
+#[cfg(desktop)]
+#[tauri::command]
+async fn install_portable_update(app: tauri::AppHandle, on_progress: Channel<TransferProgress>) -> Result<(), OpError> {
+    use tauri_plugin_updater::UpdaterExt;
+    let failed = |e: tauri_plugin_updater::Error| OpError::failed(e.to_string());
+    let update = app
+        .updater_builder()
+        .target("windows-x86_64-portable")
+        .build()
+        .map_err(failed)?
+        .check()
+        .await
+        .map_err(failed)?
+        .ok_or_else(|| OpError::failed("There's no newer portable version yet."))?;
+    let mut done = 0u64;
+    let bytes = update
+        .download(
+            |chunk, total| {
+                done += chunk as u64;
+                let _ = on_progress.send(TransferProgress { done, total: total.unwrap_or(0) });
+            },
+            || {},
+        )
+        .await
+        .map_err(failed)?;
+    blocking(move || swap_in_portable(&bytes)).await
+}
+
+/// "SSHeesh.exe" -> "SSHeesh.<tag>.exe", next to it.
+fn portable_beside(exe: &std::path::Path, tag: &str) -> PathBuf {
+    let stem = exe.file_stem().unwrap_or_default().to_string_lossy();
+    exe.with_file_name(format!("{stem}.{tag}.exe"))
+}
+
+/// Windows won't overwrite a running program but lets it be renamed, so the
+/// running copy steps aside as "<name>.old.exe" (removed at the next start)
+/// and the new one takes its name, which keeps shortcuts working.
+fn swap_in_portable(bytes: &[u8]) -> Result<(), OpError> {
+    swap_in(&std::env::current_exe()?, bytes)
+}
+
+fn swap_in(exe: &std::path::Path, bytes: &[u8]) -> Result<(), OpError> {
+    let (new, old) = (portable_beside(exe, "new"), portable_beside(exe, "old"));
+    std::fs::write(&new, bytes).map_err(|e| OpError::failed(format!("Couldn't save the update next to SSHeesh: {e}")))?;
+    let _ = std::fs::remove_file(&old);
+    if let Err(e) = std::fs::rename(exe, &old) {
+        let _ = std::fs::remove_file(&new);
+        return Err(e.into());
+    }
+    if let Err(e) = std::fs::rename(&new, exe) {
+        let _ = std::fs::rename(&old, exe);
+        let _ = std::fs::remove_file(&new);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Removes the copy the last portable update set aside, once the old
+/// process has had time to exit.
+fn remove_old_portable() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let _ = std::fs::remove_file(portable_beside(&exe, "old"));
+    });
 }
 
 /// This computer's user and machine name, for streamer mode.
@@ -467,6 +537,9 @@ pub fn run() {
                 // The window opens at the size and place you left it.
                 app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
             }
+            if is_portable() {
+                remove_old_portable();
+            }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(AppState {
@@ -519,6 +592,8 @@ pub fn run() {
             fetch_metrics,
             local_identity,
             is_portable,
+            #[cfg(desktop)]
+            install_portable_update,
             list_containers,
             container_action,
         ])
@@ -531,4 +606,26 @@ pub fn run() {
                 app.state::<AppState>().sessions.close_all();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portable_update_takes_the_old_files_place() {
+        let dir = std::env::temp_dir().join(format!("sshee-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("SSHeesh_0.4.0_x64-portable.exe");
+        std::fs::write(&exe, "old").unwrap();
+        swap_in(&exe, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(dir.join("SSHeesh_0.4.0_x64-portable.old.exe")).unwrap(), "old");
+        assert!(!dir.join("SSHeesh_0.4.0_x64-portable.new.exe").exists());
+        // A second update replaces the copy the first one set aside.
+        swap_in(&exe, b"newer").unwrap();
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "newer");
+        assert_eq!(std::fs::read_to_string(dir.join("SSHeesh_0.4.0_x64-portable.old.exe")).unwrap(), "new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

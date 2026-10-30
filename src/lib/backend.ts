@@ -34,6 +34,8 @@ export interface Backend {
   checkUpdate(): Promise<UpdateInfo | null>;
   /** Downloads and installs the update found by checkUpdate. Progress is 0..1, or null if unknown. */
   installUpdate(onProgress: (fraction: number | null) => void): Promise<void>;
+  /** The portable .exe's update: downloaded, checked, and swapped in for the next start. */
+  installPortableUpdate(onProgress: (fraction: number | null) => void): Promise<void>;
   relaunch(): Promise<void>;
   /** Opens a web link in the system browser. */
   openExternal(url: string): Promise<void>;
@@ -179,6 +181,11 @@ async function tauriBackend(): Promise<Backend> {
     trustTestHostKey: (input) => call("trust_test_host_key", { input }),
     trustHostKey: (hostId) => call("trust_host_key", { hostId }),
     isPortable: () => call("is_portable", {}),
+    async installPortableUpdate(onProgress) {
+      const channel = new Channel<TransferProgress>();
+      channel.onmessage = ({ done, total }) => onProgress(total ? Math.min(1, done / total) : null);
+      await call("install_portable_update", { onProgress: channel });
+    },
     async writeClipboard(text) {
       const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);

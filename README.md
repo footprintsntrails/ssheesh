@@ -97,7 +97,7 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 | | |
 | --- | --- |
 | **macOS** 11+ (Apple Silicon and Intel) | One command in Terminal (below), or download the `.dmg` · [Guide](docs/install-macos.md) |
-| **Windows** 10 / 11 | download the `portable.exe` and run it, nothing to install. Or the `setup.exe`, which also updates itself · [Guide](docs/install-windows.md) |
+| **Windows** 10 / 11 | download the `portable.exe` and run it, nothing to install. Or the `setup.exe`. Both update themselves · [Guide](docs/install-windows.md) |
 | **Linux** | download the `.AppImage`: one file, nothing to install. Make it runnable once (`chmod +x`), then double-click it. |
 
 **Quickest on a Mac:** paste this into Terminal. It installs the latest version and opens it, with no security prompts:
