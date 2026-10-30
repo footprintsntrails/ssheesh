@@ -58,9 +58,15 @@ SSHeesh is made for people who'd rather not become Linux admins to look after a 
 
 | | |
 | --- | --- |
-| **macOS** 11+ (Apple Silicon and Intel) | [Guide](docs/install-macos.md) · download the `.dmg` |
+| **macOS** 11+ (Apple Silicon and Intel) | One command in Terminal (below), or download the `.dmg` · [Guide](docs/install-macos.md) |
 | **Windows** 10 / 11 | [Guide](docs/install-windows.md) · download the `setup.exe` |
-| **Linux** | download the `.AppImage` or `.deb` |
+| **Linux** | download the `.AppImage`: one file, nothing to install. Make it runnable once (`chmod +x`), then double-click it. |
+
+**Quickest on a Mac:** paste this into Terminal. It installs the latest version and opens it, with no security prompts:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/footprintsntrails/ssheesh/main/scripts/install-macos.sh | sh
+```
 
 All files are on the [Releases page](https://github.com/footprintsntrails/ssheesh/releases/latest). The app isn't signed by Apple or Microsoft yet, so the first launch needs a few extra clicks: on a Mac you allow it once in System Settings → Privacy & Security. The guides show every step.
 

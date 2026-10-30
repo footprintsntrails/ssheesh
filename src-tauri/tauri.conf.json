@@ -29,7 +29,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "appimage"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Servers, terminals and files that don't fall over",
     "icon": [
@@ -42,7 +47,7 @@
     "createUpdaterArtifacts": true,
     "publisher": "SSHeesh contributors",
     "homepage": "https://github.com/footprintsntrails/ssheesh",
-    "copyright": "\u00a9 2026 footprintsntrails. CC BY-NC-SA 4.0",
+    "copyright": "© 2026 footprintsntrails. CC BY-NC-SA 4.0",
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0"

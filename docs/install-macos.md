@@ -4,19 +4,31 @@
 
 **Needs:** macOS 11 Big Sur or newer. Works on Apple Silicon (M1–M4) and Intel Macs, it's one download for both.
 
-## 1. Download
+## The easy way: one command
 
-Open the [latest release](https://github.com/footprintsntrails/ssheesh/releases/latest) and download **`SSHeesh_<version>_universal.dmg`**.
+Open **Terminal** (press ⌘Space, type `Terminal`, press Return), paste this line and press Return:
 
-## 2. Install
+```bash
+curl -fsSL https://raw.githubusercontent.com/footprintsntrails/ssheesh/main/scripts/install-macos.sh | sh
+```
 
-1. Open the downloaded `.dmg`.
-2. Drag **SSHeesh** into the **Applications** folder.
+It downloads the latest SSHeesh from this page, puts it in **Applications** and opens it. macOS doesn't ask you to confirm anything, because the app didn't come through a browser. Run the same line again later to update by hand, though SSHeesh also updates itself.
+
+## Or download it yourself
+
+1. Open the [latest release](https://github.com/footprintsntrails/ssheesh/releases/latest) and download **`SSHeesh_<version>_universal.dmg`**.
+2. Open the downloaded `.dmg` and drag **SSHeesh** into the **Applications** folder.
 3. Eject the disk image.
 
-## 3. First launch
+### First launch
 
-SSHeesh isn't notarized by Apple yet (that needs a paid Apple developer account), so macOS blocks the first launch until you allow it. On macOS 15 Sequoia and newer, right-click → Open no longer gets around this, so use the steps below.
+SSHeesh isn't notarized by Apple yet (that needs a paid Apple developer account), so macOS blocks an app that came from a browser until you allow it. The quickest fix is this line in **Terminal**:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/SSHeesh.app
+```
+
+Then open SSHeesh as usual. If you'd rather click through it, on macOS 15 Sequoia and newer right-click → Open no longer works, so:
 
 1. Open SSHeesh from Applications. macOS says “Apple could not verify SSHeesh is free of malware”. Click **Done**. Don't click Move to Trash.
 2. Open **System Settings → Privacy & Security**.
@@ -28,16 +40,10 @@ You only do this once. Updates install without asking again.
 <details>
 <summary>macOS says the app “is damaged and can't be opened”</summary>
 
-That's the same check, worded badly. Open **Terminal** and run:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/SSHeesh.app
-```
-
-Then open SSHeesh again.
+That's the same check, worded badly. Run the `xattr` line above, then open SSHeesh again.
 </details>
 
-## 4. Updates
+## Updates
 
 SSHeesh checks for updates by itself and installs them in the background. When one is ready, a **Restart to update** button appears in the toolbar at the top. Terminals reconnect after the restart.
 

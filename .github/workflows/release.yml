@@ -101,9 +101,11 @@ jobs:
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         with:
           script: |
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: Number(process.env.RELEASE_ID),
-              draft: false,
-            });
+            const release_id = Number(process.env.RELEASE_ID);
+            const { owner, repo } = context.repo;
+            // Signatures are already inside latest.json; one file per system is enough.
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
+            for (const a of assets.filter((a) => a.name.endsWith(".sig"))) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+            }
+            await github.rest.repos.updateRelease({ owner, repo, release_id, draft: false });
