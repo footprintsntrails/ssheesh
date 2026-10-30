@@ -2,8 +2,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { backend } from "./backend";
 import { arrange, movePane, newId, paneIds, removePane, splitAt, type Arrangement, type Dir, type DropZone, type LayoutNode } from "./layout";
-import type { ContainerRef, Host, SessionState, TargetRef } from "./types";
-import { sameTarget, toOpError } from "./types";
+import type { ContainerRef, Host, HostKeyCheck, SessionState, TargetRef } from "./types";
+import { sameTarget, targetKey, toOpError } from "./types";
 
 export type PaneKind = "empty" | "terminal" | "files" | "stats";
 
@@ -36,6 +36,29 @@ export interface ConfirmRequest {
   resolve: (ok: boolean) => void;
 }
 
+/** A terminal wants you: a program rang the bell or sent a notification, or a long run went quiet. */
+export interface Attention {
+  kind: "input" | "done";
+  message?: string;
+  at: number;
+}
+
+/** What a durable session printed while the connection was down. */
+export interface Recap {
+  since: number;
+  until: number;
+  lines: string[];
+  errors: number;
+  warnings: number;
+}
+
+/** Progress a program reported with OSC 9;4, shown as a bar under the pane title. */
+export interface Progress {
+  state: "normal" | "error" | "paused" | "indeterminate";
+  /** 0 to 100. */
+  value: number;
+}
+
 interface OpenOptions {
   path?: string;
   initialCommand?: string;
@@ -44,6 +67,8 @@ interface OpenOptions {
   dir?: Dir;
   /** Always open in a new split, even if the source pane is empty. */
   split?: boolean;
+  /** Put the new pane left of (or above) the source instead of after it. */
+  before?: boolean;
   container?: ContainerRef;
 }
 
@@ -70,6 +95,19 @@ interface AppState {
 
   loadHosts(): Promise<void>;
   focus(id: string): void;
+  attention: Record<string, Attention>;
+  progress: Record<string, Progress>;
+  setAttention(id: string, a: Attention | null): void;
+  setProgress(id: string, p: Progress | null): void;
+  /** A server identity question waiting on a terminal pane. */
+  hostKeyPrompts: Record<string, HostKeyCheck>;
+  setHostKeyPrompt(id: string, c: HostKeyCheck | null): void;
+  recaps: Record<string, Recap>;
+  setRecap(id: string, r: Recap | null): void;
+  /** Last terminal you used on each machine, by target key. */
+  lastTerminal: Record<string, string>;
+  /** The terminal you'd call "the" terminal for a machine: the one you used last. */
+  mainTerminalFor(target: TargetRef): string | null;
   setPane(id: string, patch: Partial<PaneState>): void;
   setSession(id: string, state: SessionState): void;
   openIn(kind: Exclude<PaneKind, "empty">, target: TargetRef, opts?: OpenOptions): string;
@@ -124,7 +162,65 @@ export const useStore = create<AppState>()(
       },
 
       focus(id) {
-        if (get().focused !== id) set({ focused: id });
+        const s = get();
+        if (s.focused === id) return;
+        const p = s.panes[id];
+        const remember = p?.kind === "terminal" && p.target ? { lastTerminal: { ...s.lastTerminal, [targetKey(p.target)]: id } } : {};
+        set({ focused: id, ...remember });
+        if (s.attention[id]) get().setAttention(id, null);
+      },
+
+      attention: {},
+      progress: {},
+
+      setAttention(id, a) {
+        set((s) => {
+          const next = { ...s.attention };
+          if (a) next[id] = a;
+          else delete next[id];
+          return { attention: next };
+        });
+      },
+
+      recaps: {},
+
+      hostKeyPrompts: {},
+
+      setHostKeyPrompt(id, c) {
+        set((s) => {
+          const next = { ...s.hostKeyPrompts };
+          if (c) next[id] = c;
+          else delete next[id];
+          return { hostKeyPrompts: next };
+        });
+      },
+
+      setRecap(id, r) {
+        set((s) => {
+          const next = { ...s.recaps };
+          if (r) next[id] = r;
+          else delete next[id];
+          return { recaps: next };
+        });
+      },
+
+      setProgress(id, p) {
+        set((s) => {
+          const next = { ...s.progress };
+          if (p) next[id] = p;
+          else delete next[id];
+          return { progress: next };
+        });
+      },
+
+      lastTerminal: {},
+
+      mainTerminalFor(target) {
+        const s = get();
+        const isOn = (id: string | undefined) => !!id && s.panes[id]?.kind === "terminal" && sameTarget(s.panes[id].target, target);
+        const last = s.lastTerminal[targetKey(target)];
+        if (isOn(last)) return last;
+        return paneIds(s.root).find((id) => isOn(id)) ?? null;
       },
 
       setPane(id, patch) {
@@ -152,7 +248,9 @@ export const useStore = create<AppState>()(
           return from;
         }
         const id = newId("p");
-        const root = source ? splitAt(s.root, from, opts.dir ?? "row", id) : s.root;
+        // A terminal opened next to files or stats goes on the left, where you read first.
+        const before = opts.before ?? (kind === "terminal" && !!source && source.kind !== "terminal");
+        const root = source ? splitAt(s.root, from, opts.dir ?? "row", id, before) : s.root;
         set({ root, panes: { ...s.panes, [id]: { id, ...fresh } }, focused: id, zoomed: null });
         return id;
       },

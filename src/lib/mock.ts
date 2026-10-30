@@ -109,12 +109,34 @@ function banner(name: string, user: string): string {
 
 interface FakeSession {
   emit: (e: SessionEvent) => void;
+  /** Sends without adding to the server's scrollback (ssh's own messages). */
+  raw: (e: SessionEvent) => void;
   line: string;
   prompt: string;
   timers: number[];
+  /** What tmux on the "server" has printed, for sessionHistory. */
+  scrollback: string;
 }
 
 const sessions = new Map<string, FakeSession>();
+const trustedDemo = new Set<string>();
+const demoTested = new Set<string>();
+const byKey = new Map<string, FakeSession>();
+const redrawTimers = new Map<string, number>();
+
+// What the demo server prints while the connection is down.
+const WHILE_AWAY = [
+  " ✔ Container app-db-1     Healthy",
+  " ✔ Container app-api-1    Recreated",
+  " ✔ Container app-cache-1  Started",
+  "Running migrations… 3 applied",
+  "2026-10-30T02:41:07Z WARN  cache warm-up took 2.4s",
+  "2026-10-30T02:41:09Z ERROR payment webhook timed out (retrying)",
+  "2026-10-30T02:41:12Z INFO  webhook delivered on retry 1",
+  "Deploy finished in 1m 48s",
+];
+
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 
 function hostFor(t: TargetRef): { name: string; user: string } {
   if (t.kind === "local") return { name: "macbook", user: "me" };
@@ -124,8 +146,25 @@ function hostFor(t: TargetRef): { name: string; user: string } {
 
 let autoReconnect = true;
 
+/** A coding agent that works for a few seconds, then rings the bell for an answer. */
+function simulateAgent(s: FakeSession) {
+  const steps = [
+    `${C.dim}✻ Reading src/routes/checkout.ts…${C.r}`,
+    `${C.dim}✻ Writing a fix for the webhook retry…${C.r}`,
+    `${C.dim}✻ Running npm test… 42 passed${C.r}`,
+  ];
+  steps.forEach((line, i) => s.timers.push(window.setTimeout(() => s.emit({ type: "output", data: `${line}\r\n` }), 900 * (i + 1))));
+  s.timers.push(
+    window.setTimeout(() => {
+      s.emit({ type: "output", data: `\x07${C.y}?${C.r} Apply this change to src/routes/checkout.ts? ${C.dim}(y/n)${C.r} ` });
+    }, 900 * (steps.length + 1)),
+  );
+}
+
 function simulateDrop(s: FakeSession) {
-  s.emit({ type: "output", data: "\r\nConnection to 203.0.113.24 closed by remote host.\r\n" });
+  s.raw({ type: "output", data: "\r\nConnection to 203.0.113.24 closed by remote host.\r\n" });
+  // The server carries on without us; tmux keeps it all.
+  s.scrollback += `\r\n${WHILE_AWAY.join("\r\n")}\r\n${s.prompt}`;
   if (!autoReconnect) {
     s.emit({ type: "status", state: { kind: "disconnected", reason: "The server stopped responding" } });
     return;
@@ -137,8 +176,8 @@ function simulateDrop(s: FakeSession) {
   s.timers.push(
     window.setTimeout(() => {
       s.emit({ type: "status", state: { kind: "connecting", attempt: 2 } });
-      s.emit({ type: "status", state: { kind: "connected", durable: true } });
-      s.emit({ type: "output", data: s.prompt });
+      s.raw({ type: "status", state: { kind: "connected", durable: true } });
+      s.raw({ type: "output", data: `\x1b[H\x1b[2J${WHILE_AWAY.slice(-5).join("\r\n")}\r\n${s.prompt}` });
     }, 4000),
   );
 }
@@ -199,11 +238,12 @@ function metricsFor(t: TargetRef): Metrics {
 
 export const mockBackend: Backend = {
   isDemo: true,
-  appVersion: async () => "0.1.0",
+  appVersion: async () => "0.3.0",
+  localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
     return {
-      version: "0.1.1",
+      version: "0.3.1",
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
       date: new Date().toISOString(),
     };
@@ -231,27 +271,42 @@ export const mockBackend: Backend = {
       port: null,
       identityFile: input.identityFile ?? null,
       source: "saved",
+      rememberedPassword: !!input.password && !!input.rememberPassword,
     };
     hosts.push(h);
-    return h;
+    return { host: h, warning: null };
+  },
+  async setZoom() {},
+  isPortable: async () => false,
+  async notify(title, body) {
+    console.info(`[notification] ${title}: ${body}`);
+  },
+  async forgetPassword(id) {
+    const h = hosts.find((x) => x.id === id);
+    if (h) h.rememberedPassword = false;
   },
   async removeHost(id) {
     const i = hosts.findIndex((h) => h.id === id);
     if (i >= 0) hosts.splice(i, 1);
   },
 
-  async openSession(paneId, target, _key, _cols, _rows, container, onEvent) {
+  async openSession(paneId, target, sessionKey, _cols, _rows, container, onEvent) {
     const { name, user } = hostFor(target);
     const prompt = container
       ? `${C.g}root@${container.id}${C.r}:${C.bl}/app${C.r}# `
       : `${C.g}${user}@${name}${C.r}:${C.bl}~${C.r}$ `;
-    const s: FakeSession = { emit: onEvent, line: "", prompt, timers: [] };
+    const s: FakeSession = { emit: onEvent, raw: onEvent, line: "", prompt, timers: [], scrollback: "" };
+    s.emit = (e) => {
+      if (e.type === "output") s.scrollback += e.data;
+      onEvent(e);
+    };
     sessions.set(paneId, s);
+    byKey.set(sessionKey, s);
     onEvent({ type: "status", state: { kind: "connecting", attempt: 1 } });
     s.timers.push(
       window.setTimeout(() => {
         onEvent({ type: "status", state: { kind: "connected", durable: target.kind !== "local" } });
-        onEvent({
+        s.emit({
           type: "output",
           data: container?.run === "logs"
             ? "2026-10-29T23:10:02Z INFO  GET /v1/orders 200 18ms\r\n2026-10-29T23:10:04Z INFO  POST /v1/checkout 201 64ms\r\n"
@@ -274,6 +329,7 @@ export const mockBackend: Backend = {
         s.line = "";
         s.emit({ type: "output", data: "\r\n" });
         if (cmd === "drop") return simulateDrop(s);
+        if (cmd === "claude") return simulateAgent(s);
         const canned: Record<string, string> = {
           ls: `${C.bl}dist${C.r}  Dockerfile  ${C.bl}node_modules${C.r}  package.json  README.md  ${C.bl}src${C.r}`,
           uptime: " 23:14:02 up 37 days,  5:02,  1 user,  load average: 1.42, 1.18, 0.97",
@@ -294,15 +350,75 @@ export const mockBackend: Backend = {
       }
     }
   },
-  resizeSession() {},
+  resizeSession(paneId, _cols, rows) {
+    // Like tmux, redraw the screen when the size changes.
+    const s = sessions.get(paneId);
+    if (!s?.scrollback) return;
+    window.clearTimeout(redrawTimers.get(paneId));
+    redrawTimers.set(
+      paneId,
+      window.setTimeout(() => {
+        const lines = s.scrollback.replace(/\x08 \x08/g, "").split("\r\n").slice(-Math.max(1, rows - 1));
+        s.raw({ type: "output", data: `\x1b[H\x1b[2J${lines.join("\r\n")}` });
+      }, 120),
+    );
+  },
   setAutoReconnect(enabled) {
     autoReconnect = enabled;
   },
   reconnectSession(paneId) {
     const s = sessions.get(paneId);
     if (!s) return;
-    s.emit({ type: "status", state: { kind: "connected", durable: true } });
-    s.emit({ type: "output", data: s.prompt });
+    s.raw({ type: "status", state: { kind: "connected", durable: true } });
+    s.raw({ type: "output", data: `\x1b[H\x1b[2J${WHILE_AWAY.slice(-5).join("\r\n")}\r\n${s.prompt}` });
+  },
+  async localAuth() {
+    await wait(120);
+    return {
+      keys: [
+        { path: "~/.ssh/id_ed25519", name: "id_ed25519", kind: "ED25519", comment: "sam@macbook" },
+        { path: "~/.ssh/work_rsa", name: "work_rsa", kind: "RSA", comment: "sam@acme" },
+      ],
+      agents: [
+        { name: "ssh-agent", socket: null, keys: 1 },
+        { name: "1Password", socket: "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock", keys: 3 },
+      ],
+    };
+  },
+  async testConnection(input) {
+    await wait(900);
+    const host = input.address.split("@").pop()?.split(":")[0] ?? "";
+    if (!demoTested.has(host)) {
+      return {
+        hostKey: { kind: "unknown", fingerprints: [{ kind: "ED25519", sha256: "SHA256:8vKq2mT0pXc4LhRj7nWfB1sYaE6uDzG3oQ9iN5kHtVw" }] },
+        signedIn: false,
+        tmux: null,
+        message: null,
+      };
+    }
+    if (input.password === "wrong") {
+      return { hostKey: { kind: "known" }, signedIn: false, tmux: null, message: "The server didn't accept that password." };
+    }
+    return { hostKey: { kind: "known" }, signedIn: true, tmux: !host.startsWith("10."), message: null };
+  },
+  async trustTestHostKey(input) {
+    demoTested.add(input.address.split("@").pop()?.split(":")[0] ?? "");
+  },
+  async checkHostKey(hostId, changed) {
+    await wait(250);
+    // The demo's "pi" is a server you've never connected to.
+    if (hostId === "cfg:pi" && !trustedDemo.has(hostId)) {
+      return { kind: "unknown", fingerprints: [{ kind: "ED25519", sha256: "SHA256:q3pV0mXh7cJ4c1nQyTz8bW2fK9sL6aRgE5uYdN0vH1o" }] };
+    }
+    if (changed) return { kind: "changed", old: [{ kind: "ED25519", sha256: "SHA256:7Yb0kq…" }], new: [{ kind: "ED25519", sha256: "SHA256:Lm2x9P…" }] };
+    return { kind: "known" };
+  },
+  async trustHostKey(hostId) {
+    trustedDemo.add(hostId);
+  },
+  async sessionHistory(_target, sessionKey) {
+    const s = byKey.get(sessionKey);
+    return s ? stripAnsi(s.scrollback).replace(/\r/g, "").replace(/\x08 \x08/g, "") : "";
   },
   closeSession(paneId) {
     sessions.get(paneId)?.timers.forEach(clearTimeout);

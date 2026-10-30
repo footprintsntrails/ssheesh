@@ -12,45 +12,70 @@
 </div>
 
 > [!WARNING]
-> **Version 0.1.0 is a very early, raw preview.** Plenty is missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
+> **Version 0.3 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
 <p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh with a terminal, a file browser and live server stats side by side"></p>
 
-## Why
-
-You open a terminal to a server, start something long (a deploy, a backup, an AI agent), the Wi-Fi blinks, and it's gone. SSHeesh keeps it alive and reconnects on its own, and puts files and server health right next to the terminal.
+SSHeesh is a terminal for your servers that you make your own. Choose how it looks, down to an icon for each server. Keep files, stats and Docker containers next to your shell. And stop losing work to bad Wi-Fi.
 
 ## Simple from the first minute
 
 SSHeesh is made for people who'd rather not become Linux admins to look after a VPS or a homelab.
 
-- **Add a server by typing `user@host`.** That's the whole setup. Servers you already have in `~/.ssh/config` are there on their own.
-- **Errors in plain words.** Instead of `Permission denied (publickey)` you read "The server didn't accept your login. Check the user name and key", with a button that helps.
+- **Paste and go.** Paste `root@1.2.3.4` or a whole `ssh -p 2222 -i key user@host` command, and every field fills in. Already have servers in `~/.ssh/config`? SSHeesh asks which ones you want.
+- **Test before you add.** One click checks that the server answers, signs in, and has `tmux` for sessions that survive a dropped connection. If it doesn't, you get the command to install it.
+- **Errors in plain words.** Instead of `Permission denied (publickey)` you read "The server didn't accept your login. Check the user name and key."
 - **No commands to memorize.** Click a container to get a shell inside it. Click Logs or Config in the file manager. Right-click anything to see what you can do with it.
-- **Nothing to install on the server.** Stats come straight from Linux. Install `tmux` if you want sessions that survive disconnects; SSHeesh tells you when it would help.
-- **Good defaults, easy undo.** It looks and works fine untouched. When you do tweak things, every section of Settings has a Reset.
+- **Good defaults, easy undo.** It looks and works fine untouched. When you do tweak things, Settings has a search box and every section has a Reset.
 
-## What it does
+## Make it yours
 
-**Terminals that survive a bad network.** When the connection drops, SSHeesh reconnects by itself. On servers with `tmux`, you land back in the very same shell with everything still running. Close the app, open it tomorrow, and your sessions are still there.
+Four app themes, or let the theme follow your system's light and dark mode. Accent colors, nine terminal color schemes, fonts, cursor, spacing, interface size. Give every server its own icon and color. Fold the sidebar into a rail of icons, or switch on compact mode and let everything but your panes slide away until you point at the window's edge.
 
-<p align="center"><img src="docs/media/reconnect.gif" alt="The connection drops, SSHeesh shows Reconnecting, and the same session comes back"></p>
+<p align="center"><img src="docs/media/customize.gif" alt="Switching app themes, accent colors and terminal color schemes live, then finding a setting by search"></p>
 
-**A file manager that's nice to use.** An address bar you can type into, filter, sort, bookmarks for the folders you live in (in a wide, narrow or hidden column), recent folders, one-click places like Logs and Config. Preview and edit text files in place. Drag files from your desktop to upload; download files or whole folders. Open a terminal in any folder, or browse the folder your terminal is in.
+Split panes any way you like and drag them around by their title bar. Fill the window with one pane, and fade the ones you're not using.
+
+<p align="center"><img src="docs/media/layout.gif" alt="Dragging a pane to a new spot, filling the window with one pane, then folding the sidebar into icons"></p>
+
+## Add a server in seconds
+
+<p align="center"><img src="docs/media/addserver.gif" alt="Pasting an ssh command fills in the form; Test connection checks the server and its fingerprint; the server gets an icon, a color and a Prod label"></p>
+
+Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed for you. Prefer a password? SSHeesh can remember it in your system keychain, never in its own files.
+
+## Everything about a server in one window
+
+**A file manager that's nice to use.** An address bar you can type into, filter, sort, bookmarks for the folders you live in, recent folders, one-click places like Logs and Config. Preview and edit text files in place. Drag files from your desktop to upload; download files or whole folders. Open a terminal in any folder, or send the one you're already using there.
 
 <p align="center"><img src="docs/screenshots/files.png" alt="File manager with bookmarks, a file preview and a context menu"></p>
 
-**Your containers, right in the sidebar.** Expand a server to see its Docker and Podman containers, grouped by Compose project. Click one for a shell inside it; right-click to follow its logs, restart, stop or start it. Container shells survive dropped connections too.
+**Your containers, right in the sidebar.** Expand a server to see its Docker and Podman containers, grouped by Compose project. Click one for a shell inside it; right-click to follow its logs, restart, stop or start it.
 
 <p align="center"><img src="docs/media/containers.gif" alt="Expanding a server to see its containers, opening a shell inside one, and restarting another"></p>
 
-**Server stats without installing anything.** A one-line vitals bar (CPU, memory, network, disk) that hides with one click, and a detailed Stats view with load, traffic since boot (and this month, if the server runs `vnstat`) and every disk.
+**Server stats without installing anything.** A one-line vitals bar (CPU, memory, network, disk) that hides with one click, and a detailed Stats view with load, traffic and every disk.
 
-**Your layout, your colors.** Split panes any way you like and drag them around by their title bar. Ready-made layouts. Four app themes including a light one, accent colors, nine terminal color schemes, fonts, cursor, spacing. Sidebar on either side.
+## Made for long jobs and AI agents
 
-<p align="center"><img src="docs/media/customize.gif" alt="Switching app themes, accent colors and terminal color schemes live"></p>
+**Sessions that survive a bad network.** On servers with `tmux`, a dropped connection doesn't end anything: SSHeesh reconnects (or asks first, your choice) and you land back in the very same shell. A card then shows what the server printed while you were away, with errors counted.
 
-<p align="center"><img src="docs/media/layout.gif" alt="Dragging a pane to a new spot, then filling the window with one pane and back"></p>
+<p align="center"><img src="docs/media/reconnect.gif" alt="The connection drops, comes back, and a card shows what happened while you were away"></p>
+
+**It tells you when you're needed.** When Claude Code, Codex or any program in a terminal waits for an answer, or a long run goes quiet, the pane and the sidebar say so, and you get a system notification if SSHeesh is in the background.
+
+<p align="center"><img src="docs/media/agent.gif" alt="An AI agent in the terminal asks a question while you're in another pane, and the pane shows Needs you"></p>
+
+**Problems jump out.** Errors show up in red and warnings in yellow, and you can add your own words to highlight.
+
+## Safe by default
+
+- **Prod, Staging and Dev labels** color a server's tag and frame everywhere it appears, so you know which machine you're typing into.
+- **A clear question for new servers.** The first connection shows the server's fingerprint instead of ssh's yes/no prompt. If its identity ever changes, SSHeesh stops and shows the old and new fingerprints.
+- **Streamer mode** hides server names, addresses, IPs and user names everywhere, terminal output included. One shortcut, before you share your screen.
+- **Nothing phones home.** No account, no analytics. SSHeesh talks to your servers and to GitHub for updates, and Settings → Privacy says so.
+
+<p align="center"><img src="docs/media/streamer.gif" alt="Streamer mode hides server names and addresses across the app and terminal"></p>
 
 **Plays well with what you have.** It uses your normal `ssh`, so hosts from `~/.ssh/config`, your keys and your agent just work. Updates install themselves.
 
@@ -59,7 +84,7 @@ SSHeesh is made for people who'd rather not become Linux admins to look after a 
 | | |
 | --- | --- |
 | **macOS** 11+ (Apple Silicon and Intel) | One command in Terminal (below), or download the `.dmg` · [Guide](docs/install-macos.md) |
-| **Windows** 10 / 11 | [Guide](docs/install-windows.md) · download the `setup.exe` |
+| **Windows** 10 / 11 | download the `portable.exe` and run it, nothing to install. Or the `setup.exe`, which also updates itself · [Guide](docs/install-windows.md) |
 | **Linux** | download the `.AppImage`: one file, nothing to install. Make it runnable once (`chmod +x`), then double-click it. |
 
 **Quickest on a Mac:** paste this into Terminal. It installs the latest version and opens it, with no security prompts:
@@ -82,6 +107,8 @@ All files are on the [Releases page](https://github.com/footprintsntrails/sshees
 | Show / hide sidebar | ⌘B | Ctrl+Shift+B |
 | Show / hide server vitals | ⌘J | Ctrl+Shift+J |
 | One pane fills the window, and back | ⇧⌘↩ | Ctrl+Shift+Enter |
+| Compact mode | ⇧⌘M | Ctrl+Shift+M |
+| Streamer mode | ⇧⌘H | Ctrl+Shift+H |
 | Settings | ⌘, | Ctrl+, |
 
 ## Ideas and bugs
@@ -109,14 +136,16 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 ## Roadmap
 
-What's planned for the next releases. The order may still change.
+What's planned next. The order may still change.
 
-- **0.2: fewer mistakes, nothing leaked.** Prod, Staging and Dev labels. A streamer mode that hides IPs and host names. A clear host key check. Passwords in your system keychain, plus support for 1Password, Bitwarden and KeePassXC agents. Highlighting in terminal output. A heads-up when an AI agent in a terminal needs you, and a "while you were away" summary after a reconnect.
-- **0.3: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
-- **0.4: Docker, files and disk.** Compose stacks with per-container stats, and updates you can roll back. "What's eating my disk", systemd services and a one-click security check-up. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
-- **0.5: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
-- **0.6: sync and themes.** Encrypted sync through a folder you pick, with no account. Themes made from three colors, and theme sharing.
+- **0.3.1: a tidier file manager.** Drag a place or bookmark out of the column to remove it, and choose which ones show with a right-click. A New menu for files, folders and archives. A toolbar that keeps the address bar when the pane gets narrow, and a calmer top bar.
+- **0.4: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
+- **0.5: Docker, files and disk.** Compose stacks with per-container stats, and updates you can roll back. "What's eating my disk", systemd services and a one-click security check-up. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
+- **0.6: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
+- **0.7: sync and themes.** Encrypted sync through a folder you pick, with no account. Themes made from three colors, and theme sharing.
 - **Along the way:** signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
+
+See what changed in each version in the [changelog](CHANGELOG.md).
 
 ## Credits
 

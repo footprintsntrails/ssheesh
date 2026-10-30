@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { backend } from "./backend";
+import { usePrivacy } from "./privacy";
 import { targetKey, toOpError, type Metrics, type OpError, type TargetRef } from "./types";
 
 const POLL_MS = 2000;
@@ -40,6 +41,7 @@ function start(key: string, target: TargetRef): Poller {
     if (document.visibilityState === "visible") {
       try {
         const m = await backend.fetchMetrics(target);
+        usePrivacy.getState().learn([m.hostname]);
         const prev = p.prev;
         let samples = p.state.samples;
         if (prev) {

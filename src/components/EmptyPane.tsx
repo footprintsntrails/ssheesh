@@ -1,17 +1,30 @@
 import { Activity, FolderOpen, Laptop, Plus, SquareTerminal } from "lucide-react";
 import { useEffect } from "react";
 import { shortcutLabel } from "../lib/keys";
-import { hostAddress, useStore, type PaneState } from "../lib/store";
+import { useStore, type PaneState } from "../lib/store";
+import { useNames } from "../lib/privacy";
 import type { TargetRef } from "../lib/types";
-import { Button, IconButton, Kbd, Monogram } from "./ui";
+import { AppLogo, Button, IconButton, Kbd } from "./ui";
+import { useHostLook, useVisibleHosts } from "../lib/labels";
+
+/** A server's own icon, in its color, on a small tile. */
+function HostTile({ hostId }: { hostId: string }) {
+  const { icon: Icon, color } = useHostLook(hostId);
+  return (
+    <span className="inline-flex size-[26px] items-center justify-center rounded-[7px] bg-ink/[0.06] ring-1 ring-inset ring-ink/[0.07]">
+      <Icon size={14} strokeWidth={1.9} className={color ? undefined : "text-accent"} style={color ? { color } : undefined} />
+    </span>
+  );
+}
 
 export function EmptyPane({ pane, focused }: { pane: PaneState; focused: boolean }) {
-  const hosts = useStore((s) => s.hosts);
+  const hosts = useVisibleHosts();
+  const names = useNames();
   const openIn = useStore((s) => s.openIn);
   const setAddHostOpen = useStore((s) => s.setAddHostOpen);
   const targets: { target: TargetRef; name: string; sub: string }[] = [
     { target: { kind: "local" }, name: "This computer", sub: "local shell" },
-    ...hosts.slice(0, 8).map((h) => ({ target: { kind: "host", hostId: h.id } as TargetRef, name: h.name, sub: hostAddress(h) })),
+    ...hosts.slice(0, 8).map((h) => ({ target: { kind: "host", hostId: h.id } as TargetRef, name: names.host(h), sub: names.address(h) })),
   ];
 
   // Number keys pick a row while this pane is focused.
@@ -32,8 +45,9 @@ export function EmptyPane({ pane, focused }: { pane: PaneState; focused: boolean
   return (
     <div className="absolute inset-0 overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-[400px] flex-col justify-center px-6 py-10">
+        <AppLogo size={40} className="mb-4" />
         <h2 className="font-serif text-[28px] italic leading-none text-fg">Where to?</h2>
-        <p className="mt-2 text-[12.5px] text-fg-3">Terminals reconnect on their own when the network blinks.</p>
+        <p className="mt-2 text-[12.5px] text-fg-3">Open a terminal, files or stats on one of your machines.</p>
 
         <div className="mt-6 flex flex-col gap-0.5">
           {targets.map(({ target, name, sub }, i) => (
@@ -50,7 +64,7 @@ export function EmptyPane({ pane, focused }: { pane: PaneState; focused: boolean
                   <Laptop size={14} strokeWidth={1.75} />
                 </span>
               ) : (
-                <Monogram name={name} health="idle" />
+                <HostTile hostId={target.kind === "host" ? target.hostId : ""} />
               )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-medium text-fg">{name}</div>

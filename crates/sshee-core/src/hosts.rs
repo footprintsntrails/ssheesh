@@ -21,6 +21,12 @@ pub struct Host {
     pub port: Option<u16>,
     pub identity_file: Option<String>,
     pub source: HostSource,
+    /// A password for it is in the system keychain.
+    #[serde(default)]
+    pub remembered_password: bool,
+    /// Sign in through this key agent's socket (1Password, Bitwarden).
+    #[serde(default)]
+    pub identity_agent: Option<String>,
 }
 
 impl Host {
@@ -33,7 +39,8 @@ impl Host {
                 user: self.user.clone(),
                 port: self.port,
                 identity_file: self.identity_file.clone(),
-                extra_args: Vec::new(),
+                identity_agent: self.identity_agent.clone(),
+                ..Default::default()
             },
         }
     }
@@ -47,6 +54,14 @@ pub struct NewHost {
     /// `user@host:port`, `host:port` or just `host`.
     pub address: String,
     pub identity_file: Option<String>,
+    /// Optional; leave empty to sign in with a key.
+    #[serde(default)]
+    pub password: Option<crate::secrets::Secret>,
+    /// Keep the password in the system keychain, or only until the app quits.
+    #[serde(default)]
+    pub remember_password: bool,
+    #[serde(default)]
+    pub identity_agent: Option<String>,
 }
 
 pub struct HostStore {
@@ -86,25 +101,23 @@ impl HostStore {
     }
 
     pub fn add(&mut self, input: NewHost) -> Result<Host, String> {
-        let (user, hostname, port) = parse_address(&input.address)?;
-        let name = input
-            .name
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| hostname.clone());
+        let mut host = preview(&input)?;
+        host.id = format!("saved:{}", unique_id());
         let mut saved = self.load_saved();
-        let host = Host {
-            id: format!("saved:{}", unique_id()),
-            name,
-            hostname,
-            user,
-            port,
-            identity_file: input.identity_file.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-            source: HostSource::Saved,
-        };
         saved.push(host.clone());
         self.write_saved(&saved)?;
         Ok(host)
+    }
+
+    /// Records whether a password for a saved host is in the keychain.
+    pub fn set_remembered_password(&mut self, id: &str, remembered: bool) -> Result<(), String> {
+        let mut saved = self.load_saved();
+        for h in saved.iter_mut().filter(|h| h.id == id) {
+            h.remembered_password = remembered;
+        }
+        self.write_saved(&saved)?;
+        self.cache.clear();
+        Ok(())
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
@@ -133,6 +146,29 @@ fn unique_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let n = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("{:x}", n)
+}
+
+/// The host a form describes, without saving it: used to test a connection
+/// before adding it.
+pub fn preview(input: &NewHost) -> Result<Host, String> {
+    let (user, hostname, port) = parse_address(&input.address)?;
+    let name = input
+        .name
+        .as_deref()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| hostname.clone());
+    Ok(Host {
+        id: format!("test:{}", input.address.trim()),
+        name,
+        hostname,
+        user,
+        port,
+        identity_file: input.identity_file.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        source: HostSource::Saved,
+        remembered_password: input.remember_password && input.password.as_ref().is_some_and(|p| !p.expose().is_empty()),
+        identity_agent: input.identity_agent.clone().filter(|s| !s.is_empty()),
+    })
 }
 
 pub fn parse_address(input: &str) -> Result<(Option<String>, String, Option<u16>), String> {
@@ -206,6 +242,8 @@ fn parse_config_text(text: &str, base: &Path, out: &mut Vec<Host>, depth: u8) {
                         port: None,
                         identity_file: None,
                         source: HostSource::SshConfig,
+                        remembered_password: false,
+                        identity_agent: None,
                     });
                     current.push(out.len() - 1);
                 }

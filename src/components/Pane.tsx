@@ -1,9 +1,11 @@
-import { Activity, Box, Columns2, FolderOpen, Maximize2, Minimize2, RotateCw, Rows2, ShieldCheck, SquareTerminal, X } from "lucide-react";
+import { Activity, BellRing, Box, Check, Columns2, FolderOpen, Maximize2, Minimize2, RotateCw, Rows2, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { targetLabel, useStore, type PaneState } from "../lib/store";
+import { useStore, type PaneState } from "../lib/store";
+import { useNames } from "../lib/privacy";
+import { ENV_LABELS, useEnv } from "../lib/labels";
 import { backend } from "../lib/backend";
 import { useSettings } from "../lib/settings";
 import { getTerminal } from "../lib/terminals";
@@ -13,7 +15,41 @@ import { EmptyPane } from "./EmptyPane";
 import { FilesPane } from "./FilesPane";
 import { StatsPane } from "./StatsPane";
 import { TerminalPane } from "./TerminalPane";
-import { Face, IconButton, moodOf } from "./ui";
+import { EnvChip, Face, IconButton, moodOf } from "./ui";
+
+/** "Needs you" when a program is waiting, "Went quiet" when a long run stopped. */
+function AttentionPill({ id }: { id: string }) {
+  const a = useStore((s) => s.attention[id]);
+  if (!a) return null;
+  const input = a.kind === "input";
+  return (
+    <span
+      title={a.message ?? (input ? "A program in this terminal is waiting for you" : "Output stopped after a long run. It may be done.")}
+      className={cn(
+        "inline-flex h-[20px] shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-semibold",
+        input ? "bg-accent text-white" : "bg-ink/[0.08] text-fg-2",
+      )}
+    >
+      {input ? <BellRing size={11} strokeWidth={2.2} /> : <Check size={11} strokeWidth={2.4} />}
+      {input ? "Needs you" : "Went quiet"}
+    </span>
+  );
+}
+
+/** A thin bar under the title while a program reports progress. */
+function ProgressLine({ id }: { id: string }) {
+  const p = useStore((s) => s.progress[id]);
+  if (!p) return null;
+  const color = p.state === "error" ? "bg-bad" : p.state === "paused" ? "bg-warn" : "bg-accent";
+  return (
+    <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] overflow-hidden">
+      <span
+        className={cn("block h-full transition-[width] duration-300", color, p.state === "indeterminate" && "w-1/3 animate-pulse")}
+        style={p.state === "indeterminate" ? undefined : { width: `${p.value}%` }}
+      />
+    </span>
+  );
+}
 
 function SessionPill({ state, local }: { state: SessionState | undefined; local: boolean }) {
   if (!state) return null;
@@ -46,7 +82,8 @@ function SessionPill({ state, local }: { state: SessionState | undefined; local:
 const ICONS = { terminal: SquareTerminal, files: FolderOpen, stats: Activity, empty: SquareTerminal };
 
 function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
-  const hosts = useStore((s) => s.hosts);
+  const env = useEnv(pane.target);
+  const names = useNames();
   const state = useStore((s) => s.sessions[pane.id]);
   const split = useStore((s) => s.split);
   const closePane = useStore((s) => s.closePane);
@@ -111,21 +148,24 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
       onDoubleClick={(e) => !(e.target as HTMLElement).closest("button") && toggleZoom(pane.id)}
       title="Drag to move, double-click to fill the window"
       className={cn(
-        "flex h-9 shrink-0 items-center gap-2 border-b pl-3 pr-1.5",
+        "relative flex h-9 shrink-0 items-center gap-2 border-b pl-3 pr-1.5",
         pane.kind === "terminal" ? "border-ink/[0.06]" : "border-line",
       )}
     >
       {pane.kind !== "terminal" && <Icon size={13.5} strokeWidth={1.9} className={focused ? "text-fg-2" : "text-fg-3"} />}
       {pane.container && <Box size={13.5} strokeWidth={1.9} className="shrink-0 text-accent" />}
       <span className={cn("max-w-[60%] shrink-0 truncate text-[12.5px] font-medium", focused ? "text-fg" : "text-fg-2")}>
-        {pane.kind === "empty" ? "New pane" : pane.container ? pane.container.name : targetLabel(pane.target, hosts)}
+        {pane.kind === "empty" ? "New pane" : pane.container ? pane.container.name : names.target(pane.target)}
       </span>
       {pane.container && (
         <span className="min-w-0 truncate text-[11.5px] text-fg-3">
-          {pane.container.run === "logs" ? "logs on" : "on"} {targetLabel(pane.target, hosts)}
+          {pane.container.run === "logs" ? "logs on" : "on"} {names.target(pane.target)}
         </span>
       )}
+      {pane.kind !== "empty" && <EnvChip env={env} />}
+      {pane.kind === "terminal" && <AttentionPill id={pane.id} />}
       {pane.kind === "terminal" && <SessionPill state={state} local={pane.target?.kind === "local"} />}
+      {pane.kind === "terminal" && <ProgressLine id={pane.id} />}
       {pane.kind === "terminal" && state?.kind === "disconnected" && (
         <button
           type="button"
@@ -170,6 +210,8 @@ export function PaneView({ id }: { id: string }) {
   const pane = useStore((s) => s.panes[id]);
   const focused = useStore((s) => s.focused === id);
   const many = useStore((s) => Object.keys(s.panes).length > 1);
+  const env = useEnv(useStore((s) => s.panes[id]?.target));
+  const dim = useSettings((s) => s.dimInactive);
   const focus = useStore((s) => s.focus);
   const drop = useStore((s) => (s.dropTarget?.paneId === id ? s.dropTarget.zone : null));
   const terminalBg = useSettings((s) => resolveScheme(s.terminalScheme, s.theme, s.accent).background);
@@ -195,13 +237,18 @@ export function PaneView({ id }: { id: string }) {
         {pane.kind === "files" && pane.target && <FilesPane pane={pane} target={pane.target} focused={focused} />}
         {pane.kind === "stats" && pane.target && <StatsPane pane={pane} target={pane.target} />}
       </div>
+      {!focused && many && dim > 0 && (
+        <div aria-hidden className="pointer-events-none absolute inset-0 z-10 bg-window transition-opacity" style={{ opacity: dim / 100 }} />
+      )}
       {/* The frame sits on top so split containers can't clip it. A terminal
           reads as its own block: its own background and a crisp edge. */}
       <div
         aria-hidden
         className={cn(
           "pointer-events-none absolute inset-0 z-20 rounded-[var(--ui-radius)] ring-inset transition-shadow",
-          pane.kind === "terminal"
+          env
+            ? cn(focused && many ? "ring-[1.5px]" : "ring-1", ENV_LABELS[env].ring)
+            : pane.kind === "terminal"
             ? focused && many
               ? "ring-1 ring-ink/[0.28] shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
               : "ring-1 ring-ink/[0.14] shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]"

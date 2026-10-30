@@ -1,4 +1,4 @@
-import { File } from "lucide-react";
+import { Check, File } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/format";
 
@@ -14,6 +14,9 @@ export interface MenuItem {
   hint?: string;
   danger?: boolean;
   disabled?: boolean;
+  /** Shows a check mark: the item is a choice that's currently on. */
+  checked?: boolean;
+  iconClass?: string;
 }
 
 /** Right-click menu: frosted, keyboard-dismissable, kept inside the window. */
@@ -56,7 +59,8 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
         ) : (
           <button
             key={it.label}
-            role="menuitem"
+            role={it.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+            aria-checked={it.checked}
             disabled={it.disabled}
             onClick={() => {
               onClose();
@@ -67,9 +71,10 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
               it.danger ? "text-bad hover:bg-bad/15" : "text-fg hover:bg-accent/90 hover:text-white",
             )}
           >
-            <it.icon size={13.5} strokeWidth={1.8} className="shrink-0 opacity-80" />
+            <it.icon size={13.5} strokeWidth={1.8} className={cn("shrink-0", it.iconClass ?? "opacity-80")} />
             <span className="flex-1">{it.label}</span>
             {it.hint && <span className="text-[11px] opacity-50">{it.hint}</span>}
+            {it.checked && <Check size={13} strokeWidth={2.2} className="shrink-0" />}
           </button>
         ),
       )}

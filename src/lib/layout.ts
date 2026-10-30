@@ -31,8 +31,8 @@ export function insertAt(root: LayoutNode, targetId: string, dir: Dir, newPaneId
   return go(root);
 }
 
-export function splitAt(root: LayoutNode, paneId: string, dir: Dir, newPaneId: string): LayoutNode {
-  return insertAt(root, paneId, dir, newPaneId, false);
+export function splitAt(root: LayoutNode, paneId: string, dir: Dir, newPaneId: string, before = false): LayoutNode {
+  return insertAt(root, paneId, dir, newPaneId, before);
 }
 
 /** Removes a pane; splits left with one child collapse into it. */

@@ -10,13 +10,65 @@ export interface Host {
   port: number | null;
   identityFile: string | null;
   source: HostSource;
+  /** A password for it is in the system keychain. */
+  rememberedPassword?: boolean;
 }
 
 export interface NewHost {
   name?: string;
   address: string;
   identityFile?: string;
+  /** Leave empty to sign in with a key. */
+  password?: string;
+  /** Keep it in the system keychain, or only until the app quits. */
+  rememberPassword?: boolean;
+  /** Sign in through a password manager's key agent (its socket path). */
+  identityAgent?: string;
 }
+
+export interface LocalKey {
+  path: string;
+  name: string;
+  kind: string;
+  comment: string;
+}
+
+export interface KeyAgent {
+  name: string;
+  socket: string | null;
+  keys: number | null;
+}
+
+/** Keys in ~/.ssh and key agents running on this computer. */
+export interface LocalAuth {
+  keys: LocalKey[];
+  agents: KeyAgent[];
+}
+
+export interface ConnectionTest {
+  hostKey: HostKeyCheck;
+  signedIn: boolean;
+  tmux: boolean | null;
+  message: string | null;
+}
+
+export interface AddedHost {
+  host: Host;
+  /** Set when the password couldn't go into the keychain. */
+  warning: string | null;
+}
+
+export interface Fingerprint {
+  kind: string;
+  sha256: string;
+}
+
+/** Whether a server's identity (host key) is already trusted. */
+export type HostKeyCheck =
+  | { kind: "known" }
+  | { kind: "unknown"; fingerprints: Fingerprint[] }
+  | { kind: "changed"; old: Fingerprint[]; new: Fingerprint[] }
+  | { kind: "unreachable"; message: string };
 
 /** Where something runs: this computer or a server from the list. */
 export type TargetRef = { kind: "local" } | { kind: "host"; hostId: string };

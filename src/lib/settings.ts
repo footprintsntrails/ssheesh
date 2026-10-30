@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { HighlightRule } from "./highlight";
 import { ACCENTS, type AppThemeId } from "./themes";
 
 export type UpdateMode = "auto" | "notify" | "manual";
@@ -11,6 +12,19 @@ export type ReconnectMode = "auto" | "ask" | "off";
 
 export interface Settings {
   theme: AppThemeId;
+  /** Switch between a light and a dark theme with the system. */
+  themeFollowsSystem: boolean;
+  lightTheme: AppThemeId;
+  darkTheme: AppThemeId;
+  /** Interface size in percent; the terminal font has its own size. */
+  uiZoom: number;
+  /** How much to fade panes you're not using, 0 to 50 percent. */
+  dimInactive: number;
+  animations: boolean;
+  /** The >_< mark in the sidebar and empty panes. */
+  logo: "winking" | "still" | "hidden";
+  /** Hides the sidebar, toolbar and vitals; they slide in at the window's edges. */
+  compactMode: boolean;
   accent: string;
   terminalScheme: string;
   terminalFont: string;
@@ -23,6 +37,8 @@ export interface Settings {
   sidebarSide: "left" | "right";
   sidebarVisible: boolean;
   sidebarWidth: number;
+  /** Full list, or a rail of server icons. */
+  sidebarMode: "wide" | "narrow";
   /** Machines whose container list is open in the sidebar. */
   expanded: string[];
   placesWidth: number;
@@ -33,10 +49,27 @@ export interface Settings {
   paneRadius: number;
   showVitals: boolean;
   updateMode: UpdateMode;
+  /** Hides server names, addresses and users everywhere, for streams and screen shares. */
+  streamerMode: boolean;
+  /** Color errors, warnings and addresses in terminal output, plus your own rules. */
+  highlightErrors: boolean;
+  highlightWarnings: boolean;
+  highlightAddresses: boolean;
+  highlightRules: HighlightRule[];
+  /** System notification when a terminal needs you and SSHeesh isn't in front. */
+  notifyAttention: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "midnight",
+  themeFollowsSystem: false,
+  lightTheme: "daylight",
+  darkTheme: "midnight",
+  uiZoom: 100,
+  dimInactive: 0,
+  animations: true,
+  logo: "winking",
+  compactMode: false,
   accent: ACCENTS[0].value,
   terminalScheme: "auto",
   terminalFont: "system",
@@ -45,18 +78,25 @@ export const DEFAULT_SETTINGS: Settings = {
   cursorStyle: "bar",
   cursorBlink: true,
   terminalPadding: 12,
-  reconnectMode: "auto",
+  reconnectMode: "ask",
   sidebarSide: "left",
   sidebarVisible: true,
   sidebarWidth: 232,
+  sidebarMode: "wide",
   expanded: [],
   placesWidth: 172,
-  placesMode: "wide",
+  placesMode: "narrow",
   previewWidth: 420,
   paneGap: 6,
   paneRadius: 11,
   showVitals: true,
   updateMode: "auto",
+  streamerMode: false,
+  highlightErrors: true,
+  highlightWarnings: true,
+  highlightAddresses: false,
+  highlightRules: [],
+  notifyAttention: true,
 };
 
 interface SettingsStore extends Settings {
@@ -80,6 +120,7 @@ export const useSettings = create<SettingsStore>()(
 export function applyAppearance(s: Settings) {
   const root = document.documentElement;
   root.dataset.theme = s.theme;
+  root.classList.toggle("reduce-motion", !s.animations);
   root.style.setProperty("--ui-accent", s.accent);
   root.style.setProperty("--ui-gap", `${s.paneGap}px`);
   root.style.setProperty("--ui-radius", `${s.paneRadius}px`);

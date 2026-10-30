@@ -1,18 +1,21 @@
 # Installing SSHeesh on Windows
 
-> SSHeesh is an early preview (0.1). Things will break; [tell us](https://github.com/footprintsntrails/ssheesh/issues/new/choose) when they do.
+> SSHeesh is an early preview (0.3). Things will break; [tell us](https://github.com/footprintsntrails/ssheesh/issues/new/choose) when they do.
 
 **Needs:** Windows 10 (version 1809 or newer) or Windows 11, 64-bit.
 
 ## 1. Download
 
-Open the [latest release](https://github.com/footprintsntrails/ssheesh/releases/latest) and download **`SSHeesh_<version>_x64-setup.exe`**.
+Open the [latest release](https://github.com/footprintsntrails/ssheesh/releases/latest). There are two ways to get SSHeesh; pick one:
 
-(There's also an `.msi` for company-managed PCs. Most people want the `setup.exe`.)
+- **`SSHeesh_<version>_x64-portable.exe`**: the whole app in one file. Nothing to install: put it anywhere (the desktop, a USB stick) and double-click it. When there's an update, SSHeesh tells you and **Download** gets the new file.
+- **`SSHeesh_<version>_x64-setup.exe`**: installs SSHeesh for your user (no admin rights needed), adds it to the Start menu, and updates itself in the background.
 
-## 2. Install
+Either way, your servers and settings live in `%APPDATA%\io.github.footprintsntrails.ssheesh`, and remembered passwords in Windows Credential Manager. You can switch between the two, or move the portable file around, without losing anything.
 
-Run the downloaded `setup.exe`. It installs for your user only, so it doesn't ask for admin rights.
+The portable file needs Microsoft Edge WebView2, which Windows 10 and 11 already have. If it won't start on an older, untouched PC, use the installer: it adds WebView2 for you.
+
+## 2. First launch
 
 ### “Windows protected your PC”
 
@@ -39,7 +42,7 @@ Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
 
 ## 4. Updates
 
-SSHeesh checks for updates by itself and installs them in the background. When one is ready, a **Restart to update** button appears in the toolbar at the top.
+The installed version checks for updates by itself and installs them in the background. When one is ready, a **Restart to update** button appears in the toolbar at the top.
 
 Change this in **Settings → Updates** (Ctrl+,): install automatically, ask first, or never check.
 

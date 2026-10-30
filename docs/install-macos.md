@@ -1,6 +1,6 @@
 # Installing SSHeesh on macOS
 
-> SSHeesh is an early preview (0.1). Things will break; [tell us](https://github.com/footprintsntrails/ssheesh/issues/new/choose) when they do.
+> SSHeesh is an early preview (0.3). Things will break; [tell us](https://github.com/footprintsntrails/ssheesh/issues/new/choose) when they do.
 
 **Needs:** macOS 11 Big Sur or newer. Works on Apple Silicon (M1–M4) and Intel Macs, it's one download for both.
 

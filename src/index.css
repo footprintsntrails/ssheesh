@@ -47,6 +47,32 @@
   }
 }
 
+/* A setting found through search points itself out for a moment. */
+.setting-found {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--ui-accent) 12%, transparent);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+/* Settings → Appearance → Animations off, or the system asks for less motion. */
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
 /* ---------------------------------------------------------------- themes */
 
 :root,
@@ -62,6 +88,9 @@
   --ui-glass: rgb(26 28 33 / 0.62);
   --ui-glass-soft: rgb(19 21 24 / 0.5);
   --ui-glow: 0.13;
+  --ui-file-code: #c792eacc;
+  --ui-file-image: #f5c451cc;
+  --ui-file-archive: #ff9f6bcc;
   color-scheme: dark;
 }
 
@@ -92,6 +121,9 @@
 }
 
 [data-theme="daylight"] {
+  --ui-file-code: #8250df;
+  --ui-file-image: #a16207;
+  --ui-file-archive: #c2410c;
   --ui-window: #eceef2;
   --ui-canvas: #ffffff;
   --ui-surface: #f6f7f9;

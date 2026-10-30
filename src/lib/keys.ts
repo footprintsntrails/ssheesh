@@ -3,7 +3,7 @@
 
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
 
-export type ShortcutId = "palette" | "splitRight" | "splitDown" | "closePane" | "addHost" | "settings" | "sidebar" | "vitals" | "zoomPane";
+export type ShortcutId = "palette" | "splitRight" | "splitDown" | "closePane" | "addHost" | "settings" | "sidebar" | "vitals" | "zoomPane" | "streamer" | "compact";
 
 interface Combo {
   key: string;
@@ -21,6 +21,8 @@ const MAC: Record<ShortcutId, Combo> = {
   sidebar: { key: "b" },
   vitals: { key: "j" },
   zoomPane: { key: "enter", shift: true },
+  streamer: { key: "h", shift: true },
+  compact: { key: "m", shift: true },
 };
 
 const OTHER: Record<ShortcutId, Combo> = {
@@ -33,6 +35,8 @@ const OTHER: Record<ShortcutId, Combo> = {
   sidebar: { key: "b" },
   vitals: { key: "j" },
   zoomPane: { key: "enter" },
+  streamer: { key: "h" },
+  compact: { key: "m" },
 };
 
 export function matches(e: KeyboardEvent, id: ShortcutId): boolean {

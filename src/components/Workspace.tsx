@@ -1,4 +1,4 @@
-import { Activity, ArrowDownToLine, Minimize2, Columns2, Columns3, FolderOpen, LayoutDashboard, LayoutGrid, PanelLeft, PanelRight, RotateCw, Rows2, Rows3, Settings, SquareTerminal } from "lucide-react";
+import { Activity, ArrowDownToLine, Minimize2, Columns2, Columns3, EyeOff, FolderOpen, LayoutDashboard, LayoutGrid, PanelLeft, PanelRight, RotateCw, Rows2, Rows3, Settings, SquareTerminal } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn } from "../lib/format";
@@ -6,11 +6,14 @@ import { isMac, shortcutLabel } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
 import type { Arrangement, LayoutNode } from "../lib/layout";
-import { hostAddress, targetLabel, useStore, type PaneKind } from "../lib/store";
+import { toggleStreamer, useNames } from "../lib/privacy";
+import { useEnv } from "../lib/labels";
+import { useStore, type PaneKind } from "../lib/store";
 import { sameTarget } from "../lib/types";
 import { PaneView } from "./Pane";
 import { VitalsBar } from "./StatsPane";
-import { IconButton } from "./ui";
+import { EdgeReveal } from "./EdgeReveal";
+import { EnvChip, IconButton } from "./ui";
 
 function Tree({ node }: { node: LayoutNode }) {
   if (node.kind === "pane") return <PaneView id={node.id} />;
@@ -43,7 +46,7 @@ function ArrangeMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const target = useStore((s) => s.panes[s.focused]?.target ?? null);
-  const hosts = useStore((s) => s.hosts);
+  const names = useNames();
   const openWorkspace = useStore((s) => s.openWorkspace);
   const arrangePanes = useStore((s) => s.arrangePanes);
 
@@ -84,7 +87,7 @@ function ArrangeMenu() {
                 }}
               >
                 <SquareTerminal size={14} className="opacity-80" />
-                <span className="flex-1 truncate">Workspace for {targetLabel(target, hosts)}</span>
+                <span className="flex-1 truncate">Workspace for {names.target(target)}</span>
               </button>
               <div className="px-2 pb-1 text-[11px] leading-snug text-fg-3">Terminal, files and stats side by side</div>
               <div className="mx-2 my-1 h-px bg-ink/[0.08]" />
@@ -157,22 +160,44 @@ function UpdateButton() {
   return null;
 }
 
+/** Visible whenever names are hidden, so you always know, and one click away from off. */
+function StreamerBadge() {
+  const on = useSettings((s) => s.streamerMode);
+  if (!on) return null;
+  return (
+    <button
+      type="button"
+      onClick={toggleStreamer}
+      title={`Streamer mode hides server names, addresses and users. Click to show them (${shortcutLabel("streamer")})`}
+      className="flex h-7 items-center gap-1.5 rounded-[7px] bg-accent/15 px-2.5 text-[12px] font-medium text-accent hover:bg-accent/20"
+    >
+      <EyeOff size={13} /> Streamer mode
+    </button>
+  );
+}
+
 /** Top bar: what's focused, and one-click views of the same machine. */
 function Toolbar() {
   const pane = useStore((s) => s.panes[s.focused]);
   const hosts = useStore((s) => s.hosts);
+  const names = useNames();
   const panes = useStore((s) => s.panes);
   const focus = useStore((s) => s.focus);
   const openIn = useStore((s) => s.openIn);
   const split = useStore((s) => s.split);
   const target = pane?.target ?? null;
   const host = target?.kind === "host" ? hosts.find((h) => h.id === target.hostId) : undefined;
+  const env = useEnv(target);
   const sidebarSide = useSettings((s) => s.sidebarSide);
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const updateSettings = useSettings((s) => s.update);
   const showVitals = useSettings((s) => s.showVitals);
   // macOS draws the window buttons at the top left, over whatever is there.
-  const clearTrafficLights = isMac && (!sidebarVisible || sidebarSide === "right");
+  const narrowRail = useSettings((s) => s.sidebarMode === "narrow");
+  const compactMode = useSettings((s) => s.compactMode);
+  const clearTrafficLights = isMac && (!sidebarVisible || sidebarSide === "right" || compactMode);
+  // A narrow rail is too thin for the window buttons; they spill over the toolbar.
+  const nudgeForRail = isMac && sidebarVisible && sidebarSide === "left" && narrowRail && !compactMode;
   const SidebarIcon = sidebarSide === "left" ? PanelLeft : PanelRight;
 
   const show = (kind: Exclude<PaneKind, "empty">) => {
@@ -183,7 +208,7 @@ function Toolbar() {
   };
 
   return (
-    <header data-tauri-drag-region className={cn("flex h-[46px] shrink-0 items-center gap-3 pr-3", clearTrafficLights ? "pl-[80px]" : "pl-2")}>
+    <header data-tauri-drag-region className={cn("flex h-[46px] shrink-0 items-center gap-3 pr-3", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}>
       <IconButton
         label={`${sidebarVisible ? "Hide" : "Show"} sidebar (${shortcutLabel("sidebar")})`}
         onClick={() => updateSettings({ sidebarVisible: !sidebarVisible })}
@@ -192,8 +217,9 @@ function Toolbar() {
         <SidebarIcon size={15} />
       </IconButton>
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span className="truncate text-[13px] font-semibold text-fg">{target ? targetLabel(target, hosts) : "SSHeesh"}</span>
-        {host && <span className="truncate text-[12px] text-fg-3">{hostAddress(host)}</span>}
+        <span className="truncate text-[13px] font-semibold text-fg">{target ? names.target(target) : "SSHeesh"}</span>
+        <EnvChip env={env} className="self-center" />
+        {host && !names.on && <span className="truncate text-[12px] text-fg-3">{names.address(host)}</span>}
       </div>
 
       <div
@@ -227,6 +253,7 @@ function Toolbar() {
       </div>
 
       <div className="flex items-center gap-0.5">
+        <StreamerBadge />
         <ZoomBadge />
         <UpdateButton />
         <IconButton
@@ -254,7 +281,8 @@ function Toolbar() {
 export function Workspace() {
   const root = useStore((s) => s.root);
   const zoomed = useStore((s) => (s.zoomed && s.panes[s.zoomed] ? s.zoomed : null));
-  const showVitals = useSettings((s) => s.showVitals);
+  const showVitals = useSettings((s) => s.showVitals && !s.compactMode);
+  const compact = useSettings((s) => s.compactMode);
   const updateSettings = useSettings((s) => s.update);
   // Vitals follow the focused pane's machine, or the first one on screen.
   const target = useStore((s) => s.panes[s.focused]?.target ?? Object.values(s.panes).find((p) => p.target)?.target ?? null);
@@ -267,7 +295,19 @@ export function Workspace() {
   };
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <Toolbar />
+      {compact ? (
+        <>
+          {/* Room to drag the window, and for the macOS window buttons. */}
+          <div data-tauri-drag-region className={cn("shrink-0", isMac ? "h-[30px]" : "h-[var(--ui-gap)]")} />
+          <EdgeReveal side="top" label="Toolbar">
+            <div className="w-full">
+              <Toolbar />
+            </div>
+          </EdgeReveal>
+        </>
+      ) : (
+        <Toolbar />
+      )}
       <div className="min-h-0 flex-1" style={{ padding: showVitals && target ? "0 var(--ui-gap)" : "0 var(--ui-gap) var(--ui-gap)" }}>
         {zoomed ? <PaneView id={zoomed} /> : <Tree node={root} />}
       </div>

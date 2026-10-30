@@ -6,7 +6,7 @@
 //! shell lives inside a named tmux session, so the new connection lands back
 //! in the same shell with everything still running.
 
-use crate::ssh::{common_args, durable_command, session_name, ssh_program, SshEnv, Target};
+use crate::ssh::{common_args, durable_command, password_env, session_name, ssh_program, SshEnv, Target};
 use crate::text::{last_meaningful_line, Marker, MarkerScanner, Utf8Stream};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -352,6 +352,9 @@ fn build_command(spec: &SessionSpec) -> CommandBuilder {
             c.args(["-tt", "--"]);
             c.arg(&t.destination);
             c.arg(durable_command(&spec.key, spec.run.as_deref()));
+            for (k, v) in password_env(t, &spec.env).unwrap_or_default() {
+                c.env(k, v);
+            }
             c
         }
     };
@@ -370,8 +373,11 @@ fn fatal_reason(line: &str, ever_connected: bool) -> Option<String> {
     if line.contains("Permission denied") || line.contains("Too many authentication failures") {
         return Some("The server didn't accept your login. Check the user name and key, then retry.".into());
     }
-    if line.contains("Host key verification failed") || line.contains("IDENTIFICATION HAS CHANGED") {
-        return Some("The server's fingerprint doesn't match what we saw before. Check ~/.ssh/known_hosts.".into());
+    if line.contains("IDENTIFICATION HAS CHANGED") {
+        return Some("The server's identity changed since you last connected.".into());
+    }
+    if line.contains("Host key verification failed") {
+        return Some("The server's identity couldn't be checked, so SSHeesh didn't connect.".into());
     }
     let unknown_host = line.contains("Name or service not known")
         || line.contains("nodename nor servname")
@@ -417,6 +423,19 @@ pub fn end_remote(target: &Target, env: &SshEnv, key: &str) -> Result<(), crate:
         crate::ssh::run_remote(t, env, &script, None)?;
     }
     Ok(())
+}
+
+/// The last `lines` lines of a durable session's scrollback, joined where
+/// tmux wrapped them. Used to show what happened while you were away.
+pub fn history(target: &Target, env: &SshEnv, key: &str, lines: u32) -> Result<String, crate::OpError> {
+    let Target::Ssh(t) = target else { return Ok(String::new()) };
+    let script = format!(
+        "tmux capture-pane -p -J -S -{} -t {} 2>/dev/null; exit 0",
+        lines.clamp(10, 20000),
+        crate::ssh::shell_quote(&session_name(key))
+    );
+    let out = crate::ssh::run_remote(t, env, &script, None)?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 #[cfg(test)]

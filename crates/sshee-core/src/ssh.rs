@@ -1,5 +1,6 @@
 //! Building `ssh` invocations and running one-off remote commands.
 
+use crate::secrets::{askpass_env, Secret};
 use crate::error::OpError;
 use std::io::Write;
 use std::path::PathBuf;
@@ -21,6 +22,10 @@ pub struct SshTarget {
     pub identity_file: Option<String>,
     /// Extra raw ssh arguments (used by tests to point at a custom config).
     pub extra_args: Vec<String>,
+    /// Handed to ssh through askpass when the server asks for a password.
+    pub password: Option<Secret>,
+    /// A password manager's key agent (1Password, Bitwarden) to sign in with.
+    pub identity_agent: Option<String>,
 }
 
 /// Shared settings for every ssh process the app starts.
@@ -30,6 +35,8 @@ pub struct SshEnv {
     /// and metrics reuse the terminal's login instead of signing in again.
     /// Not supported by Windows OpenSSH, so it's ignored there.
     pub control_dir: Option<PathBuf>,
+    /// The program ssh runs to ask for a password: the app itself.
+    pub askpass: Option<PathBuf>,
 }
 
 impl SshEnv {
@@ -40,7 +47,7 @@ impl SshEnv {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         }
-        Self { control_dir: Some(dir) }
+        Self { control_dir: Some(dir), askpass: None }
     }
 }
 
@@ -60,6 +67,10 @@ pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
     opt("ServerAliveInterval=5");
     opt("ServerAliveCountMax=3");
     opt("ConnectTimeout=10");
+    if t.password.is_some() {
+        // A wrong saved password should fail once, not three times.
+        opt("NumberOfPasswordPrompts=1");
+    }
     if cfg!(unix) {
         if let Some(dir) = &env.control_dir {
             opt("ControlMaster=auto");
@@ -78,6 +89,10 @@ pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
     if let Some(i) = &t.identity_file {
         a.push("-i".into());
         a.push(expand_tilde(i));
+    }
+    if let Some(agent) = &t.identity_agent {
+        a.push("-o".into());
+        a.push(format!("IdentityAgent={}", expand_tilde(agent)));
     }
     a
 }
@@ -128,13 +143,26 @@ pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
     format!("sh -c {}", shell_quote(&script))
 }
 
+/// Environment that lets ssh log in with the target's password, if it has one.
+pub fn password_env(t: &SshTarget, env: &SshEnv) -> Option<Vec<(&'static str, String)>> {
+    Some(askpass_env(env.askpass.as_deref()?, t.password.as_ref()?))
+}
+
 /// Builds a non-interactive ssh command that runs `script` with `sh`.
 pub fn remote_command(t: &SshTarget, env: &SshEnv, script: &str) -> Command {
     let mut cmd = Command::new(ssh_program());
-    cmd.args(common_args(t, env))
-        .args(["-o", "BatchMode=yes", "-T", "--"])
-        .arg(&t.destination)
-        .arg(format!("sh -c {}", shell_quote(script)));
+    cmd.args(common_args(t, env));
+    // BatchMode stops ssh from asking anything. With a password we let it ask,
+    // and askpass answers the password prompt and refuses everything else.
+    match password_env(t, env) {
+        Some(vars) => {
+            cmd.envs(vars);
+        }
+        None => {
+            cmd.args(["-o", "BatchMode=yes"]);
+        }
+    }
+    cmd.args(["-T", "--"]).arg(&t.destination).arg(format!("sh -c {}", shell_quote(script)));
     hide_console(&mut cmd);
     cmd
 }

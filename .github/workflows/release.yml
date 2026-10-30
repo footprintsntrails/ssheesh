@@ -31,7 +31,14 @@ jobs:
             const fs = require("fs");
             const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
             const tag = context.ref.startsWith("refs/tags/") ? context.ref.slice("refs/tags/".length) : `v${version}`;
-            const body = fs.readFileSync(".github/release-notes.md", "utf8").replaceAll("{{version}}", version);
+            // This version's section of CHANGELOG.md becomes "What's new"; the app shows it before updating.
+            const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
+            const section = changelog.split(/^## /m).find((s) => s.startsWith(`${version} `) || s.startsWith(`${version}\n`)) ?? "";
+            const news = section.split("\n").slice(1).join("\n").trim();
+            const body = fs
+              .readFileSync(".github/release-notes.md", "utf8")
+              .replaceAll("{{version}}", version)
+              .replace("{{changes}}", news || "See CHANGELOG.md.");
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -90,6 +97,27 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
+
+      # The same app as one file to run without installing.
+      - name: Attach the portable Windows app
+        if: matrix.name == 'Windows'
+        uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require("fs");
+            const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            const exe = ["target/release/ssheesh.exe", "src-tauri/target/release/ssheesh.exe"].find((p) => fs.existsSync(p));
+            if (!exe) throw new Error("Couldn't find the built ssheesh.exe");
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              name: `SSHeesh_${version}_x64-portable.exe`,
+              data: fs.readFileSync(exe),
+              headers: { "content-type": "application/octet-stream", "content-length": fs.statSync(exe).size },
+            });
 
   publish-release:
     name: Publish release

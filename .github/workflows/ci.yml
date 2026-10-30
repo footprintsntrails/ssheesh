@@ -36,6 +36,9 @@ jobs:
       - name: Type-check and build the interface
         run: npm run build
 
+      - name: Test the interface
+        run: npm test
+
       - name: Test the core
         run: cargo test -p sshee-core
 

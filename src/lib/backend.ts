@@ -2,7 +2,7 @@
 // Tauri (Rust); in a plain browser it's a demo backend with sample data, so
 // the interface can be designed and screenshotted without servers.
 
-import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile } from "./types";
+import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest } from "./types";
 import { toOpError } from "./types";
 
 export interface DropEvent {
@@ -22,6 +22,8 @@ export interface UpdateInfo {
 export interface Backend {
   readonly isDemo: boolean;
   appVersion(): Promise<string>;
+  /** This computer's user and machine name, hidden in streamer mode. */
+  localIdentity(): Promise<{ user: string; hostname: string }>;
   /** Asks the release server; null when already up to date. */
   checkUpdate(): Promise<UpdateInfo | null>;
   /** Downloads and installs the update found by checkUpdate. Progress is 0..1, or null if unknown. */
@@ -31,8 +33,28 @@ export interface Backend {
   openExternal(url: string): Promise<void>;
 
   listHosts(): Promise<Host[]>;
-  addHost(input: NewHost): Promise<Host>;
+  addHost(input: NewHost): Promise<AddedHost>;
   removeHost(id: string): Promise<void>;
+  /** Keys in ~/.ssh and key agents running on this computer. */
+  localAuth(): Promise<LocalAuth>;
+  /** Tries a server from the "Add a server" form before it's saved. */
+  testConnection(input: NewHost): Promise<ConnectionTest>;
+  /** Trusts the identity a connection test showed. */
+  trustTestHostKey(input: NewHost): Promise<void>;
+  /** Is the server's key known? If not, fetches it so you can check it first. */
+  checkHostKey(hostId: string, changed: boolean): Promise<HostKeyCheck>;
+  /** Saves the key you were just shown to ~/.ssh/known_hosts. */
+  trustHostKey(hostId: string): Promise<void>;
+  /** Recent scrollback of a durable (tmux) session. */
+  sessionHistory(target: TargetRef, sessionKey: string, lines: number): Promise<string>;
+  /** The portable Windows .exe, which updates by downloading the new one. */
+  isPortable(): Promise<boolean>;
+  /** Scales the whole interface, like a browser's zoom. */
+  setZoom(scale: number): Promise<void>;
+  /** Shows a system notification; asks for permission the first time. */
+  notify(title: string, body: string): Promise<void>;
+  /** Drops a server's password from memory and the keychain. */
+  forgetPassword(id: string): Promise<void>;
 
   openSession(
     paneId: string,
@@ -94,6 +116,7 @@ async function tauriBackend(): Promise<Backend> {
   return {
     isDemo: false,
     appVersion: () => app.getVersion(),
+    localIdentity: () => call("local_identity", {}),
     async checkUpdate() {
       try {
         pending = await updater.check();
@@ -118,6 +141,24 @@ async function tauriBackend(): Promise<Backend> {
     listHosts: () => call("list_hosts"),
     addHost: (input) => call("add_host", { input }),
     removeHost: (id) => call("remove_host", { id }),
+    forgetPassword: (id) => call("forget_password", { id }),
+    sessionHistory: (target, sessionKey, lines) => call("session_history", { target, sessionKey, lines }),
+    checkHostKey: (hostId, changed) => call("check_host_key", { hostId, changed }),
+    localAuth: () => call("local_auth", {}),
+    testConnection: (input) => call("test_connection", { input }),
+    trustTestHostKey: (input) => call("trust_test_host_key", { input }),
+    trustHostKey: (hostId) => call("trust_host_key", { hostId }),
+    isPortable: () => call("is_portable", {}),
+    async setZoom(scale) {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      await getCurrentWebview().setZoom(scale);
+    },
+    async notify(title, body) {
+      const n = await import("@tauri-apps/plugin-notification");
+      let ok = await n.isPermissionGranted();
+      if (!ok) ok = (await n.requestPermission()) === "granted";
+      if (ok) n.sendNotification({ title, body });
+    },
 
     async openSession(paneId, target, sessionKey, cols, rows, container, onEvent) {
       const channel = new Channel<SessionEvent>();

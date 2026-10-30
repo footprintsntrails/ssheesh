@@ -1,15 +1,16 @@
 import { Command } from "cmdk";
-import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, FolderOpen, Info, Laptop, LayoutDashboard, LayoutGrid, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, SquareTerminal, Star, X } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { backend } from "../lib/backend";
+import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, SquareTerminal, Star, X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
 import { useSettings } from "../lib/settings";
-import { hostAddress, useStore } from "../lib/store";
+import { useStore } from "../lib/store";
+import { toggleStreamer, useNames } from "../lib/privacy";
 import { useUpdates } from "../lib/updates";
-import { targetKey, toOpError, type TargetRef } from "../lib/types";
+import { targetKey, type TargetRef } from "../lib/types";
 import { Button, Kbd } from "./ui";
+import { useVisibleHosts } from "../lib/labels";
 
 // ---------------------------------------------------------------- command palette
 
@@ -30,7 +31,7 @@ function Item({ onSelect, icon: Icon, label, hint, value }: { onSelect: () => vo
 export function CommandPalette() {
   const open = useStore((s) => s.paletteOpen);
   const setOpen = useStore((s) => s.setPaletteOpen);
-  const hosts = useStore((s) => s.hosts);
+  const hosts = useVisibleHosts();
   const focused = useStore((s) => s.panes[s.focused]);
   const openIn = useStore((s) => s.openIn);
   const split = useStore((s) => s.split);
@@ -41,6 +42,8 @@ export function CommandPalette() {
   const arrangePanes = useStore((s) => s.arrangePanes);
   const checkUpdates = useUpdates((u) => u.check);
   const pins = useBookmarks((b) => b.pins);
+  const names = useNames();
+  const compactMode = useSettings((s) => s.compactMode);
   const toggleSidebar = () => {
     const st = useSettings.getState();
     st.update({ sidebarVisible: !st.sidebarVisible });
@@ -53,7 +56,7 @@ export function CommandPalette() {
 
   const targets: { target: TargetRef; name: string; hint: string }[] = [
     { target: { kind: "local" }, name: "This computer", hint: "local" },
-    ...hosts.map((h) => ({ target: { kind: "host", hostId: h.id } as TargetRef, name: h.name, hint: hostAddress(h) })),
+    ...hosts.map((h) => ({ target: { kind: "host", hostId: h.id } as TargetRef, name: names.host(h), hint: names.address(h) })),
   ];
 
   return (
@@ -152,6 +155,20 @@ export function CommandPalette() {
           <Item icon={Settings} value="theme appearance colors accent" label="Change theme and colors" onSelect={run(() => openSettings("appearance"))} />
           <Item icon={SquareTerminal} value="terminal theme font size cursor" label="Terminal look" onSelect={run(() => openSettings("terminal"))} />
           <Item
+            icon={Minimize2}
+            value="compact mode focus hide sidebar toolbar zen"
+            label={compactMode ? "Turn off compact mode" : "Turn on compact mode"}
+            hint={shortcutLabel("compact")}
+            onSelect={run(() => useSettings.getState().update({ compactMode: !compactMode }))}
+          />
+          <Item
+            icon={names.on ? Eye : EyeOff}
+            value="streamer mode hide names addresses privacy screen share recording"
+            label={names.on ? "Turn off streamer mode" : "Turn on streamer mode"}
+            hint={shortcutLabel("streamer")}
+            onSelect={run(toggleStreamer)}
+          />
+          <Item
             icon={RefreshCw}
             label="Check for updates"
             onSelect={run(() => {
@@ -167,7 +184,7 @@ export function CommandPalette() {
 
 // ---------------------------------------------------------------- dialogs
 
-function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
+export function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -184,108 +201,7 @@ function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClos
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="flex items-baseline justify-between text-[12px] font-medium text-fg-2">
-        {label}
-        {hint && <span className="text-[11px] font-normal text-fg-3">{hint}</span>}
-      </span>
-      {children}
-    </label>
-  );
-}
 
-const inputClass =
-  "h-9 rounded-[9px] bg-ink/[0.05] px-3 text-[13px] text-fg outline-none ring-1 ring-inset ring-ink/[0.08] placeholder:text-fg-3/70 focus:ring-2 focus:ring-accent/70";
-
-export function AddHostDialog() {
-  const open = useStore((s) => s.addHostOpen);
-  const setOpen = useStore((s) => s.setAddHostOpen);
-  const loadHosts = useStore((s) => s.loadHosts);
-  const openIn = useStore((s) => s.openIn);
-  const toast = useStore((s) => s.toast);
-  const [address, setAddress] = useState("");
-  const [name, setName] = useState("");
-  const [key, setKey] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setAddress("");
-      setName("");
-      setKey("");
-      setError(null);
-    }
-  }, [open]);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const host = await backend.addHost({ address, name: name || undefined, identityFile: key || undefined });
-      await loadHosts();
-      setOpen(false);
-      toast({ tone: "success", title: `Added ${host.name}` });
-      openIn("terminal", { kind: "host", hostId: host.id });
-    } catch (err) {
-      setError(toOpError(err).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal open={open} onClose={() => setOpen(false)}>
-      <form onSubmit={submit} className="p-5">
-        <h2 className="text-[15px] font-semibold text-fg">Add a server</h2>
-        <p className="mt-1 text-[12.5px] text-fg-3">Anything in ~/.ssh/config is already in your list.</p>
-        <div className="mt-5 flex flex-col gap-3.5">
-          <Field label="Address" hint="user@host or user@host:port">
-            <input
-              autoFocus
-              required
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="root@203.0.113.10"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              className={cn(inputClass, "font-mono text-[12.5px]")}
-            />
-          </Field>
-          <Field label="Name" hint="optional">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="homelab" spellCheck={false} className={inputClass} />
-          </Field>
-          <Field label="SSH key" hint="optional · uses your default keys if empty">
-            <input
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="~/.ssh/id_ed25519"
-              spellCheck={false}
-              autoCapitalize="off"
-              className={cn(inputClass, "font-mono text-[12.5px]")}
-            />
-          </Field>
-        </div>
-        {error && (
-          <p className="mt-3 flex items-start gap-1.5 text-[12px] text-bad">
-            <CircleAlert size={13} className="mt-px shrink-0" /> {error}
-          </p>
-        )}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" disabled={saving || !address.trim()}>
-            Add and connect
-          </Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
 
 export function ConfirmDialog() {
   const req = useStore((s) => s.confirmRequest);

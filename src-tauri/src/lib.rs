@@ -4,6 +4,8 @@ use serde::Deserialize;
 use sshee_core::containers::{self, ContainerList, Engine};
 use sshee_core::files::{self, DirListing, TextFile};
 use sshee_core::metrics::{self, Metrics};
+use sshee_core::secrets::PasswordStore;
+use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::session::{self, EventSink};
 use sshee_core::{ErrorCode, Host, HostStore, NewHost, OpError, SessionEvent, SessionManager, SessionSpec, SshEnv, Target};
 use std::path::PathBuf;
@@ -14,6 +16,8 @@ use tauri::{Manager, State};
 struct AppState {
     sessions: SessionManager,
     hosts: Mutex<HostStore>,
+    passwords: PasswordStore,
+    host_keys: Arc<PendingKeys>,
     env: SshEnv,
 }
 
@@ -42,7 +46,11 @@ fn resolve(state: &AppState, spec: &TargetSpec) -> Result<Target, OpError> {
             .lock()
             .unwrap()
             .get(host_id)
-            .map(|h| Target::Ssh(h.target()))
+            .map(|h| {
+                let mut t = h.target();
+                t.password = state.passwords.get(&h.id, h.remembered_password);
+                Target::Ssh(t)
+            })
             .ok_or_else(|| OpError::new(ErrorCode::NotFound, "That server isn't in your list anymore.")),
     }
 }
@@ -60,13 +68,38 @@ fn list_hosts(state: State<AppState>) -> Vec<Host> {
 }
 
 #[tauri::command]
-fn add_host(state: State<AppState>, input: NewHost) -> Result<Host, String> {
-    state.hosts.lock().unwrap().add(input)
+fn add_host(state: State<AppState>, mut input: NewHost) -> Result<AddedHost, String> {
+    let password = input.password.take().filter(|p| !p.expose().is_empty());
+    let mut host = state.hosts.lock().unwrap().add(input.clone())?;
+    let mut warning = None;
+    if let Some(pw) = password {
+        if let Err(e) = state.passwords.set(&host.id, pw, input.remember_password) {
+            state.hosts.lock().unwrap().set_remembered_password(&host.id, false)?;
+            host.remembered_password = false;
+            warning = Some(e);
+        }
+    }
+    Ok(AddedHost { host, warning })
+}
+
+#[derive(serde::Serialize)]
+struct AddedHost {
+    host: Host,
+    /// Set when the password couldn't go into the keychain.
+    warning: Option<String>,
 }
 
 #[tauri::command]
 fn remove_host(state: State<AppState>, id: String) -> Result<(), String> {
+    state.passwords.forget(&id);
     state.hosts.lock().unwrap().remove(&id)
+}
+
+/// Drops a host's password from memory and the keychain.
+#[tauri::command]
+fn forget_password(state: State<AppState>, id: String) -> Result<(), String> {
+    state.passwords.forget(&id);
+    state.hosts.lock().unwrap().set_remembered_password(&id, false)
 }
 
 // ---------------------------------------------------------------- terminals
@@ -126,6 +159,85 @@ fn close_session(state: State<AppState>, pane_id: String, target: Option<TargetS
             });
         }
     }
+}
+
+fn ssh_target(state: &AppState, host_id: &str) -> Result<sshee_core::ssh::SshTarget, OpError> {
+    match resolve(state, &TargetSpec::Host { host_id: host_id.to_string() })? {
+        Target::Ssh(t) => Ok(t),
+        Target::Local => Err(OpError::failed("That's this computer, not a server.")),
+    }
+}
+
+/// Is the server's key known? If not, fetches it so you can check it first.
+#[tauri::command]
+async fn check_host_key(state: State<'_, AppState>, host_id: String, changed: bool) -> Result<HostKeyCheck, OpError> {
+    let t = ssh_target(&state, &host_id)?;
+    let keys = state.host_keys.clone();
+    blocking(move || keys.check(&host_id, &t, changed)).await
+}
+
+/// Saves the key you were just shown to ~/.ssh/known_hosts.
+#[tauri::command]
+fn trust_host_key(state: State<AppState>, host_id: String) -> Result<(), OpError> {
+    let t = ssh_target(&state, &host_id)?;
+    state.host_keys.trust(&host_id, &t)
+}
+
+/// Keys in ~/.ssh and key agents running on this computer.
+#[tauri::command]
+async fn local_auth() -> Result<sshee_core::keys::LocalAuth, OpError> {
+    blocking(|| Ok(sshee_core::keys::discover())).await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionTest {
+    host_key: HostKeyCheck,
+    signed_in: bool,
+    /// Whether tmux is installed, so sessions can survive a dropped connection.
+    tmux: Option<bool>,
+    message: Option<String>,
+}
+
+/// Tries a server from the "Add a server" form before it's saved: is it
+/// there, is its identity trusted, does the login work, is tmux installed?
+#[tauri::command]
+async fn test_connection(state: State<'_, AppState>, input: NewHost) -> Result<ConnectionTest, OpError> {
+    let host = sshee_core::hosts::preview(&input).map_err(OpError::failed)?;
+    let mut t = host.target();
+    t.password = input.password.clone().filter(|p| !p.expose().is_empty());
+    let (keys, env) = (state.host_keys.clone(), state.env.clone());
+    blocking(move || {
+        let host_key = keys.check(&host.id, &t, false)?;
+        if host_key != HostKeyCheck::Known {
+            return Ok(ConnectionTest { host_key, signed_in: false, tmux: None, message: None });
+        }
+        let probe = "if command -v tmux >/dev/null 2>&1; then echo tmux=yes; else echo tmux=no; fi";
+        Ok(match sshee_core::ssh::run_remote(&t, &env, probe, None) {
+            Ok(out) => ConnectionTest {
+                host_key,
+                signed_in: true,
+                tmux: Some(String::from_utf8_lossy(&out).contains("tmux=yes")),
+                message: None,
+            },
+            Err(e) => ConnectionTest { host_key, signed_in: false, tmux: None, message: Some(e.message) },
+        })
+    })
+    .await
+}
+
+/// Trusts the identity a connection test showed.
+#[tauri::command]
+fn trust_test_host_key(state: State<AppState>, input: NewHost) -> Result<(), OpError> {
+    let host = sshee_core::hosts::preview(&input).map_err(OpError::failed)?;
+    state.host_keys.trust(&host.id, &host.target())
+}
+
+/// Recent scrollback of a durable session, for the "while you were away" summary.
+#[tauri::command]
+async fn session_history(state: State<'_, AppState>, target: TargetSpec, session_key: String, lines: u32) -> Result<String, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || session::history(&t, &env, &session_key, lines)).await
 }
 
 // ---------------------------------------------------------------- files
@@ -192,6 +304,23 @@ async fn upload_paths(
     .await
 }
 
+/// The portable Windows .exe: run straight from a download, not installed.
+/// It can't replace itself while running, so updates mean a new download.
+#[tauri::command]
+fn is_portable() -> bool {
+    cfg!(windows)
+        && std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| !dir.join("uninstall.exe").exists()))
+            .unwrap_or(false)
+}
+
+/// This computer's user and machine name, for streamer mode.
+#[tauri::command]
+fn local_identity() -> sshee_core::identity::LocalIdentity {
+    sshee_core::identity::local()
+}
+
 #[tauri::command]
 async fn session_cwd(state: State<'_, AppState>, target: TargetSpec, session_key: String) -> Result<String, OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
@@ -229,19 +358,28 @@ async fn fetch_metrics(state: State<'_, AppState>, target: TargetSpec) -> Result
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(desktop)]
             {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_process::init())?;
+                // The window opens at the size and place you left it.
+                app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
             }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(AppState {
                 sessions: SessionManager::new(),
                 hosts: Mutex::new(HostStore::new(&data_dir)),
-                env: SshEnv::with_control_dir(sshee_core::ssh::default_control_dir()),
+                passwords: PasswordStore::default(),
+                host_keys: Arc::new(PendingKeys::default()),
+                env: SshEnv {
+                    // ssh runs this same executable to ask for a password; see main.rs.
+                    askpass: std::env::current_exe().ok(),
+                    ..SshEnv::with_control_dir(sshee_core::ssh::default_control_dir())
+                },
             });
             Ok(())
         })
@@ -249,6 +387,13 @@ pub fn run() {
             list_hosts,
             add_host,
             remove_host,
+            forget_password,
+            session_history,
+            check_host_key,
+            trust_host_key,
+            local_auth,
+            test_connection,
+            trust_test_host_key,
             open_session,
             write_session,
             resize_session,
@@ -265,6 +410,8 @@ pub fn run() {
             upload_paths,
             session_cwd,
             fetch_metrics,
+            local_identity,
+            is_portable,
             list_containers,
             container_action,
         ])

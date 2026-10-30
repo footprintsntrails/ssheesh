@@ -2,6 +2,7 @@ import { Activity, SquareTerminal, X } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { bytes, cn, monthName, percent, rate, uptime } from "../lib/format";
 import { useMetrics, type Sample } from "../lib/metrics";
+import { useNames } from "../lib/privacy";
 import { useStore, type PaneState } from "../lib/store";
 import type { Metrics, OpError, TargetRef } from "../lib/types";
 import { Button, IconButton, Spinner } from "./ui";
@@ -78,6 +79,7 @@ function Row({ label, value, detail, chart }: { label: string; value: ReactNode;
 /** The Stats pane: one compact table, readable at a glance. */
 export function StatsPane({ pane, target }: { pane: PaneState; target: TargetRef }) {
   const openIn = useStore((s) => s.openIn);
+  const names = useNames();
   const { metrics: m, samples, error } = useMetrics(target);
   const last = samples[samples.length - 1];
 
@@ -139,7 +141,7 @@ export function StatsPane({ pane, target }: { pane: PaneState; target: TargetRef
         />
       ))}
       <p className="px-4 py-3 text-[12px] text-fg-3">
-        {m.hostname}, {m.kernel}, up {uptime(m.uptimeSecs)}
+        {names.text(m.hostname)}, {m.kernel}, up {uptime(m.uptimeSecs)}
         {!m.month && ". Install vnstat on the server for monthly traffic."}
       </p>
     </div>

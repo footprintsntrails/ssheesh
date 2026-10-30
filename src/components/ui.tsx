@@ -1,5 +1,7 @@
-import type { ButtonHTMLAttributes, ComponentProps, ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from "react";
 import { cn } from "../lib/format";
+import { ENV_LABELS, type EnvLabel } from "../lib/labels";
+import { useSettings } from "../lib/settings";
 import type { SessionState } from "../lib/types";
 
 type ButtonProps = ComponentProps<"button"> & {
@@ -111,31 +113,21 @@ export function StatusDot({ health, className }: { health: Health; className?: s
 }
 
 /** "ssh" in mono + "eesh" in serif italic: the name is the joke. */
-export function Wordmark({ className }: { className?: string }) {
+/** "Prod", "Staging" or "Dev" in the label's color. */
+export function EnvChip({ env, className }: { env: EnvLabel | null; className?: string }) {
+  if (!env) return null;
+  const l = ENV_LABELS[env];
   return (
-    <span className={cn("inline-flex items-baseline select-none", className)} aria-label="SSHeesh">
-      <span className="font-mono text-[13px] font-semibold tracking-[-0.02em] text-fg">ssh</span>
-      <span className="font-serif text-[16px] italic text-fg -ml-px">eesh</span>
+    <span
+      title={`Labeled ${l.name}`}
+      className={cn("shrink-0 rounded-[4px] px-[5px] text-[10.5px] font-semibold leading-[16px] tracking-[0.01em]", l.text, l.tint, className)}
+    >
+      {l.short}
     </span>
   );
 }
 
-export function Monogram({ name, health }: { name: string; health: Health }) {
-  const letters = name
-    .replace(/[^a-zA-Z0-9]+/g, " ")
-    .trim()
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-  return (
-    <span className="relative inline-flex size-[26px] shrink-0 items-center justify-center rounded-[7px] bg-gradient-to-b from-ink/[0.09] to-ink/[0.03] text-[10.5px] font-semibold tracking-wide text-fg-2 ring-1 ring-inset ring-ink/[0.07]">
-      {letters || "?"}
-      <StatusDot health={health} className="absolute -right-0.5 -bottom-0.5 rounded-full ring-2 ring-window" />
-    </span>
-  );
-}
+
 
 export type Mood = "ok" | "busy" | "lost" | "dead" | "done";
 
@@ -198,10 +190,63 @@ export function Face({ mood, className }: { mood: Mood; className?: string }) {
 }
 
 /**
+ * The app's mark: a terminal window making a >_< face. When `winking`, every
+ * so often it blinks, or winks with its right eye.
+ */
+export function Logo({ size = 20, winking = false, className }: { size?: number; winking?: boolean; className?: string }) {
+  const [face, setFace] = useState<"open" | "blink" | "wink">("open");
+  useEffect(() => {
+    if (!winking) return;
+    let timer = 0;
+    const later = () => {
+      timer = window.setTimeout(() => {
+        const kind = Math.random() < 0.4 ? "wink" : "blink";
+        setFace(kind);
+        timer = window.setTimeout(() => {
+          setFace("open");
+          later();
+        }, kind === "wink" ? 450 : 170);
+      }, 4500 + Math.random() * 9000);
+    };
+    later();
+    return () => window.clearTimeout(timer);
+  }, [winking]);
+  const eye = { fill: "none", stroke: "#f2f0ea", strokeWidth: 20, strokeLinecap: "square" as const };
+  const left = face === "blink" ? "M32 112 L61 112" : "M32 86 L61 112 L32 138";
+  const right = face === "open" ? "M168 86 L139 112 L168 138" : "M139 112 L168 112";
+  return (
+    <svg viewBox="0 0 200 200" width={size} height={size} role="img" aria-label="SSHeesh" className={cn("shrink-0", className)}>
+      <g transform="translate(19.5 19.5) scale(0.805)">
+        <rect x="8" y="8" width="184" height="184" rx="44" fill="#232428" />
+        <path d="M52 8 H148 A44 44 0 0 1 192 52 V46 H8 V52 A44 44 0 0 1 52 8 Z" fill="#2f3136" />
+        <rect x="8.5" y="8.5" width="183" height="183" rx="43.5" fill="none" stroke="#ffffff" strokeOpacity="0.09" />
+        <circle cx="35" cy="27" r="5.5" fill="#5c5f67" />
+        <circle cx="52" cy="27" r="5.5" fill="#5c5f67" />
+        <circle cx="69" cy="27" r="5.5" fill="#5c5f67" />
+        <path d={left} {...eye} />
+        <path d={right} {...eye} />
+        <rect x="76" y="140" width="48" height="20" fill="#3dd68c" />
+      </g>
+    </svg>
+  );
+}
+
+/** The logo as Settings → Appearance asks for it, or nothing. */
+export function AppLogo({ size, className }: { size?: number; className?: string }) {
+  const style = useSettings((s) => s.logo);
+  const animations = useSettings((s) => s.animations);
+  if (style === "hidden") return null;
+  return <Logo size={size} winking={style === "winking" && animations} className={className} />;
+}
+
+/**
  * A grab strip on a panel's edge. Drag to resize, double-click to reset.
  * `edge` is the side of the panel the strip sits on.
  */
 export function ResizeHandle({ edge, onResize, onReset, label }: { edge: "left" | "right"; onResize: (dx: number) => void; onReset?: () => void; label: string }) {
+  // A drag outlives the render it started in; always call the newest handler.
+  const handler = useRef(onResize);
+  handler.current = onResize;
   const start = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -212,7 +257,7 @@ export function ResizeHandle({ edge, onResize, onReset, label }: { edge: "left" 
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - last;
       last = ev.clientX;
-      if (dx) onResize(dx);
+      if (dx) handler.current(dx);
     };
     const up = () => {
       el.removeEventListener("pointermove", move);

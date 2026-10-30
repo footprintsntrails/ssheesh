@@ -1,13 +1,17 @@
-import { Activity, Box, ChevronRight, Copy, FolderOpen, Layers, LayoutDashboard, Laptop, Play, Plus, RotateCw, ScrollText, Search, Server, Square, SquareTerminal, Trash } from "lucide-react";
-import { useCallback, useEffect, useState, type MouseEvent } from "react";
+import { Activity, Box, ChevronRight, Circle, Copy, EyeOff, KeyRound, Palette, FolderOpen, Layers, LayoutDashboard, Laptop, Play, Plus, RotateCw, ScrollText, Search, Square, SquareTerminal, Trash } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
 import { isMac, shortcutLabel } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { hostAddress, useStore } from "../lib/store";
+import { useNames } from "../lib/privacy";
+import { ENV_LABELS, ENV_ORDER, HOST_COLORS, useEnv, useHostLook, useLabels, useVisibleHosts } from "../lib/labels";
 import { sameTarget, targetKey, toOpError, type Container, type ContainerList, type Host, type OpError, type TargetRef } from "../lib/types";
 import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
-import { Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
+import { LookPopover } from "./LookPicker";
+import { ConfigNotice } from "./ConfigImport";
+import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
 
 const RANK: Record<Health, number> = { idle: 0, busy: 1, live: 2, warn: 3, bad: 4 };
 
@@ -54,6 +58,8 @@ function useContainers(target: TargetRef) {
   }, [refresh]);
   return { list, error, refresh };
 }
+
+const DOCKER_INSTALL = "curl -fsSL https://get.docker.com | sudo sh";
 
 function TreeNote({ children }: { children: React.ReactNode }) {
   return <p className="flex items-start gap-1.5 py-1 pr-2 pl-9 text-[11.5px] leading-snug text-fg-3">{children}</p>;
@@ -126,7 +132,11 @@ function ContainerTree({ target }: { target: TargetRef }) {
   if (error)
     return (
       <TreeNote>
-        {error.code === "auth" || error.code === "hostKey" ? "Open a terminal to sign in, then containers show up here." : error.message}
+        {error.code === "auth"
+          ? "Open a terminal to sign in, then containers show up here."
+          : error.code === "hostKey"
+            ? "Open a terminal to confirm this server's identity, then containers show up here."
+            : error.message}
       </TreeNote>
     );
   if (!list)
@@ -135,7 +145,23 @@ function ContainerTree({ target }: { target: TargetRef }) {
         <Spinner className="mt-px size-3" /> Looking for containers
       </TreeNote>
     );
-  if (list.engines.length === 0 && list.problems.length === 0) return <TreeNote>No Docker or Podman here.</TreeNote>;
+  if (list.engines.length === 0 && list.problems.length === 0)
+    return (
+      <TreeNote>
+        <span>
+          No Docker or Podman here. To install Docker, run{" "}
+          <button
+            type="button"
+            title="Copy"
+            onClick={() => void navigator.clipboard.writeText(DOCKER_INSTALL).then(() => useStore.getState().toast({ tone: "info", title: "Copied", body: DOCKER_INSTALL }))}
+            className="rounded bg-ink/[0.07] px-1 font-mono text-[10.5px] text-fg-2 hover:bg-ink/[0.12]"
+          >
+            {DOCKER_INSTALL}
+          </button>{" "}
+          in a terminal.
+        </span>
+      </TreeNote>
+    );
 
   const projects = [...new Set(list.containers.map((c) => c.project).filter((p): p is string => !!p))];
   const loose = list.containers.filter((c) => !c.project);
@@ -159,12 +185,20 @@ function ContainerTree({ target }: { target: TargetRef }) {
       {loose.map((c) => (
         <ContainerRow key={c.id} target={target} c={c} indent={false} onChanged={refresh} />
       ))}
-      {list.engines.length > 0 && list.containers.length === 0 && <TreeNote>No containers yet.</TreeNote>}
+      {list.engines.length > 0 && list.containers.length === 0 && (
+        <TreeNote>No containers yet. Start some with docker compose up -d, and they show up here.</TreeNote>
+      )}
     </div>
   );
 }
 
-function Row({ target, label, address, host }: { target: TargetRef; label: string; address?: string; host?: Host }) {
+/** A small status dot for the narrow rail, where the face doesn't fit. */
+const HEALTH_DOT: Record<Health, string | null> = { idle: null, busy: "bg-fg-3 animate-pulse", live: "bg-ok", warn: "bg-warn", bad: "bg-bad" };
+
+function Row({ target, label, address, host, narrow }: { target: TargetRef; label: string; address?: string; host?: Host; narrow: boolean }) {
+  const names = useNames();
+  const env = useEnv(target);
+  const waiting = useStore((s) => Object.entries(s.attention).some(([id, a]) => a.kind === "input" && sameTarget(s.panes[id]?.target, target)));
   const openIn = useStore((s) => s.openIn);
   const openWorkspace = useStore((s) => s.openWorkspace);
   const loadHosts = useStore((s) => s.loadHosts);
@@ -173,7 +207,11 @@ function Row({ target, label, address, host }: { target: TargetRef; label: strin
   const active = useStore((s) => sameTarget(s.panes[s.focused]?.target, target));
   const health = useHealth(target);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const Icon = target.kind === "local" ? Laptop : Server;
+  const [lookAt, setLookAt] = useState<Menu | null>(null);
+  const look = useHostLook(host?.id);
+  const savedLook = useLabels((s) => (host ? s.looks[host.id] : undefined));
+  const Icon = target.kind === "local" ? Laptop : look.icon;
+  const iconStyle = look.color && target.kind !== "local" ? { color: look.color } : undefined;
 
   const items: (MenuItem | "sep")[] = [
     { label: "New terminal", icon: SquareTerminal, run: () => openIn("terminal", target) },
@@ -183,15 +221,55 @@ function Row({ target, label, address, host }: { target: TargetRef; label: strin
     ...(address
       ? (["sep", { label: "Copy address", icon: Copy, run: () => void navigator.clipboard.writeText(address).then(() => toast({ tone: "info", title: "Copied", body: address })) }] as (MenuItem | "sep")[])
       : []),
+    ...(host
+      ? ([
+          "sep",
+          { label: "Icon and color…", icon: Palette, run: () => setLookAt(menu) },
+          ...ENV_ORDER.map((e) => ({
+            label: ENV_LABELS[e].name,
+            icon: Circle,
+            iconClass: ENV_LABELS[e].dot,
+            checked: env === e,
+            run: () => useLabels.getState().setEnv(host.id, env === e ? null : e),
+          })),
+        ] as (MenuItem | "sep")[])
+      : []),
+    ...(host?.rememberedPassword
+      ? ([
+          "sep",
+          {
+            label: "Forget saved password",
+            icon: KeyRound,
+            run: async () => {
+              await backend.forgetPassword(host.id);
+              void loadHosts();
+              toast({ tone: "info", title: "Password forgotten", body: "It's gone from your keychain. The next login asks for it again." });
+            },
+          },
+        ] as (MenuItem | "sep")[])
+      : []),
+    ...(host?.source === "sshConfig"
+      ? ([
+          "sep",
+          {
+            label: "Hide from list",
+            icon: EyeOff,
+            run: () => {
+              useLabels.getState().setHidden(host.id, true);
+              toast({ tone: "info", title: `Hid ${names.host(host)}`, body: "It stays in ~/.ssh/config. Settings → Layout → Servers from ~/.ssh/config brings it back." });
+            },
+          },
+        ] as (MenuItem | "sep")[])
+      : []),
     ...(host?.source === "saved"
       ? ([
           "sep",
           {
-            label: "Remove from list",
+            label: "Remove server…",
             icon: Trash,
             danger: true,
             run: async () => {
-              if (!(await confirm({ title: `Remove ${host.name}?`, body: "Only removes it from SSHeesh. Nothing changes on the server.", confirmLabel: "Remove", danger: true }))) return;
+              if (!(await confirm({ title: `Remove ${names.host(host)}?`, body: "Only removes it from SSHeesh. Nothing changes on the server.", confirmLabel: "Remove", danger: true }))) return;
               await backend.removeHost(host.id);
               void loadHosts();
             },
@@ -207,6 +285,45 @@ function Row({ target, label, address, host }: { target: TargetRef; label: strin
     st.update({ expanded: expanded ? st.expanded.filter((k) => k !== key) : [...st.expanded, key] });
   };
 
+  const pickLook = lookAt && host && (
+    <LookPopover
+      at={lookAt}
+      look={savedLook ?? { icon: "server", color: HOST_COLORS[0] }}
+      onChange={(l) => useLabels.getState().setLook(host.id, l)}
+      onClose={() => setLookAt(null)}
+    />
+  );
+
+  if (narrow) {
+    const dot = HEALTH_DOT[health];
+    return (
+      <>
+        <button
+          type="button"
+          title={label}
+          aria-label={label}
+          aria-current={active || undefined}
+          onClick={() => openIn("terminal", target)}
+          onContextMenu={(e: MouseEvent) => {
+            e.preventDefault();
+            setMenu({ x: e.clientX, y: e.clientY });
+          }}
+          className={cn(
+            "relative mx-auto flex size-10 shrink-0 items-center justify-center rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
+            active ? "bg-ink/[0.11]" : "hover:bg-ink/[0.06]",
+          )}
+        >
+          <Icon size={19} strokeWidth={1.9} className={cn("shrink-0", !iconStyle && "text-accent")} style={iconStyle} />
+          {env && <span className={cn("absolute bottom-[4px] left-1/2 h-[3px] w-3.5 -translate-x-1/2 rounded-full", ENV_LABELS[env].bar)} />}
+          {dot && <span className={cn("absolute right-[5px] bottom-[5px] size-[7px] rounded-full ring-2 ring-[var(--ui-window)]", dot)} />}
+          {waiting && <span className="absolute top-[4px] right-[4px] size-2 rounded-full bg-accent ring-2 ring-[var(--ui-window)]" />}
+        </button>
+        {menu && <ContextMenu menu={menu} items={items} onClose={() => setMenu(null)} />}
+        {pickLook}
+      </>
+    );
+  }
+
   return (
     <>
       <div className="group/row relative flex items-center">
@@ -221,7 +338,7 @@ function Row({ target, label, address, host }: { target: TargetRef; label: strin
       </button>
       <button
         type="button"
-        title={address}
+        title={names.on ? undefined : address}
         aria-current={active || undefined}
         onClick={() => openIn("terminal", target)}
         onContextMenu={(e: MouseEvent) => {
@@ -233,25 +350,76 @@ function Row({ target, label, address, host }: { target: TargetRef; label: strin
           active ? "bg-ink/[0.1] text-fg" : "text-fg hover:bg-ink/[0.05] focus-visible:bg-ink/[0.07]",
         )}
       >
-        <Icon size={15} strokeWidth={1.8} className="shrink-0 text-accent" />
+        <Icon size={15} strokeWidth={1.8} className={cn("shrink-0", !iconStyle && "text-accent")} style={iconStyle} />
         <span className="min-w-0 flex-1 truncate">{label}</span>
+        <EnvChip env={env} />
+        {waiting && <span title="A terminal here needs you" className="size-[7px] shrink-0 rounded-full bg-accent" />}
         <StatusMark health={health} />
       </button>
       </div>
       {expanded && <ContainerTree target={target} />}
       {menu && <ContextMenu menu={menu} items={items} onClose={() => setMenu(null)} />}
+      {pickLook}
     </>
   );
 }
 
+/** Narrower than this while dragging, the list folds into a rail of icons. */
+const FOLD_AT = 120;
+const RAIL_WIDTH = 60;
+
 export function Sidebar() {
-  const hosts = useStore((s) => s.hosts);
+  const hosts = useVisibleHosts();
+  const names = useNames();
   const loaded = useStore((s) => s.hostsLoaded);
   const setPaletteOpen = useStore((s) => s.setPaletteOpen);
   const setAddHostOpen = useStore((s) => s.setAddHostOpen);
   const side = useSettings((s) => s.sidebarSide);
-  const width = useSettings((s) => s.sidebarWidth);
+  const wideWidth = useSettings((s) => s.sidebarWidth);
+  const narrow = useSettings((s) => s.sidebarMode === "narrow");
+  const logoShown = useSettings((s) => s.logo !== "hidden");
   const update = useSettings((s) => s.update);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const live = useRef<number | null>(null);
+  const width = dragWidth ?? (narrow ? RAIL_WIDTH : wideWidth);
+
+  // Width before this drag: folding into the rail keeps it, so unfolding
+  // brings the list back exactly as wide as it was.
+  const before = useRef(wideWidth);
+  // The edge follows the pointer; past FOLD_AT it snaps between list and rail.
+  const onResize = (dx: number) => {
+    const st = useSettings.getState();
+    if (live.current === null) before.current = st.sidebarWidth;
+    let next = Math.round(Math.min(420, Math.max(RAIL_WIDTH, (live.current ?? width) + (side === "left" ? dx : -dx))));
+    if (next < FOLD_AT) {
+      if (st.sidebarMode !== "narrow") st.update({ sidebarMode: "narrow", sidebarWidth: before.current });
+    } else if (st.sidebarMode === "narrow") {
+      next = st.sidebarWidth;
+      st.update({ sidebarMode: "wide" });
+    } else {
+      st.update({ sidebarWidth: Math.max(150, next) });
+    }
+    live.current = next;
+    setDragWidth(next);
+  };
+  useEffect(() => {
+    if (dragWidth === null) return;
+    const done = () => {
+      live.current = null;
+      setDragWidth(null);
+    };
+    window.addEventListener("pointerup", done);
+    return () => window.removeEventListener("pointerup", done);
+  }, [dragWidth]);
+
+  const rows = (
+    <>
+      <Row target={{ kind: "local" }} label="This computer" narrow={narrow} />
+      {hosts.map((h) => (
+        <Row key={h.id} target={{ kind: "host", hostId: h.id }} label={names.host(h)} address={hostAddress(h)} host={h} narrow={narrow} />
+      ))}
+    </>
+  );
 
   return (
     <aside
@@ -262,46 +430,61 @@ export function Sidebar() {
       <ResizeHandle
         edge={side === "left" ? "right" : "left"}
         label="Resize sidebar"
-        onResize={(dx) => {
-          const w = useSettings.getState().sidebarWidth + (side === "left" ? dx : -dx);
-          update({ sidebarWidth: Math.round(Math.min(420, Math.max(180, w))) });
-        }}
-        onReset={() => update({ sidebarWidth: 232 })}
+        onResize={onResize}
+        onReset={() => update({ sidebarMode: "wide", sidebarWidth: 232 })}
       />
       {/* Title bar space; on macOS the window buttons sit here. */}
-      <div data-tauri-drag-region className={cn("h-[46px] shrink-0", isMac && side === "left" && "pl-[80px]")} />
-
-      <div className="px-2.5 pb-3">
-        <button
-          type="button"
-          onClick={() => setPaletteOpen(true)}
-          className="flex h-7 w-full items-center gap-1.5 rounded-[7px] bg-ink/[0.07] px-2 text-[13px] text-fg-3 hover:bg-ink/[0.09]"
-        >
-          <Search size={13} strokeWidth={2} />
-          <span className="flex-1 text-left">Search</span>
-          <span className="text-[11.5px]">{shortcutLabel("palette")}</span>
-        </button>
+      <div
+        data-tauri-drag-region
+        className={cn("flex h-[46px] shrink-0 items-center gap-2", narrow ? "justify-center" : "px-3.5", isMac && side === "left" && !narrow && "pl-[84px]")}
+      >
+        {/* On a Mac the window buttons fill the top of a narrow rail. */}
+        {!(narrow && isMac && side === "left") && <AppLogo size={narrow ? 22 : 18} />}
+        {!narrow && logoShown && <span className="pointer-events-none text-[13px] font-semibold tracking-tight text-fg-2">SSHeesh</span>}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2.5 pb-3">
-        <div className="flex h-6 items-center justify-between pr-0.5 pl-2">
-          <h2 className="text-[11px] font-semibold text-fg-2">Servers</h2>
-          <IconButton label="Add server" onClick={() => setAddHostOpen(true)} className="size-5 rounded-[5px]">
-            <Plus size={14} strokeWidth={2} />
+      {narrow ? (
+        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pb-3">
+          <IconButton label={`Search (${shortcutLabel("palette")})`} onClick={() => setPaletteOpen(true)} className="size-10 rounded-[10px]">
+            <Search size={17} strokeWidth={1.9} />
           </IconButton>
-        </div>
-        <div className="mt-0.5 flex flex-col gap-px">
-          <Row target={{ kind: "local" }} label="This computer" />
-          {hosts.map((h) => (
-            <Row key={h.id} target={{ kind: "host", hostId: h.id }} label={h.name} address={hostAddress(h)} host={h} />
-          ))}
-        </div>
-        {loaded && hosts.length === 0 && (
-          <p className="mt-3 px-2 text-[12px] leading-snug text-fg-3">
-            Add a server with the plus button. Hosts in ~/.ssh/config appear here on their own.
-          </p>
-        )}
-      </nav>
+          <div className="my-1 h-px w-6 shrink-0 bg-ink/[0.09]" />
+          {rows}
+          <IconButton label="Add server" onClick={() => setAddHostOpen(true)} className="size-10 shrink-0 rounded-[10px]">
+            <Plus size={17} strokeWidth={1.9} />
+          </IconButton>
+        </nav>
+      ) : (
+        <>
+          <div className="px-2.5 pb-3">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="flex h-7 w-full items-center gap-1.5 rounded-[7px] bg-ink/[0.07] px-2 text-[13px] text-fg-3 hover:bg-ink/[0.09]"
+            >
+              <Search size={13} strokeWidth={2} />
+              <span className="flex-1 truncate text-left">Search</span>
+              <span className="shrink-0 text-[11.5px]">{shortcutLabel("palette")}</span>
+            </button>
+          </div>
+
+          <ConfigNotice />
+          <nav className="flex-1 overflow-y-auto px-2.5 pb-3">
+            <div className="flex h-6 items-center justify-between pr-0.5 pl-2">
+              <h2 className="text-[11px] font-semibold text-fg-2">Servers</h2>
+              <IconButton label="Add server" onClick={() => setAddHostOpen(true)} className="size-5 rounded-[5px]">
+                <Plus size={14} strokeWidth={2} />
+              </IconButton>
+            </div>
+            <div className="mt-0.5 flex flex-col gap-px">{rows}</div>
+            {loaded && hosts.length === 0 && (
+              <p className="mt-3 px-2 text-[12px] leading-snug text-fg-3">
+                Add a server with the plus button. Hosts in ~/.ssh/config appear here on their own.
+              </p>
+            )}
+          </nav>
+        </>
+      )}
     </aside>
   );
 }

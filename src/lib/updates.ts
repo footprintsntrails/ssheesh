@@ -15,8 +15,12 @@ export type UpdateStatus =
   | { kind: "ready"; version: string }
   | { kind: "error"; message: string };
 
+export const RELEASES = "https://github.com/footprintsntrails/ssheesh/releases/latest";
+
 interface UpdatesState {
   current: string;
+  /** The portable Windows build: updates are a download, not an install. */
+  portable: boolean;
   status: UpdateStatus;
   lastChecked: number | null;
   check(opts?: { quiet?: boolean }): Promise<void>;
@@ -26,6 +30,7 @@ interface UpdatesState {
 
 export const useUpdates = create<UpdatesState>()((set, get) => ({
   current: "",
+  portable: false,
   status: { kind: "idle" },
   lastChecked: null,
 
@@ -38,7 +43,7 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
       set({ lastChecked: Date.now() });
       if (!info) return set({ status: { kind: "upToDate" } });
       set({ status: { kind: "available", version: info.version, notes: info.notes } });
-      if (useSettings.getState().updateMode === "auto") await get().install();
+      if (useSettings.getState().updateMode === "auto" && !get().portable) await get().install();
     } catch (e) {
       // Background checks fail quietly (offline, server down); manual ones say why.
       set({ status: quiet ? { kind: "idle" } : { kind: "error", message: toOpError(e).message } });
@@ -48,6 +53,8 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
   async install() {
     const s = get().status;
     if (s.kind !== "available") return;
+    // A portable .exe can't replace itself while it runs: get the new one instead.
+    if (get().portable) return void backend.openExternal(RELEASES);
     set({ status: { kind: "downloading", version: s.version, progress: 0 } });
     try {
       await backend.installUpdate((progress) => set({ status: { kind: "downloading", version: s.version, progress } }));
@@ -71,6 +78,10 @@ export function startUpdateChecks() {
   if (started) return;
   started = true;
   void backend.appVersion().then((current) => useUpdates.setState({ current }));
+  void backend
+    .isPortable()
+    .then((portable) => useUpdates.setState({ portable }))
+    .catch(() => {});
   const tick = () => {
     if (useSettings.getState().updateMode !== "manual") void useUpdates.getState().check({ quiet: true });
   };

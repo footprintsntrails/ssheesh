@@ -1,37 +1,4 @@
-import {
-  ArrowUp,
-  ChevronLeft,
-  Copy,
-  Download,
-  Eye,
-  EyeOff,
-  File,
-  FileArchive,
-  FileCode,
-  FileImage,
-  FileTerminal,
-  FileText,
-  Folder,
-  FolderPlus,
-  HardDrive,
-  House,
-  Link,
-  Pencil,
-  RefreshCw,
-  Search,
-  SquareTerminal,
-  Trash,
-  Upload,
-  X,
-  Star,
-  Clock,
-  PanelLeft,
-  ScrollText,
-  Settings2,
-  Globe,
-  Package,
-  Timer,
-} from "lucide-react";
+import { ArrowUp, ChevronLeft, Clock, Copy, CornerDownRight, Download, Eye, EyeOff, File, FileArchive, FileCode, FileImage, FileTerminal, FileText, Folder, FolderPlus, Globe, HardDrive, House, Link, Package, PanelLeft, Pencil, RefreshCw, ScrollText, Search, Settings2, SquareTerminal, Star, Timer, Trash, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { folderName, LINUX_PLACES, useBookmarks } from "../lib/bookmarks";
@@ -42,6 +9,8 @@ import { useStore, type PaneState } from "../lib/store";
 import { targetKey, toOpError, type DirListing, type FileEntry, type OpError, type TargetRef, type TextFile } from "../lib/types";
 import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
 import { Button, IconButton, ResizeHandle, Spinner } from "./ui";
+import { useNames } from "../lib/privacy";
+import { findTerminal } from "../lib/terminals";
 
 type SortKey = "name" | "size" | "modified";
 
@@ -67,10 +36,10 @@ function EntryIcon({ entry }: { entry: FileEntry }) {
   if (entry.kind === "link") return <Link {...common} className="shrink-0 text-fg-3" />;
   const n = entry.name;
   if (SCRIPT.test(n)) return <FileTerminal {...common} className="shrink-0 text-ok/80" />;
-  if (CODE.test(n) || n === "Dockerfile" || n.startsWith(".env")) return <FileCode {...common} className="shrink-0 text-[#c792ea]/80" />;
+  if (CODE.test(n) || n === "Dockerfile" || n.startsWith(".env")) return <FileCode {...common} className="shrink-0 text-[var(--ui-file-code)]" />;
   if (TEXT.test(n)) return <FileText {...common} className="shrink-0 text-fg-2" />;
-  if (IMAGE.test(n)) return <FileImage {...common} className="shrink-0 text-[#f5c451]/80" />;
-  if (ARCHIVE.test(n)) return <FileArchive {...common} className="shrink-0 text-[#ff9f6b]/80" />;
+  if (IMAGE.test(n)) return <FileImage {...common} className="shrink-0 text-[var(--ui-file-image)]" />;
+  if (ARCHIVE.test(n)) return <FileArchive {...common} className="shrink-0 text-[var(--ui-file-archive)]" />;
   return <File {...common} className="shrink-0 text-fg-3" />;
 }
 
@@ -88,6 +57,7 @@ function sortEntries(list: FileEntry[], key: SortKey, asc: boolean): FileEntry[]
 
 /** Always-visible, editable path: type or paste a folder and press Enter. */
 function AddressBar({ path, onGo }: { path: string; onGo: (p: string) => void }) {
+  const names = useNames();
   const [value, setValue] = useState(path);
   const [editing, setEditing] = useState(false);
   useEffect(() => {
@@ -98,7 +68,7 @@ function AddressBar({ path, onGo }: { path: string; onGo: (p: string) => void })
       <span className="sr-only">Folder path</span>
       <HardDrive size={13} className="pointer-events-none absolute left-2.5 text-fg-3" />
       <input
-        value={value}
+        value={editing ? value : names.text(value)}
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
@@ -166,6 +136,7 @@ function PlaceItem({
   onRemove,
   iconClass,
   narrow,
+  starred,
 }: {
   icon: typeof File;
   label: string;
@@ -175,6 +146,8 @@ function PlaceItem({
   onRemove?: () => void;
   iconClass?: string;
   narrow: boolean;
+  /** A bookmark: in the narrow column it's a folder with a small star. */
+  starred?: boolean;
 }) {
   if (narrow) {
     return (
@@ -183,12 +156,15 @@ function PlaceItem({
         title={title}
         onClick={onClick}
         className={cn(
-          "flex w-full flex-col items-center gap-0.5 rounded-[7px] px-0.5 py-1.5 outline-none",
-          active ? "bg-ink/[0.09] text-fg" : "text-fg-2 hover:bg-ink/[0.045] hover:text-fg",
+          "flex w-full flex-col items-center gap-[3px] rounded-[9px] pt-[7px] pb-[5px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
+          active ? "bg-accent/15 text-accent" : "text-fg-2 hover:bg-ink/[0.06] hover:text-fg",
         )}
       >
-        <Icon size={15} strokeWidth={1.8} className={cn("shrink-0", iconClass ?? "text-fg-3")} />
-        <span className="w-full truncate text-center text-[9.5px] leading-tight">{label}</span>
+        <span className="relative">
+          <Icon size={18} strokeWidth={1.9} className="shrink-0" />
+          {starred && <Star size={9} strokeWidth={0} className="absolute -right-[5px] -bottom-[3px] fill-warn" />}
+        </span>
+        <span className="w-full truncate px-1 text-center text-[10px] font-medium leading-[12px]">{label}</span>
       </button>
     );
   }
@@ -222,7 +198,7 @@ function PlaceItem({
   );
 }
 
-const NARROW_WIDTH = 62;
+const NARROW_WIDTH = 64;
 /** Dragging the wide column narrower than this folds it into the narrow one. */
 const FOLD_AT = 118;
 
@@ -245,26 +221,38 @@ function Places({
   compact: boolean;
 }) {
   const mode = useSettings((st) => st.placesMode);
+  const names = useNames();
   const wideWidth = useSettings((st) => st.placesWidth);
   const narrow = mode === "narrow";
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const width = dragWidth ?? (narrow ? NARROW_WIDTH : wideWidth);
-  const heading = narrow ? "mx-2 my-2 h-px bg-ink/[0.08]" : "px-2 pt-3 pb-1 text-[11px] font-semibold text-fg-3";
+  // Pointer moves arrive faster than renders, so the running width lives here.
+  const live = useRef<number | null>(null);
+  const before = useRef(wideWidth);
+  const heading = narrow ? "mx-3 my-2 h-px bg-ink/[0.08]" : "px-2 pt-3 pb-1 text-[11px] font-semibold text-fg-3";
   const recentShown = recent.filter((p) => !pins.includes(p) && p !== dir).slice(0, 5);
 
   // While dragging, the column follows the pointer; it snaps to the narrow
   // or wide form depending on where it ends up.
   const onResize = (dx: number) => {
-    const next = Math.round(Math.min(360, Math.max(NARROW_WIDTH, (dragWidth ?? width) + dx)));
-    setDragWidth(next);
     const st = useSettings.getState();
-    if (next < FOLD_AT && st.placesMode === "wide") st.update({ placesMode: "narrow" });
-    else if (next >= FOLD_AT && st.placesMode === "narrow") st.update({ placesMode: "wide", placesWidth: next });
-    else if (next >= FOLD_AT) st.update({ placesWidth: next });
+    if (live.current === null) before.current = st.placesWidth;
+    let next = Math.round(Math.min(360, Math.max(NARROW_WIDTH, (live.current ?? width) + dx)));
+    // Folding keeps the wide width from before the drag; unfolding brings it back.
+    if (next < FOLD_AT && st.placesMode === "wide") st.update({ placesMode: "narrow", placesWidth: before.current });
+    else if (next >= FOLD_AT && st.placesMode === "narrow") {
+      next = st.placesWidth;
+      st.update({ placesMode: "wide" });
+    } else if (next >= FOLD_AT) st.update({ placesWidth: next });
+    live.current = next;
+    setDragWidth(next);
   };
   useEffect(() => {
     if (dragWidth === null) return;
-    const done = () => setDragWidth(null);
+    const done = () => {
+      live.current = null;
+      setDragWidth(null);
+    };
     window.addEventListener("pointerup", done);
     return () => window.removeEventListener("pointerup", done);
   }, [dragWidth]);
@@ -279,8 +267,8 @@ function Places({
         onResize={onResize}
         onReset={() => useSettings.getState().update({ placesMode: "wide", placesWidth: 172 })}
       />
-      <div className={cn("min-h-0 flex-1 overflow-y-auto pb-2", narrow ? "px-1 pt-1" : "px-1.5")}>
-        <div className={heading}>{!narrow && "Places"}</div>
+      <div className={cn("min-h-0 flex-1 overflow-y-auto pb-2", narrow ? "flex flex-col gap-0.5 px-1.5 pt-1.5" : "px-1.5")}>
+        {!narrow && <div className={heading}>Places</div>}
         {item({ icon: House, label: "Home", title: "Your home folder", active: false, onClick: () => onGo("~") })}
         {item({ icon: HardDrive, label: "Root", title: "/", active: dir === "/", onClick: () => onGo("/") })}
         {remote &&
@@ -300,10 +288,11 @@ function Places({
           : pins.map((p) => (
               <div key={p}>
                 {item({
-                  icon: Star,
-                  iconClass: "fill-warn text-warn",
-                  label: folderName(p),
-                  title: p,
+                  icon: narrow ? Folder : Star,
+                  iconClass: narrow ? undefined : "fill-warn text-warn",
+                  starred: true,
+                  label: names.text(folderName(p)),
+                  title: names.text(p),
                   active: dir === p,
                   onClick: () => onGo(p),
                   onRemove: () => onUnpin(p),
@@ -315,7 +304,7 @@ function Places({
           <>
             <div className={heading}>{!narrow && "Recent"}</div>
             {recentShown.map((p) => (
-              <div key={p}>{item({ icon: Clock, label: folderName(p), title: p, active: false, onClick: () => onGo(p) })}</div>
+              <div key={p}>{item({ icon: Clock, label: names.text(folderName(p)), title: names.text(p), active: false, onClick: () => onGo(p) })}</div>
             ))}
           </>
         )}
@@ -541,6 +530,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const terminalHere = (folder: string) =>
     openIn("terminal", target, { from: pane.id, split: true, initialCommand: `cd -- ${shellQuote(folder)} && clear` });
 
+  /** Moves the terminal you already use on this machine into the folder. */
+  const mainTerminalHere = (folder: string) => {
+    const st = useStore.getState();
+    const id = st.mainTerminalFor(target);
+    if (!id) return terminalHere(folder);
+    // Ctrl+U first clears anything half-typed on the prompt.
+    backend.writeSession(id, `\x15cd -- ${shellQuote(folder)}\r`);
+    st.focus(id);
+    findTerminal(id)?.focus();
+  };
+
   const pickAndUpload = async () => {
     const paths = await backend.pickFiles();
     void upload(paths);
@@ -610,7 +610,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       return [
         { label: "New folder", icon: FolderPlus, run: () => setCreating(true) },
         ...(remote ? [{ label: "Upload files…", icon: Upload, run: pickAndUpload }] : []),
-        { label: "Open terminal here", icon: SquareTerminal, run: () => terminalHere(dir) },
+        { label: "Open in main terminal", icon: CornerDownRight, run: () => mainTerminalHere(dir) },
+        { label: "Open new terminal here", icon: SquareTerminal, run: () => terminalHere(dir) },
         "sep",
         { label: pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder", icon: Star, run: () => toggleBookmark(tk, dir) },
         { label: "Copy folder path", icon: Copy, run: () => copyPath(dir) },
@@ -630,7 +631,12 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             ...(entry.kind === "dir"
               ? [{ label: pins.includes(full) ? "Remove bookmark" : "Add to bookmarks", icon: Star, run: () => toggleBookmark(tk, full) }]
               : []),
-            ...(entry.kind === "dir" ? [{ label: "Open terminal here", icon: SquareTerminal, run: () => terminalHere(full) }] : []),
+            ...(entry.kind === "dir"
+              ? [
+                  { label: "Open in main terminal", icon: CornerDownRight, run: () => mainTerminalHere(full) },
+                  { label: "Open new terminal here", icon: SquareTerminal, run: () => terminalHere(full) },
+                ]
+              : []),
           ]
         : []),
       "sep",

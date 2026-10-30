@@ -7,8 +7,12 @@
 pub mod containers;
 pub mod error;
 pub mod files;
+pub mod hostkeys;
 pub mod hosts;
+pub mod identity;
+pub mod keys;
 pub mod metrics;
+pub mod secrets;
 pub mod session;
 pub mod ssh;
 mod text;
