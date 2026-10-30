@@ -59,6 +59,42 @@ function Card({ selected, onClick, title, children }: { selected: boolean; onCli
 const fill = { fill: "currentColor", fillOpacity: 0.28 };
 const strong = { fill: "var(--ui-accent)", fillOpacity: 0.85 };
 
+const LOAD_STYLES = [
+  { id: "off", title: "Off" },
+  { id: "frame", title: "Frame" },
+  { id: "bars", title: "Bars" },
+  { id: "pulse", title: "Pulse" },
+  { id: "count", title: "Count" },
+] as const;
+
+/** One server icon drawn with the load style on it. */
+function LoadPicture({ style }: { style: (typeof LOAD_STYLES)[number]["id"] }) {
+  const accent = { stroke: "var(--ui-accent)", strokeWidth: 1.6, fill: "none", strokeLinecap: "round" } as const;
+  const cx = style === "bars" ? 29 : 32;
+  const cy = style === "pulse" ? 15 : 18;
+  return (
+    <>
+      <rect x="21" y="7" width="22" height="22" rx="6" {...fill} />
+      <circle cx={cx} cy={cy} r="4.5" {...accent} />
+      {style === "off" && <circle cx="40" cy="26" r="2.4" fill="var(--ui-ok)" />}
+      {style === "frame" && (
+        <path d="M32 7H37A6 6 0 0 1 43 13V23A6 6 0 0 1 37 29H27A6 6 0 0 1 21 23V13A6 6 0 0 1 27 7Z" {...accent} strokeWidth={2} pathLength={100} strokeDasharray="38 100" />
+      )}
+      {style === "bars" &&
+        [0.5, 0.75, 0.35].map((v, i) => <rect key={i} x={35.5 + i * 2.5} y={24 - 10 * v} width="1.6" height={10 * v} rx="0.8" fill="var(--ui-accent)" />)}
+      {style === "pulse" && <polyline points="25,25 28,23.5 30.5,26 33.5,21.5 36,24.5 39,22.5" {...accent} strokeWidth={1.3} />}
+      {style === "count" && (
+        <>
+          <circle cx="41" cy="27" r="4.2" fill="var(--ui-ok)" />
+          <text x="41" y="29" textAnchor="middle" fontSize="6" fontWeight="700" fill="black" fillOpacity="0.75">
+            2
+          </text>
+        </>
+      )}
+    </>
+  );
+}
+
 export function Welcome() {
   const onboarded = useSettings((s) => s.onboarded);
   const s = useSettings();
@@ -241,30 +277,48 @@ export function Welcome() {
             {step === 3 && (
               <>
                 <h2 className="text-[20px] font-semibold tracking-tight text-fg">Layout</h2>
-                <Field label="Server list" hint="Icons save room; you can give each server its own icon and color.">
-                  <div className="flex gap-2" role="radiogroup" aria-label="Server list">
-                    <Card selected={s.sidebarMode === "wide"} onClick={() => set({ sidebarMode: "wide" })} title="Names">
-                      <rect x="4" y="4" width="20" height="32" rx="2" {...fill} />
-                      {[9, 15, 21, 27].map((y) => (
-                        <rect key={y} x="7" y={y} width="14" height="3" rx="1" fill="currentColor" fillOpacity="0.6" />
-                      ))}
-                    </Card>
-                    <Card selected={s.sidebarMode === "narrow"} onClick={() => set({ sidebarMode: "narrow" })} title="Icons">
-                      <rect x="4" y="4" width="8" height="32" rx="2" {...fill} />
-                      {[8, 15, 22, 29].map((y) => (
-                        <rect key={y} x="5.5" y={y} width="5" height="5" rx="1.2" {...strong} />
-                      ))}
-                    </Card>
-                  </div>
-                </Field>
-                <Field label="Sidebar side">
-                  <div className="flex gap-2" role="radiogroup" aria-label="Sidebar side">
-                    <Card selected={s.sidebarSide === "left"} onClick={() => set({ sidebarSide: "left" })} title="Left">
-                      <rect x="4" y="4" width="14" height="32" rx="2" {...strong} />
-                    </Card>
-                    <Card selected={s.sidebarSide === "right"} onClick={() => set({ sidebarSide: "right" })} title="Right">
-                      <rect x="46" y="4" width="14" height="32" rx="2" {...strong} />
-                    </Card>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Server list" hint="Icons save room.">
+                    <div className="flex gap-2" role="radiogroup" aria-label="Server list">
+                      <Card selected={s.sidebarMode === "wide"} onClick={() => set({ sidebarMode: "wide" })} title="Names">
+                        <rect x="4" y="4" width="20" height="32" rx="2" {...fill} />
+                        {[9, 15, 21, 27].map((y) => (
+                          <rect key={y} x="7" y={y} width="14" height="3" rx="1" fill="currentColor" fillOpacity="0.6" />
+                        ))}
+                      </Card>
+                      <Card selected={s.sidebarMode === "narrow"} onClick={() => set({ sidebarMode: "narrow" })} title="Icons">
+                        <rect x="4" y="4" width="8" height="32" rx="2" {...fill} />
+                        {[8, 15, 22, 29].map((y) => (
+                          <rect key={y} x="5.5" y={y} width="5" height="5" rx="1.2" {...strong} />
+                        ))}
+                      </Card>
+                    </div>
+                  </Field>
+                  <Field label="Sidebar side" hint="Where the list sits.">
+                    <div className="flex gap-2" role="radiogroup" aria-label="Sidebar side">
+                      <Card selected={s.sidebarSide === "left"} onClick={() => set({ sidebarSide: "left" })} title="Left">
+                        <rect x="4" y="4" width="14" height="32" rx="2" {...strong} />
+                      </Card>
+                      <Card selected={s.sidebarSide === "right"} onClick={() => set({ sidebarSide: "right" })} title="Right">
+                        <rect x="46" y="4" width="14" height="32" rx="2" {...strong} />
+                      </Card>
+                    </div>
+                  </Field>
+                </div>
+                <Field
+                  label="Server load"
+                  hint={
+                    s.railStatus === "off"
+                      ? "Servers show only whether they're connected."
+                      : "How busy each open server is. The list shows small CPU and memory meters; icons show the style you pick."
+                  }
+                >
+                  <div className="flex gap-2" role="radiogroup" aria-label="Server load">
+                    {LOAD_STYLES.map(({ id, title }) => (
+                      <Card key={id} selected={s.railStatus === id} onClick={() => set({ railStatus: id })} title={title}>
+                        <LoadPicture style={id} />
+                      </Card>
+                    ))}
                   </div>
                 </Field>
                 <Field label="Bookmarks in the file manager">

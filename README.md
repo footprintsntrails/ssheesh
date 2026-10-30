@@ -145,7 +145,6 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 What's planned next. The order may still change.
 
-- **0.3.2: a friendlier start and a tidier file manager.** A welcome on first launch. Pane title bars that fit any width. Drag a place or bookmark out of the column to remove it, and choose which ones show with a right-click. A New menu for files, folders and archives. A toolbar that keeps the address bar when the pane gets narrow, and a calmer top bar.
 - **0.4: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
 - **0.5: Docker, files and disk.** Compose stacks with per-container stats, and updates you can roll back. "What's eating my disk", systemd services and a one-click security check-up. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
 - **0.6: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.

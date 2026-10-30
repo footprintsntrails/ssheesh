@@ -334,6 +334,28 @@ mod tests {
     }
 
     #[test]
+    fn notes_a_remembered_password_across_restarts() {
+        let dir = std::env::temp_dir().join(format!("sshee-hosts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let form = |password: Option<&str>| NewHost {
+            name: None,
+            address: "deploy@203.0.113.10".into(),
+            identity_file: None,
+            password: password.map(crate::secrets::Secret::new),
+            remember_password: true,
+            identity_agent: None,
+        };
+        let mut store = HostStore::new(&dir).with_ssh_config(None);
+        let with = store.add(form(Some("pw"))).unwrap();
+        let without = store.add(form(None)).unwrap();
+        // A fresh store reads the file, like the app after a restart.
+        let mut again = HostStore::new(&dir).with_ssh_config(None);
+        assert!(again.get(&with.id).unwrap().remembered_password);
+        assert!(!again.get(&without.id).unwrap().remembered_password);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn parses_addresses() {
         assert_eq!(parse_address("root@1.2.3.4:2222").unwrap(), (Some("root".into()), "1.2.3.4".into(), Some(2222)));
         assert_eq!(parse_address("example.com").unwrap(), (None, "example.com".into(), None));

@@ -6,7 +6,7 @@
 //! which answers password prompts and nothing else. A host key question or a
 //! key passphrase prompt gets no answer, so those still fail safe.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Mutex;
 
@@ -39,6 +39,8 @@ impl fmt::Debug for Secret {
 #[derive(Default)]
 pub struct PasswordStore {
     memory: Mutex<HashMap<String, Secret>>,
+    /// Hosts already looked for in the keychain by `recover` this run.
+    looked: Mutex<HashSet<String>>,
 }
 
 impl PasswordStore {
@@ -55,6 +57,16 @@ impl PasswordStore {
         let s = Secret::new(pw);
         self.memory.lock().unwrap().insert(host_id.to_string(), s.clone());
         Some(s)
+    }
+
+    /// Looks in the keychain for a host whose saved password went unnoted:
+    /// 0.3.4 and earlier saved it there but told the server list it wasn't.
+    /// Asks the keychain at most once per host per run.
+    pub fn recover(&self, host_id: &str) -> Option<Secret> {
+        if !self.looked.lock().unwrap().insert(host_id.to_string()) {
+            return None;
+        }
+        self.get(host_id, true)
     }
 
     /// Keeps a password for this run, and in the keychain when `remember` is

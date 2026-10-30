@@ -7,7 +7,7 @@ use sshee_core::metrics::{self, Metrics};
 use sshee_core::secrets::PasswordStore;
 use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::session::{self, EventSink};
-use sshee_core::{ErrorCode, Host, HostStore, NewHost, OpError, SessionEvent, SessionManager, SessionSpec, SshEnv, Target};
+use sshee_core::{ErrorCode, Host, HostSource, HostStore, NewHost, OpError, SessionEvent, SessionManager, SessionSpec, SshEnv, Target};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
@@ -41,17 +41,23 @@ enum TargetSpec {
 fn resolve(state: &AppState, spec: &TargetSpec) -> Result<Target, OpError> {
     match spec {
         TargetSpec::Local => Ok(Target::Local),
-        TargetSpec::Host { host_id } => state
-            .hosts
-            .lock()
-            .unwrap()
-            .get(host_id)
-            .map(|h| {
-                let mut t = h.target();
-                t.password = state.passwords.get(&h.id, h.remembered_password);
-                Target::Ssh(t)
-            })
-            .ok_or_else(|| OpError::new(ErrorCode::NotFound, "That server isn't in your list anymore.")),
+        TargetSpec::Host { host_id } => {
+            let mut hosts = state.hosts.lock().unwrap();
+            let h = hosts
+                .get(host_id)
+                .ok_or_else(|| OpError::new(ErrorCode::NotFound, "That server isn't in your list anymore."))?;
+            let mut t = h.target();
+            t.password = state.passwords.get(&h.id, h.remembered_password);
+            // A server added in the app may have its password in the keychain
+            // without a note saying so (0.3.4 and earlier). Find it, note it.
+            if t.password.is_none() && !h.remembered_password && h.source == HostSource::Saved {
+                t.password = state.passwords.recover(&h.id);
+                if t.password.is_some() {
+                    let _ = hosts.set_remembered_password(&h.id, true);
+                }
+            }
+            Ok(Target::Ssh(t))
+        }
     }
 }
 
@@ -68,12 +74,15 @@ fn list_hosts(state: State<AppState>) -> Vec<Host> {
 }
 
 #[tauri::command]
-fn add_host(state: State<AppState>, mut input: NewHost) -> Result<AddedHost, String> {
-    let password = input.password.take().filter(|p| !p.expose().is_empty());
-    let mut host = state.hosts.lock().unwrap().add(input.clone())?;
+fn add_host(state: State<AppState>, input: NewHost) -> Result<AddedHost, String> {
+    // The form keeps its password while the server is saved: that's how the
+    // list notes the password is in the keychain.
+    let password = input.password.clone().filter(|p| !p.expose().is_empty());
+    let remember = input.remember_password;
+    let mut host = state.hosts.lock().unwrap().add(input)?;
     let mut warning = None;
     if let Some(pw) = password {
-        if let Err(e) = state.passwords.set(&host.id, pw, input.remember_password) {
+        if let Err(e) = state.passwords.set(&host.id, pw, remember) {
             state.hosts.lock().unwrap().set_remembered_password(&host.id, false)?;
             host.remembered_password = false;
             warning = Some(e);

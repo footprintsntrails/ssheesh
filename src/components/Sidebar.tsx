@@ -12,6 +12,7 @@ import { sameTarget, targetKey, toOpError, type Container, type ContainerList, t
 import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
 import { LookPopover } from "./LookPicker";
 import { ConfigNotice } from "./ConfigImport";
+import { LoadLine, RailCard, RailLoad } from "./ServerLoad";
 import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
 
 const RANK: Record<Health, number> = { idle: 0, busy: 1, live: 2, warn: 3, bad: 4 };
@@ -207,6 +208,11 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
   const toast = useStore((s) => s.toast);
   const active = useStore((s) => sameTarget(s.panes[s.focused]?.target, target));
   const health = useHealth(target);
+  const panes = useStore((s) => Object.values(s.panes).filter((p) => sameTarget(p.target, target)).length);
+  const railStatus = useSettings((s) => s.railStatus);
+  const side = useSettings((s) => s.sidebarSide);
+  const [hover, setHover] = useState<DOMRect | null>(null);
+  const hoverTimer = useRef(0);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [lookAt, setLookAt] = useState<Menu | null>(null);
   const look = useHostLook(host?.id);
@@ -296,29 +302,67 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
   );
 
   if (narrow) {
-    const dot = HEALTH_DOT[health];
+    // A connected server shows its load instead of the plain green dot.
+    const showLoad = health === "live" && railStatus !== "off";
+    const dot = showLoad ? null : HEALTH_DOT[health];
+    const pulse = showLoad && railStatus === "pulse";
+    const bars = showLoad && railStatus === "bars";
+    const unhover = () => {
+      window.clearTimeout(hoverTimer.current);
+      setHover(null);
+    };
     return (
       <>
         <button
           type="button"
-          title={label}
           aria-label={label}
           aria-current={active || undefined}
-          onClick={() => openIn("terminal", target)}
+          onClick={() => {
+            unhover();
+            openIn("terminal", target);
+          }}
+          onPointerEnter={(e) => {
+            const at = e.currentTarget.getBoundingClientRect();
+            hoverTimer.current = window.setTimeout(() => setHover(at), 350);
+          }}
+          onPointerLeave={unhover}
           onContextMenu={(e: MouseEvent) => {
             e.preventDefault();
+            unhover();
             setMenu({ x: e.clientX, y: e.clientY });
           }}
           className={cn(
-            "relative mx-auto flex size-10 shrink-0 items-center justify-center rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
+            "relative mx-auto flex w-10 shrink-0 items-center justify-center rounded-[10px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
+            pulse ? "h-12" : "h-10",
             active ? "bg-ink/[0.11]" : "hover:bg-ink/[0.06]",
           )}
         >
-          <Icon size={19} strokeWidth={1.9} className={cn("shrink-0", !iconStyle && "text-accent")} style={iconStyle} />
+          <Icon
+            size={bars ? 18 : 19}
+            strokeWidth={1.9}
+            className={cn("shrink-0", !iconStyle && "text-accent", bars && "-translate-x-[7px]", pulse && "-translate-y-[6px]")}
+            style={iconStyle}
+          />
+          {showLoad && <RailLoad target={target} style={railStatus} panes={panes} waiting={waiting} />}
           {env && <span className={cn("absolute bottom-[4px] left-1/2 h-[3px] w-3.5 -translate-x-1/2 rounded-full", ENV_LABELS[env].bar)} />}
           {dot && <span className={cn("absolute right-[5px] bottom-[5px] size-[7px] rounded-full ring-2 ring-[var(--ui-window)]", dot)} />}
-          {waiting && <span className="absolute top-[4px] right-[4px] size-2 rounded-full bg-accent ring-2 ring-[var(--ui-window)]" />}
+          {waiting && !(showLoad && railStatus === "count") && (
+            <span className={cn("absolute size-2 rounded-full bg-accent ring-2 ring-[var(--ui-window)]", showLoad ? "-top-[2px] -right-[2px]" : "top-[4px] right-[4px]")} />
+          )}
         </button>
+        {hover && !menu && (
+          <RailCard
+            target={target}
+            at={hover}
+            side={side}
+            label={label}
+            address={names.on ? undefined : address}
+            env={env}
+            health={health}
+            waiting={waiting}
+            panes={panes}
+          />
+        )}
         {menu && <ContextMenu menu={menu} items={items} onClose={() => setMenu(null)} />}
         {pickLook}
       </>
@@ -333,7 +377,7 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
         aria-label={expanded ? `Hide containers on ${label}` : `Show containers on ${label}`}
         aria-expanded={expanded}
         onClick={toggle}
-        className="absolute left-0 z-10 flex h-7 w-5 items-center justify-center rounded text-fg-3 hover:text-fg"
+        className="absolute top-0 left-0 z-10 flex h-7 w-5 items-center justify-center rounded text-fg-3 hover:text-fg"
       >
         <ChevronRight size={12} strokeWidth={2.4} className={cn("transition-transform", expanded && "rotate-90")} />
       </button>
@@ -347,15 +391,18 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
           setMenu({ x: e.clientX, y: e.clientY });
         }}
         className={cn(
-          "flex h-7 w-full items-center gap-2 rounded-[6px] pr-1.5 pl-5 text-left text-[13px] outline-none",
+          "block w-full rounded-[6px] pr-1.5 pl-5 text-left text-[13px] outline-none",
           active ? "bg-ink/[0.1] text-fg" : "text-fg hover:bg-ink/[0.05] focus-visible:bg-ink/[0.07]",
         )}
       >
-        <Icon size={15} strokeWidth={1.8} className={cn("shrink-0", !iconStyle && "text-accent")} style={iconStyle} />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        <EnvChip env={env} />
-        {waiting && <span title="A terminal here needs you" className="size-[7px] shrink-0 rounded-full bg-accent" />}
-        <StatusMark health={health} />
+        <span className="flex h-7 items-center gap-2">
+          <Icon size={15} strokeWidth={1.8} className={cn("shrink-0", !iconStyle && "text-accent")} style={iconStyle} />
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <EnvChip env={env} />
+          {waiting && <span title="A terminal here needs you" className="size-[7px] shrink-0 rounded-full bg-accent" />}
+          <StatusMark health={health} />
+        </span>
+        {health === "live" && railStatus !== "off" && <LoadLine target={target} />}
       </button>
       </div>
       {expanded && <ContainerTree target={target} />}

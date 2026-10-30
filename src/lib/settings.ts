@@ -43,6 +43,8 @@ export interface Settings {
   sidebarWidth: number;
   /** Full list, or a rail of server icons. */
   sidebarMode: "wide" | "narrow";
+  /** How the sidebar shows a connected server's load: meters in the list, this style on rail icons. */
+  railStatus: "off" | "frame" | "bars" | "pulse" | "count";
   /** Machines whose container list is open in the sidebar. */
   expanded: string[];
   placesWidth: number;
@@ -91,6 +93,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarVisible: true,
   sidebarWidth: 232,
   sidebarMode: "wide",
+  railStatus: "frame",
   expanded: [],
   placesWidth: 172,
   placesMode: "narrow",

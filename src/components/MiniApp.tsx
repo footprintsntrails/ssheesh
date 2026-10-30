@@ -9,6 +9,39 @@ import { fontStack, resolveScheme } from "../lib/themes";
 const SERVERS = ["#5b9dff", "#3dd68c", "#ff6fb1", "#b07cff"];
 const NAMES = ["prod-api", "homelab", "pi", "db-replica"];
 
+/** The first rail icon's load, in the chosen style, at miniature size. */
+function MiniLoad() {
+  const style = useSettings((s) => s.railStatus);
+  if (style === "frame")
+    return (
+      <svg viewBox="0 0 14 14" className="absolute -top-[3px] -left-[3px] size-5" aria-hidden>
+        <path
+          d="M7 0.75H9.75A3.5 3.5 0 0 1 13.25 4.25V9.75A3.5 3.5 0 0 1 9.75 13.25H4.25A3.5 3.5 0 0 1 0.75 9.75V4.25A3.5 3.5 0 0 1 4.25 0.75Z"
+          fill="none"
+          stroke="var(--ui-accent)"
+          strokeWidth="1.2"
+          pathLength={100}
+          strokeDasharray="40 100"
+        />
+      </svg>
+    );
+  if (style === "bars")
+    return (
+      <span className="absolute top-1/2 -right-[5px] flex h-2.5 -translate-y-1/2 items-end gap-px">
+        <span className="h-1/2 w-[1.5px] rounded-full bg-accent" />
+        <span className="h-3/4 w-[1.5px] rounded-full bg-accent" />
+      </span>
+    );
+  if (style === "pulse")
+    return (
+      <svg viewBox="0 0 14 4" className="absolute -bottom-[6px] left-0 h-1 w-3.5" aria-hidden>
+        <polyline points="0,3 3,2 5,3.5 8,0.8 10,2.6 14,1.5" fill="none" stroke="var(--ui-accent)" strokeWidth="1" />
+      </svg>
+    );
+  if (style === "count") return <span className="absolute -right-[3px] -bottom-[3px] size-[7px] rounded-full bg-ok ring-1 ring-[var(--ui-window)]" />;
+  return null;
+}
+
 export function MiniApp({ className, focus }: { className?: string; focus?: "sidebar" | "terminal" | "files" | "vitals" }) {
   const s = useSettings();
   const t = resolveScheme(s.terminalScheme, s.theme, s.accent);
@@ -25,11 +58,25 @@ export function MiniApp({ className, focus }: { className?: string; focus?: "sid
       <div className="mb-1 h-2.5 rounded-[3px] bg-ink/[0.08]" />
       {NAMES.map((n, i) =>
         narrow ? (
-          <span key={n} className="mx-auto size-3.5 rounded-[4px]" style={{ background: `${SERVERS[i]}40`, boxShadow: `inset 0 0 0 1.5px ${SERVERS[i]}` }} />
+          <span key={n} className="relative mx-auto size-3.5 rounded-[4px]" style={{ background: `${SERVERS[i]}40`, boxShadow: `inset 0 0 0 1.5px ${SERVERS[i]}` }}>
+            {i === 0 && <MiniLoad />}
+          </span>
         ) : (
-          <span key={n} className={cn("flex items-center gap-1 rounded-[3px] px-1 py-[2px]", i === 0 && "bg-ink/[0.09]")}>
-            <span className="size-1.5 shrink-0 rounded-[2px]" style={{ background: SERVERS[i] }} />
-            <span className="truncate text-[7px] leading-none text-fg-2">{n}</span>
+          <span key={n} className={cn("flex flex-col gap-[3px] rounded-[3px] px-1 py-[2px]", i === 0 && "bg-ink/[0.09]")}>
+            <span className="flex items-center gap-1">
+              <span className="size-1.5 shrink-0 rounded-[2px]" style={{ background: SERVERS[i] }} />
+              <span className="truncate text-[7px] leading-none text-fg-2">{n}</span>
+            </span>
+            {i === 0 && s.railStatus !== "off" && (
+              <span className="flex gap-1 pb-[1px] pl-2.5">
+                <span className="h-[2px] flex-1 rounded-full bg-ink/[0.12]">
+                  <span className="block h-full w-2/5 rounded-full bg-accent" />
+                </span>
+                <span className="h-[2px] flex-1 rounded-full bg-ink/[0.12]">
+                  <span className="block h-full w-3/5 rounded-full bg-accent" />
+                </span>
+              </span>
+            )}
           </span>
         ),
       )}

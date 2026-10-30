@@ -7,7 +7,7 @@ import { useStore, type PaneState } from "../lib/store";
 import type { Metrics, OpError, TargetRef } from "../lib/types";
 import { Button, IconButton, Spinner } from "./ui";
 
-function Sparkline({ series, max, color, fill = true, height = 28, width = 200 }: { series: number[]; max: number; color: string; fill?: boolean; height?: number; width?: number }) {
+export function Sparkline({ series, max, color, fill = true, height = 28, width = 200 }: { series: number[]; max: number; color: string; fill?: boolean; height?: number; width?: number }) {
   const id = useId();
   if (series.length < 2) return <div style={{ height }} />;
   const n = series.length;
@@ -28,7 +28,7 @@ function Sparkline({ series, max, color, fill = true, height = 28, width = 200 }
   );
 }
 
-function Meter({ value, height = 4 }: { value: number; height?: number }) {
+export function Meter({ value, height = 4 }: { value: number; height?: number }) {
   const v = Math.max(0, Math.min(1, value));
   return (
     <div className="w-full overflow-hidden rounded-full bg-ink/[0.08]" style={{ height }}>
@@ -40,7 +40,7 @@ function Meter({ value, height = 4 }: { value: number; height?: number }) {
   );
 }
 
-function memFraction(m: Metrics) {
+export function memFraction(m: Metrics) {
   return m.memTotal ? (m.memTotal - m.memAvailable) / m.memTotal : 0;
 }
 

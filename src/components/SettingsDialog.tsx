@@ -572,7 +572,7 @@ function Layout({ s, set, reset }: SectionProps) {
   ];
   return (
     <>
-      <SectionTitle onReset={() => reset(["sidebarSide", "sidebarVisible", "sidebarMode", "compactMode", "showVitals", "placesMode", "paneGap", "paneRadius"])}>Layout</SectionTitle>
+      <SectionTitle onReset={() => reset(["sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "placesMode", "paneGap", "paneRadius"])}>Layout</SectionTitle>
       <Row label="Arrange open panes" hint="Rearranges what's open. Nothing gets closed. You can also drag a pane by its title bar." stack>
         <div className="grid grid-cols-4 gap-2">
           {ARRANGE.map(({ id, label, icon: Icon }) => (
@@ -610,6 +610,22 @@ function Layout({ s, set, reset }: SectionProps) {
           options={[
             { value: "wide", label: "Names" },
             { value: "narrow", label: "Icons" },
+          ]}
+        />
+      </Row>
+      <Row
+        label="Server load"
+        hint="How busy each open server is: meters in the list, this style on icons. Point at an icon for the numbers. Amber means a disk or memory is nearly full."
+      >
+        <Segmented
+          value={s.railStatus}
+          onChange={(v) => set({ railStatus: v })}
+          options={[
+            { value: "off", label: "Off" },
+            { value: "frame", label: "Frame" },
+            { value: "bars", label: "Bars" },
+            { value: "pulse", label: "Pulse" },
+            { value: "count", label: "Count" },
           ]}
         />
       </Row>

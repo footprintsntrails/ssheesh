@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.5 — live servers
+
+### See how your servers are doing
+- **Small CPU and memory meters under every open server** in the sidebar. They come from the same numbers as the vitals bar, and servers you haven't opened aren't asked for anything.
+- **A warning line when a disk or memory is nearly full**, like "Disk 91% full", so you notice before something breaks.
+- **When the sidebar is folded into icons**, each open server shows its load on its icon. Pick the style in Settings → Layout → Server load, or in the welcome's Layout step: Frame (the default), Bars, Pulse, Count, or Off.
+- **Point at a server icon** for a card with its address, how many panes are open, CPU, memory, disk and uptime.
+
+### Fixed
+- **"Remember password" works after a restart.** The password went into your keychain, but SSHeesh forgot it had saved it and asked again next time. Servers you added before this update find their saved password on the next connect, so there's no need to add them again.
+
 ## 0.3.4 — drop files anywhere
 
 - **Drop files on a server's terminal to upload them.** SSHeesh asks where to put them, starting with the folder that terminal is in, and you can change it before uploading.

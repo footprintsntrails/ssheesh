@@ -216,10 +216,17 @@ const containers: Record<string, Container[]> = {
 
 const counters = new Map<string, { cpuT: number; cpuI: number; rx: number; tx: number }>();
 
+/** How busy each demo machine is: homelab's disk is nearly full. */
+const LOADS: Record<string, { cpu: number; mem: number; disk: number }> = {
+  "cfg:prod-api": { cpu: 0.3, mem: 0.6, disk: 0.44 },
+  "cfg:homelab": { cpu: 0.08, mem: 0.34, disk: 0.91 },
+};
+
 function metricsFor(t: TargetRef): Metrics {
   const key = t.kind === "local" ? "local" : t.hostId;
+  const load = LOADS[key] ?? { cpu: 0.18, mem: 0.39, disk: 0.44 };
   const c = counters.get(key) ?? { cpuT: 1e7, cpuI: 8e6, rx: 2.31e12, tx: 1.12e12 };
-  const busy = 0.18 + 0.14 * Math.sin(Date.now() / 9000) + Math.random() * 0.08;
+  const busy = load.cpu + 0.12 * Math.sin(Date.now() / 9000) + Math.random() * 0.08;
   c.cpuT += 1200;
   c.cpuI += 1200 * (1 - busy);
   c.rx += 1.4e6 + Math.random() * 2.6e6;
@@ -236,7 +243,7 @@ function metricsFor(t: TargetRef): Metrics {
     cpuTotal: c.cpuT,
     cpuIdle: c.cpuI,
     memTotal: 32 * 2 ** 30,
-    memAvailable: 19.6 * 2 ** 30 + Math.random() * 2 ** 28,
+    memAvailable: 32 * 2 ** 30 * (1 - load.mem) + Math.random() * 2 ** 28,
     swapTotal: 4 * 2 ** 30,
     swapFree: 3.7 * 2 ** 30,
     netRx: c.rx,
@@ -244,7 +251,7 @@ function metricsFor(t: TargetRef): Metrics {
     netIfaces: ["eth0"],
     month: { month: "2026-10", rx: 412.6 * 2 ** 30, tx: 128.3 * 2 ** 30 },
     disks: [
-      { mount: "/", size: 480 * 2 ** 30, used: 211 * 2 ** 30 },
+      { mount: "/", size: 480 * 2 ** 30, used: 480 * 2 ** 30 * load.disk },
       { mount: "/var/lib/postgresql", size: 960 * 2 ** 30, used: 702 * 2 ** 30 },
     ],
   };
@@ -252,12 +259,12 @@ function metricsFor(t: TargetRef): Metrics {
 
 export const mockBackend: Backend = {
   isDemo: true,
-  appVersion: async () => "0.3.4",
+  appVersion: async () => "0.3.5",
   localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
     return {
-      version: "0.3.5",
+      version: "0.3.6",
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
       date: new Date().toISOString(),
     };
