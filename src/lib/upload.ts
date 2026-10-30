@@ -3,6 +3,7 @@
 
 import { backend } from "./backend";
 import { useStore } from "./store";
+import { track } from "./transfers";
 import { toOpError, type TargetRef } from "./types";
 
 /** "notes.txt" or "3 items", for messages. */
@@ -15,21 +16,25 @@ export async function uploadTo(target: TargetRef, dir: string, paths: string[]):
   if (!paths.length) return false;
   const { toast, confirm } = useStore.getState();
   const label = filesLabel(paths);
-  const verb = target.kind === "host" ? "Uploaded" : "Copied";
+  const host = target.kind === "host";
+  const verb = host ? "Uploaded" : "Copied";
+  const send = (overwrite: boolean) => track(host ? "upload" : "copy", label, (hooks) => backend.uploadPaths(target, paths, dir, overwrite, hooks));
+  const failed = (e: unknown) => {
+    const err = toOpError(e);
+    if (err.code === "cancelled") toast({ tone: "info", title: host ? "Upload stopped" : "Copy stopped", body: label });
+    else toast({ tone: "error", title: host ? "Upload failed" : "Copy failed", body: err.message });
+    return false;
+  };
   try {
-    await backend.uploadPaths(target, paths, dir, false);
+    await send(false);
   } catch (e) {
     const err = toOpError(e);
-    if (err.code !== "exists") {
-      toast({ tone: "error", title: target.kind === "host" ? "Upload failed" : "Copy failed", body: err.message });
-      return false;
-    }
+    if (err.code !== "exists") return failed(e);
     if (!(await confirm({ title: "Replace existing files?", body: err.message, confirmLabel: "Replace" }))) return false;
     try {
-      await backend.uploadPaths(target, paths, dir, true);
+      await send(true);
     } catch (e2) {
-      toast({ tone: "error", title: target.kind === "host" ? "Upload failed" : "Copy failed", body: toOpError(e2).message });
-      return false;
+      return failed(e2);
     }
   }
   toast({ tone: "success", title: `${verb} ${label}`, body: dir });

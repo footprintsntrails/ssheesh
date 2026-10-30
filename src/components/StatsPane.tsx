@@ -1,10 +1,11 @@
-import { Activity, SquareTerminal, X } from "lucide-react";
+import { Activity, HardDrive, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { bytes, cn, monthName, percent, rate, uptime } from "../lib/format";
 import { useMetrics, type Sample } from "../lib/metrics";
 import { useNames } from "../lib/privacy";
 import { useStore, type PaneState } from "../lib/store";
 import type { Metrics, OpError, TargetRef } from "../lib/types";
+import { openServerTool } from "./ServerTools";
 import { Button, IconButton, Spinner } from "./ui";
 
 export function Sparkline({ series, max, color, fill = true, height = 28, width = 200 }: { series: number[]; max: number; color: string; fill?: boolean; height?: number; width?: number }) {
@@ -140,10 +141,20 @@ export function StatsPane({ pane, target }: { pane: PaneState; target: TargetRef
           chart={<Meter value={d.size ? d.used / d.size : 0} height={6} />}
         />
       ))}
-      <p className="px-4 py-3 text-[12px] text-fg-3">
+      <p className="px-4 pt-3 text-[12px] text-fg-3">
         {names.text(m.hostname)}, {m.kernel}, up {uptime(m.uptimeSecs)}
         {!m.month && ". Install vnstat on the server for monthly traffic."}
       </p>
+      {target.kind === "host" && (
+        <div className="flex flex-wrap gap-1.5 px-3 pt-2 pb-3">
+          <Button size="sm" variant="ghost" onClick={() => openServerTool("checkup", target)}>
+            <ShieldCheck size={13} /> Security check-up
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => openServerTool("disk", target)}>
+            <HardDrive size={13} /> What's using the disk
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -165,37 +176,39 @@ export function VitalsBar({ target, onDetails, onHide }: { target: TargetRef; on
   const max = netMax(samples);
 
   return (
-    <div className="@container flex h-8 shrink-0 items-center gap-5 overflow-hidden pr-1.5 pl-3 text-[12px] tabular-nums text-fg">
-      {error && !m ? (
-        <span className="truncate text-fg-3">Stats aren't available here: {error.message}</span>
-      ) : (
-        <>
-          <Vital label="CPU">
-            <span className="w-9 text-right">{last ? percent(last.cpu) : "…"}</span>
-            <span className="hidden w-12 @xl:block">
-              <Sparkline series={samples.map((s) => s.cpu)} max={1} color="var(--ui-accent)" height={14} width={48} fill={false} />
-            </span>
-          </Vital>
-          <Vital label="Memory">
-            <span>{m ? percent(memFraction(m)) : "…"}</span>
-            <span className="hidden w-10 @xl:block">{m && <Meter value={memFraction(m)} height={4} />}</span>
-          </Vital>
-          {/* Narrow windows keep CPU and memory; network and disk come back as room allows. */}
-          <Vital label="Network" className="hidden @xl:flex">
-            <span>{last ? `↓ ${rate(last.rx)}  ↑ ${rate(last.tx)}` : "…"}</span>
-            <span className="hidden w-12 @3xl:block">
-              <Sparkline series={samples.map((s) => s.rx)} max={max} color="var(--ui-accent)" height={14} width={48} fill={false} />
-            </span>
-          </Vital>
-          {root && (
-            <Vital label="Disk" className="hidden @md:flex">
-              <span>{percent(root.size ? root.used / root.size : 0)}</span>
+    <div className="@container flex h-8 shrink-0 items-center gap-1 pr-1.5 pl-3 text-[12px] tabular-nums text-fg">
+      {/* The readouts give way before the buttons do. */}
+      <div className="flex min-w-0 flex-1 items-center gap-5 overflow-hidden">
+        {error && !m ? (
+          <span className="truncate text-fg-3">Stats aren't available here: {error.message}</span>
+        ) : (
+          <>
+            <Vital label="CPU">
+              <span className="w-9 text-right">{last ? percent(last.cpu) : "…"}</span>
+              <span className="hidden w-12 @xl:block">
+                <Sparkline series={samples.map((s) => s.cpu)} max={1} color="var(--ui-accent)" height={14} width={48} fill={false} />
+              </span>
             </Vital>
-          )}
-          {m && <span className="hidden text-fg-3 @4xl:inline">up {uptime(m.uptimeSecs)}</span>}
-        </>
-      )}
-      <span className="flex-1" />
+            <Vital label="Memory">
+              <span>{m ? percent(memFraction(m)) : "…"}</span>
+              <span className="hidden w-10 @xl:block">{m && <Meter value={memFraction(m)} height={4} />}</span>
+            </Vital>
+            {/* Narrow windows keep CPU and memory; network and disk come back as room allows. */}
+            <Vital label="Network" className="hidden @2xl:flex">
+              <span>{last ? `↓ ${rate(last.rx)}  ↑ ${rate(last.tx)}` : "…"}</span>
+              <span className="hidden w-12 @3xl:block">
+                <Sparkline series={samples.map((s) => s.rx)} max={max} color="var(--ui-accent)" height={14} width={48} fill={false} />
+              </span>
+            </Vital>
+            {root && (
+              <Vital label="Disk" className="hidden @md:flex">
+                <span>{percent(root.size ? root.used / root.size : 0)}</span>
+              </Vital>
+            )}
+            {m && <span className="hidden text-fg-3 @4xl:inline">up {uptime(m.uptimeSecs)}</span>}
+          </>
+        )}
+      </div>
       <IconButton label="Open full stats" onClick={onDetails} className="size-6">
         <Activity size={13.5} />
       </IconButton>

@@ -1,7 +1,7 @@
 // Demo backend for running the UI in a plain browser (`npm run dev`).
 // Everything here is sample data: documentation IP ranges, made-up servers.
 
-import type { Backend } from "./backend";
+import type { Backend, TransferHooks } from "./backend";
 import type { Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
 
 const hosts: Host[] = [
@@ -12,6 +12,27 @@ const hosts: Host[] = [
 ];
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const fakeCancels = new Map<string, () => void>();
+/** Pretends to move `total` bytes over a few seconds; Cancel stops it. */
+function fakeTransfer(hooks: TransferHooks, total: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let done = 0;
+    const timer = setInterval(() => {
+      done = Math.min(total, done + (total / 30) * (0.5 + Math.random()));
+      hooks.onProgress({ done, total });
+      if (done < total) return;
+      clearInterval(timer);
+      fakeCancels.delete(hooks.id);
+      resolve();
+    }, 120);
+    fakeCancels.set(hooks.id, () => {
+      clearInterval(timer);
+      fakeCancels.delete(hooks.id);
+      reject({ code: "cancelled", message: "Cancelled." });
+    });
+  });
+}
 const now = Math.floor(Date.now() / 1000);
 
 function dir(name: string, ago: number, mode = "drwxr-xr-x"): FileEntry {
@@ -484,15 +505,74 @@ export const mockBackend: Backend = {
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";
     tree[parent] = (tree[parent] ?? []).filter((x) => x.name !== path.split("/").pop());
   },
-  async downloadPath(_t, path) {
-    await wait(600);
+  async downloadPath(_t, path, _isDir, hooks) {
+    await fakeTransfer(hooks, 48 * 1024 * 1024);
     return `~/Downloads/${path.split("/").pop()}`;
   },
-  async uploadPaths() {
-    await wait(800);
+  async uploadPaths(_t, _paths, _dir, _overwrite, hooks) {
+    await fakeTransfer(hooks, 23 * 1024 * 1024);
+  },
+  async writeClipboard(text) {
+    await navigator.clipboard.writeText(text);
+  },
+  cancelTransfer(id) {
+    fakeCancels.get(id)?.();
   },
   async sessionCwd() {
     return "/var/www/app";
+  },
+  async detectAgents() {
+    await wait(300);
+    return ["claude", "codex", "opencode", "omp"];
+  },
+  async paneInfo() {
+    return { command: "zsh", cwd: "/var/www/app", idle: true };
+  },
+  async securityCheckup() {
+    await wait(1400);
+    return {
+      asRoot: true,
+      checks: [
+        { id: "password-login", title: "Password login", verdict: "bad", detail: "Anyone can try passwords on this server, and bots do, all day. Keys are much harder to guess.", fix: "printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\n' | sudo tee /etc/ssh/sshd_config.d/00-ssheesh.conf && sudo systemctl reload ssh", fixNote: "Turns password login off. Check that logging in with your key works first, or you could lock yourself out." },
+        { id: "root-login", title: "Root login", verdict: "good", detail: "root can only log in with a key.", fix: null, fixNote: null },
+        { id: "open-ports", title: "Open ports", verdict: "warn", detail: "Open to the internet: 22 (ssh), 80 and 443 (web), 5432 (PostgreSQL). A database usually shouldn't be reachable from outside.", fix: null, fixNote: null },
+        { id: "firewall", title: "Firewall", verdict: "good", detail: "ufw is on.", fix: null, fixNote: null },
+        { id: "docker-ports", title: "Docker ports", verdict: "warn", detail: "Containers publish 5432 on every address. Docker's ports go around ufw, so the firewall doesn't block them. Publish them as 127.0.0.1:5432:5432 in your compose file instead.", fix: null, fixNote: null },
+        { id: "auto-updates", title: "Automatic updates", verdict: "good", detail: "Security updates install by themselves.", fix: null, fixNote: null },
+        { id: "security-updates", title: "Security updates", verdict: "bad", detail: "7 security fixes are waiting, including openssh-server, openssl and the kernel. They fix CVE-2026-10001, CVE-2026-10002 and 4 more.", fix: "sudo apt-get update && sudo apt-get upgrade --with-new-pkgs", fixNote: "Installs the fixes. A kernel fix needs a restart afterwards." },
+        { id: "brute-force", title: "Brute-force protection", verdict: "warn", detail: "Nothing slows down password guessing (no fail2ban or CrowdSec), and password login is on.", fix: "sudo apt-get install -y fail2ban", fixNote: "Installs fail2ban, which blocks addresses that keep failing to log in." },
+        { id: "reboot", title: "Restart", verdict: "good", detail: "No updates are waiting for a restart.", fix: null, fixNote: null },
+      ],
+    };
+  },
+  async diskReport() {
+    await wait(900);
+    const GB = 1024 ** 3;
+    return {
+      asRoot: true,
+      volumes: [
+        { mount: "/", size: 80 * GB, used: 71.4 * GB },
+        { mount: "/mnt/backups", size: 500 * GB, used: 212 * GB },
+      ],
+      docker: { images: 14.2 * GB, imagesReclaimable: 9.8 * GB, containers: 1.1 * GB, containersReclaimable: 0.4 * GB, volumes: 6.3 * GB, volumesReclaimable: 0, buildCache: 3.7 * GB, buildCacheReclaimable: 3.7 * GB },
+      journal: 1.6 * GB,
+      cleanups: [
+        { id: "docker-images", title: "Unused Docker images", detail: "Removes images no container uses. They download again when you need them.", command: "docker image prune -a", bytes: 9.8 * GB },
+        { id: "docker-build-cache", title: "Docker build cache", detail: "Leftovers from building images. The next build just takes a bit longer.", command: "docker builder prune -a", bytes: 3.7 * GB },
+        { id: "journal", title: "Old system logs", detail: "Trims the systemd journal to the newest 200 MB.", command: "sudo journalctl --vacuum-size=200M", bytes: 1.4 * GB },
+        { id: "apt-cache", title: "Downloaded packages", detail: "Installers apt keeps after installing. Nothing installed is removed.", command: "sudo apt-get clean", bytes: 0.6 * GB },
+      ],
+    };
+  },
+  async diskBiggest(_t, path) {
+    await wait(700);
+    const GB = 1024 ** 3;
+    const join = (name: string) => (path === "/" ? `/${name}` : `${path}/${name}`);
+    const rows: [string, number, boolean][] =
+      path === "/"
+        ? [["var", 38.2 * GB, true], ["home", 14.1 * GB, true], ["usr", 9.3 * GB, true], ["opt", 4.8 * GB, true], ["snap", 2.2 * GB, true], ["root", 1.4 * GB, true], ["boot", 0.3 * GB, true], ["swapfile", 2 * GB, false]]
+        : [["lib", 29.4 * GB, true], ["log", 6.1 * GB, true], ["cache", 1.9 * GB, true], ["backups", 0.6 * GB, true], ["www", 0.2 * GB, true]];
+    return rows.map(([name, bytes, isDir]) => ({ path: join(name), name, bytes, isDir })).sort((a, b) => b.bytes - a.bytes);
   },
   async pickFiles() {
     return [];

@@ -4,14 +4,16 @@
 // re-parented into whichever container is showing it.
 
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import { backend } from "./backend";
-import { matchShortcut } from "./keys";
+import { isTerminalNewline, isTerminalPaste, matchShortcut, terminalCopyKey } from "./keys";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { OutputPipeline } from "./output";
 import { maskText, streamerOn, targetName } from "./privacy";
 import { useSettings } from "./settings";
-import { fontStack, resolveScheme } from "./themes";
+import { fontStack, ICON_FONT, resolveScheme } from "./themes";
 import { useStore, type Attention, type PaneState, type Progress } from "./store";
 import type { ContainerRef, HostKeyCheck, SessionEvent, SessionState, TargetRef } from "./types";
 import { toOpError } from "./types";
@@ -39,10 +41,16 @@ function park(): HTMLDivElement {
   return parking;
 }
 
+/** Copies to the system clipboard; a failure isn't worth interrupting anyone over. */
+function copyText(text: string): Promise<void> {
+  return backend.writeClipboard(text).catch(() => {});
+}
+
 class TerminalHandle {
   readonly term: Terminal;
   readonly el: HTMLDivElement;
   private fit = new FitAddon();
+  private gpu: WebglAddon | null = null;
   private started = false;
   private disposed = false;
   private fitFrame = 0;
@@ -73,11 +81,40 @@ class TerminalHandle {
       scrollback: 10000,
       macOptionIsMeta: true,
       drawBoldTextInBrightColors: false,
+      // Needed for the Unicode 11 widths below.
+      allowProposedApi: true,
     });
     this.term.loadAddon(this.fit);
+    // Emoji take two cells, as the shell and tmux on the server count them.
+    // With xterm's default (Unicode 6) widths the cursor drifts after one.
+    this.term.loadAddon(new Unicode11Addon());
+    this.term.unicode.activeVersion = "11";
     this.term.open(this.el);
-    // App shortcuts win over the terminal.
-    this.term.attachCustomKeyEventHandler((e) => matchShortcut(e) === null);
+    this.setGpu(useSettings.getState().gpuRendering);
+    this.term.attachCustomKeyEventHandler((e) => {
+      const copy = terminalCopyKey(e);
+      if (copy) {
+        const text = this.term.getSelection();
+        if (text || copy === "ctrl-shift-c") {
+          if (e.type === "keydown") {
+            e.preventDefault();
+            if (text) void copyText(text);
+            this.term.clearSelection();
+          }
+          return false;
+        }
+      }
+      if (isTerminalNewline(e)) {
+        if (e.type === "keydown") {
+          e.preventDefault();
+          this.term.input("\n");
+        }
+        return false;
+      }
+      // App shortcuts win over the terminal. A paste key is left to the
+      // browser, which fires the paste event xterm handles.
+      return matchShortcut(e) === null && !isTerminalPaste(e);
+    });
     this.term.onData((d) => backend.writeSession(paneId, d));
     this.term.onResize(({ cols, rows }) => backend.resizeSession(paneId, cols, rows));
     // Programs that want you: AI agents and long jobs ring the bell or send
@@ -88,11 +125,61 @@ class TerminalHandle {
       else this.notice({ kind: "input", message: data });
       return true;
     });
+    // A program's own copy (OSC 52): tmux sends one for a mouse selection,
+    // and Claude Code, OpenCode and vim for theirs. Reading the clipboard
+    // back ("?") isn't allowed: a server has no business seeing it.
+    this.term.parser.registerOscHandler(52, (data) => {
+      const payload = data.slice(data.indexOf(";") + 1);
+      if (payload && payload !== "?" && payload.length < 4_000_000) {
+        try {
+          void copyText(new TextDecoder().decode(Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))));
+        } catch {
+          /* not base64 */
+        }
+      }
+      return true;
+    });
+    // Selecting with the mouse copies, once the selection settles.
+    let selecting = 0;
+    this.term.onSelectionChange(() => {
+      window.clearTimeout(selecting);
+      if (!useSettings.getState().copyOnSelect || !this.term.hasSelection()) return;
+      selecting = window.setTimeout(() => {
+        const text = this.term.getSelection();
+        if (text) void copyText(text);
+      }, 250);
+    });
     this.term.parser.registerOscHandler(777, (data) => {
       const [kind, title, body] = data.split(";");
       if (kind === "notify") this.notice({ kind: "input", message: [title, body].filter(Boolean).join(": ") });
       return true;
     });
+  }
+
+  /**
+   * Draws with the GPU: far faster for programs that redraw a lot (Claude
+   * Code, OpenCode, htop), and box-drawing and Powerline shapes join up
+   * with no gaps between lines. Without WebGL, or once the browser takes the
+   * context back (it caps how many a page has), the DOM renderer carries on.
+   */
+  setGpu(on: boolean) {
+    if (this.disposed || on === !!this.gpu) return;
+    if (!on) {
+      this.gpu?.dispose();
+      this.gpu = null;
+      return;
+    }
+    try {
+      const gpu = new WebglAddon();
+      gpu.onContextLoss(() => {
+        gpu.dispose();
+        if (this.gpu === gpu) this.gpu = null;
+      });
+      this.term.loadAddon(gpu);
+      this.gpu = gpu;
+    } catch {
+      /* no WebGL2 here */
+    }
   }
 
   /** You're looking at this terminal right now. */
@@ -191,6 +278,8 @@ class TerminalHandle {
   applyLook() {
     if (this.disposed) return;
     Object.assign(this.term.options, lookOptions());
+    // The GPU renderer keeps glyphs it drew before a font arrived.
+    this.term.clearTextureAtlas();
     this.scheduleFit();
   }
 
@@ -359,11 +448,17 @@ if (typeof window !== "undefined") {
 }
 
 useSettings.subscribe((s, prev) => {
+  if (s.gpuRendering === prev.gpuRendering) return;
+  for (const h of handles.values()) h.setGpu(s.gpuRendering);
+});
+useSettings.subscribe((s, prev) => {
   if (s.streamerMode === prev.streamerMode) return;
   for (const h of handles.values()) h.redraw();
 });
-if (typeof document !== "undefined") {
-  void document.fonts?.ready.then(() => {
+if (typeof document !== "undefined" && document.fonts) {
+  // The icon font loads up front, so a prompt's icons are there on first draw.
+  const icons = document.fonts.load(`13px ${ICON_FONT}`, "\ue0b0").catch(() => []);
+  void Promise.all([document.fonts.ready, icons]).then(() => {
     for (const h of handles.values()) h.applyLook();
   });
 }

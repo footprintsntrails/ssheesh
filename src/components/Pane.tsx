@@ -12,6 +12,7 @@ import { useSettings } from "../lib/settings";
 import { getTerminal } from "../lib/terminals";
 import { resolveScheme } from "../lib/themes";
 import type { SessionState } from "../lib/types";
+import { AgentButtons } from "./AgentIcons";
 import { EmptyPane } from "./EmptyPane";
 import { FilesPane } from "./FilesPane";
 import { StatsPane } from "./StatsPane";
@@ -170,6 +171,11 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
       {pane.kind === "terminal" && (
         <span className="contents @max-[10rem]:hidden">
           <SessionPill state={state} local={pane.target?.kind === "local"} />
+        </span>
+      )}
+      {pane.kind === "terminal" && (
+        <span className="contents @max-[24rem]:hidden">
+          <AgentButtons pane={pane} connected={state?.kind === "connected"} />
         </span>
       )}
       {pane.kind === "terminal" && <ProgressLine id={pane.id} />}

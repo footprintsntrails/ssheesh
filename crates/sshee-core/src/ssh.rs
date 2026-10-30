@@ -126,6 +126,12 @@ pub fn session_name(key: &str) -> String {
 /// server, the shell lives inside a named tmux session that outlives the
 /// connection, and reconnecting attaches to it again. tmux's status bar is
 /// hidden so it looks like a plain terminal. Without tmux it's a normal shell.
+///
+/// Tuned for programs like Claude Code, OpenCode and vim: full 24-bit color
+/// (ssh doesn't pass COLORTERM on, and tmux 3.2+ needs telling the terminal
+/// has it), Esc without tmux waiting for more keys, focus reports, screen
+/// updates drawn in one go, and copying (a mouse selection, or a program's
+/// own copy) reaching your clipboard.
 pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
     let name = session_name(key);
     // With a command: tmux runs it as the session's only window; without
@@ -138,7 +144,7 @@ pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
         None => (String::new(), r#""${SHELL:-/bin/sh}" -l"#.to_string()),
     };
     let script = format!(
-        r#"if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; exec tmux new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on; else printf "\033]7777;sshee=plain\007"; exec {plain}; fi"#
+        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) set -- ;; *) set -- -T RGB,sync ;; esac; exec tmux "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; set-option -s escape-time 10 \; set-option -s focus-events on \; set-option -s set-clipboard on; else printf "\033]7777;sshee=plain\007"; exec {plain}; fi"#
     );
     format!("sh -c {}", shell_quote(&script))
 }
@@ -241,6 +247,7 @@ mod tests {
     fn durable_command_runs_through_sh() {
         let c = durable_command("k1", None);
         assert!(c.starts_with("sh -c '"));
-        assert!(c.contains("tmux new-session -A -s sshee-k1"));
+        assert!(c.contains(r#"tmux "$@" new-session -A -s sshee-k1"#));
+        assert!(c.contains("export COLORTERM=truecolor"));
     }
 }

@@ -154,7 +154,82 @@ export interface Metrics {
   disks: { mount: string; size: number; used: number }[];
 }
 
-export type ErrorCode = "auth" | "hostKey" | "network" | "notFound" | "exists" | "tooLarge" | "unsupported" | "failed";
+export type ErrorCode = "auth" | "hostKey" | "network" | "notFound" | "exists" | "tooLarge" | "unsupported" | "cancelled" | "failed";
+
+/** One finding of the security check-up. */
+export interface Check {
+  /** "password-login", "root-login", "open-ports", "firewall", "docker-ports", "auto-updates", "brute-force", "reboot". */
+  id: string;
+  title: string;
+  verdict: "good" | "warn" | "bad" | "unknown";
+  detail: string;
+  /** A command that fixes it, for you to run. */
+  fix: string | null;
+  fixNote: string | null;
+}
+
+export interface Checkup {
+  checks: Check[];
+  /** False when some checks couldn't read root-only files. */
+  asRoot: boolean;
+}
+
+export interface DiskVolume {
+  mount: string;
+  size: number;
+  used: number;
+}
+
+/** A file or folder in the "biggest" list. */
+export interface DiskUsage {
+  path: string;
+  name: string;
+  bytes: number;
+  isDir: boolean;
+}
+
+/** `docker system df`, in bytes. */
+export interface DockerUsage {
+  images: number;
+  imagesReclaimable: number;
+  containers: number;
+  containersReclaimable: number;
+  volumes: number;
+  volumesReclaimable: number;
+  buildCache: number;
+  buildCacheReclaimable: number;
+}
+
+/** A safe cleanup: a command you run, and roughly what it frees. */
+export interface Cleanup {
+  id: string;
+  title: string;
+  detail: string;
+  command: string;
+  bytes: number | null;
+}
+
+export interface DiskReport {
+  volumes: DiskVolume[];
+  docker: DockerUsage | null;
+  journal: number | null;
+  cleanups: Cleanup[];
+  asRoot: boolean;
+}
+
+/** A terminal's foreground program and folder, from tmux on the server. */
+export interface PaneInfo {
+  command: string;
+  cwd: string;
+  /** The shell is waiting at its prompt. */
+  idle: boolean;
+}
+
+/** How far an upload or download got. `total` is 0 while the size isn't known. */
+export interface TransferProgress {
+  done: number;
+  total: number;
+}
 
 export interface OpError {
   code: ErrorCode;

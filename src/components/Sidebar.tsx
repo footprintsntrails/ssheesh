@@ -1,4 +1,4 @@
-import { Activity, Box, ChevronRight, Circle, Copy, EyeOff, KeyRound, Palette, FolderOpen, Layers, LayoutDashboard, Laptop, Play, Plus, RotateCw, ScrollText, Search, Square, SquareTerminal, Trash } from "lucide-react";
+import { Activity, Box, ChevronRight, Circle, Copy, EyeOff, HardDrive, KeyRound, Palette, FolderOpen, Layers, LayoutDashboard, Laptop, Play, Plus, RotateCw, ScrollText, Search, ShieldCheck, Square, SquareTerminal, Trash } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
@@ -14,6 +14,7 @@ import { LookPopover } from "./LookPicker";
 import { ConfigNotice } from "./ConfigImport";
 import { LoadLine, RailCard, RailLoad } from "./ServerLoad";
 import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
+import { openServerTool } from "./ServerTools";
 
 const RANK: Record<Health, number> = { idle: 0, busy: 1, live: 2, warn: 3, bad: 4 };
 
@@ -224,6 +225,12 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
     { label: "New terminal", icon: SquareTerminal, run: () => openIn("terminal", target) },
     { label: "Browse files", icon: FolderOpen, run: () => openIn("files", target) },
     { label: "Show stats", icon: Activity, run: () => openIn("stats", target) },
+    ...(target.kind === "host"
+      ? [
+          { label: "Security check-up", icon: ShieldCheck, run: () => openServerTool("checkup", target) },
+          { label: "What's using the disk", icon: HardDrive, run: () => openServerTool("disk", target) },
+        ]
+      : []),
     { label: "Open workspace", icon: LayoutDashboard, run: () => openWorkspace(target) },
     ...(address
       ? (["sep", { label: "Copy address", icon: Copy, run: () => void navigator.clipboard.writeText(address).then(() => toast({ tone: "info", title: "Copied", body: address })) }] as (MenuItem | "sep")[])

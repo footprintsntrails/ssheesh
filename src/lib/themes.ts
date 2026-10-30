@@ -152,8 +152,12 @@ export const TERMINAL_FONTS: { id: string; name: string; stack: string }[] = [
   { id: "consolas", name: "Consolas", stack: "Consolas, monospace" },
 ];
 
+/** Nerd Font icons for prompts like oh-my-posh and Starship, after the chosen font. */
+export const ICON_FONT = '"Symbols Nerd Font Mono"';
+
 export function fontStack(id: string): string {
-  return (TERMINAL_FONTS.find((f) => f.id === id) ?? TERMINAL_FONTS[0]).stack;
+  const stack = (TERMINAL_FONTS.find((f) => f.id === id) ?? TERMINAL_FONTS[0]).stack;
+  return stack.replace(/,\s*monospace$/, `, ${ICON_FONT}, monospace`);
 }
 
 /** "auto" follows the app theme and blends into the pane background. */

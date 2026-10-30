@@ -1,13 +1,17 @@
 //! Tauri glue: exposes sshee-core to the UI as commands.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sshee_core::agents::{self, PaneInfo};
+use sshee_core::checkup::{self, Checkup};
+use sshee_core::disk::{self, DiskReport, Usage};
 use sshee_core::containers::{self, ContainerList, Engine};
-use sshee_core::files::{self, DirListing, TextFile};
+use sshee_core::files::{self, DirListing, TextFile, Transfer};
 use sshee_core::metrics::{self, Metrics};
 use sshee_core::secrets::PasswordStore;
 use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::session::{self, EventSink};
 use sshee_core::{ErrorCode, Host, HostSource, HostStore, NewHost, OpError, SessionEvent, SessionManager, SessionSpec, SshEnv, Target};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
@@ -19,6 +23,8 @@ struct AppState {
     passwords: PasswordStore,
     host_keys: Arc<PendingKeys>,
     env: SshEnv,
+    /// Uploads and downloads in progress, by the id the UI gave them.
+    transfers: Mutex<HashMap<String, Arc<Transfer>>>,
 }
 
 /// A container a terminal opens into, and what to run there.
@@ -294,12 +300,49 @@ async fn delete_path(state: State<'_, AppState>, target: TargetSpec, path: Strin
     blocking(move || files::delete(&t, &env, &path)).await
 }
 
+/// Bytes moved so far and the total (0 when unknown), for the transfers panel.
+#[derive(Clone, Serialize)]
+struct TransferProgress {
+    done: u64,
+    total: u64,
+}
+
+/// Runs an upload or download that the UI can follow and cancel by `id`.
+async fn run_transfer<T: Send + 'static>(
+    state: &AppState,
+    id: String,
+    on_progress: Channel<TransferProgress>,
+    work: impl FnOnce(Arc<Transfer>) -> Result<T, OpError> + Send + 'static,
+) -> Result<T, OpError> {
+    let xfer = Transfer::new(move |done, total| {
+        let _ = on_progress.send(TransferProgress { done, total });
+    });
+    state.transfers.lock().unwrap().insert(id.clone(), xfer.clone());
+    let result = blocking(move || work(xfer)).await;
+    state.transfers.lock().unwrap().remove(&id);
+    result
+}
+
+#[tauri::command]
+fn cancel_transfer(state: State<AppState>, id: String) {
+    if let Some(xfer) = state.transfers.lock().unwrap().get(&id) {
+        xfer.cancel();
+    }
+}
+
 /// Saves a server file or folder into Downloads; returns the local path.
 #[tauri::command]
-async fn download_path(state: State<'_, AppState>, target: TargetSpec, path: String, is_dir: bool) -> Result<String, OpError> {
+async fn download_path(
+    state: State<'_, AppState>,
+    target: TargetSpec,
+    path: String,
+    is_dir: bool,
+    transfer_id: String,
+    on_progress: Channel<TransferProgress>,
+) -> Result<String, OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
     let dest = dirs::download_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."));
-    blocking(move || files::download(&t, &env, &path, is_dir, &dest)).await
+    run_transfer(&state, transfer_id, on_progress, move |xfer| files::download(&t, &env, &path, is_dir, &dest, &xfer)).await
 }
 
 #[tauri::command]
@@ -309,11 +352,15 @@ async fn upload_paths(
     paths: Vec<String>,
     remote_dir: String,
     overwrite: bool,
+    transfer_id: String,
+    on_progress: Channel<TransferProgress>,
 ) -> Result<(), OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
-    blocking(move || {
-        for p in paths {
-            files::upload(&t, &env, &PathBuf::from(p), &remote_dir, overwrite)?;
+    run_transfer(&state, transfer_id, on_progress, move |xfer| {
+        let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        xfer.add_total(paths.iter().map(|p| files::upload_size(p)).sum());
+        for p in &paths {
+            files::upload(&t, &env, p, &remote_dir, overwrite, &xfer)?;
         }
         Ok(())
     })
@@ -335,6 +382,41 @@ fn is_portable() -> bool {
 #[tauri::command]
 fn local_identity() -> sshee_core::identity::LocalIdentity {
     sshee_core::identity::local()
+}
+
+/// AI coding agents installed on the server ("claude", "codex", …).
+#[tauri::command]
+async fn detect_agents(state: State<'_, AppState>, target: TargetSpec) -> Result<Vec<String>, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || agents::detect(&t, &env)).await
+}
+
+/// A terminal's foreground program and folder, from tmux on the server.
+#[tauri::command]
+async fn pane_info(state: State<'_, AppState>, target: TargetSpec, session_key: String) -> Result<PaneInfo, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || agents::pane_info(&t, &env, &session_key)).await
+}
+
+/// A read-only security check of the server.
+#[tauri::command]
+async fn security_checkup(state: State<'_, AppState>, target: TargetSpec) -> Result<Checkup, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || checkup::run(&t, &env)).await
+}
+
+/// Disks, Docker, the journal and safe cleanups.
+#[tauri::command]
+async fn disk_report(state: State<'_, AppState>, target: TargetSpec) -> Result<DiskReport, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || disk::report(&t, &env)).await
+}
+
+/// The biggest files and folders directly inside `path`.
+#[tauri::command]
+async fn disk_biggest(state: State<'_, AppState>, target: TargetSpec, path: String) -> Result<Vec<Usage>, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || disk::biggest(&t, &env, &path)).await
 }
 
 #[tauri::command]
@@ -376,6 +458,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             #[cfg(desktop)]
             {
@@ -391,6 +474,7 @@ pub fn run() {
                 hosts: Mutex::new(HostStore::new(&data_dir)),
                 passwords: PasswordStore::default(),
                 host_keys: Arc::new(PendingKeys::default()),
+                transfers: Mutex::default(),
                 env: SshEnv {
                     // ssh runs this same executable to ask for a password; see main.rs.
                     askpass: std::env::current_exe().ok(),
@@ -425,6 +509,12 @@ pub fn run() {
             delete_path,
             download_path,
             upload_paths,
+            cancel_transfer,
+            detect_agents,
+            pane_info,
+            security_checkup,
+            disk_report,
+            disk_biggest,
             session_cwd,
             fetch_metrics,
             local_identity,

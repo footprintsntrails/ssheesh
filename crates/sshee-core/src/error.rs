@@ -15,6 +15,8 @@ pub enum ErrorCode {
     Exists,
     TooLarge,
     Unsupported,
+    /// You stopped it.
+    Cancelled,
     Failed,
 }
 

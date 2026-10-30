@@ -215,7 +215,9 @@ export function RailCard({
     top: Math.max(8, Math.min(at.top - 6, window.innerHeight - 220)),
     ...(side === "left" ? { left: at.right + 10 } : { right: window.innerWidth - at.left + 10 }),
   };
-  const status = health === "live" ? `${STATUS.live} · ${panes} ${panes === 1 ? "pane" : "panes"} open` : STATUS[health];
+  const open = `${panes} ${panes === 1 ? "pane" : "panes"} open`;
+  const status =
+    health === "live" ? `${STATUS.live} · ${open}` : health === "idle" && panes > 0 ? `${open}, no terminal. Click for one.` : STATUS[health];
   return (
     <div role="tooltip" style={pos} className="glass pointer-events-none fixed z-50 w-[228px] animate-fade-in rounded-[11px] px-3.5 py-3">
       <div className="flex items-center gap-2">

@@ -293,7 +293,7 @@ export function AddHostDialog() {
           <p className="mt-1 text-[12.5px] text-fg-3">Servers in ~/.ssh/config are already in your list.</p>
         </div>
 
-        <div className="mt-4 flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-1">
+        <div className="mt-4 flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-4 [mask-image:linear-gradient(to_bottom,black_calc(100%_-_20px),transparent)]">
           <Section title="Where">
             <div className="flex gap-2">
               <label className="min-w-0 flex-1">

@@ -25,7 +25,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
-import { shortcutLabel } from "../lib/keys";
+import { isMac, shortcutLabel } from "../lib/keys";
 import type { Arrangement } from "../lib/layout";
 import { useSettings, type Settings } from "../lib/settings";
 import { useStore } from "../lib/store";
@@ -109,7 +109,8 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
       aria-label={label}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-[22px] w-[38px] rounded-full transition-colors",
+        // Never squeezed by a long label next to it.
+        "relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors",
         checked ? "bg-accent" : "bg-ink/[0.14]",
       )}
     >
@@ -125,7 +126,7 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
 
 export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
   return (
-    <div className="flex h-8 items-center rounded-[9px] bg-ink/[0.05] p-[3px] ring-1 ring-inset ring-ink/[0.06]">
+    <div className="flex h-8 w-fit items-center rounded-[9px] bg-ink/[0.05] p-[3px] ring-1 ring-inset ring-ink/[0.06]">
       {options.map((o) => (
         <button
           key={o.value}
@@ -359,6 +360,8 @@ function Terminal({ s, set, reset }: SectionProps) {
             "terminalLineHeight",
             "cursorStyle",
             "cursorBlink",
+            "gpuRendering",
+            "copyOnSelect",
             "terminalPadding",
             "reconnectMode",
             "highlightErrors",
@@ -459,6 +462,15 @@ function Terminal({ s, set, reset }: SectionProps) {
       </Row>
       <Row label="Blinking cursor">
         <Switch label="Blinking cursor" checked={s.cursorBlink} onChange={(v) => set({ cursorBlink: v })} />
+      </Row>
+      <Row
+        label="Copy text when you select it"
+        hint={`Also in server terminals and in programs like Claude Code.${isMac ? "" : " Ctrl+C copies a selection too; with nothing selected it stops the running command. Ctrl+Shift+C and Ctrl+Shift+V always copy and paste."}`}
+      >
+        <Switch label="Copy text when you select it" checked={s.copyOnSelect} onChange={(v) => set({ copyOnSelect: v })} />
+      </Row>
+      <Row label="Draw with the GPU" hint="Smoother for programs that redraw a lot, like Claude Code and OpenCode, and box lines join up. Turn it off if a terminal stays blank.">
+        <Switch label="Draw with the GPU" checked={s.gpuRendering} onChange={(v) => set({ gpuRendering: v })} />
       </Row>
 
       <Row
@@ -912,7 +924,7 @@ export function SettingsDialog() {
         aria-modal
         aria-label="Settings"
         onMouseDown={(e) => e.stopPropagation()}
-        className="glass flex h-[min(620px,calc(100vh-48px))] w-[min(820px,100%)] animate-pop-in overflow-hidden rounded-[18px]"
+        className="glass relative flex h-[min(620px,calc(100vh-48px))] w-[min(820px,100%)] animate-pop-in overflow-hidden rounded-[18px]"
       >
         <nav className="flex w-[190px] shrink-0 flex-col gap-0.5 border-r border-line p-2.5">
           <div className="px-2 pt-1.5 pb-2 text-[12px] font-semibold text-fg-3">Settings</div>
@@ -963,14 +975,15 @@ export function SettingsDialog() {
             </button>
           ))}
         </nav>
+        {/* Outside the scrolling section, so it stays put. */}
+        <button
+          onClick={close}
+          aria-label="Close settings"
+          className="absolute top-4 right-4 z-10 inline-flex size-7 items-center justify-center rounded-md text-fg-3 hover:bg-ink/[0.07] hover:text-fg"
+        >
+          <X size={15} />
+        </button>
         <div className="relative min-w-0 flex-1 overflow-y-auto px-7 py-6">
-          <button
-            onClick={close}
-            aria-label="Close settings"
-            className="absolute top-4 right-4 inline-flex size-7 items-center justify-center rounded-md text-fg-3 hover:bg-ink/[0.07] hover:text-fg"
-          >
-            <X size={15} />
-          </button>
           {section === "appearance" && <Appearance {...props} />}
           {section === "terminal" && <Terminal {...props} />}
           {section === "layout" && <Layout {...props} />}

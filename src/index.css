@@ -3,6 +3,15 @@
 @import "@xterm/xterm/css/xterm.css";
 @import "tailwindcss";
 
+/* Icons in prompts (oh-my-posh, Starship, lsd): Nerd Fonts' symbols, MIT
+   (src/fonts). Used only for characters the terminal font lacks. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./fonts/SymbolsNerdFontMono.woff2") format("woff2");
+  font-display: block;
+  unicode-range: U+23FB-23FE, U+2630, U+2665, U+26A1, U+276C-2771, U+2B58, U+E000-F8FF, U+F0000-FFFFD;
+}
+
 /* Every color is a runtime variable, so themes and the accent can change
    live from Settings. `ink` is the overlay color: white on dark themes,
    black on light ones (bg-ink/[0.05] = a faint tint either way).
@@ -32,6 +41,13 @@
   --animate-fade-in: fade-in 160ms ease-out;
   --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
   --animate-slide-up: slide-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* A bar that doesn't know how far along it is: a segment sweeping across. */
+  --animate-sweep: sweep 1.3s ease-in-out infinite;
+
+  @keyframes sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(300%); }
+  }
 
   @keyframes fade-in {
     from { opacity: 0; }
@@ -163,6 +179,14 @@
     0 24px 64px -18px rgb(0 0 0 / 0.55),
     0 2px 8px rgb(0 0 0 / 0.2),
     inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+
+/* Webviews without backdrop blur (some Linux setups) would show text right
+   through the frost, so floating layers go nearly solid there. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    background: color-mix(in srgb, var(--ui-glass), var(--ui-raised) 85%);
+  }
 }
 
 /* Lighter frost for surfaces that sit in the layout (the sidebar). */

@@ -11,7 +11,8 @@ import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
 import { Button, IconButton, ResizeHandle, Spinner } from "./ui";
 import { useNames } from "../lib/privacy";
 import { findTerminal } from "../lib/terminals";
-import { filesLabel, uploadTo } from "../lib/upload";
+import { uploadTo } from "../lib/upload";
+import { track } from "../lib/transfers";
 
 type SortKey = "name" | "size" | "modified";
 
@@ -387,7 +388,8 @@ function Places({
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      className={cn("relative shrink-0 flex-col border-r border-line", compact ? "hidden @3xl:flex" : "hidden @xs:flex")}
+      // The wide column only shows once the list beside it still has room.
+      className={cn("relative shrink-0 flex-col border-r border-line", compact ? "hidden @3xl:flex" : narrow ? "hidden @xs:flex" : "hidden @lg:flex")}
     >
       <ResizeHandle
         edge="right"
@@ -579,25 +581,23 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     }
   };
 
+  // Progress for both shows on a card in the corner, with a Stop button.
   const download = async (entries: FileEntry[]) => {
     if (!remote || entries.length === 0) return;
     for (const e of entries) {
-      setBusy(`Downloading ${e.name}…`);
       try {
-        const saved = await backend.downloadPath(target, joinPath(dir, e.name), e.kind === "dir");
+        const saved = await track("download", e.name, (hooks) => backend.downloadPath(target, joinPath(dir, e.name), e.kind === "dir", hooks));
         toast({ tone: "success", title: `Downloaded ${e.name}`, body: saved });
       } catch (err) {
-        fail(`Couldn't download ${e.name}`, err);
+        if (toOpError(err).code === "cancelled") toast({ tone: "info", title: "Download stopped", body: e.name });
+        else fail(`Couldn't download ${e.name}`, err);
       }
     }
-    setBusy(null);
   };
 
   const upload = async (paths: string[]) => {
     if (paths.length === 0) return;
-    setBusy(`${remote ? "Uploading" : "Copying"} ${filesLabel(paths)}…`);
     await uploadTo(target, dir, paths);
-    setBusy(null);
     refresh();
   };
 
@@ -917,7 +917,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
           />
         )}
         {/* list */}
-        <div className="@container relative flex min-w-[220px] flex-1 flex-col">
+        <div className={cn("@container relative min-w-[220px] flex-1 flex-col", preview ? "hidden @2xl:flex" : "flex")}>
           {error && !listing ? (
             <div className="flex flex-1 items-center justify-center p-6">
               <div className="max-w-[320px] text-center">
@@ -1046,15 +1046,15 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
           )}
 
           {/* status bar */}
-          <div className="flex h-7 shrink-0 items-center gap-3 border-t border-line px-3 text-[11.5px] text-fg-3 tabular-nums">
+          <div className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t border-line px-3 text-[11.5px] whitespace-nowrap text-fg-3 tabular-nums">
             {listing && (
-              <span>
+              <span className="truncate">
                 {visible.length} {visible.length === 1 ? "item" : "items"}
                 {!showHidden && hiddenCount > 0 && `, ${hiddenCount} hidden`}
               </span>
             )}
             {selectedEntries.length > 0 && (
-              <span className="text-fg-2">
+              <span className="truncate text-fg-2">
                 {selectedEntries.length} selected
                 {selectedEntries.some((e) => e.kind !== "dir") &&
                   `, ${bytes(selectedEntries.filter((e) => e.kind !== "dir").reduce((a, e) => a + e.size, 0))}`}
@@ -1081,7 +1081,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
         {/* preview / editor */}
         {preview && (
-          <div style={{ width: previewWidth }} className="relative flex max-w-[70%] min-w-[220px] shrink-0 flex-col border-l border-line bg-ink/[0.012]">
+          // Beside the list when there's room; in a narrow pane it takes the whole width.
+          <div style={{ width: previewWidth }} className="relative flex min-w-[220px] flex-1 flex-col border-l border-line bg-ink/[0.012] @2xl:max-w-[70%] @2xl:flex-none">
             <ResizeHandle
               edge="left"
               label="Resize preview"

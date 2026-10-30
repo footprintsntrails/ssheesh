@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.4.0 — know your server
+
+### A security check-up
+- **One click checks a server's security** without changing anything: password login, root login, ports open to the internet, the firewall, Docker ports that slip past ufw, automatic updates, protection against password guessing, and updates waiting for a restart.
+- **Packages with known holes.** The check-up lists installed packages that have security fixes waiting, with their CVE numbers when the system knows them, and flags ssh, OpenSSL, sudo and the kernel. It asks the server's own package manager, so your package list goes nowhere.
+- **Each finding says why it matters** in plain words, problems first. Where there's a fix, it's a command you can copy or paste into the server's terminal, and nothing runs until you press Enter.
+- Find it in Stats, by right-clicking a server, or by searching for "security" (⌘K / Ctrl+Shift+K).
+
+### What's using the disk
+- **How full each disk is, and the biggest folders.** Click a folder to look inside, or open it in Files.
+- **Docker's images, containers, volumes and build cache**, plus the system journal and package caches.
+- **Safe cleanups** that say what they remove and roughly how much they free, as commands you copy or paste into the terminal. SSHeesh never deletes anything on its own, and doesn't offer to delete Docker volumes, which hold data.
+
+### Start an AI agent where you are
+- **The logos of the agents a server has** (Claude Code, Codex, OpenCode, oh-my-pi) sit in the terminal's title bar. Click one to start it in the folder you're in. If the terminal is busy with something else, the agent starts in a new terminal beside it, in the same folder.
+
+### Terminals made for AI coding agents
+- **Claude Code, OpenCode and other full-screen programs get full color.** Servers now know your terminal shows millions of colors, so programs stop falling back to 256.
+- **Esc works right away**, also on servers with an older tmux, which waited half a second for more keys. Stopping an agent feels instant.
+- **Shift+Enter starts a new line** in Claude Code, OpenCode and Codex instead of sending your message. In a plain shell it still runs the command, like Enter.
+- **Icons in oh-my-posh and Starship prompts show up** instead of empty boxes: SSHeesh brings the Nerd Fonts symbols along.
+- **Emoji take two cells**, as the server counts them, so the cursor no longer drifts after one.
+- **Draw with the GPU** in Settings → Terminal: smoother for programs that redraw a lot, and box lines join up. On by default on Windows.
+
+### Copy and paste
+- **Selecting text copies it**, in server terminals too. So do the copy commands of Claude Code, OpenCode and vim. Turn it off in Settings → Terminal.
+- **Ctrl+C copies when text is selected**, as in Windows Terminal; with nothing selected it stops the running command, as always. Ctrl+Shift+C and Ctrl+Shift+V always copy and paste.
+- **Pasting on Windows.** Ctrl+V pastes, and so does clipboard history (Win+V), which presses Ctrl+V for you. Before, it sent a control key to the server instead.
+- A server can put text on your clipboard but never read it.
+
+### See uploads and downloads
+- **A card in the corner for every upload and download**: how much is done out of how much, the speed, and an X to stop it. Stopping leaves nothing half-done behind, on the server or on your computer.
+- An upload that gets cut off no longer leaves a broken file in place of the one that was there.
+- The drop-to-upload window closes as soon as you press Upload; the card shows how it goes.
+
+### Fixed
+- A file preview no longer spills out of a narrow Files pane: it takes the whole pane until there's room for both. The wide bookmarks column waits for room too, and the status bar stays on one line.
+- The vitals bar keeps its buttons in a narrow window, and toasts sit above it instead of covering it.
+- Settings' close button stays put while you scroll.
+- In compact mode the toolbar waits a moment before sliding in, so reaching for a pane's buttons doesn't cover them. Panels that slide in have an edge line.
+- A server's card in the icon rail no longer says it isn't open when Files or Stats is.
+- The Compact mode switch in the welcome no longer gets squeezed by its description, and the welcome's choice buttons don't stretch across.
+- The Add server window shows that there's more below.
+
 ## 0.3.5 — live servers
 
 ### See how your servers are doing

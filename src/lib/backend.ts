@@ -2,7 +2,7 @@
 // Tauri (Rust); in a plain browser it's a demo backend with sample data, so
 // the interface can be designed and screenshotted without servers.
 
-import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest } from "./types";
+import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage } from "./types";
 import { toOpError } from "./types";
 
 export interface DropEvent {
@@ -11,6 +11,12 @@ export interface DropEvent {
   /** CSS pixels, relative to the window. */
   x: number;
   y: number;
+}
+
+/** An upload or download the UI follows: its id (to cancel it) and where progress goes. */
+export interface TransferHooks {
+  id: string;
+  onProgress: (p: TransferProgress) => void;
 }
 
 export interface UpdateInfo {
@@ -31,6 +37,11 @@ export interface Backend {
   relaunch(): Promise<void>;
   /** Opens a web link in the system browser. */
   openExternal(url: string): Promise<void>;
+  /**
+   * Puts text on the system clipboard. Works without a click, for terminal
+   * selections and programs' own copies, which webviews often refuse.
+   */
+  writeClipboard(text: string): Promise<void>;
 
   listHosts(): Promise<Host[]>;
   addHost(input: NewHost): Promise<AddedHost>;
@@ -80,9 +91,21 @@ export interface Backend {
   /** Packs `names` from `dir` into `dir/archive` (.tar.gz). */
   archivePaths(target: TargetRef, dir: string, names: string[], archive: string): Promise<void>;
   deletePath(target: TargetRef, path: string): Promise<void>;
-  downloadPath(target: TargetRef, path: string, isDir: boolean): Promise<string>;
-  uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean): Promise<void>;
+  downloadPath(target: TargetRef, path: string, isDir: boolean, hooks: TransferHooks): Promise<string>;
+  uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, hooks: TransferHooks): Promise<void>;
+  /** Stops an upload or download; its call then fails with code "cancelled". */
+  cancelTransfer(id: string): void;
   sessionCwd(target: TargetRef, sessionKey: string): Promise<string>;
+  /** AI coding agents installed on the server, by command ("claude", "codex"…). */
+  detectAgents(target: TargetRef): Promise<string[]>;
+  /** What a terminal runs in the foreground and its folder; fails without tmux. */
+  paneInfo(target: TargetRef, sessionKey: string): Promise<PaneInfo>;
+  /** A read-only security check of the server. */
+  securityCheckup(target: TargetRef): Promise<Checkup>;
+  /** Disks, Docker, the journal and safe cleanups. */
+  diskReport(target: TargetRef): Promise<DiskReport>;
+  /** The biggest files and folders directly inside `path`, largest first. */
+  diskBiggest(target: TargetRef, path: string): Promise<DiskUsage[]>;
   pickFiles(): Promise<string[]>;
   onFileDrop(cb: (e: DropEvent) => void): () => void;
 
@@ -113,6 +136,11 @@ async function tauriBackend(): Promise<Backend> {
   };
   const fire = (cmd: string, args: Record<string, unknown>) => {
     invoke(cmd, args).catch(() => {});
+  };
+  const progress = (hooks: TransferHooks) => {
+    const channel = new Channel<TransferProgress>();
+    channel.onmessage = hooks.onProgress;
+    return { transferId: hooks.id, onProgress: channel };
   };
 
   return {
@@ -151,6 +179,10 @@ async function tauriBackend(): Promise<Backend> {
     trustTestHostKey: (input) => call("trust_test_host_key", { input }),
     trustHostKey: (hostId) => call("trust_host_key", { hostId }),
     isPortable: () => call("is_portable", {}),
+    async writeClipboard(text) {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(text);
+    },
     async setZoom(scale) {
       const { getCurrentWebview } = await import("@tauri-apps/api/webview");
       await getCurrentWebview().setZoom(scale);
@@ -182,10 +214,16 @@ async function tauriBackend(): Promise<Backend> {
     renamePath: (target, from, to) => call("rename_path", { target, from, to }),
     archivePaths: (target, dir, names, archive) => call("archive_paths", { target, dir, names, archive }),
     deletePath: (target, path) => call("delete_path", { target, path }),
-    downloadPath: (target, path, isDir) => call("download_path", { target, path, isDir }),
-    uploadPaths: (target, paths, remoteDir, overwrite) =>
-      call("upload_paths", { target, paths, remoteDir, overwrite }),
+    downloadPath: (target, path, isDir, hooks) => call("download_path", { target, path, isDir, ...progress(hooks) }),
+    uploadPaths: (target, paths, remoteDir, overwrite, hooks) =>
+      call("upload_paths", { target, paths, remoteDir, overwrite, ...progress(hooks) }),
+    cancelTransfer: (id) => fire("cancel_transfer", { id }),
     sessionCwd: (target, sessionKey) => call("session_cwd", { target, sessionKey }),
+    detectAgents: (target) => call("detect_agents", { target }),
+    paneInfo: (target, sessionKey) => call("pane_info", { target, sessionKey }),
+    securityCheckup: (target) => call("security_checkup", { target }),
+    diskReport: (target) => call("disk_report", { target }),
+    diskBiggest: (target, path) => call("disk_biggest", { target, path }),
     async pickFiles() {
       const picked = await dialog.open({ multiple: true, directory: false, title: "Upload files" });
       if (!picked) return [];

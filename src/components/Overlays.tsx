@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, Sparkles, SquareTerminal, Star, X } from "lucide-react";
+import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, HardDrive, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
@@ -11,6 +11,8 @@ import { showCurrentNotes } from "./WhatsNew";
 import { useUpdates } from "../lib/updates";
 import { targetKey, type TargetRef } from "../lib/types";
 import { Button, Kbd } from "./ui";
+import { TransferCards } from "./Transfers";
+import { openServerTool } from "./ServerTools";
 import { useVisibleHosts } from "../lib/labels";
 
 // ---------------------------------------------------------------- command palette
@@ -141,6 +143,22 @@ export function CommandPalette() {
               <Item icon={Columns2} label="Split right" hint={shortcutLabel("splitRight")} onSelect={run(() => split(focused.id, "row"))} />
               <Item icon={Rows2} label="Split down" hint={shortcutLabel("splitDown")} onSelect={run(() => split(focused.id, "col"))} />
               <Item icon={X} label="Close pane" hint={shortcutLabel("closePane")} onSelect={run(() => closePane(focused.id))} />
+              {focused.target?.kind === "host" && (
+                <>
+                  <Item
+                    icon={ShieldCheck}
+                    value="security check-up audit firewall ports password ssh hardening"
+                    label="Security check-up"
+                    onSelect={run(() => focused.target && openServerTool("checkup", focused.target))}
+                  />
+                  <Item
+                    icon={HardDrive}
+                    value="disk space usage full clean up docker logs biggest folders"
+                    label="What's using the disk"
+                    onSelect={run(() => focused.target && openServerTool("disk", focused.target))}
+                  />
+                </>
+              )}
             </>
           )}
           <Item icon={LayoutDashboard} value="arrange main stack" label="Arrange: main + stack" onSelect={run(() => arrangePanes("main"))} />
@@ -242,8 +260,11 @@ export function ConfirmDialog() {
 export function Toasts() {
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismissToast);
+  // Above the vitals bar, so a long upload's card doesn't hide it.
+  const overVitals = useSettings((s) => s.showVitals && !s.compactMode);
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[340px] max-w-[calc(100vw-32px)] flex-col gap-2">
+    <div className={cn("pointer-events-none fixed right-4 z-[60] flex w-[340px] max-w-[calc(100vw-32px)] flex-col gap-2", overVitals ? "bottom-12" : "bottom-4")}>
+      <TransferCards />
       {toasts.map((t) => {
         const Icon = t.tone === "success" ? CircleCheck : t.tone === "error" ? CircleAlert : Info;
         return (

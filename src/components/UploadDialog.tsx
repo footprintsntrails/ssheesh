@@ -39,7 +39,6 @@ export function UploadDialog() {
   const names = useNames();
   const [dir, setDir] = useState("");
   const [finding, setFinding] = useState(false);
-  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!pending) return;
@@ -58,12 +57,11 @@ export function UploadDialog() {
 
   if (!pending) return null;
   const files = pending.paths.map((p) => p.split(/[\\/]/).pop() ?? p);
-  const send = async () => {
+  // Progress shows on a card in the corner, so the dialog can go right away.
+  const send = () => {
     if (!dir.trim()) return;
-    setSending(true);
-    const ok = await uploadTo(pending.target, dir.trim(), pending.paths);
-    setSending(false);
-    if (ok) close();
+    close();
+    void uploadTo(pending.target, dir.trim(), pending.paths);
   };
 
   return (
@@ -72,7 +70,7 @@ export function UploadDialog() {
         className="p-5"
         onSubmit={(e) => {
           e.preventDefault();
-          void send();
+          send();
         }}
       >
         <div className="flex items-start gap-3">
@@ -111,8 +109,8 @@ export function UploadDialog() {
           <Button type="button" variant="ghost" onClick={close}>
             Cancel
           </Button>
-          <Button type="submit" variant="primary" disabled={finding || sending || !dir.trim()}>
-            {sending ? <LoaderCircle size={13} className="animate-spin" /> : <FileUp size={13} />} Upload
+          <Button type="submit" variant="primary" disabled={finding || !dir.trim()}>
+            <FileUp size={13} /> Upload
           </Button>
         </div>
       </form>

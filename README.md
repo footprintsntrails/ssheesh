@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/banner.png" alt="ssheesh: servers, terminals and files that don't fall over">
+<img src="docs/banner.gif" alt="ssheesh: servers, terminals and files that don't fall over">
 
 [![Latest release](https://img.shields.io/github/v/release/footprintsntrails/ssheesh?include_prereleases&label=release&color=5b9dff)](https://github.com/footprintsntrails/ssheesh/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/footprintsntrails/ssheesh/ci.yml?branch=main&label=build)](https://github.com/footprintsntrails/ssheesh/actions/workflows/ci.yml)
@@ -12,7 +12,7 @@
 </div>
 
 > [!WARNING]
-> **Version 0.3 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
+> **Version 0.4 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
 <p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a short list of servers with their own icons, and a terminal"></p>
 
@@ -53,7 +53,7 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 
 ## Everything about a server in one window
 
-**A file manager that's nice to use.** An address bar you can type into, filter, sort, bookmarks for the folders you live in, recent folders, one-click places like Logs and Config. Preview and edit text files in place. Drag files from your desktop to upload; download files or whole folders. Open a terminal in any folder, or send the one you're already using there.
+**A file manager that's nice to use.** An address bar you can type into, filter, sort, bookmarks for the folders you live in, recent folders, one-click places like Logs and Config. Preview and edit text files in place. Drag files from your desktop to upload; download files or whole folders. Every upload and download shows how far along it is and how fast it's going, with a button to stop it. Open a terminal in any folder, or send the one you're already using there.
 
 <p align="center"><img src="docs/screenshots/files.png" alt="File manager with bookmarks, a file preview and a context menu"></p>
 
@@ -62,6 +62,10 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 <p align="center"><img src="docs/media/containers.gif" alt="Expanding a server to see its containers, opening a shell inside one, and restarting another"></p>
 
 **Server stats without installing anything.** A one-line vitals bar (CPU, memory, network, disk) that hides with one click, and a detailed Stats view with load, traffic and every disk.
+
+**A security check-up in one click.** SSHeesh looks at how people can log in, what's open to the internet, the firewall, Docker ports that slip past it, automatic updates, packages with security fixes waiting (with their CVE numbers), and protection against password guessing. It changes nothing. Each finding says in plain words why it matters, with a command to fix it that you can paste into the terminal.
+
+**See where your disk space went.** How full each disk is, the biggest folders (click one to look inside), Docker's images and build cache, and old logs, with safe cleanups that each say what they remove.
 
 ## Made for long jobs and AI agents
 
@@ -72,6 +76,8 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 **It tells you when you're needed.** When Claude Code, Codex or any program in a terminal waits for an answer, or a long run goes quiet, the pane and the sidebar say so, and you get a system notification if SSHeesh is in the background.
 
 <p align="center"><img src="docs/media/agent.gif" alt="An AI agent in the terminal asks a question while you're in another pane, and the pane shows Needs you"></p>
+
+**Start an agent where you are.** When Claude Code, Codex, OpenCode or oh-my-pi is installed on a server, its logo sits in the terminal's title bar. Click it to start the agent in the folder you're in, or in a new terminal beside yours if that one's busy. The terminal is tuned for them: full color, Shift+Enter for a new line, Esc that answers right away, and copying that reaches your clipboard.
 
 **Problems jump out.** Errors show up in red and warnings in yellow, and you can add your own words to highlight.
 
@@ -117,6 +123,8 @@ All files are on the [Releases page](https://github.com/footprintsntrails/sshees
 | Compact mode | ⇧⌘M | Ctrl+Shift+M |
 | Streamer mode | ⇧⌘H | Ctrl+Shift+H |
 | Settings | ⌘, | Ctrl+, |
+| Copy / paste in a terminal | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V, or Ctrl+C with text selected. Ctrl+V pastes on Windows |
+| New line in Claude Code, Codex, OpenCode | ⇧↩ | Shift+Enter |
 
 ## Ideas and bugs
 
@@ -145,10 +153,10 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 What's planned next. The order may still change.
 
-- **0.4: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
-- **0.5: Docker, files and disk.** Compose stacks with per-container stats, and updates you can roll back. "What's eating my disk", systemd services and a one-click security check-up. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
-- **0.6: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
-- **0.7: sync and themes.** Encrypted sync through a folder you pick, with no account. Themes made from three colors, and theme sharing.
+- **0.5: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
+- **0.6: Docker, files and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
+- **0.7: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
+- **0.8: sync and themes.** Encrypted sync through a folder you pick, with no account. Themes made from three colors, and theme sharing.
 - **Along the way:** signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
 
 See what changed in each version in the [changelog](CHANGELOG.md).
@@ -158,6 +166,8 @@ See what changed in each version in the [changelog](CHANGELOG.md).
 Made by [@footprintsntrails](https://github.com/footprintsntrails), built together with [Claude](https://claude.com/claude-code) by Anthropic.
 
 Terminal color schemes come from their open-source authors: Tokyo Night, Catppuccin, Dracula, Nord, One Dark, Gruvbox and Solarized.
+
+Icons in prompts like oh-my-posh and Starship come from the [Nerd Fonts](https://www.nerdfonts.com) symbols font (MIT; each icon set under its own open license).
 
 ## License
 

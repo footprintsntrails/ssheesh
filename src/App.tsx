@@ -18,6 +18,7 @@ import { applyAppearance, useSettings } from "./lib/settings";
 import { useStore } from "./lib/store";
 import { startUpdateChecks } from "./lib/updates";
 import { toggleStreamer, useLearnLocalIdentity } from "./lib/privacy";
+import { ServerTools } from "./components/ServerTools";
 
 function useShortcuts() {
   useEffect(() => {
@@ -153,6 +154,7 @@ export function App() {
       <Welcome />
       <WhatsNew />
       <UploadDialog />
+      <ServerTools />
       <ConfirmDialog />
       <Toasts />
     </div>

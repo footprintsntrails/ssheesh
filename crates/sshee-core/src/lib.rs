@@ -4,7 +4,10 @@
 //! All remote work goes through the system `ssh` binary, so the user's
 //! `~/.ssh/config`, keys and agent just work.
 
+pub mod agents;
+pub mod checkup;
 pub mod containers;
+pub mod disk;
 pub mod error;
 pub mod files;
 pub mod hostkeys;

@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { HighlightRule } from "./highlight";
+import { isWindows } from "./keys";
 import { ACCENTS, type AppThemeId } from "./themes";
 
 export type UpdateMode = "auto" | "notify" | "manual";
@@ -36,6 +37,10 @@ export interface Settings {
   terminalLineHeight: number;
   cursorStyle: "bar" | "block" | "underline";
   cursorBlink: boolean;
+  /** Terminals draw with WebGL. On by default on Windows, whose WebView2 is Chromium. */
+  gpuRendering: boolean;
+  /** Selecting text in a terminal copies it. */
+  copyOnSelect: boolean;
   terminalPadding: number;
   reconnectMode: ReconnectMode;
   sidebarSide: "left" | "right";
@@ -87,6 +92,8 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalLineHeight: 1.22,
   cursorStyle: "bar",
   cursorBlink: true,
+  gpuRendering: isWindows,
+  copyOnSelect: true,
   terminalPadding: 12,
   reconnectMode: "ask",
   sidebarSide: "left",
