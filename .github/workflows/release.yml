@@ -107,7 +107,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          exe=$(ls target/release/ssheesh.exe src-tauri/target/release/ssheesh.exe 2>/dev/null | head -1)
+          for exe in target/release/ssheesh.exe src-tauri/target/release/ssheesh.exe; do
+            [ -f "$exe" ] && break
+          done
           npx tauri signer sign "$exe"
 
       # The same app as one file to run without installing.
