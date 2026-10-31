@@ -5,7 +5,7 @@
 
 import { FileUp, FolderOpen, Laptop, Plus, RotateCcw, Search, SquareTerminal } from "lucide-react";
 import { useState, type MouseEvent } from "react";
-import { agentName, agentRunning } from "../lib/agents";
+import { agentRunning } from "../lib/agents";
 import { ago } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { useEnv, useHostLook, useUndecidedConfig, useVisibleHosts } from "../lib/labels";
@@ -95,7 +95,7 @@ function RunningNow() {
           >
             {agent ? <AgentIcon id={agent} size={15} /> : <SquareTerminal size={15} className="text-fg-3" />}
             <span className="min-w-0 flex-1 truncate text-[13px] text-fg">
-              {agent ? agentName(agent) : "Terminal"} <span className="text-fg-3">on {names.target(p.target)}</span>
+              {tabLabel(p, foreground[p.id])} <span className="text-fg-3">on {names.target(p.target)}</span>
             </span>
             {waiting ? <span className="text-[11.5px] font-medium text-warn">Needs you</span> : <span className="text-[11.5px] text-fg-3">working</span>}
           </button>

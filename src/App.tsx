@@ -52,7 +52,8 @@ function useShortcuts() {
       else if (id === "splitRight") pane && s.split(pane.id, "row");
       else if (id === "splitDown") pane && s.split(pane.id, "col");
       else if (id === "closePane") pane && closeTab(pane.id);
-      else if (id === "newTerminal") pane?.target && newTab("terminal", pane.target);
+      // On the main menu, a new terminal goes to the server you were on last.
+      else if (id === "newTerminal") newTab("terminal", pane?.target ?? s.panes[s.focused]?.target ?? { kind: "local" });
       else if (id === "reopenTab") s.reopenClosed();
       else if (id === "toggleSplit") toggleSplit();
       else if (id === "settings") s.settingsOpen ? s.closeSettings() : s.openSettings();

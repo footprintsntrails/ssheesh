@@ -12,12 +12,15 @@ import { targetKey, type TargetRef } from "./types";
 
 export type AgentId = "claude" | "codex" | "opencode" | "omp";
 
-/** In the order they show up; `id` is also the command that starts each one. */
-export const AGENTS: { id: AgentId; name: string }[] = [
-  { id: "claude", name: "Claude Code" },
-  { id: "codex", name: "Codex" },
-  { id: "opencode", name: "OpenCode" },
-  { id: "omp", name: "oh-my-pi" },
+/**
+ * In the order they show up; `id` is also the command that starts each one.
+ * `short` is what a tab calls it: "Terminal (OMP)".
+ */
+export const AGENTS: { id: AgentId; name: string; short: string }[] = [
+  { id: "claude", name: "Claude Code", short: "Claude Code" },
+  { id: "codex", name: "Codex", short: "Codex" },
+  { id: "opencode", name: "OpenCode", short: "OpenCode" },
+  { id: "omp", name: "oh-my-pi", short: "OMP" },
 ];
 
 const NONE: AgentId[] = [];
@@ -50,8 +53,9 @@ export function agentRunning(command: string | undefined): AgentId | null {
   return AGENTS.find((a) => a.id === c)?.id ?? null;
 }
 
-export function agentName(id: AgentId): string {
-  return AGENTS.find((a) => a.id === id)?.name ?? id;
+/** The agent's name as a tab shows it, in brackets after "Terminal". */
+export function agentShort(id: AgentId): string {
+  return AGENTS.find((a) => a.id === id)?.short ?? id;
 }
 
 const WATCH_MS = 5000;

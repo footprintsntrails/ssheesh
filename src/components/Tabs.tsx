@@ -7,7 +7,7 @@
 import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, HardDrive, Plus, Rows2, ShieldCheck, SquareTerminal, X, type LucideIcon } from "lucide-react";
 import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { agentName, agentRunning } from "../lib/agents";
+import { agentRunning, agentShort } from "../lib/agents";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import type { DropZone } from "../lib/layout";
@@ -31,14 +31,14 @@ const KIND: Record<PaneKind, { label: string; icon: LucideIcon }> = {
 /**
  * "Terminal", "Terminal 2"…: each tab keeps the number it got when it
  * opened, so moving or closing tabs never renames the others. A terminal
- * with an AI agent in front is called after the agent.
+ * with an AI agent in front says so in brackets: "Terminal 2 (Claude Code)".
  */
 export function tabLabel(p: Pick<PaneState, "kind" | "container" | "n">, command?: string): string {
   if (p.container) return p.container.name;
-  const agent = p.kind === "terminal" ? agentRunning(command) : null;
-  if (agent) return agentName(agent);
   const n = p.n ?? 1;
-  return n > 1 ? `${KIND[p.kind].label} ${n}` : KIND[p.kind].label;
+  const name = n > 1 ? `${KIND[p.kind].label} ${n}` : KIND[p.kind].label;
+  const agent = p.kind === "terminal" ? agentRunning(command) : null;
+  return agent ? `${name} (${agentShort(agent)})` : name;
 }
 
 export function TabIcon({ pane, command, size = 13.5, className }: { pane: Pick<PaneState, "kind" | "container">; command?: string; size?: number; className?: string }) {
@@ -158,12 +158,15 @@ function tabMenu(id: string, target: TargetRef): (MenuItem | "sep")[] {
   ];
 }
 
-/** Needs you, done, working or broken: shapes, not just colors. */
-function TabState({ id }: { id: string }) {
+/**
+ * Needs you, done, working or broken: shapes, not just colors. The sidebar
+ * writes "Needs you" on a line of its own, so it passes `noInput`.
+ */
+function TabState({ id, noInput = false }: { id: string; noInput?: boolean }) {
   const attention = useStore((s) => s.attention[id]);
   const progress = useStore((s) => !!s.progress[id]);
   const state = useStore((s) => s.sessions[id]?.kind);
-  if (attention?.kind === "input")
+  if (attention?.kind === "input" && !noInput)
     return (
       <span title={attention.message ?? "Waiting for you"} className="shrink-0 text-[11px] font-medium text-warn">
         Needs you
@@ -272,31 +275,38 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
   const active = useStore((s) => !s.home && s.focused === id);
   const onScreen = useStore((s) => split && !s.home && !s.hidden.includes(id) && sameTarget(s.panes[s.focused]?.target, s.panes[id]?.target));
   const command = useStore((s) => s.foreground[id]);
+  const waiting = useStore((s) => (s.attention[id]?.kind === "input" ? (s.attention[id]?.message ?? "Waiting for you") : null));
   if (!pane) return null;
   const label = tabLabel(pane, command);
   return (
     <div
       {...props}
       aria-selected={active}
-      aria-label={label}
+      aria-label={waiting ? `${label}, needs you` : label}
       data-hint={agentRunning(command) ? "agent-tab" : undefined}
-      title={narrow ? label : `${label}. Drag onto the screen to show it beside, middle-click to close`}
+      title={narrow ? label : `${waiting ? `${waiting}\n` : ""}${label}. Drag onto the screen to show it beside, middle-click to close`}
       className={cn(
         "group/tab relative flex cursor-default items-center select-none outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
-        narrow ? "size-8 justify-center rounded-[8px]" : "h-7 gap-2 rounded-[6px] pr-1 pl-[27px] text-[12.5px]",
+        narrow ? "size-7 justify-center rounded-[7px]" : "min-h-[26px] gap-2 rounded-[6px] py-[3px] pr-1 pl-1.5 text-[12px]",
         active ? "bg-ink/[0.1] text-fg" : onScreen ? "bg-ink/[0.045] text-fg" : "text-fg-2 hover:bg-ink/[0.05] hover:text-fg",
+        // The one you're on marks the branch line it hangs from.
+        !narrow && active && "before:absolute before:inset-y-[5px] before:-left-[6.5px] before:w-[2px] before:rounded-full before:bg-accent",
       )}
     >
-      <TabIcon pane={pane} command={command} size={narrow ? 15 : 13.5} className={active ? "text-fg" : "text-fg-3"} />
+      <TabIcon pane={pane} command={command} size={narrow ? 13.5 : 13} className={active ? "text-fg" : "text-fg-3"} />
       {narrow ? (
         <span className="absolute -top-0.5 -right-0.5 empty:hidden">
           <NarrowState id={id} />
         </span>
       ) : (
         <>
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          {/* A long name keeps its words: "Needs you" gets a line of its own. */}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate leading-[18px]">{label}</span>
+            {waiting && <span className="block truncate text-[11px] leading-[14px] font-medium text-warn">Needs you</span>}
+          </span>
           <span className="contents group-hover/tab:hidden">
-            <TabState id={id} />
+            <TabState id={id} noInput />
           </span>
           <CloseButton
             id={id}
@@ -309,7 +319,11 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
   );
 });
 
-/** A machine's tabs, under its row in the sidebar. Narrow, they're icons under the server's icon. */
+/**
+ * A machine's tabs, under its row in the sidebar: everything open on it,
+ * hanging from a line that starts at the server's icon. Narrow, they're
+ * smaller icons under the server's.
+ */
 export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boolean }) {
   const names = useNames();
   const split = useSplit(target);
@@ -322,8 +336,13 @@ export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boo
       role="tablist"
       aria-orientation="vertical"
       aria-label={`Tabs on ${names.target(target)}`}
-      className={cn("flex flex-col", narrow ? "items-center gap-0.5 pb-1" : "gap-px pb-1")}
+      className={cn("flex flex-col", narrow ? "items-center gap-0.5 pb-1.5" : "mb-1.5 ml-[27px] gap-px border-l border-ink/[0.1] pl-[5px]")}
     >
+      {!narrow && (
+        <span aria-hidden className="flex h-5 items-center pl-1.5 text-[10.5px] font-medium text-fg-3">
+          Tabs
+        </span>
+      )}
       {shown.map((id) => (
         <SidebarTab key={id} id={id} narrow={narrow} split={split} props={tabProps(id)} />
       ))}

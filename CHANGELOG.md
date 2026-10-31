@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1 — tabs that belong to their server
+
+- **Tabs look like they belong to their server.** Each server's tabs sit under a quiet "Tabs" heading and hang from a line that starts at the server's icon; the tab you're on is marked on that line. Servers are a little bigger and tabs a little smaller, so the list reads at a glance.
+- **A terminal with an agent keeps its name**: "Terminal 2 (Claude Code)", "Terminal (Codex)", "Terminal (OMP)" for oh-my-pi. "Needs you" gets a line of its own, so the name isn't cut off.
+- **New terminals open on the server you're on.** Splitting (Ctrl+Shift+D and Ctrl+Shift+E, ⌘D and ⇧⌘D on a Mac) opens a terminal on the same server right away instead of asking where to. On the main menu, Ctrl+Shift+T (⌘T) opens one on the server you were on last; before, it did nothing.
+- **"Show me" no longer closes the hello.** It plays the feature right there, so you can look at each one and then choose. "Your own colors and keys" opens the page to set them up, with a way back.
+- **The tour looks like SSHeesh**, with made-up but real-looking files and code. In "Find anything" the command bar no longer slides off the edge of the picture.
+
 ## 0.6.0 — a calm window for your servers
 
 SSHeesh now works like a browser for your servers: each server is like a site, with its tabs right under it. The first time you open this version, a short hello shows what changed, and every choice you made before stays.

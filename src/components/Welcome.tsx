@@ -5,8 +5,8 @@
 // Known SSHeesh before a redesign: one screen of what changed, with the old
 // way one click away, and every choice you made kept.
 
-import { ChevronDown, Eye, EyeOff, FileUp, MessageSquare, Plus } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowLeft, ChevronDown, Eye, EyeOff, FileUp, MessageSquare, Plus, RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
 import { isMac, shortcutLabel } from "../lib/keys";
@@ -19,7 +19,7 @@ import { MiniApp } from "./MiniApp";
 import { Modal } from "./Overlays";
 import { Segmented, Slider, Switch } from "./controls";
 import { useTour } from "../lib/tour";
-import { SceneNewLayout } from "./TourScenes";
+import { SceneMainMenu, SceneNewLayout, ScenePeek, SceneTabs } from "./TourScenes";
 import { Button, Logo } from "./ui";
 
 function set(patch: Partial<Settings>) {
@@ -165,16 +165,22 @@ const ISSUES = "https://github.com/footprintsntrails/ssheesh/issues/new/choose";
 /** What the redesign changed, for people who knew SSHeesh before it. */
 function WhatChanged({ onCustomize, onDone }: { onCustomize: () => void; onDone: (tour: boolean) => void }) {
   const s = useSettings();
-  const openTour = (step: number) => {
-    onDone(false);
-    useTour.getState().show(step);
-  };
-  const rows = [
-    { title: "Main menu", body: "A start page with your servers, agents at work and tabs you closed.", show: () => (onDone(false), useStore.getState().showHome()) },
-    { title: "Peek at files", body: `${isMac ? "⌘-click" : "Ctrl+click"} a path in a terminal to see the file beside it.`, show: () => openTour(3) },
-    { title: "Agents in the sidebar", body: "Claude Code and Codex show up by name, on every server.", show: () => openTour(1) },
-    { title: "Your own colors and keys", body: "Edit any theme color, and set your own keyboard shortcuts.", show: () => (onDone(false), useStore.getState().openSettings("appearance")) },
+  // "Show me" plays its picture here, in place of the new layout's; the
+  // hello stays open, so you can look at all of them and then choose.
+  const [showing, setShowing] = useState<string | null>(null);
+  const [take, setTake] = useState(0);
+  const rows: { title: string; body: string; scene?: ComponentType }[] = [
+    { title: "Main menu", body: "A start page with your servers, agents at work and tabs you closed.", scene: SceneMainMenu },
+    { title: "Peek at files", body: `${isMac ? "⌘-click" : "Ctrl+click"} a path in a terminal to see the file beside it.`, scene: ScenePeek },
+    { title: "Agents in the sidebar", body: "Claude Code and Codex show up by name, on every server.", scene: SceneTabs },
+    { title: "Your own colors and keys", body: "Edit any theme color, and set your own keyboard shortcuts." },
   ];
+  const Scene = rows.find((r) => r.title === showing)?.scene ?? SceneNewLayout;
+  const show = (r: (typeof rows)[number]) => {
+    if (!r.scene) return onCustomize();
+    setShowing(r.title);
+    setTake((t) => t + 1);
+  };
   return (
     <div className="flex flex-col gap-5 p-6">
       <div className="flex items-center gap-3">
@@ -182,7 +188,24 @@ function WhatChanged({ onCustomize, onDone }: { onCustomize: () => void; onDone:
         <h2 className="flex-1 text-[20px] font-semibold tracking-tight text-fg">SSHeesh has a new layout</h2>
         <HideNames />
       </div>
-      <SceneNewLayout />
+      <div className="relative">
+        <Scene key={take} />
+        <button
+          type="button"
+          onClick={() => (showing ? setShowing(null) : setTake((t) => t + 1))}
+          className="absolute right-2 bottom-2 flex h-6 items-center gap-1 rounded-[6px] bg-raised/90 px-2 text-[11px] text-fg-2 ring-1 ring-ink/[0.1] hover:text-fg"
+        >
+          {showing ? (
+            <>
+              <ArrowLeft size={11} /> The new layout
+            </>
+          ) : (
+            <>
+              <RotateCcw size={11} /> Replay
+            </>
+          )}
+        </button>
+      </div>
       <p className="-mt-1 text-[13px] text-fg-2">Your servers, sessions and settings are where you left them.</p>
       <div className="grid grid-cols-2 gap-4">
         <div className="flex flex-col gap-2">
@@ -211,13 +234,13 @@ function WhatChanged({ onCustomize, onDone }: { onCustomize: () => void; onDone:
       <div className="flex flex-col">
         <h3 className="pb-1 text-[11.5px] font-semibold text-fg-3">Also new</h3>
         {rows.map((r) => (
-          <div key={r.title} className="flex items-center gap-3 border-t border-line py-2">
+          <div key={r.title} className={cn("-mx-2 flex items-center gap-3 rounded-[8px] border-t border-line px-2 py-2", showing === r.title && "border-transparent bg-accent/10")}>
             <span className="min-w-0 flex-1">
               <span className="block text-[12.5px] font-medium text-fg">{r.title}</span>
               <span className="block text-[11.5px] text-fg-3">{r.body}</span>
             </span>
-            <Button size="sm" variant="ghost" onClick={r.show}>
-              Show me
+            <Button size="sm" variant="ghost" onClick={() => show(r)}>
+              {showing === r.title ? "Replay" : r.scene ? "Show me" : "Try it"}
             </Button>
           </div>
         ))}
@@ -598,7 +621,12 @@ export function Welcome() {
 
           <div className="mt-5 flex items-center gap-3">
             {returning ? (
-              <span className="flex-1" />
+              <>
+                <Button variant="ghost" onClick={() => setStep("changed")}>
+                  Back
+                </Button>
+                <span className="flex-1" />
+              </>
             ) : (
               <>
                 <Button variant="ghost" onClick={() => setStep("servers")}>

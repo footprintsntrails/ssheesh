@@ -365,7 +365,7 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
           aria-label={expanded ? `Hide containers on ${label}` : `Show containers on ${label}`}
           aria-expanded={expanded}
           onClick={toggle}
-          className="absolute top-0 left-0 z-10 flex h-7 w-5 items-center justify-center rounded text-fg-3 opacity-0 group-hover/row:opacity-100 hover:text-fg focus-visible:opacity-100"
+          className="absolute top-0 left-0 z-10 flex h-8 w-5 items-center justify-center rounded text-fg-3 opacity-0 group-hover/row:opacity-100 hover:text-fg focus-visible:opacity-100"
         >
           <ChevronRight size={12} strokeWidth={2.4} className={cn("transition-transform", expanded && "rotate-90")} />
         </button>
@@ -379,12 +379,11 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
             setMenu({ x: e.clientX, y: e.clientY });
           }}
           className={cn(
-            "block w-full rounded-[6px] pr-1.5 pl-5 text-left text-[13px] outline-none text-fg hover:bg-ink/[0.05] focus-visible:bg-ink/[0.07]",
-            active && "font-medium",
+            "block w-full rounded-[7px] pr-1.5 pl-5 text-left text-[13.5px] font-medium outline-none text-fg hover:bg-ink/[0.05] focus-visible:bg-ink/[0.07]",
           )}
         >
-          <span className="flex h-7 items-center gap-2">
-            <HostIcon hostId={host?.id} local={target.kind === "local"} size={15} strokeWidth={1.8} className="shrink-0" />
+          <span className="flex h-8 items-center gap-2">
+            <HostIcon hostId={host?.id} local={target.kind === "local"} size={16.5} strokeWidth={1.8} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">{label}</span>
             <EnvChip env={env} />
             <StatusMark health={health} />
@@ -395,7 +394,7 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
         <IconButton
           label={`New terminal on ${label}`}
           onClick={() => newTab("terminal", target)}
-          className="absolute top-1 right-1 size-5 rounded-[5px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+          className="absolute top-1.5 right-1 size-5 rounded-[5px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
         >
           <Plus size={13} strokeWidth={2} />
         </IconButton>

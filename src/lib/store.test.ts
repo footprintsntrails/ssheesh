@@ -46,6 +46,15 @@ describe("one layout per machine", () => {
     expect(s.closedTabs.map((c) => c.kind)).toEqual(["files", "terminal"]);
   });
 
+  it("a split is a new terminal on the same machine, beside the one you split", () => {
+    const id = useStore.getState().split("w2", "col");
+    const s = useStore.getState();
+    expect(s.panes[id]).toMatchObject({ kind: "terminal", target: web, n: 2 });
+    expect(paneIds(s.layouts["host:cfg:web"])).toEqual(["w1", "w2", id]);
+    expect(paneIds(s.layouts["host:cfg:db"])).toEqual(["d1"]);
+    expect(s.focused).toBe(id);
+  });
+
   it("on the main menu there's no tab to act on", () => {
     useStore.getState().showHome();
     expect(activePane(useStore.getState())).toBeNull();

@@ -432,14 +432,12 @@ export const useStore = create<AppState>()(
         return id;
       },
 
+      // A split is a new terminal on the server you're on, right away: no
+      // asking where to, and never another server.
       split(id, dir) {
-        const s = get();
-        const key = machine(s.panes[id]);
-        if (!key || !s.layouts[key]) return id;
-        const nid = newId("p");
-        const panes = { ...s.panes, [nid]: { id: nid, kind: "empty" as const, target: s.panes[id].target } };
-        set({ layouts: { ...s.layouts, [key]: splitAt(s.layouts[key], id, dir, nid) }, panes, ...focusing(s, panes, nid), zoomed: null });
-        return nid;
+        const target = get().panes[id]?.target;
+        if (!target) return id;
+        return get().openIn("terminal", target, { from: id, dir, split: true, before: false });
       },
 
       closePane(id) {

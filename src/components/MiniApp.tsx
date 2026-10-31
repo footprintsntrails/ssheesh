@@ -87,15 +87,18 @@ export function MiniApp() {
                 </span>
               )}
             </span>
-            {i === 0 &&
-              tabsInSidebar &&
-              ["Terminal", "Claude Code", "Files"].map((t, k) => (
-                <span key={t} className={cn("ml-2 flex items-center gap-1 rounded-[3px] px-1 py-[1.5px]", (k === 0 || (split && k === 2)) && "bg-ink/[0.09]")}>
-                  <span className={cn("size-1 shrink-0 rounded-[1px]", k === 1 ? "bg-[#d97757]" : "bg-ink/[0.3]")} />
-                  <span className="truncate text-[6.5px] leading-none text-fg-2">{t}</span>
-                  {k === 1 && <span className="ml-auto size-1 shrink-0 rounded-full bg-warn" />}
-                </span>
-              ))}
+            {i === 0 && tabsInSidebar && (
+              <span className="ml-[6px] flex flex-col gap-[2px] border-l border-ink/[0.12] pl-[3px]">
+                <span className="pl-1 text-[5.5px] leading-none text-fg-3">Tabs</span>
+                {["Terminal", "Terminal 2 (Claude Code)", "Files"].map((t, k) => (
+                  <span key={t} className={cn("flex items-center gap-1 rounded-[3px] px-1 py-[1.5px]", (k === 0 || (split && k === 2)) && "bg-ink/[0.09]")}>
+                    <span className={cn("size-1 shrink-0 rounded-[1px]", k === 1 ? "bg-[#d97757]" : "bg-ink/[0.3]")} />
+                    <span className="truncate text-[6.5px] leading-none text-fg-2">{t}</span>
+                    {k === 1 && <span className="ml-auto size-1 shrink-0 rounded-full bg-warn" />}
+                  </span>
+                ))}
+              </span>
+            )}
           </span>
         ),
       )}
