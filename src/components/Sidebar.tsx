@@ -1,4 +1,4 @@
-import { Activity, Box, ChevronRight, Circle, Copy, EyeOff, HardDrive, KeyRound, Palette, FolderOpen, Layers, LayoutDashboard, Laptop, Play, Plus, RotateCw, ScrollText, Search, ShieldCheck, Square, SquareTerminal, Trash } from "lucide-react";
+import { Activity, BookOpen, Box, Cable, ChevronRight, Circle, Copy, EyeOff, HardDrive, KeyRound, Palette, FolderOpen, Layers, LayoutDashboard, Laptop, Play, Plus, RotateCw, ScrollText, Search, ShieldCheck, Square, SquareTerminal, Trash } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
@@ -15,6 +15,8 @@ import { ConfigNotice } from "./ConfigImport";
 import { LoadLine, RailCard, RailLoad } from "./ServerLoad";
 import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
 import { openServerTool } from "./ServerTools";
+import { openRecipes } from "./Recipes";
+import { openTunnels } from "./Tunnels";
 
 const RANK: Record<Health, number> = { idle: 0, busy: 1, live: 2, warn: 3, bad: 4 };
 
@@ -229,6 +231,8 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
       ? [
           { label: "Security check-up", icon: ShieldCheck, run: () => openServerTool("checkup", target) },
           { label: "What's using the disk", icon: HardDrive, run: () => openServerTool("disk", target) },
+          { label: "Web apps and tunnels", icon: Cable, run: () => openTunnels(target) },
+          { label: "Recipes", icon: BookOpen, run: () => openRecipes(target) },
         ]
       : []),
     { label: "Open workspace", icon: LayoutDashboard, run: () => openWorkspace(target) },

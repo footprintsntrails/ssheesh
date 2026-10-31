@@ -6,16 +6,19 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IBufferLine } from "@xterm/xterm";
 import { backend } from "./backend";
-import { isTerminalNewline, isTerminalPaste, matchShortcut, terminalCopyKey } from "./keys";
+import { isMac, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
+import { findLinks } from "./paths";
+import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
+import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { OutputPipeline } from "./output";
 import { maskText, streamerOn, targetName } from "./privacy";
 import { useSettings } from "./settings";
 import { fontStack, ICON_FONT, resolveScheme } from "./themes";
 import { useStore, type Attention, type PaneState, type Progress } from "./store";
-import type { ContainerRef, HostKeyCheck, SessionEvent, SessionState, TargetRef } from "./types";
+import type { ContainerRef, HostKeyCheck, SessionEvent, SessionState, TargetRef, TmuxScroll } from "./types";
 import { toOpError } from "./types";
 
 /** Current terminal look from Settings. */
@@ -41,6 +44,29 @@ function park(): HTMLDivElement {
   return parking;
 }
 
+/** A buffer row's text, and the column each of its characters sits in. */
+function rowText(line: IBufferLine, cols: number): { text: string; cells: number[] } {
+  let text = "";
+  const cells: number[] = [];
+  for (let x = 0; x < cols; x++) {
+    const cell = line.getCell(x);
+    if (!cell) break;
+    // The second half of a wide character has no text of its own.
+    if (cell.getWidth() === 0) continue;
+    const chars = cell.getChars() || " ";
+    for (const ch of chars) {
+      text += ch;
+      cells.push(x);
+    }
+  }
+  return { text, cells };
+}
+
+/** Keys and mouse reports that aren't typing: they don't end scrolling back. */
+const NOT_TYPING = /^\x1b\[(?:<|M|I$|O$)/;
+/** tmux leaves scrolling back on this key (bound in `durable_command`). */
+const LEAVE_SCROLL = "\x1b[9006~";
+
 /** Copies to the system clipboard; a failure isn't worth interrupting anyone over. */
 function copyText(text: string): Promise<void> {
   return backend.writeClipboard(text).catch(() => {});
@@ -53,7 +79,7 @@ class TerminalHandle {
   private gpu: WebglAddon | null = null;
   private started = false;
   private disposed = false;
-  private fitFrame = 0;
+  private fitTimer = 0;
   private last?: SessionState;
   private pendingCommand?: string;
   private output = new OutputPipeline((text) => this.term.write(text));
@@ -63,6 +89,16 @@ class TerminalHandle {
   private quietNoted = true;
   /** When the connection dropped, and the lines that were on screen then. */
   private away: { since: number; anchor: string[]; current: string } | null = null;
+  /** Where tmux on the server is scrolled to; null when the history is this terminal's own. */
+  private tmux: TmuxScroll | null = null;
+  private durable = false;
+  /** The shell's folder, when it reports it (OSC 7). */
+  private cwd: string | null = null;
+  private scrollListeners = new Set<() => void>();
+  private scrollFrame = 0;
+  /** A tmux scroll to send once the one in flight is answered; null asks where it is. */
+  private scrollWant: number | null | undefined;
+  private scrollBusy = false;
 
   constructor(
     readonly paneId: string,
@@ -104,6 +140,15 @@ class TerminalHandle {
           return false;
         }
       }
+      // Shift+Page Up/Down scrolls back through the history, tmux's included.
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "PageUp" || e.key === "PageDown")) {
+        if (e.type === "keydown") {
+          e.preventDefault();
+          const v = this.scrollView();
+          this.scrollTo(v.top + (e.key === "PageUp" ? -1 : 1) * Math.max(1, v.rows - 1));
+        }
+        return false;
+      }
       if (isTerminalNewline(e)) {
         if (e.type === "keydown") {
           e.preventDefault();
@@ -115,7 +160,61 @@ class TerminalHandle {
       // browser, which fires the paste event xterm handles.
       return matchShortcut(e) === null && !isTerminalPaste(e);
     });
-    this.term.onData((d) => backend.writeSession(paneId, d));
+    this.term.onData((d) => {
+      // Typing while scrolled back goes to the prompt, as in other terminals,
+      // instead of tmux's copy mode.
+      if (this.tmux?.inMode && !NOT_TYPING.test(d)) {
+        backend.writeSession(paneId, LEAVE_SCROLL);
+        this.setTmux({ ...this.tmux, inMode: false, position: 0 });
+      }
+      backend.writeSession(paneId, d);
+    });
+    // On Windows the console between us and ssh (ConPTY) answers "which
+    // terminal are you?" (DA1) itself. Our answer came on top of it, and the
+    // extra one landed in the shell as "61;6;7;21;22;23;24;28;32;42c".
+    if (isWindows) this.term.parser.registerCsiHandler({ final: "c" }, (params) => params.length === 0 || params[0] === 0);
+    // The scrollbar: tmux reports its scroll position in the title, and a
+    // plain shell's history is this terminal's own.
+    this.term.onTitleChange((title) => {
+      const s = parseScrollTitle(title);
+      if (s) this.setTmux(s);
+    });
+    this.term.onScroll(() => this.emitScroll());
+    this.term.onWriteParsed(() => this.emitScroll());
+    // tmux only reports on a redraw, so count lines going up into its history meanwhile.
+    this.term.onLineFeed(() => {
+      const t = this.tmux;
+      if (!t || t.inMode || t.history >= t.limit || this.term.buffer.active.cursorY !== this.term.rows - 1) return;
+      t.history++;
+      this.emitScroll();
+    });
+    this.term.parser.registerOscHandler(7, (data) => {
+      try {
+        const path = decodeURIComponent(new URL(data).pathname);
+        this.cwd = /^\/[A-Za-z]:/.test(path) ? path.slice(1) : path;
+      } catch {
+        /* not a file:// URL */
+      }
+      return true;
+    });
+    // Paths and links in the output open with Ctrl+click (⌘-click on a Mac).
+    this.term.registerLinkProvider({
+      provideLinks: (y, callback) => {
+        const line = this.term.buffer.active.getLine(y - 1);
+        if (!line) return callback(undefined);
+        const { text, cells } = rowText(line, this.term.cols);
+        const links = findLinks(text).map((link) => ({
+          range: { start: { x: cells[link.start] + 1, y }, end: { x: cells[link.end - 1] + 1, y } },
+          text: text.slice(link.start, link.end),
+          decorations: { pointerCursor: true, underline: true },
+          activate: (e: MouseEvent) => {
+            if (!(isMac ? e.metaKey : e.ctrlKey)) return;
+            void openTerminalLink({ paneId, target, sessionKey, durable: this.durable, cwd: this.cwd }, link);
+          },
+        }));
+        callback(links.length ? links : undefined);
+      },
+    });
     this.term.onResize(({ cols, rows }) => backend.resizeSession(paneId, cols, rows));
     // Programs that want you: AI agents and long jobs ring the bell or send
     // a notification (OSC 9 for iTerm2 and Windows Terminal, OSC 777 for others).
@@ -257,9 +356,79 @@ class TerminalHandle {
     if (!this.disposed && this.el.parentElement !== park()) park().appendChild(this.el);
   }
 
+  /**
+   * A new size redraws the whole screen on the server (tmux), so fitting on
+   * every frame of a drag made the text jump up and down. It fits once the
+   * size settles.
+   */
   scheduleFit() {
-    cancelAnimationFrame(this.fitFrame);
-    this.fitFrame = requestAnimationFrame(() => this.refit());
+    window.clearTimeout(this.fitTimer);
+    this.fitTimer = window.setTimeout(() => this.refit(), 90);
+  }
+
+  // ---- scrollbar
+
+  onScrollChange(fn: () => void): () => void {
+    this.scrollListeners.add(fn);
+    return () => this.scrollListeners.delete(fn);
+  }
+
+  private emitScroll() {
+    cancelAnimationFrame(this.scrollFrame);
+    this.scrollFrame = requestAnimationFrame(() => this.scrollListeners.forEach((fn) => fn()));
+  }
+
+  private setTmux(s: TmuxScroll | null) {
+    this.tmux = s;
+    this.emitScroll();
+  }
+
+  /** What the scrollbar shows. */
+  scrollView(): ScrollView {
+    if (this.tmux) return tmuxView(this.tmux);
+    const b = this.term.buffer.active;
+    return { total: b.length, top: b.viewportY, rows: this.term.rows };
+  }
+
+  /** Scrolls so line `top` is the first in view. */
+  scrollTo(top: number) {
+    const t = this.tmux;
+    if (!t) {
+      this.term.scrollToLine(Math.max(0, Math.round(top)));
+      return;
+    }
+    const position = tmuxPosition(t, top);
+    this.setTmux({ ...t, inMode: position > 0, position });
+    this.askTmux(position);
+  }
+
+  /** Asks tmux how much history there is, for an exact scrollbar. */
+  refreshScroll() {
+    if (this.tmux) this.askTmux(null);
+  }
+
+  /** One tmux scroll at a time; while one is out, only the latest wish waits. */
+  private askTmux(position: number | null) {
+    this.scrollWant = position;
+    if (this.scrollBusy) return;
+    this.scrollBusy = true;
+    const next = () => {
+      const want = this.scrollWant;
+      this.scrollWant = undefined;
+      if (want === undefined || this.disposed) {
+        this.scrollBusy = false;
+        return;
+      }
+      backend
+        .tmuxScroll(this.target, this.sessionKey, want)
+        .then((s) => {
+          // Mid-drag the next wish is already shown; don't jump back.
+          if (this.scrollWant === undefined && this.tmux) this.setTmux(s);
+        })
+        .catch(() => {})
+        .finally(next);
+    };
+    next();
   }
 
   refit() {
@@ -363,6 +532,11 @@ class TerminalHandle {
     }
     const prev = this.last;
     this.last = e.state;
+    if (e.state.kind === "connected") {
+      this.durable = e.state.durable;
+      // A new shell has its history here, not in tmux.
+      if (!e.state.durable) this.setTmux(null);
+    }
     useStore.getState().setSession(this.paneId, e.state);
     const down = e.state.kind === "reconnecting" || e.state.kind === "disconnected";
     if (down && !this.away && this.target.kind === "host") this.away = { since: Date.now(), anchor: anchorLines(this.term), current: cursorLine(this.term) };

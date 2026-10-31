@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.0 — commands and tunnels
+
+### Snippets and a sharper command palette
+- **Snippets: commands you keep and run again.** Leave blanks in them, like `{{service}}` or `{{lines:100}}`, and SSHeesh asks for them each time; `{{container}}` lets you pick one of the server's containers. They run in the terminal of the server you're looking at. A few useful ones are there to start with.
+- **Narrow the palette down** (⌘K / Ctrl+Shift+K) by typing `srv:` for servers, `cmd:` for snippets, recipes and server tools, `file:` for bookmarked and recent folders, or `set:` for settings.
+
+### Recipes that explain every command
+- **Eight step-by-step guides**: log in with a key and turn passwords off, turn on the firewall, stop password guessing with fail2ban, install security updates automatically, use your own user instead of root, install Docker, add swap, and put a web app behind HTTPS with Caddy.
+- **Every command comes with a sentence saying what it does.** Commands go into the terminal without pressing Enter, so you run each one yourself. Steps that could lock you out say so first, check that you can still log in, and say how to undo them.
+- Commands for Debian and Ubuntu or for Fedora and RHEL, picked from what the server runs. Findings in the security check-up link to the recipe that fixes them.
+
+### The server's web apps in your browser, and saved tunnels
+- **Web apps on this server**: SSHeesh finds what the server serves (Grafana, a dev server, a Docker app) with its page title. Click Open and it's in your browser at `localhost`, through your SSH login, without opening anything to the internet.
+- **Saved tunnels** bring a server's port (or a SOCKS proxy) to this computer, with a switch for each. They reconnect on their own when the connection drops, and the ones that were on start again when SSHeesh opens.
+
+### Terminal
+- **Ctrl+click a file path in the output** (⌘-click on a Mac) to open it in the file manager beside the terminal, with the file picked out and shown. Paths like `src/main.rs:12` and `./notes.md` work too, from the folder the terminal is in. Ctrl+click a web link to open it in your browser.
+- **A scrollbar**, also for the history of server terminals, which lives in tmux on the server. Drag it, click above or below it, or press Shift+Page Up and Shift+Page Down. Typing while you're scrolled back takes you back to the prompt.
+- **The server's welcome message** (motd) shows when a new session starts, as it does when you log in with ssh.
+- **Resizing no longer makes the text jump.** The terminal takes its new size once you stop dragging, instead of redrawing on the server at every step.
+- On Windows, connecting no longer types `61;6;7;21;22;23;24;28;32;42c` into the shell.
+
+### Tabs or side by side
+- **Terminal, Files and Stats switch on and off** at the top: with only Terminal on, the terminal fills the window; with Terminal and Files on, they share it. Switching one off keeps it running.
+- **Or use them as tabs**: one fills the window at a time, and a second terminal gets a tab of its own. Pick it in the welcome or in Settings → Layout.
+
+### File manager
+- **Folders open much faster on Windows**, and big folders faster everywhere. SSHeesh stays signed in to the server between clicks instead of logging in again for every folder (Windows can't share one connection the way macOS and Linux do). Folders you've seen show up at once while they refresh, the folder under the pointer loads before you click it, and a folder with thousands of files only draws what's on screen.
+- **Click any folder in the address bar** to go there; click the current folder or the space after it to type a path.
+- **A `..` row** at the top of every folder goes up one.
+- **Back and Forward** with the mouse's side buttons, Alt+← and Alt+→, and a Forward button.
+- **Bookmarks on the left or the right**: Settings → Layout.
+
+### Fixed
+- "What's using the disk" promised far more from removing unused Docker images than it frees, and kept promising it after you'd removed them: Docker counts layers those images share with ones in use. It now counts only what the cleanup really removes, and leaves the card out when no image is unused.
+- Drop-down lists on Windows showed white text on a white background.
+- Picking an icon for a new server opens the icons under its name instead of a pop-up over the colors.
+
 ## 0.4.2 — the portable app updates itself
 
 - **The portable Windows app updates itself**, like the installed one: it downloads the new version, checks its signature, takes its place, and asks you to restart. Your servers and settings stay put. This works from 0.4.2 on, so getting 0.4.2 itself is one last manual download.

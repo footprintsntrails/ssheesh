@@ -15,6 +15,8 @@ export interface PaneState {
   sessionKey?: string;
   /** Files pane: current folder. */
   path?: string;
+  /** Files pane: a file in that folder to pick out and preview, once. */
+  reveal?: string;
   /** Terminal pane: typed once after the first connect (e.g. `cd` into a folder). */
   initialCommand?: string;
   /** Terminal pane: opened inside this container. */
@@ -89,6 +91,13 @@ interface AppState {
   settingsSection: string;
   /** A pane temporarily filling the whole workspace. */
   zoomed: string | null;
+  /**
+   * Panes switched off in the toolbar: kept, with their sessions running,
+   * but not drawn. Focusing one brings it back.
+   */
+  hidden: string[];
+  /** Switches panes off (or back on) without closing them. */
+  setHidden(ids: string[], hidden: boolean): void;
   /** Pane being dragged by its header, and where it would land. */
   dragPane: string | null;
   dropTarget: { paneId: string; zone: DropZone } | null;
@@ -163,6 +172,7 @@ export const useStore = create<AppState>()(
 
       focus(id) {
         const s = get();
+        if (s.hidden.includes(id)) set({ hidden: s.hidden.filter((h) => h !== id) });
         if (s.focused === id) return;
         const p = s.panes[id];
         const remember = p?.kind === "terminal" && p.target ? { lastTerminal: { ...s.lastTerminal, [targetKey(p.target)]: id } } : {};
@@ -283,10 +293,24 @@ export const useStore = create<AppState>()(
           root = { kind: "pane", id: fresh };
           panes[fresh] = { id: fresh, kind: "empty", target: null };
         }
-        const remaining = paneIds(root);
-        const idx = order.indexOf(id);
+        // Focus moves to a pane that's on screen, if there is one.
+        const all = paneIds(root);
+        const shown = all.filter((r) => !s.hidden.includes(r));
+        const remaining = shown.length ? shown : all;
+        const idx = order.filter((r) => remaining.includes(r) || r === id).indexOf(id);
         const focused = s.focused === id ? (remaining[Math.max(0, idx - 1)] ?? remaining[0]) : s.focused;
-        set({ root, panes, sessions, focused, zoomed: s.zoomed === id ? null : s.zoomed });
+        set({ root, panes, sessions, focused, zoomed: s.zoomed === id ? null : s.zoomed, hidden: s.hidden.filter((h) => h !== id) });
+      },
+
+      hidden: [],
+      setHidden(ids, hide) {
+        const s = get();
+        const hidden = hide ? [...new Set([...s.hidden, ...ids])] : s.hidden.filter((h) => !ids.includes(h));
+        // Something always stays on screen.
+        const shown = paneIds(s.root).filter((id) => !hidden.includes(id));
+        if (!shown.length) return;
+        const focused = hidden.includes(s.focused) ? (shown.find((id) => sameTarget(s.panes[id]?.target ?? null, s.panes[s.focused]?.target ?? null)) ?? shown[0]) : s.focused;
+        set({ hidden, focused, zoomed: s.zoomed && hidden.includes(s.zoomed) ? null : s.zoomed });
       },
 
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
@@ -370,7 +394,7 @@ export const useStore = create<AppState>()(
     {
       name: "sshee-workspace",
       version: 1,
-      partialize: (s) => ({ root: s.root, panes: s.panes, focused: s.focused }),
+      partialize: (s) => ({ root: s.root, panes: s.panes, focused: s.focused, hidden: s.hidden }),
     },
   ),
 );

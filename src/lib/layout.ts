@@ -47,6 +47,16 @@ export function removePane(root: LayoutNode, paneId: string): LayoutNode | null 
   return go(root);
 }
 
+/** The tree without the panes in `hidden`; null if nothing is left. */
+export function visibleTree(root: LayoutNode, hidden: string[]): LayoutNode | null {
+  let tree: LayoutNode | null = root;
+  for (const id of hidden) {
+    if (!tree) break;
+    tree = removePane(tree, id);
+  }
+  return tree;
+}
+
 export function swapPanes(root: LayoutNode, a: string, b: string): LayoutNode {
   const go = (node: LayoutNode): LayoutNode => {
     if (node.kind === "pane") return node.id === a ? { ...node, id: b } : node.id === b ? { ...node, id: a } : node;

@@ -122,29 +122,47 @@ pub fn session_name(key: &str) -> String {
     format!("sshee-{clean}")
 }
 
+/// Prints the server's welcome message (motd), which ssh leaves out when it
+/// runs a command instead of a plain login. Skipped with ~/.hushlogin, as a
+/// login would. Each file once, even when one links to another.
+const MOTD: &str = r#"if [ ! -e "$HOME/.hushlogin" ]; then seen=; for f in /run/motd.dynamic /etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*; do [ -f "$f" ] && [ -r "$f" ] || continue; r=$(readlink -f "$f" 2>/dev/null || echo "$f"); case " $seen " in *" $r "*) continue ;; esac; seen="$seen $r"; cat "$f"; done 2>/dev/null; fi"#;
+
+/// tmux reports the scroll position through the window title, which the
+/// app reads to draw a scrollbar: in copy mode or not, lines scrolled up,
+/// lines of history, pane height and the history limit.
+pub const SCROLL_TITLE: &str = "sshee-scroll #{pane_in_mode} #{scroll_position} #{history_size} #{pane_height} #{history_limit}";
+
 /// The remote command for an interactive session. If tmux exists on the
 /// server, the shell lives inside a named tmux session that outlives the
 /// connection, and reconnecting attaches to it again. tmux's status bar is
 /// hidden so it looks like a plain terminal. Without tmux it's a normal shell.
+/// A new session starts with the server's welcome message, as a login does.
 ///
 /// Tuned for programs like Claude Code, OpenCode and vim: full 24-bit color
 /// (ssh doesn't pass COLORTERM on, and tmux 3.2+ needs telling the terminal
 /// has it), Esc without tmux waiting for more keys, focus reports, screen
 /// updates drawn in one go, and copying (a mouse selection, or a program's
-/// own copy) reaching your clipboard.
+/// own copy) reaching your clipboard. With tmux 3.2+ it also reports where
+/// you've scrolled to, and binds a key (ESC [ 9006 ~, which no keyboard
+/// sends) that leaves scrolling, so typing goes back to the prompt.
 pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
     let name = session_name(key);
     // With a command: tmux runs it as the session's only window; without
-    // tmux it's exec'd directly. Without one: the login shell.
+    // tmux it's exec'd directly. Without one: the login shell, after the
+    // welcome message. tmux runs a session's command with the login shell,
+    // which may be fish, hence the `sh -c`.
     let (in_tmux, plain) = match run {
         Some(argv) => {
             let cmd = argv.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
-            (format!(" {}", shell_quote(&cmd)), cmd)
+            (format!(" {}", shell_quote(&cmd)), format!("exec {cmd}"))
         }
-        None => (String::new(), r#""${SHELL:-/bin/sh}" -l"#.to_string()),
+        None => {
+            let login = format!(r#"{MOTD}; exec "${{SHELL:-/bin/sh}}" -l"#);
+            (format!(" {}", shell_quote(&format!("sh -c {}", shell_quote(&login)))), login)
+        }
     };
     let script = format!(
-        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) set -- ;; *) set -- -T RGB,sync ;; esac; exec tmux "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; set-option -s escape-time 10 \; set-option -s focus-events on \; set-option -s set-clipboard on; else printf "\033]7777;sshee=plain\007"; exec {plain}; fi"#
+        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; set-option -s escape-time 10 \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
     );
     format!("sh -c {}", shell_quote(&script))
 }
@@ -173,8 +191,12 @@ pub fn remote_command(t: &SshTarget, env: &SshEnv, script: &str) -> Command {
     cmd
 }
 
-/// Runs a script on the server and returns its stdout.
+/// Runs a script on the server and returns its stdout. Without input it
+/// goes through a shell that's already signed in (see `shell_pool`).
 pub fn run_remote(t: &SshTarget, env: &SshEnv, script: &str, stdin: Option<Vec<u8>>) -> Result<Vec<u8>, OpError> {
+    if stdin.is_none() {
+        return crate::shell_pool::run(t, env, script, None);
+    }
     let mut cmd = remote_command(t, env, script);
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
@@ -191,6 +213,13 @@ pub fn run_remote(t: &SshTarget, env: &SshEnv, script: &str, stdin: Option<Vec<u
     } else {
         Err(OpError::from_ssh(out.status.code(), &String::from_utf8_lossy(&out.stderr)))
     }
+}
+
+/// Like `run_remote`, for commands that only look: if the shell turns out to
+/// have lost its connection it's asked again on a fresh one, and an answer
+/// that takes over a minute counts as no answer.
+pub fn run_remote_read(t: &SshTarget, env: &SshEnv, script: &str) -> Result<Vec<u8>, OpError> {
+    crate::shell_pool::run(t, env, script, Some(std::time::Duration::from_secs(60)))
 }
 
 /// Runs a script on this computer with `sh` (used for "This computer").
@@ -247,7 +276,10 @@ mod tests {
     fn durable_command_runs_through_sh() {
         let c = durable_command("k1", None);
         assert!(c.starts_with("sh -c '"));
-        assert!(c.contains(r#"tmux "$@" new-session -A -s sshee-k1"#));
+        assert!(c.contains(r#"set -- "$@" new-session -A -s sshee-k1"#));
+        assert!(c.contains(r#"exec tmux "$@""#));
         assert!(c.contains("export COLORTERM=truecolor"));
+        assert!(c.contains("motd.dynamic"));
+        assert!(c.contains("sshee-scroll #{pane_in_mode}"));
     }
 }

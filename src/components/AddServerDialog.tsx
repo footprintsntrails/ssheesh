@@ -474,29 +474,18 @@ export function AddHostDialog() {
 
           <Section title="In your list">
             <div className="flex items-center gap-2">
-              <div className="relative">
-                <button
-                  type="button"
-                  aria-label={`Icon: ${HOST_ICONS[icon]?.name}. Change`}
-                  aria-expanded={iconsOpen}
-                  onClick={() => setIconsOpen((v) => !v)}
-                  className="flex size-9 items-center justify-center rounded-[9px] bg-ink/[0.05] ring-1 ring-inset ring-ink/[0.08] hover:bg-ink/[0.08]"
-                >
-                  <Icon size={17} strokeWidth={1.9} style={{ color }} />
-                </button>
-                {iconsOpen && (
-                  <div className="glass absolute top-11 left-0 z-10 w-[236px] animate-pop-in rounded-[12px] p-2">
-                    <LookGrid
-                      look={{ icon, color }}
-                      onChange={(l) => {
-                        if (l.icon !== icon) setIconsOpen(false);
-                        setIcon(l.icon);
-                        setColor(l.color);
-                      }}
-                    />
-                  </div>
+              <button
+                type="button"
+                aria-label={`Icon: ${HOST_ICONS[icon]?.name}. Change`}
+                aria-expanded={iconsOpen}
+                onClick={() => setIconsOpen((v) => !v)}
+                className={cn(
+                  "flex size-9 shrink-0 items-center justify-center rounded-[9px] ring-1 ring-inset",
+                  iconsOpen ? "bg-ink/[0.08] ring-accent/60" : "bg-ink/[0.05] ring-ink/[0.08] hover:bg-ink/[0.08]",
                 )}
-              </div>
+              >
+                <Icon size={17} strokeWidth={1.9} style={{ color }} />
+              </button>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -506,6 +495,22 @@ export function AddHostDialog() {
                 className={inputClass}
               />
             </div>
+            {/* Icons open in place, under the name, instead of floating over the colors. */}
+            {iconsOpen && (
+              <div
+                ref={(el) => el?.scrollIntoView({ block: "nearest", behavior: "smooth" })}
+                className="animate-fade-in rounded-[10px] bg-ink/[0.035] p-1.5 ring-1 ring-inset ring-ink/[0.06]"
+              >
+                <LookGrid
+                  look={{ icon, color }}
+                  colors={false}
+                  onChange={(l) => {
+                    setIcon(l.icon);
+                    setIconsOpen(false);
+                  }}
+                />
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex gap-1.5" role="radiogroup" aria-label="Icon color">
                 {HOST_COLORS.map((c) => (

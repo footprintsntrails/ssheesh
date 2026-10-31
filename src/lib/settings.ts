@@ -26,6 +26,11 @@ export interface Settings {
   logo: "winking" | "still" | "hidden";
   /** Hides the sidebar, toolbar and vitals; they slide in at the window's edges. */
   compactMode: boolean;
+  /**
+   * "split": Terminal, Files and Stats switch on and off, and the ones on
+   * share the window. "tabs": one fills the window at a time.
+   */
+  viewMode: "split" | "tabs";
   /** The first-launch hello has been seen (or skipped). */
   onboarded: boolean;
   /** The version whose "What's new" you've seen, to show notes after an update. */
@@ -55,6 +60,8 @@ export interface Settings {
   placesWidth: number;
   /** The file manager's places and bookmarks column. */
   placesMode: "wide" | "narrow" | "hidden";
+  /** Which side of the file list the places and bookmarks sit on. */
+  placesSide: "left" | "right";
   /** Places you took out of the file manager's column ("home", "/var/log", "recent"…). */
   hiddenPlaces: string[];
   previewWidth: number;
@@ -104,6 +111,8 @@ export const DEFAULT_SETTINGS: Settings = {
   expanded: [],
   placesWidth: 172,
   placesMode: "narrow",
+  placesSide: "left",
+  viewMode: "split",
   hiddenPlaces: [],
   previewWidth: 420,
   paneGap: 6,

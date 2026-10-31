@@ -198,6 +198,8 @@ export interface DockerUsage {
   volumesReclaimable: number;
   buildCache: number;
   buildCacheReclaimable: number;
+  /** Images no container uses, when Docker could list them one by one. */
+  unusedImages: number | null;
 }
 
 /** A safe cleanup: a command you run, and roughly what it frees. */
@@ -214,6 +216,51 @@ export interface DiskReport {
   docker: DockerUsage | null;
   journal: number | null;
   cleanups: Cleanup[];
+  asRoot: boolean;
+}
+
+/**
+ * What a tunnel does: this computer's port opens a port as seen from the
+ * server (`remoteHost` "127.0.0.1" is the server itself), or a SOCKS proxy
+ * that sends whatever uses it out through the server.
+ */
+export type Forward =
+  | { kind: "local"; localPort: number; remoteHost: string; remotePort: number }
+  | { kind: "socks"; localPort: number };
+
+/** How a tunnel is doing. "off" is the UI's own: its switch is off. */
+export type TunnelState =
+  | { kind: "starting" }
+  | { kind: "on"; warning: string | null }
+  | { kind: "reconnecting"; attempt: number; retryInMs: number; reason: string }
+  | { kind: "failed"; message: string }
+  | { kind: "off" };
+
+/** Something listening on TCP on the server. */
+export interface WebApp {
+  port: number;
+  /** Where a tunnel to it connects, as the server sees it: 127.0.0.1 unless it listens on one other address. */
+  remoteHost: string;
+  /** The program listening ("node", "nginx"), when the server says. */
+  process: string | null;
+  /** What the port or program is known as ("PostgreSQL", "Docker"). */
+  knownAs: string | null;
+  /** The page's <title>. */
+  title: string | null;
+  scheme: "http" | "https" | null;
+  /** HTTP status of its front page. */
+  status: number | null;
+  /** Likely a website: it answered HTTP, or it's a usual web port or program. */
+  web: boolean;
+  /** Also listens on an address other computers can reach. */
+  public: boolean;
+}
+
+export interface WebAppScan {
+  /** Likely websites first, then by port. */
+  apps: WebApp[];
+  /** curl is on the server, so page titles could be read. */
+  curl: boolean;
   asRoot: boolean;
 }
 
@@ -249,4 +296,17 @@ export function targetKey(t: TargetRef): string {
 
 export function sameTarget(a: TargetRef | null | undefined, b: TargetRef | null | undefined): boolean {
   return !!a && !!b && targetKey(a) === targetKey(b);
+}
+
+/** Where a server terminal's tmux session is scrolled to. */
+export interface TmuxScroll {
+  /** Scrolled back rather than following the output. */
+  inMode: boolean;
+  /** Lines scrolled up from the bottom. */
+  position: number;
+  /** Lines of history above the screen. */
+  history: number;
+  height: number;
+  /** The most history tmux keeps. */
+  limit: number;
 }

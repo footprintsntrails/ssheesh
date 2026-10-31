@@ -419,6 +419,57 @@ pub fn tmux_session_for(key: &str) -> String {
     session_name(key)
 }
 
+/// Where a pane's tmux session is scrolled to (see `ssh::SCROLL_TITLE`).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TmuxScroll {
+    /// Scrolled back (tmux's copy mode) rather than following the output.
+    pub in_mode: bool,
+    /// Lines scrolled up from the bottom.
+    pub position: u32,
+    /// Lines of history above the screen.
+    pub history: u32,
+    pub height: u32,
+    /// The most history tmux keeps.
+    pub limit: u32,
+}
+
+/// Reads "sshee-scroll 1 100 480 24 2000". Out of copy mode tmux leaves the
+/// position empty, so there's one number fewer.
+pub fn parse_scroll(text: &str) -> Option<TmuxScroll> {
+    let mut words = text.split_whitespace();
+    if words.next()? != "sshee-scroll" {
+        return None;
+    }
+    let n: Vec<u32> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
+    let (in_mode, position, rest) = match n.as_slice() {
+        [mode, pos, rest @ ..] if rest.len() == 3 => (*mode == 1, *pos, rest),
+        [mode, rest @ ..] if rest.len() == 3 => (*mode == 1, 0, rest),
+        _ => return None,
+    };
+    Some(TmuxScroll { in_mode, position, history: rest[0], height: rest[1], limit: rest[2] })
+}
+
+/// Scrolls a pane's tmux session so `position` lines of history sit below
+/// the screen (0 goes back to following the output), then says where it
+/// ended up. Without a position it only reports. tmux doesn't report a
+/// scroll made this way through the title, hence the answer.
+pub fn tmux_scroll(target: &Target, env: &SshEnv, key: &str, position: Option<u32>) -> Result<TmuxScroll, crate::OpError> {
+    let Target::Ssh(t) = target else {
+        return Err(crate::OpError::new(crate::ErrorCode::Unsupported, "Not a server session."));
+    };
+    // Session names only hold letters, digits, "-" and "_", so no quoting.
+    let s = session_name(key);
+    let go = match position {
+        None => String::new(),
+        Some(0) => format!("tmux if-shell -F -t {s} '#{{pane_in_mode}}' 'send-keys -X -t {s} cancel' 2>/dev/null; "),
+        Some(n) => format!("tmux copy-mode -e -t {s} \\; send-keys -X -t {s} goto-line {n} 2>/dev/null; "),
+    };
+    let script = format!("{go}tmux display-message -p -t {s} '{}'", crate::ssh::SCROLL_TITLE);
+    let out = crate::ssh::run_remote_read(t, env, &script)?;
+    parse_scroll(&String::from_utf8_lossy(&out)).ok_or_else(|| crate::OpError::failed("Couldn't tell where the terminal is scrolled to."))
+}
+
 /// Ends a pane's tmux session on the server. Used when the user closes the
 /// pane on purpose; quitting the app leaves sessions running so they can be
 /// picked up again next time.
@@ -439,13 +490,21 @@ pub fn history(target: &Target, env: &SshEnv, key: &str, lines: u32) -> Result<S
         lines.clamp(10, 20000),
         crate::ssh::shell_quote(&session_name(key))
     );
-    let out = crate::ssh::run_remote(t, env, &script, None)?;
+    let out = crate::ssh::run_remote_read(t, env, &script)?;
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_scroll_report() {
+        assert_eq!(parse_scroll("sshee-scroll 1 100 480 24 2000\n"), Some(TmuxScroll { in_mode: true, position: 100, history: 480, height: 24, limit: 2000 }));
+        assert_eq!(parse_scroll("sshee-scroll 0  480 24 2000"), Some(TmuxScroll { in_mode: false, position: 0, history: 480, height: 24, limit: 2000 }));
+        assert_eq!(parse_scroll("vim ~/notes"), None);
+        assert_eq!(parse_scroll("sshee-scroll 1 x 480 24 2000"), None);
+    }
 
     #[test]
     fn backoff_grows_and_caps() {

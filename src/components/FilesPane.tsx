@@ -1,5 +1,5 @@
-import { ArrowUp, ChevronLeft, Clock, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, Globe, HardDrive, House, Link, Package, PanelLeft, Pencil, Plus, RefreshCw, RotateCcw, ScrollText, Search, Settings2, SquareTerminal, Star, Timer, Trash, Upload, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ArrowUp, ChevronLeft, ChevronRight, Clock, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, Globe, HardDrive, House, Link, Package, PanelLeft, PanelRight, Pencil, Plus, RefreshCw, RotateCcw, ScrollText, Search, Settings2, SquareTerminal, Star, Timer, Trash, Upload, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { folderName, LINUX_PLACES, useBookmarks } from "../lib/bookmarks";
 import { bytes, cn, joinPath, modified, parentPath, shellQuote } from "../lib/format";
@@ -11,6 +11,7 @@ import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
 import { Button, IconButton, ResizeHandle, Spinner } from "./ui";
 import { useNames } from "../lib/privacy";
 import { findTerminal } from "../lib/terminals";
+import { pathCrumbs } from "../lib/paths";
 import { uploadTo } from "../lib/upload";
 import { track } from "../lib/transfers";
 
@@ -57,28 +58,89 @@ function sortEntries(list: FileEntry[], key: SortKey, asc: boolean): FileEntry[]
   });
 }
 
-/** Always-visible, editable path: type or paste a folder and press Enter. */
+/**
+ * Always-visible path. Each folder in it is a button that goes there; a
+ * click on the current folder or the free space after it turns the bar
+ * into a text field to type or paste a path.
+ */
 function AddressBar({ path, onGo }: { path: string; onGo: (p: string) => void }) {
   const names = useNames();
   const [value, setValue] = useState(path);
   const [editing, setEditing] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const trail = useRef<HTMLDivElement>(null);
+  const crumbs = useMemo(() => pathCrumbs(path), [path]);
   useEffect(() => {
     if (!editing) setValue(path);
   }, [path, editing]);
+  // A long path shows its end: the folder you're in.
+  useLayoutEffect(() => {
+    const el = trail.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [path, editing]);
+  useEffect(() => {
+    if (editing) input.current?.select();
+  }, [editing]);
+
+  if (!editing) {
+    return (
+      <div
+        role="navigation"
+        aria-label="Folder path"
+        onClick={() => setEditing(true)}
+        title="Click a folder to go there. Click the empty space to type a path."
+        className="flex h-7 min-w-0 flex-1 items-center rounded-[7px] bg-ink/[0.05] ring-1 ring-inset ring-ink/[0.07] hover:ring-ink/[0.12]"
+      >
+        <div
+          ref={trail}
+          onWheel={(e) => {
+            if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY;
+          }}
+          className="flex h-full min-w-0 items-center overflow-x-auto pl-1 pr-1.5 font-mono text-[12px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {crumbs.map((c, i) => {
+            const last = i === crumbs.length - 1;
+            const root = i === 0 && (c.label === "/" || c.label === "~" || c.label.endsWith(":"));
+            return (
+              <span key={c.path} className="flex shrink-0 items-center">
+                {i > 0 && !(i === 1 && crumbs[0].label === "/") && <span className="px-px text-fg-3/60">/</span>}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (last) setEditing(true);
+                    else onGo(c.path);
+                  }}
+                  title={last ? "Type a path" : `Go to ${names.text(c.path)}`}
+                  className={cn(
+                    "flex h-[22px] items-center rounded-[5px] px-1 hover:bg-ink/[0.08]",
+                    last ? "font-medium text-fg" : "text-fg-2 hover:text-fg",
+                  )}
+                >
+                  {root && c.label === "/" ? <HardDrive size={13} className="text-fg-3" aria-label="Top of the disk" /> : root && c.label === "~" ? <House size={13} className="text-fg-3" aria-label="Home folder" /> : names.text(c.label)}
+                </button>
+                {i === 0 && c.label === "/" && crumbs.length > 1 && <span className="px-px text-fg-3/60">/</span>}
+              </span>
+            );
+          })}
+        </div>
+        <div className="h-full min-w-3 flex-1 cursor-text" />
+      </div>
+    );
+  }
+
   return (
     <label className="relative flex h-7 min-w-0 flex-1 items-center">
       <span className="sr-only">Folder path</span>
       <HardDrive size={13} className="pointer-events-none absolute left-2.5 text-fg-3" />
       <input
-        value={editing ? value : names.text(value)}
+        ref={input}
+        autoFocus
+        value={value}
         spellCheck={false}
         autoCapitalize="off"
         autoCorrect="off"
         onChange={(e) => setValue(e.target.value)}
-        onFocus={(e) => {
-          setEditing(true);
-          e.currentTarget.select();
-        }}
         onBlur={() => setEditing(false)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -126,6 +188,39 @@ function InlineName({ initial, onDone }: { initial: string; onDone: (name: strin
 }
 
 const EMPTY: string[] = [];
+
+/** Height of a row in the list, in CSS pixels (`h-7`). */
+const ROW = 28;
+/** Past this many items only the rows in view (and a few around them) are drawn. */
+const WINDOW_FROM = 250;
+
+/**
+ * Folders seen lately, per server. Going back, up, or into a folder the
+ * pointer rested on shows its last listing at once while a fresh one loads.
+ */
+const listings = new Map<string, DirListing>();
+const cacheKey = (tk: string, path: string) => `${tk}\n${path}`;
+
+function remember(tk: string, asked: string, l: DirListing) {
+  for (const p of new Set([asked, l.path])) {
+    const k = cacheKey(tk, p);
+    listings.delete(k);
+    listings.set(k, l);
+  }
+  while (listings.size > 300) listings.delete(listings.keys().next().value as string);
+}
+
+let prefetching = false;
+/** Lists a folder ahead of time, one at a time, unless it's already known. */
+function prefetch(target: TargetRef, tk: string, path: string) {
+  if (prefetching || listings.has(cacheKey(tk, path))) return;
+  prefetching = true;
+  backend
+    .listDir(target, path)
+    .then((l) => remember(tk, path, l))
+    .catch(() => {})
+    .finally(() => (prefetching = false));
+}
 
 const PLACE_ICONS: Record<string, typeof File> = { "/var/log": ScrollText, "/etc": Settings2, "/var/www": Globe, "/opt": Package, "/tmp": Timer };
 
@@ -251,6 +346,7 @@ function Places({
   compact: boolean;
 }) {
   const mode = useSettings((st) => st.placesMode);
+  const right = useSettings((st) => st.placesSide === "right");
   const names = useNames();
   const wideWidth = useSettings((st) => st.placesWidth);
   const narrow = mode === "narrow";
@@ -267,7 +363,8 @@ function Places({
   const onResize = (dx: number) => {
     const st = useSettings.getState();
     if (live.current === null) before.current = st.placesWidth;
-    let next = Math.round(Math.min(360, Math.max(NARROW_WIDTH, (live.current ?? width) + dx)));
+    // On the right, the edge you drag is the left one, so dragging left widens it.
+    let next = Math.round(Math.min(360, Math.max(NARROW_WIDTH, (live.current ?? width) + (right ? -dx : dx))));
     // Folding keeps the wide width from before the drag; unfolding brings it back.
     if (next < FOLD_AT && st.placesMode === "wide") st.update({ placesMode: "narrow", placesWidth: before.current });
     else if (next >= FOLD_AT && st.placesMode === "narrow") {
@@ -389,10 +486,14 @@ function Places({
         setMenu({ x: e.clientX, y: e.clientY });
       }}
       // The wide column only shows once the list beside it still has room.
-      className={cn("relative shrink-0 flex-col border-r border-line", compact ? "hidden @3xl:flex" : narrow ? "hidden @xs:flex" : "hidden @lg:flex")}
+      className={cn(
+        "relative shrink-0 flex-col border-line",
+        right ? "order-last border-l" : "border-r",
+        compact ? "hidden @3xl:flex" : narrow ? "hidden @xs:flex" : "hidden @lg:flex",
+      )}
     >
       <ResizeHandle
-        edge="right"
+        edge={right ? "left" : "right"}
         label="Resize places"
         onResize={onResize}
         onReset={() => useSettings.getState().update({ placesMode: "wide", placesWidth: 172 })}
@@ -479,6 +580,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const history = useRef<string[]>([]);
+  /** Folders you went back from, for Forward. */
+  const future = useRef<string[]>([]);
   const skipFetch = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -489,6 +592,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const removeBookmark = useBookmarks((b) => b.remove);
   const visit = useBookmarks((b) => b.visit);
   const placesMode = useSettings((st) => st.placesMode);
+  const placesSide = useSettings((st) => st.placesSide);
   const previewWidth = useSettings((st) => st.previewWidth);
 
   useEffect(() => {
@@ -497,10 +601,16 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       return;
     }
     let alive = true;
+    const cached = listings.get(cacheKey(tk, path));
+    if (cached) {
+      setListing(cached);
+      setError(null);
+    }
     setLoading(true);
     backend
       .listDir(target, path)
       .then((l) => {
+        remember(tk, path, l);
         if (!alive) return;
         setListing(l);
         setError(null);
@@ -531,11 +641,70 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   }, [listing, filter, showHidden, sort]);
 
   const hiddenCount = listing ? listing.entries.filter((e) => e.name.startsWith(".")).length : 0;
-  const selectedEntries = visible.filter((e) => selected.includes(e.name));
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const selectedEntries = visible.filter((e) => selectedSet.has(e.name));
+
+  // Big folders draw only the rows in view.
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const [view, setView] = useState({ top: 0, height: 800 });
+  useEffect(() => {
+    if (!listEl) return;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setView({ top: listEl.scrollTop, height: listEl.clientHeight }));
+    };
+    update();
+    listEl.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(listEl);
+    return () => {
+      cancelAnimationFrame(frame);
+      listEl.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, [listEl]);
+  /** Every folder but the top of the disk starts with "..", the folder above. */
+  const upRow = !!listing && dir !== "/" && !/^[A-Za-z]:\/?$/.test(dir);
+  /** Space above the first row: the list's padding, "..", and a row being named. */
+  const lead = 4 + (upRow ? ROW : 0) + (creating ? ROW : 0);
+  const windowed = visible.length > WINDOW_FROM;
+  const first = windowed ? Math.max(0, Math.floor((view.top - lead) / ROW) - 20) : 0;
+  const last = windowed ? Math.min(visible.length, Math.ceil((view.top + view.height - lead) / ROW) + 20) : visible.length;
+  const scrollToRow = (i: number) => {
+    const el = listRef.current;
+    if (!el) return;
+    const top = lead + i * ROW;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + ROW > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW - el.clientHeight;
+  };
+
+  // A file to pick out, from a Ctrl+click on its path in a terminal.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  useEffect(() => {
+    const name = pane.reveal;
+    if (!name || !listing || listing.path !== path) return;
+    const entry = listing.entries.find((e) => e.name === name);
+    // A listing from the cache may not have it yet; the fresh one will tell.
+    if (!entry && loading) return;
+    setPane(pane.id, { reveal: undefined });
+    if (!entry) return;
+    if (name.startsWith(".")) setShowHidden(true);
+    setFilter("");
+    setSelected([name]);
+    setAnchor(name);
+    requestAnimationFrame(() => scrollToRow(visibleRef.current.findIndex((e) => e.name === name)));
+    if (entry.kind !== "dir") void openPreview(entry);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pane.reveal, listing, loading]);
 
   const navigate = (to: string, remember = true) => {
     if (to === dir) return refresh();
-    if (remember) history.current.push(dir);
+    if (remember) {
+      history.current.push(dir);
+      future.current = [];
+    }
     setSelected([]);
     setAnchor(null);
     setFilter("");
@@ -545,7 +714,16 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   const goBack = () => {
     const prev = history.current.pop();
-    if (prev) navigate(prev, false);
+    if (!prev) return;
+    future.current.push(dir);
+    navigate(prev, false);
+  };
+
+  const goForward = () => {
+    const next = future.current.pop();
+    if (!next) return;
+    history.current.push(dir);
+    navigate(next, false);
   };
 
   const fail = (title: string, e: unknown) => toast({ tone: "error", title, body: toOpError(e).message });
@@ -679,6 +857,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   /** Everything the toolbar holds, for the ⋯ menu; narrow panes hide some buttons. */
   const moreItems = (): (MenuItem | "sep")[] => [
     { label: "Back", icon: ChevronLeft, disabled: history.current.length === 0, run: goBack },
+    { label: "Forward", icon: ChevronRight, disabled: future.current.length === 0, run: goForward },
     { label: "Up one folder", icon: ArrowUp, disabled: dir === "/", run: () => navigate(parentPath(dir)) },
     "sep",
     { label: "Show hidden files", icon: Eye, checked: showHidden, run: () => setShowHidden((v) => !v) },
@@ -745,6 +924,13 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     }
   };
 
+  // Resting the pointer on a folder lists it ahead of time, so opening it is instant.
+  const hoverTimer = useRef(0);
+  const hoverFolder = (name: string) => {
+    window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => prefetch(target, tk, joinPath(dir, name)), 150);
+  };
+
   const typeahead = useRef({ text: "", at: 0 });
   const onListKey = (e: ReactKeyboardEvent) => {
     if (renaming || creating) return;
@@ -755,9 +941,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       if (!entry) return;
       setSelected([entry.name]);
       setAnchor(entry.name);
-      listRef.current?.querySelector(`[data-name="${CSS.escape(entry.name)}"]`)?.scrollIntoView({ block: "nearest" });
+      scrollToRow(visible.indexOf(entry));
     };
-    if (e.key === "ArrowDown") pick(idx + 1);
+    if (e.altKey && e.key === "ArrowLeft") goBack();
+    else if (e.altKey && e.key === "ArrowRight") goForward();
+    else if (e.key === "ArrowDown") pick(idx + 1);
     else if (e.key === "ArrowUp" && mod) navigate(parentPath(dir));
     else if (e.key === "ArrowUp") pick(idx < 0 ? 0 : idx - 1);
     else if (e.key === "Enter" && selectedEntries.length === 1) open(selectedEntries[0]);
@@ -834,7 +1022,16 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const dirty = preview?.file?.content != null && preview.draft !== preview.file.content;
 
   return (
-    <div className="@container absolute inset-0 flex flex-col">
+    <div
+      // The mouse's side buttons go back and forward, as in a browser.
+      onMouseUp={(e) => {
+        if (e.button !== 3 && e.button !== 4) return;
+        e.preventDefault();
+        if (e.button === 3) goBack();
+        else goForward();
+      }}
+      className="@container absolute inset-0 flex flex-col"
+    >
       {/* toolbar */}
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-1.5">
         <span className="hidden @xs:flex">
@@ -846,14 +1043,19 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             }
             className="size-6"
           >
-            <PanelLeft size={14} />
+            {placesSide === "right" ? <PanelRight size={14} /> : <PanelLeft size={14} />}
           </IconButton>
         </span>
         <div className="mx-0.5 hidden h-4 w-px bg-ink/[0.08] @xs:block" />
         <span className="hidden items-center @xs:flex">
-          <IconButton label="Back" onClick={goBack} disabled={history.current.length === 0} className="size-6">
+          <IconButton label="Back (mouse back button, Alt+←)" onClick={goBack} disabled={history.current.length === 0} className="size-6">
             <ChevronLeft size={15} />
           </IconButton>
+          {future.current.length > 0 && (
+            <IconButton label="Forward (mouse forward button, Alt+→)" onClick={goForward} className="size-6">
+              <ChevronRight size={15} />
+            </IconButton>
+          )}
           <IconButton label="Up one folder" onClick={() => navigate(parentPath(dir))} disabled={dir === "/"} className="size-6">
             <ArrowUp size={14} />
           </IconButton>
@@ -947,7 +1149,10 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 <div className="pointer-events-none absolute inset-x-0 top-7 z-10 h-px animate-pulse bg-accent/70" />
               )}
               <div
-                ref={listRef}
+                ref={(el) => {
+                  listRef.current = el;
+                  setListEl(el);
+                }}
                 tabIndex={0}
                 onKeyDown={onListKey}
                 onClick={(e) => e.target === e.currentTarget && setSelected([])}
@@ -966,6 +1171,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                     </div>
                   ))}
 
+                {upRow && (
+                  <div
+                    onDoubleClick={() => navigate(parentPath(dir))}
+                    onClick={() => setSelected([])}
+                    title="Double-click to go to the folder above"
+                    className="mx-1.5 flex h-7 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-fg-2 hover:bg-ink/[0.035]"
+                  >
+                    <CornerLeftUp size={15} strokeWidth={1.7} className="text-fg-3" />
+                    ..
+                  </div>
+                )}
                 {creating && (
                   <div className="mx-1.5 flex h-7 items-center gap-2.5 rounded-md bg-ink/[0.04] px-2.5">
                     {creating.kind === "folder" ? (
@@ -988,12 +1204,15 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                   </div>
                 )}
 
-                {visible.map((entry) => {
-                  const isSel = selected.includes(entry.name);
+                {first > 0 && <div style={{ height: first * ROW }} />}
+                {visible.slice(first, last).map((entry) => {
+                  const isSel = selectedSet.has(entry.name);
                   return (
                     <div
                       key={entry.name}
                       data-name={entry.name}
+                      onPointerEnter={entry.kind === "dir" ? () => hoverFolder(entry.name) : undefined}
+                      onPointerLeave={entry.kind === "dir" ? () => window.clearTimeout(hoverTimer.current) : undefined}
                       onClick={(e) => click(e, entry)}
                       onDoubleClick={() => open(entry)}
                       onContextMenu={(e) => {
@@ -1034,6 +1253,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                     </div>
                   );
                 })}
+                {last < visible.length && <div style={{ height: (visible.length - last) * ROW }} />}
 
                 {listing && visible.length === 0 && !creating && (
                   <div className="flex flex-col items-center px-6 pt-16 text-center">

@@ -8,6 +8,12 @@ import "./index.css";
 applyAppearance(useSettings.getState());
 seedDemoLayout();
 
+// The mouse's back and forward buttons move through the Files pane's
+// folders; they must never take the window back through its own page history.
+window.addEventListener("mouseup", (e) => {
+  if (e.button === 3 || e.button === 4) e.preventDefault();
+});
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />

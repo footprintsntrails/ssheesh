@@ -2,8 +2,9 @@
 // Tauri (Rust); in a plain browser it's a demo backend with sample data, so
 // the interface can be designed and screenshotted without servers.
 
-import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage } from "./types";
+import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage, TmuxScroll } from "./types";
 import { toOpError } from "./types";
+import type { Forward, TunnelState, WebAppScan } from "./types";
 
 export interface DropEvent {
   type: "over" | "drop" | "leave";
@@ -60,6 +61,8 @@ export interface Backend {
   trustHostKey(hostId: string): Promise<void>;
   /** Recent scrollback of a durable (tmux) session. */
   sessionHistory(target: TargetRef, sessionKey: string, lines: number): Promise<string>;
+  /** Scrolls a server terminal's tmux history so `position` lines sit below the screen (0 follows the output again); without one, just reports. */
+  tmuxScroll(target: TargetRef, sessionKey: string, position: number | null): Promise<TmuxScroll>;
   /** The portable Windows .exe, which updates by downloading the new one. */
   isPortable(): Promise<boolean>;
   /** Scales the whole interface, like a browser's zoom. */
@@ -114,6 +117,20 @@ export interface Backend {
   fetchMetrics(target: TargetRef): Promise<Metrics>;
   listContainers(target: TargetRef): Promise<ContainerList>;
   containerAction(target: TargetRef, engine: Engine, id: string, action: "start" | "stop" | "restart"): Promise<void>;
+
+  /** What listens on the server, likely websites first, with page titles when curl is there. */
+  scanWebApps(target: TargetRef): Promise<WebAppScan>;
+  /**
+   * Starts tunnel `id` to a server, or reattaches to it when it already runs
+   * the same way. Fails at once when the port here is taken; after that,
+   * how it's doing arrives in `onState`.
+   */
+  startTunnel(id: string, hostId: string, forward: Forward, onState: (s: TunnelState) => void): Promise<void>;
+  stopTunnel(id: string): void;
+  /** Why a tunnel couldn't listen on `port` on this computer, or null when it's free. */
+  localPortProblem(port: number): Promise<string | null>;
+  /** A free port here for the server's `preferred` one: the same number when it's free. */
+  pickLocalPort(preferred: number, avoid: number[]): Promise<number>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -175,6 +192,7 @@ async function tauriBackend(): Promise<Backend> {
     removeHost: (id) => call("remove_host", { id }),
     forgetPassword: (id) => call("forget_password", { id }),
     sessionHistory: (target, sessionKey, lines) => call("session_history", { target, sessionKey, lines }),
+    tmuxScroll: (target, sessionKey, position) => call("tmux_scroll", { target, sessionKey, position }),
     checkHostKey: (hostId, changed) => call("check_host_key", { hostId, changed }),
     localAuth: () => call("local_auth", {}),
     testConnection: (input) => call("test_connection", { input }),
@@ -261,6 +279,16 @@ async function tauriBackend(): Promise<Backend> {
     fetchMetrics: (target) => call("fetch_metrics", { target }),
     listContainers: (target) => call("list_containers", { target }),
     containerAction: (target, engine, id, action) => call("container_action", { target, engine, id, action }),
+
+    scanWebApps: (target) => call("scan_web_apps", { target }),
+    async startTunnel(id, hostId, forward, onState) {
+      const channel = new Channel<TunnelState>();
+      channel.onmessage = onState;
+      await call("start_tunnel", { id, hostId, forward, onState: channel });
+    },
+    stopTunnel: (id) => fire("stop_tunnel", { id }),
+    localPortProblem: (port) => call("local_port_problem", { port }),
+    pickLocalPort: (preferred, avoid) => call("pick_local_port", { preferred, avoid }),
   };
 }
 

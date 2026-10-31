@@ -6,6 +6,7 @@ import { lineTone } from "../lib/highlight";
 import { useNames } from "../lib/privacy";
 import { useSettings } from "../lib/settings";
 import { getTerminal } from "../lib/terminals";
+import { thumb, topForOffset, type ScrollView } from "../lib/scroll";
 import { resolveScheme } from "../lib/themes";
 import type { Fingerprint, HostKeyCheck, SessionState } from "../lib/types";
 import { Button, Face } from "./ui";
@@ -204,6 +205,73 @@ function HostKeyCard({ check, name, onAnswer }: { check: HostKeyCheck; name: str
   );
 }
 
+/**
+ * A scrollbar over the terminal's right edge. For a server terminal it
+ * shows tmux's history (where the scrollback really is) and scrolls it;
+ * otherwise the terminal's own. Drag the thumb, or click the track to move
+ * a screen at a time.
+ */
+function TerminalScrollbar({ pane, top, bottom, right }: { pane: PaneState; top: number; bottom: number; right: number }) {
+  const h = getTerminal(pane);
+  const track = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<ScrollView>(() => h.scrollView());
+  const [height, setHeight] = useState(0);
+  const [drag, setDrag] = useState<{ from: number; offset: number; at: number } | null>(null);
+  useEffect(() => h.onScrollChange(() => setView(h.scrollView())), [h]);
+  useEffect(() => {
+    const el = track.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHeight(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const t = thumb(view, height);
+  const offset = drag ? Math.max(0, Math.min(height - t.size, drag.offset + drag.at - drag.from)) : t.offset;
+  // Always there, so it knows its height; only shown once there's history.
+  const needed = view.total > view.rows;
+
+  return (
+    <div
+      ref={track}
+      onPointerEnter={() => h.refreshScroll()}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const box = e.currentTarget.getBoundingClientRect();
+        const y = e.clientY - box.top;
+        if (y >= offset && y <= offset + t.size) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setDrag({ from: e.clientY, offset, at: e.clientY });
+        } else {
+          // A click above or below the thumb moves a screen that way.
+          h.scrollTo(view.top + (y < offset ? -1 : 1) * Math.max(1, view.rows - 1));
+        }
+      }}
+      onPointerMove={(e) => {
+        if (!drag) return;
+        setDrag({ ...drag, at: e.clientY });
+        h.scrollTo(topForOffset(view, height, t.size, drag.offset + e.clientY - drag.from));
+      }}
+      onPointerUp={() => {
+        setDrag(null);
+        h.focus();
+      }}
+      title="Drag to scroll back. Shift+Page Up and Page Down work too."
+      aria-hidden={!needed}
+      className={cn("group/scroll absolute z-[1] w-3.5 cursor-default", !needed && "pointer-events-none invisible")}
+      style={{ top, bottom, right }}
+    >
+      <div
+        className={cn(
+          "absolute right-[3px] w-[6px] rounded-full bg-ink/[0.16] transition-[width,background-color] group-hover/scroll:w-[8px] group-hover/scroll:bg-ink/[0.28]",
+          drag && "w-[8px] bg-ink/[0.36]",
+        )}
+        style={{ top: offset, height: t.size }}
+      />
+    </div>
+  );
+}
+
 export function TerminalPane({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const pad = useSettings((s) => s.terminalPadding);
@@ -254,10 +322,11 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
         ref={box}
         style={{ padding: `${Math.round(pad * 0.66)}px ${Math.round(pad / 3)}px ${Math.round(pad * 0.66)}px ${pad}px` }}
         className={cn(
-          "absolute inset-0 transition-[opacity,filter] duration-300",
+          "absolute inset-0 overflow-hidden transition-[opacity,filter] duration-300",
           (offline || stopped) && "opacity-40 saturate-50",
         )}
       />
+      <TerminalScrollbar pane={pane} top={Math.round(pad * 0.66)} bottom={Math.round(pad * 0.66)} right={Math.round(pad / 3)} />
 
       {state?.kind === "disconnected" && reconnectMode === "ask" && (
         <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center px-3">

@@ -661,14 +661,14 @@ fn root_login(f: &Facts) -> Finding {
 // ---- open ports
 
 #[derive(Debug)]
-struct Listener {
-    udp: bool,
-    host: String,
-    port: u16,
-    process: Option<String>,
+pub(crate) struct Listener {
+    pub(crate) udp: bool,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) process: Option<String>,
 }
 
-fn listeners(lines: &[&str]) -> Option<Vec<Listener>> {
+pub(crate) fn listeners(lines: &[&str]) -> Option<Vec<Listener>> {
     let ss = lines.iter().map(|l| l.trim()).find(|l| *l == "#ss" || *l == "#netstat")? == "#ss";
     // ss: Netid State Recv-Q Send-Q Local Peer Process
     // netstat: Proto Recv-Q Send-Q Local Foreign [State] [PID/Program]
@@ -695,7 +695,7 @@ fn listeners(lines: &[&str]) -> Option<Vec<Listener>> {
 }
 
 /// Loopback and link-local addresses can't be reached from the internet.
-fn is_local(host: &str) -> bool {
+pub(crate) fn is_local(host: &str) -> bool {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let host = host.split('%').next().unwrap_or(host);
     match host.parse::<IpAddr>() {
@@ -706,7 +706,7 @@ fn is_local(host: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Risk {
+pub(crate) enum Risk {
     Fine,
     /// Should only face this server or a private network.
     Private,
@@ -715,7 +715,7 @@ enum Risk {
 }
 
 /// Ports people know by name, and what it means when they face the internet.
-const PORTS: &[(u16, &str, Risk)] = &[
+pub(crate) const PORTS: &[(u16, &str, Risk)] = &[
     (21, "FTP", Risk::Fine),
     (22, "SSH", Risk::Fine),
     (23, "Telnet", Risk::Private),
@@ -758,7 +758,7 @@ const PORTS: &[(u16, &str, Risk)] = &[
 ];
 
 /// Programs that should stay private on whatever port they use.
-const PROGRAMS: &[(&str, &str, Risk)] = &[
+pub(crate) const PROGRAMS: &[(&str, &str, Risk)] = &[
     ("postgres", "PostgreSQL", Risk::Private),
     ("mysqld", "MySQL", Risk::Private),
     ("mariadbd", "MariaDB", Risk::Private),

@@ -130,6 +130,7 @@ export function Segmented<T extends string>({ value, options, onChange }: { valu
       {options.map((o) => (
         <button
           key={o.value}
+          type="button"
           onClick={() => onChange(o.value)}
           className={cn(
             "flex h-[26px] items-center gap-1.5 rounded-[6px] px-3 text-[12px] font-medium transition-all",
@@ -584,7 +585,24 @@ function Layout({ s, set, reset }: SectionProps) {
   ];
   return (
     <>
-      <SectionTitle onReset={() => reset(["sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "placesMode", "paneGap", "paneRadius"])}>Layout</SectionTitle>
+      <SectionTitle onReset={() => reset(["viewMode", "sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "placesMode", "placesSide", "paneGap", "paneRadius"])}>Layout</SectionTitle>
+      <Row
+        label="Terminal, Files and Stats"
+        hint={
+          s.viewMode === "tabs"
+            ? "One at a time, as tabs at the top. Each keeps running while you look at another."
+            : "Switch each on or off at the top. The ones you switch on share the window."
+        }
+      >
+        <Segmented
+          value={s.viewMode}
+          options={[
+            { value: "split", label: "Side by side" },
+            { value: "tabs", label: "Tabs" },
+          ]}
+          onChange={(v) => set({ viewMode: v })}
+        />
+      </Row>
       <Row label="Arrange open panes" hint="Rearranges what's open. Nothing gets closed. You can also drag a pane by its title bar." stack>
         <div className="grid grid-cols-4 gap-2">
           {ARRANGE.map(({ id, label, icon: Icon }) => (
@@ -642,16 +660,26 @@ function Layout({ s, set, reset }: SectionProps) {
         />
       </Row>
       <HiddenServers />
-      <Row label="Places and bookmarks" hint="The column on the left of the file manager. Drag its edge to fold or unfold it.">
-        <Segmented
-          value={s.placesMode}
-          onChange={(v) => set({ placesMode: v })}
-          options={[
-            { value: "wide", label: "Wide" },
-            { value: "narrow", label: "Narrow" },
-            { value: "hidden", label: "Hidden" },
-          ]}
-        />
+      <Row label="Places and bookmarks" hint={`The column on the ${s.placesSide} of the file manager. Drag its edge to fold or unfold it.`}>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Segmented
+            value={s.placesSide}
+            onChange={(v) => set({ placesSide: v })}
+            options={[
+              { value: "left", label: "Left" },
+              { value: "right", label: "Right" },
+            ]}
+          />
+          <Segmented
+            value={s.placesMode}
+            onChange={(v) => set({ placesMode: v })}
+            options={[
+              { value: "wide", label: "Wide" },
+              { value: "narrow", label: "Narrow" },
+              { value: "hidden", label: "Hidden" },
+            ]}
+          />
+        </div>
       </Row>
       <Row label="Server vitals" hint="A one-line CPU, memory, network and disk readout under your panes.">
         <Switch label="Show server vitals" checked={s.showVitals} onChange={(v) => set({ showVitals: v })} />

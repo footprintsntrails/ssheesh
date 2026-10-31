@@ -233,6 +233,13 @@
   ::selection {
     background: color-mix(in srgb, var(--ui-accent) 35%, transparent);
   }
+  /* A drop-down's list is drawn by the system. On Windows it stayed white
+     while the options took the theme's light text, so they were invisible. */
+  select option,
+  select optgroup {
+    background-color: var(--ui-window);
+    color: var(--ui-fg);
+  }
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -288,9 +295,10 @@
 .term-host .xterm-viewport {
   background-color: transparent !important;
 }
-.term-host .xterm .xterm-scrollable-element > .scrollbar > .slider {
-  background: rgb(var(--ui-ink) / 0.12) !important;
-  border-radius: 8px;
+/* The terminal's own scrollbar gives way to ours (TerminalScrollbar), which
+   also covers tmux's history on servers. */
+.term-host .xterm .xterm-scrollable-element > .scrollbar {
+  display: none !important;
 }
 
 /* Range sliders in Settings. */

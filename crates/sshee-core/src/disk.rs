@@ -42,6 +42,8 @@ pub struct DockerUsage {
     pub volumes_reclaimable: u64,
     pub build_cache: u64,
     pub build_cache_reclaimable: u64,
+    /// Images no container uses, when Docker could list them one by one.
+    pub unused_images: Option<u64>,
 }
 
 /// A safe cleanup you can run, with what it frees when that's known.
@@ -105,9 +107,10 @@ echo @@dnf@@; command -v dnf >/dev/null 2>&1 && for d in /var/cache/dnf /var/cac
 echo @@oldlogs@@; [ -d /var/log ] && $S find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -exec du -k {} + 2>/dev/null | awk '{s+=$1} END {print s+0}'
 echo @@docker@@
 if command -v docker >/dev/null 2>&1; then
-  if docker system df --format '{{json .}}' 2>/dev/null; then echo @@docker-via@@; echo direct
-  elif [ -n "$S" ] && sudo -n docker system df --format '{{json .}}' 2>/dev/null; then echo @@docker-via@@; echo sudo
+  if docker system df --format '{{json .}}' 2>/dev/null; then echo @@docker-via@@; echo direct; D="docker"
+  elif [ -n "$S" ] && sudo -n docker system df --format '{{json .}}' 2>/dev/null; then echo @@docker-via@@; echo sudo; D="sudo -n docker"
   fi
+  [ -n "$D" ] && { echo @@docker-images@@; $D system df -v --format '{{json .Images}}' 2>/dev/null; }
 fi
 exit 0"#;
 
@@ -204,7 +207,14 @@ fn parse_report(s: &Sections) -> DiskReport {
     let who = lines(s, "who").first().map(|w| w.trim()).unwrap_or("user");
     let root = who == "root";
     let docker_via = lines(s, "docker-via").first().map(|v| v.trim());
-    let docker = docker_via.map(|_| parse_docker(lines(s, "docker")));
+    let docker = docker_via.map(|_| {
+        let mut d = parse_docker(lines(s, "docker"));
+        if let Some((count, bytes)) = unused_images(lines(s, "docker-images")) {
+            d.unused_images = Some(count);
+            d.images_reclaimable = bytes;
+        }
+        d
+    });
     let journal = lines(s, "journal").iter().find_map(|l| journal_bytes(l));
     let found = Found {
         sudo: if root { "" } else { "sudo " },
@@ -250,13 +260,12 @@ impl Found {
             }
         };
         if let Some(d) = docker {
-            add(
-                "docker-images",
-                "Unused Docker images",
-                "Removes images no container uses; they download again when needed.",
-                format!("{dk} image prune -a"),
-                d.images_reclaimable,
-            );
+            let images = match d.unused_images {
+                Some(1) => "Removes the one image no container uses; it downloads again when needed.".to_string(),
+                Some(n) => format!("Removes the {n} images no container uses; they download again when needed."),
+                None => "Removes images no container uses; they download again when needed.".to_string(),
+            };
+            add("docker-images", "Unused Docker images", &images, format!("{dk} image prune -a"), d.images_reclaimable);
             // -a, because the reclaimable figure counts all unused cache,
             // not only the dangling part a plain prune removes.
             add(
@@ -433,6 +442,35 @@ fn parse_docker(rows: &[&str]) -> DockerUsage {
     d
 }
 
+/// One image in `docker system df -v --format '{{json .Images}}'`.
+#[derive(Deserialize)]
+struct ImageRow {
+    /// How many containers use it: a number, "0", or "N/A".
+    #[serde(rename = "Containers", default)]
+    containers: serde_json::Value,
+    /// Its layers no other image has.
+    #[serde(rename = "UniqueSize", default)]
+    unique: String,
+}
+
+/// How many images no container uses, and what removing them surely frees.
+///
+/// Docker's own "reclaimable" figure counts layers those images share with
+/// images in use, which `image prune -a` keeps, so it can promise gigabytes
+/// that never come free (and keeps promising them after the prune). The
+/// layers only an unused image has do come free, so their sum is a floor:
+/// layers shared between unused images alone come on top.
+fn unused_images(rows: &[&str]) -> Option<(u64, u64)> {
+    let images: Vec<ImageRow> = serde_json::from_str(rows.first()?.trim()).ok()?;
+    let unused = images.iter().filter(|i| match &i.containers {
+        serde_json::Value::Number(n) => n.as_u64() == Some(0),
+        serde_json::Value::String(s) => s.trim() == "0",
+        _ => false,
+    });
+    let (count, bytes) = unused.fold((0, 0), |(c, b), i| (c + 1, b + size_bytes(&i.unique, 1000).unwrap_or(0)));
+    Some((count, bytes))
+}
+
 /// "Archived and active journals take up 1.2G in the file system." Older
 /// systemd says "Journals take up 1.2G on disk."
 fn journal_bytes(line: &str) -> Option<u64> {
@@ -588,6 +626,16 @@ cgroup_root              10240         0     10240   0% /sys/fs/cgroup
         assert_eq!(d.build_cache, 2_040_000_000);
         assert_eq!(d.build_cache_reclaimable, 2_040_000_000);
         assert_eq!(parse_docker(&["not json", r#"{"Type":"Images","Size":"0B","Reclaimable":"0B"}"#]).images, 0);
+    }
+
+    #[test]
+    fn counts_only_what_an_image_prune_frees() {
+        let rows = r#"[{"Containers":"2","ID":"a","SharedSize":"80MB","Size":"1.2GB","UniqueSize":"1.12GB"},{"Containers":"0","ID":"b","SharedSize":"1.1GB","Size":"1.3GB","UniqueSize":"200MB"},{"Containers":0,"ID":"c","SharedSize":"0B","Size":"50MB","UniqueSize":"50MB"},{"Containers":"N/A","ID":"d","UniqueSize":"9GB"}]"#;
+        assert_eq!(unused_images(&[rows]), Some((2, 250_000_000)));
+        // After a prune: nothing unused, so nothing to offer.
+        assert_eq!(unused_images(&[r#"[{"Containers":"1","UniqueSize":"1GB"}]"#]), Some((0, 0)));
+        assert_eq!(unused_images(&[]), None);
+        assert_eq!(unused_images(&["not json"]), None);
     }
 
     #[test]

@@ -255,6 +255,13 @@ async fn session_history(state: State<'_, AppState>, target: TargetSpec, session
     blocking(move || session::history(&t, &env, &session_key, lines)).await
 }
 
+/// Scrolls a server terminal's tmux history to a position (or just reports it).
+#[tauri::command]
+async fn tmux_scroll(state: State<'_, AppState>, target: TargetSpec, session_key: String, position: Option<u32>) -> Result<session::TmuxScroll, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || session::tmux_scroll(&t, &env, &session_key, position)).await
+}
+
 // ---------------------------------------------------------------- files
 
 #[tauri::command]
@@ -523,6 +530,50 @@ async fn fetch_metrics(state: State<'_, AppState>, target: TargetSpec) -> Result
     blocking(move || metrics::fetch(&t, &env)).await
 }
 
+// ---------------------------------------------------------------- tunnels
+
+/// What listens on the server, and which of it answers like a website.
+#[tauri::command]
+async fn scan_web_apps(state: State<'_, AppState>, target: TargetSpec) -> Result<sshee_core::tunnels::WebAppScan, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || sshee_core::tunnels::scan(&t, &env)).await
+}
+
+/// Starts tunnel `id` (or, if it already runs the same way, reattaches to
+/// it). Its state goes to `on_state`; a port here that's taken fails at once.
+#[tauri::command]
+async fn start_tunnel(
+    state: State<'_, AppState>,
+    tunnels: State<'_, sshee_core::tunnels::TunnelManager>,
+    id: String,
+    host_id: String,
+    forward: sshee_core::tunnels::Forward,
+    on_state: Channel<sshee_core::tunnels::TunnelState>,
+) -> Result<(), OpError> {
+    let t = ssh_target(&state, &host_id)?;
+    let sink: sshee_core::tunnels::StateSink = Arc::new(move |s| {
+        let _ = on_state.send(s);
+    });
+    tunnels.start(&id, &t, &state.env, forward, sink)
+}
+
+#[tauri::command]
+fn stop_tunnel(tunnels: State<sshee_core::tunnels::TunnelManager>, id: String) {
+    tunnels.stop(&id);
+}
+
+/// Why a tunnel couldn't listen on `port` on this computer, or null.
+#[tauri::command]
+fn local_port_problem(port: u16) -> Option<String> {
+    sshee_core::tunnels::port_problem(port).map(|e| e.message)
+}
+
+/// A free port here for the server's `preferred` one: the same number when it's free.
+#[tauri::command]
+fn pick_local_port(preferred: u16, avoid: Vec<u16>) -> Result<u16, OpError> {
+    sshee_core::tunnels::pick_local_port(preferred, &avoid)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -554,6 +605,7 @@ pub fn run() {
                     ..SshEnv::with_control_dir(sshee_core::ssh::default_control_dir())
                 },
             });
+            app.manage(sshee_core::tunnels::TunnelManager::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -562,6 +614,7 @@ pub fn run() {
             remove_host,
             forget_password,
             session_history,
+            tmux_scroll,
             check_host_key,
             trust_host_key,
             local_auth,
@@ -596,6 +649,11 @@ pub fn run() {
             install_portable_update,
             list_containers,
             container_action,
+            scan_web_apps,
+            start_tunnel,
+            stop_tunnel,
+            local_port_problem,
+            pick_local_port,
         ])
         .build(tauri::generate_context!())
         .expect("error while starting SSHeesh")
@@ -604,6 +662,8 @@ pub fn run() {
             // servers stay, so reopening the app picks them back up.
             if let tauri::RunEvent::Exit = event {
                 app.state::<AppState>().sessions.close_all();
+                // Tunnels end with the app too; the ones you left on start again next time.
+                app.state::<sshee_core::tunnels::TunnelManager>().stop_all();
             }
         });
 }

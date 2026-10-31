@@ -5,10 +5,10 @@ import { cn } from "../lib/format";
 import { isMac, shortcutLabel } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
-import type { LayoutNode } from "../lib/layout";
+import { paneIds, visibleTree, type LayoutNode } from "../lib/layout";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { useEnv } from "../lib/labels";
-import { useStore, type PaneKind } from "../lib/store";
+import { useStore, type PaneKind, type PaneState } from "../lib/store";
 import { sameTarget } from "../lib/types";
 import { PaneView } from "./Pane";
 import { VitalsBar } from "./StatsPane";
@@ -44,7 +44,8 @@ const VIEWS: { kind: Exclude<PaneKind, "empty">; label: string; icon: typeof Squ
 
 /** While one pane fills the window, a way back to the full layout. */
 function ZoomBadge() {
-  const zoomed = useStore((s) => s.zoomed);
+  const tabs = useSettings((s) => s.viewMode === "tabs");
+  const zoomed = useStore((s) => (tabs ? null : s.zoomed));
   const count = useStore((s) => Object.keys(s.panes).length);
   const toggleZoom = useStore((s) => s.toggleZoom);
   if (!zoomed || count < 2) return null;
@@ -128,12 +129,37 @@ function Toolbar() {
   const nudgeForRail = isMac && sidebarVisible && sidebarSide === "left" && narrowRail && !compactMode;
   const SidebarIcon = sidebarSide === "left" ? PanelLeft : PanelRight;
 
+  const viewMode = useSettings((s) => s.viewMode);
+  const root = useStore((s) => s.root);
+  const hidden = useStore((s) => s.hidden);
+  const setHidden = useStore((s) => s.setHidden);
+  // This machine's panes, in layout order.
+  const mine = target
+    ? paneIds(root)
+        .map((id) => panes[id])
+        .filter((p): p is PaneState => !!p && p.kind !== "empty" && sameTarget(p.target, target))
+    : [];
+  const ofKind = (kind: PaneKind) => mine.filter((p) => p.kind === kind);
+
+  /** Brings a view on screen: the panes of that kind come back, or a new one opens. */
   const show = (kind: Exclude<PaneKind, "empty">) => {
     if (!target) return;
-    const existing = Object.values(panes).find((p) => p.kind === kind && sameTarget(p.target, target));
-    if (existing) focus(existing.id);
-    else openIn(kind, target, { split: pane?.kind !== "empty" });
+    const list = ofKind(kind);
+    if (!list.length) {
+      openIn(kind, target, { split: pane?.kind !== "empty" });
+      return;
+    }
+    if (viewMode === "split") setHidden(list.map((p) => p.id), false);
+    focus(list.find((p) => p.id === pane?.id)?.id ?? list[0].id);
   };
+  /** Side by side: each view switches on and off; the ones on share the window. */
+  const toggle = (kind: Exclude<PaneKind, "empty">) => {
+    const list = ofKind(kind);
+    if (list.some((p) => !hidden.includes(p.id))) setHidden(list.map((p) => p.id), true);
+    else show(kind);
+  };
+  // As tabs, a second terminal (or one in a container) gets its own tab.
+  const extras = viewMode === "tabs" ? mine.filter((p) => ofKind(p.kind)[0]?.id !== p.id) : [];
 
   return (
     <header data-tauri-drag-region className={cn("@container flex h-[46px] shrink-0 items-center gap-3 pr-3", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}>
@@ -159,15 +185,17 @@ function Toolbar() {
         )}
       >
         {VIEWS.map(({ kind, label, icon: Icon }) => {
-          const active = pane?.kind === kind;
+          const list = ofKind(kind);
+          const active =
+            viewMode === "tabs" ? !!pane && list[0]?.id === pane.id || (!list.length && pane?.kind === kind) : list.some((p) => !hidden.includes(p.id));
           return (
             <button
               key={kind}
               role="tab"
               aria-selected={active}
               aria-label={label}
-              title={label}
-              onClick={() => show(kind)}
+              title={viewMode === "tabs" ? label : active ? `${label} is on. Click to hide it` : `Show ${label}`}
+              onClick={() => (viewMode === "tabs" ? show(kind) : toggle(kind))}
               className={cn(
                 "flex h-[22px] items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium transition-all",
                 active
@@ -180,18 +208,45 @@ function Toolbar() {
             </button>
           );
         })}
+        {extras.map((p) => {
+          const view = VIEWS.find((v) => v.kind === p.kind) ?? VIEWS[0];
+          const label = p.container ? p.container.name : `${view.label} ${ofKind(p.kind).indexOf(p) + 1}`;
+          const active = pane?.id === p.id;
+          return (
+            <button
+              key={p.id}
+              role="tab"
+              aria-selected={active}
+              title={label}
+              onClick={() => focus(p.id)}
+              className={cn(
+                "flex h-[22px] max-w-[140px] items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium transition-all",
+                active
+                  ? "bg-ink/[0.11] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.35),inset_0_1px_0_rgb(255_255_255/0.07)]"
+                  : "text-fg-3 hover:text-fg-2",
+              )}
+            >
+              <view.icon size={12.5} strokeWidth={2} className="shrink-0" />
+              <span className="hidden truncate @xl:inline">{label}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex items-center gap-0.5">
         <StreamerBadge />
         <ZoomBadge />
         <UpdateButton />
-        <IconButton label={`Split right (${shortcutLabel("splitRight")})`} onClick={() => pane && split(pane.id, "row")}>
-          <Columns2 size={15} />
-        </IconButton>
-        <IconButton label={`Split down (${shortcutLabel("splitDown")})`} onClick={() => pane && split(pane.id, "col")}>
-          <Rows2 size={15} />
-        </IconButton>
+        {viewMode === "split" && (
+          <>
+            <IconButton label={`Split right (${shortcutLabel("splitRight")})`} onClick={() => pane && split(pane.id, "row")}>
+              <Columns2 size={15} />
+            </IconButton>
+            <IconButton label={`Split down (${shortcutLabel("splitDown")})`} onClick={() => pane && split(pane.id, "col")}>
+              <Rows2 size={15} />
+            </IconButton>
+          </>
+        )}
         <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => useStore.getState().openSettings()}>
           <Settings size={15} />
         </IconButton>
@@ -202,7 +257,12 @@ function Toolbar() {
 
 export function Workspace() {
   const root = useStore((s) => s.root);
+  const hidden = useStore((s) => s.hidden);
+  const focused = useStore((s) => s.focused);
+  const tabs = useSettings((s) => s.viewMode === "tabs");
   const zoomed = useStore((s) => (s.zoomed && s.panes[s.zoomed] ? s.zoomed : null));
+  // As tabs, the focused pane fills the window; side by side, the panes switched on share it.
+  const tree = tabs ? null : visibleTree(root, hidden);
   const showVitals = useSettings((s) => s.showVitals && !s.compactMode);
   const compact = useSettings((s) => s.compactMode);
   const updateSettings = useSettings((s) => s.update);
@@ -231,7 +291,7 @@ export function Workspace() {
         <Toolbar />
       )}
       <div className="min-h-0 flex-1" style={{ padding: showVitals && target ? "0 var(--ui-gap)" : "0 var(--ui-gap) var(--ui-gap)" }}>
-        {zoomed ? <PaneView id={zoomed} /> : <Tree node={root} />}
+        {zoomed && !tabs ? <PaneView key={zoomed} id={zoomed} /> : tree ? <Tree node={tree} /> : <PaneView key={focused} id={focused} />}
       </div>
       {showVitals && target && (
         <VitalsBar

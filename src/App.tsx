@@ -19,6 +19,10 @@ import { useStore } from "./lib/store";
 import { startUpdateChecks } from "./lib/updates";
 import { toggleStreamer, useLearnLocalIdentity } from "./lib/privacy";
 import { ServerTools } from "./components/ServerTools";
+import { Recipes } from "./components/Recipes";
+import { Snippets } from "./components/Snippets";
+import { Tunnels } from "./components/Tunnels";
+import { restoreTunnels } from "./lib/tunnels";
 
 function useShortcuts() {
   useEffect(() => {
@@ -121,6 +125,8 @@ export function App() {
   const reconnectMode = useSettings((s) => s.reconnectMode);
   useEffect(() => backend.setAutoReconnect(reconnectMode === "auto"), [reconnectMode]);
   useEffect(() => startUpdateChecks(), []);
+  // Saved tunnels that were on when SSHeesh closed come back on.
+  useEffect(() => restoreTunnels(), []);
   const uiZoom = useSettings((s) => s.uiZoom);
   useEffect(() => void backend.setZoom(uiZoom / 100).catch(() => {}), [uiZoom]);
   useFollowSystemTheme();
@@ -155,6 +161,9 @@ export function App() {
       <WhatsNew />
       <UploadDialog />
       <ServerTools />
+      <Recipes />
+      <Snippets />
+      <Tunnels />
       <ConfirmDialog />
       <Toasts />
     </div>

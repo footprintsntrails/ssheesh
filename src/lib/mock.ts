@@ -3,6 +3,7 @@
 
 import type { Backend, TransferHooks } from "./backend";
 import type { Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
+import type { WebApp } from "./types";
 
 const hosts: Host[] = [
   { id: "cfg:prod-api", name: "prod-api", hostname: "203.0.113.24", user: "deploy", port: null, identityFile: null, source: "sshConfig" },
@@ -71,6 +72,8 @@ const tree: Record<string, FileEntry[]> = {
 };
 
 const textFiles: Record<string, string> = {
+  // A key made up for the demo; its private half was thrown away.
+  "id_ed25519.pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII5PL2EOb31cCbJC+OjU74tjgLeisDMLh51dTLBg849P sam@macbook\n",
   "docker-compose.yml": `services:
   api:
     image: ghcr.io/acme/api:2.14.0
@@ -90,6 +93,12 @@ volumes:
   pgdata:
 `,
 };
+
+// A big folder, where only the rows in view get drawn.
+const TOOLS = ["git", "python3", "perl", "x86_64-linux-gnu", "systemd", "gpg", "ssh", "lib", "node", "gcc"];
+tree["/usr/bin"] = Array.from({ length: 1400 }, (_, i) =>
+  file(`${TOOLS[i % TOOLS.length]}-${String((i / TOOLS.length) | 0).padStart(3, "0")}`, 20_000 + ((i * 7919) % 900_000), 86400 * (30 + (i % 300)), "-rwxr-xr-x"),
+);
 
 function listing(path: string): DirListing {
   const resolved = path === "~" || path === "" ? "/home/deploy" : path;
@@ -463,6 +472,10 @@ export const mockBackend: Backend = {
   async trustHostKey(hostId) {
     trustedDemo.add(hostId);
   },
+  async tmuxScroll(_target, _key, position) {
+    // The demo terminals aren't tmux, so they scroll on their own.
+    return { inMode: !!position, position: position ?? 0, history: 0, height: 24, limit: 2000 };
+  },
   async sessionHistory(_target, sessionKey) {
     const s = byKey.get(sessionKey);
     return s ? stripAnsi(s.scrollback).replace(/\r/g, "").replace(/\x08 \x08/g, "") : "";
@@ -557,10 +570,10 @@ export const mockBackend: Backend = {
         { mount: "/", size: 80 * GB, used: 71.4 * GB },
         { mount: "/mnt/backups", size: 500 * GB, used: 212 * GB },
       ],
-      docker: { images: 14.2 * GB, imagesReclaimable: 9.8 * GB, containers: 1.1 * GB, containersReclaimable: 0.4 * GB, volumes: 6.3 * GB, volumesReclaimable: 0, buildCache: 3.7 * GB, buildCacheReclaimable: 3.7 * GB },
+      docker: { images: 14.2 * GB, imagesReclaimable: 2.6 * GB, unusedImages: 7, containers: 1.1 * GB, containersReclaimable: 0.4 * GB, volumes: 6.3 * GB, volumesReclaimable: 0, buildCache: 3.7 * GB, buildCacheReclaimable: 3.7 * GB },
       journal: 1.6 * GB,
       cleanups: [
-        { id: "docker-images", title: "Unused Docker images", detail: "Removes images no container uses. They download again when you need them.", command: "docker image prune -a", bytes: 9.8 * GB },
+        { id: "docker-images", title: "Unused Docker images", detail: "Removes the 7 images no container uses; they download again when needed.", command: "docker image prune -a", bytes: 2.6 * GB },
         { id: "docker-build-cache", title: "Docker build cache", detail: "Leftovers from building images. The next build just takes a bit longer.", command: "docker builder prune -a", bytes: 3.7 * GB },
         { id: "journal", title: "Old system logs", detail: "Trims the systemd journal to the newest 200 MB.", command: "sudo journalctl --vacuum-size=200M", bytes: 1.4 * GB },
         { id: "apt-cache", title: "Downloaded packages", detail: "Installers apt keeps after installing. Nothing installed is removed.", command: "sudo apt-get clean", bytes: 0.6 * GB },
@@ -606,5 +619,96 @@ export const mockBackend: Backend = {
   async fetchMetrics(target) {
     await wait(60);
     return metricsFor(target);
+  },
+
+  async scanWebApps(target) {
+    await wait(1100);
+    if (target.kind !== "host") throw { code: "unsupported", message: "Tunnels are for servers." };
+    const scan = demoWebApps[target.hostId] ?? { apps: [], curl: true };
+    return { apps: scan.apps.map((a) => ({ ...a })), curl: scan.curl, asRoot: true };
+  },
+  async startTunnel(id, hostId, forward, onState) {
+    await wait(80);
+    const port = forward.localPort;
+    if ([...demoTunnels].some(([other, t]) => other !== id && t.port === port)) {
+      throw { code: "exists", message: `Another tunnel already uses port ${port} on this computer.` };
+    }
+    if (demoBusyPorts.has(port)) throw { code: "exists", message: `Port ${port} on this computer is already in use.` };
+    demoTunnels.get(id)?.timers.forEach(clearTimeout);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    demoTunnels.set(id, { port, timers });
+    onState({ kind: "starting" });
+    timers.push(setTimeout(() => onState({ kind: "on", warning: null }), 600 + Math.random() * 600));
+    // The homelab's Wi-Fi drops now and then; its tunnels come back by themselves.
+    if (hostId === "cfg:homelab") {
+      timers.push(setTimeout(() => onState({ kind: "reconnecting", attempt: 1, retryInMs: 2000, reason: "The server stopped responding" }), 9000));
+      timers.push(setTimeout(() => onState({ kind: "on", warning: null }), 11800));
+    }
+  },
+  stopTunnel(id) {
+    demoTunnels.get(id)?.timers.forEach(clearTimeout);
+    demoTunnels.delete(id);
+  },
+  async localPortProblem(port) {
+    await wait(40);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return "Pick a port on this computer, from 1 to 65535.";
+    if (port < 1024) return `Port ${port} on this computer needs administrator rights. Pick one above 1023.`;
+    if (demoBusyPorts.has(port) || [...demoTunnels.values()].some((t) => t.port === port)) return `Port ${port} on this computer is already in use.`;
+    return null;
+  },
+  async pickLocalPort(preferred, avoid) {
+    await wait(40);
+    const free = (p: number) => p >= 1024 && p <= 65535 && !avoid.includes(p) && !demoBusyPorts.has(p) && ![...demoTunnels.values()].some((t) => t.port === p);
+    const pick = [preferred, preferred < 1024 ? preferred + 8000 : 0, preferred + 10000].find(free);
+    return pick ?? 49152 + Math.floor(Math.random() * 16000);
+  },
+};
+
+// ---------------------------------------------------------------- tunnels (demo)
+
+/** Ports "this computer" already uses in the demo: AirPlay takes 5000 and 7000 on a Mac. */
+const demoBusyPorts = new Set([5000, 7000]);
+const demoTunnels = new Map<string, { port: number; timers: ReturnType<typeof setTimeout>[] }>();
+
+function app(port: number, process: string | null, title: string | null, more: Partial<WebApp> = {}): WebApp {
+  const web = more.web ?? true;
+  return { port, remoteHost: "127.0.0.1", process, knownAs: null, title, scheme: web ? "http" : null, status: web ? 200 : null, web, public: false, ...more };
+}
+
+const demoWebApps: Record<string, { apps: WebApp[]; curl: boolean }> = {
+  "cfg:prod-api": {
+    curl: true,
+    apps: [
+      app(80, "nginx", null, { status: 301, public: true }),
+      app(3000, "grafana", "Grafana"),
+      app(8080, "docker-proxy", "Acme API · Swagger UI", { knownAs: "Docker" }),
+      app(9090, "prometheus", "Prometheus Time Series Collection and Processing Server"),
+      app(15672, "beam.smp", "RabbitMQ Management"),
+      app(5432, "postgres", null, { knownAs: "PostgreSQL", web: false }),
+      app(6379, "redis-server", null, { knownAs: "Redis", web: false }),
+    ],
+  },
+  "cfg:homelab": {
+    curl: true,
+    apps: [
+      app(5000, "python3", "Photo frame"),
+      app(8096, "jellyfin", "Jellyfin", { public: true, remoteHost: "192.168.1.20" }),
+      app(8123, "python3", "Home Assistant"),
+      app(9000, "docker-proxy", "Portainer", { knownAs: "Docker", public: true }),
+      app(32400, "Plex Media Serv", "Plex", { status: 401, public: true }),
+      app(445, "smbd", null, { knownAs: "Windows file sharing", web: false, public: true }),
+    ],
+  },
+  "cfg:pi": {
+    curl: false,
+    apps: [
+      app(80, "lighttpd", null, { scheme: null, status: null, public: true }),
+      app(1880, "node", null, { scheme: null, status: null }),
+      app(53, "pihole-FTL", null, { knownAs: "DNS", web: false, public: true }),
+    ],
+  },
+  "saved:db": {
+    curl: true,
+    apps: [app(9187, "postgres_export", "Postgres Exporter"), app(5432, "postgres", null, { knownAs: "PostgreSQL", web: false, public: true })],
   },
 };

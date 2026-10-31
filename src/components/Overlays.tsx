@@ -1,6 +1,6 @@
 import { Command } from "cmdk";
-import { Activity, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, HardDrive, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Plus, RefreshCw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Activity, BookOpen, Braces, Cable, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, HardDrive, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Play, Plus, RefreshCw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
@@ -13,9 +13,27 @@ import { targetKey, type TargetRef } from "../lib/types";
 import { Button, Kbd } from "./ui";
 import { TransferCards } from "./Transfers";
 import { openServerTool } from "./ServerTools";
+import { newSnippet, openSnippets, runSnippet } from "./Snippets";
+import { openRecipes } from "./Recipes";
+import { openTunnels } from "./Tunnels";
+import { useSnippets } from "../lib/snippets";
+import { RECIPES } from "../lib/recipes";
 import { useVisibleHosts } from "../lib/labels";
 
 // ---------------------------------------------------------------- command palette
+
+type Scope = "srv" | "cmd" | "file" | "set";
+const SCOPES: Record<Scope, string> = { srv: "Servers", cmd: "Commands", file: "Folders", set: "Settings" };
+const PREFIX = /^\s*(srv|cmd|file|set):\s*/i;
+/** Settings sections, with words people might search for. */
+const SETTINGS_SECTIONS: [string, string, string][] = [
+  ["appearance", "Appearance", "theme colors accent zoom size"],
+  ["terminal", "Terminal", "font cursor colors scheme copy gpu"],
+  ["layout", "Layout", "tabs side by side sidebar compact vitals reconnect"],
+  ["privacy", "Privacy", "streamer mode"],
+  ["updates", "Updates", "version download"],
+  ["about", "About", "version license credits"],
+];
 
 function Item({ onSelect, icon: Icon, label, hint, value }: { onSelect: () => void; icon: typeof Search; label: string; hint?: string; value?: string }) {
   return (
@@ -56,6 +74,15 @@ export function CommandPalette() {
     setOpen(false);
     fn();
   };
+  const snippets = useSnippets((s) => s.snippets);
+  const recent = useBookmarks((b) => b.recent);
+  // "srv:", "cmd:", "file:" or "set:" in front narrows the list to one kind of thing.
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    if (!open) setSearch("");
+  }, [open]);
+  const scope = (PREFIX.exec(search)?.[1].toLowerCase() ?? null) as Scope | null;
+  const shows = (s: Scope) => !scope || scope === s;
 
   const targets: { target: TargetRef; name: string; hint: string }[] = [
     { target: { kind: "local" }, name: "This computer", hint: "local" },
@@ -68,9 +95,10 @@ export function CommandPalette() {
       onOpenChange={setOpen}
       label="Jump to"
       loop
+      shouldFilter
       filter={(value, search) => {
         const v = value.toLowerCase();
-        return search.toLowerCase().split(/\s+/).every((w) => v.includes(w)) ? 1 : 0;
+        return search.replace(PREFIX, "").trim().toLowerCase().split(/\s+/).every((w) => v.includes(w)) ? 1 : 0;
       }}
       overlayClassName="fixed inset-0 z-40 bg-black/25 animate-fade-in"
       contentClassName="fixed left-1/2 top-[14vh] z-50 w-[580px] max-w-[calc(100vw-32px)] -translate-x-1/2 outline-none"
@@ -78,7 +106,10 @@ export function CommandPalette() {
     >
       <div className="flex items-center gap-2.5 border-b border-ink/[0.07] px-4">
         <Search size={16} className="shrink-0 text-fg-3" />
+        {scope && <span className="shrink-0 rounded-[6px] bg-accent/15 px-1.5 py-0.5 text-[11.5px] font-medium text-accent">{SCOPES[scope]}</span>}
         <Command.Input
+          value={search}
+          onValueChange={setSearch}
           placeholder="Search servers and actions…"
           className="h-[50px] flex-1 bg-transparent text-[15px] text-fg outline-none placeholder:text-fg-3"
         />
@@ -86,7 +117,23 @@ export function CommandPalette() {
       </div>
       <Command.List className="max-h-[min(420px,60vh)] overflow-y-auto p-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-fg-3">
         <Command.Empty className="px-3 py-8 text-center text-[13px] text-fg-3">Nothing found.</Command.Empty>
+        {!search && (
+          <div className="flex flex-wrap items-center gap-1.5 px-2.5 pt-1.5 pb-1 text-[11.5px] text-fg-3">
+            Narrow it down:
+            {(Object.keys(SCOPES) as Scope[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setSearch(`${k}:`)}
+                className="rounded-[6px] bg-ink/[0.05] px-1.5 py-0.5 hover:bg-ink/[0.09] hover:text-fg-2"
+              >
+                <span className="font-mono text-fg-2">{k}:</span> {SCOPES[k].toLowerCase()}
+              </button>
+            ))}
+          </div>
+        )}
 
+        {shows("srv") && (
         <Command.Group heading="Connect">
           {targets.map(({ target, name, hint }) => (
             <Item
@@ -99,7 +146,34 @@ export function CommandPalette() {
             />
           ))}
         </Command.Group>
+        )}
 
+        {shows("cmd") && (
+          <Command.Group heading="Snippets">
+            {snippets.map((sn) => (
+              <Item key={`sn-${sn.id}`} value={`snippet command run ${sn.name} ${sn.command}`} icon={Play} label={sn.name} hint={sn.command} onSelect={run(() => runSnippet(sn))} />
+            ))}
+            <Item icon={Plus} value="new snippet command save" label="New snippet…" onSelect={run(() => newSnippet())} />
+            <Item icon={Braces} value="snippets commands saved manage edit" label="All snippets" onSelect={run(openSnippets)} />
+          </Command.Group>
+        )}
+
+        {shows("cmd") && focused?.target?.kind === "host" && (
+          <Command.Group heading="Recipes">
+            {RECIPES.map((r) => (
+              <Item
+                key={`rc-${r.id}`}
+                value={`recipe guide how to ${r.title} ${r.summary}`}
+                icon={BookOpen}
+                label={r.title}
+                hint="step by step"
+                onSelect={run(() => focused.target && openRecipes(focused.target, r.id))}
+              />
+            ))}
+          </Command.Group>
+        )}
+
+        {shows("file") && (
         <Command.Group heading="Bookmarks">
           {targets.flatMap(({ target, name }) =>
             (pins[targetKey(target)] ?? []).map((path) => (
@@ -113,8 +187,26 @@ export function CommandPalette() {
               />
             )),
           )}
+          {targets.flatMap(({ target, name }) =>
+            (recent[targetKey(target)] ?? [])
+              .filter((path) => !(pins[targetKey(target)] ?? []).includes(path))
+              .slice(0, 5)
+              .map((path) => (
+                <Item
+                  key={`r-${name}-${path}`}
+                  value={`recent folder ${folderName(path)} ${path} ${name}`}
+                  icon={FolderOpen}
+                  label={`${folderName(path)} on ${name}`}
+                  hint={path}
+                  onSelect={run(() => openIn("files", target, { path, split: true }))}
+                />
+              )),
+          )}
         </Command.Group>
+        )}
 
+        {shows("srv") && (
+        <>
         <Command.Group heading="Workspaces">
           {targets.map(({ target, name }) => (
             <Item
@@ -136,7 +228,10 @@ export function CommandPalette() {
             <Item key={`s-${name}`} value={`stats metrics cpu memory traffic ${name}`} icon={Activity} label={`Stats for ${name}`} onSelect={run(() => openIn("stats", target))} />
           ))}
         </Command.Group>
+        </>
+        )}
 
+        {(shows("cmd") || shows("srv")) && (
         <Command.Group heading="Workspace">
           {focused && (
             <>
@@ -157,6 +252,18 @@ export function CommandPalette() {
                     label="What's using the disk"
                     onSelect={run(() => focused.target && openServerTool("disk", focused.target))}
                   />
+                  <Item
+                    icon={Cable}
+                    value="web apps tunnels port forward forwarding socks proxy open in browser localhost"
+                    label="Web apps and tunnels"
+                    onSelect={run(() => focused.target && openTunnels(focused.target))}
+                  />
+                  <Item
+                    icon={BookOpen}
+                    value="recipes guides how to step by step firewall docker swap fail2ban caddy https key sudo updates"
+                    label="Recipes: step-by-step guides"
+                    onSelect={run(() => focused.target && openRecipes(focused.target))}
+                  />
                 </>
               )}
             </>
@@ -168,7 +275,9 @@ export function CommandPalette() {
           <Item icon={PanelLeft} label="Toggle sidebar" hint={shortcutLabel("sidebar")} onSelect={run(toggleSidebar)} />
           <Item icon={Plus} label="Add server…" hint={shortcutLabel("addHost")} onSelect={run(() => setAddHostOpen(true))} />
         </Command.Group>
+        )}
 
+        {shows("set") && (
         <Command.Group heading="App">
           <Item icon={Settings} label="Settings" hint={shortcutLabel("settings")} onSelect={run(() => openSettings())} />
           <Item icon={Settings} value="theme appearance colors accent" label="Change theme and colors" onSelect={run(() => openSettings("appearance"))} />
@@ -196,7 +305,11 @@ export function CommandPalette() {
               void checkUpdates();
             })}
           />
+          {SETTINGS_SECTIONS.map(([id, label, words]) => (
+            <Item key={`set-${id}`} icon={Settings} value={`settings ${label} ${words}`} label={`Settings: ${label}`} onSelect={run(() => openSettings(id))} />
+          ))}
         </Command.Group>
+        )}
       </Command.List>
     </Command.Dialog>
   );

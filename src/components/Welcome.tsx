@@ -277,6 +277,28 @@ export function Welcome() {
             {step === 3 && (
               <>
                 <h2 className="text-[20px] font-semibold tracking-tight text-fg">Layout</h2>
+                <Field
+                  label="Terminal, Files and Stats"
+                  hint={
+                    s.viewMode === "tabs"
+                      ? "One at a time, as tabs at the top. Each keeps running while you look at another."
+                      : "Switch each on or off at the top. The ones you switch on share the window."
+                  }
+                >
+                  <div className="flex gap-2" role="radiogroup" aria-label="Terminal, Files and Stats">
+                    <Card selected={s.viewMode === "split"} onClick={() => set({ viewMode: "split" })} title="Side by side">
+                      <rect x="4" y="4" width="34" height="32" rx="2" {...strong} />
+                      <rect x="41" y="4" width="19" height="15" rx="2" {...fill} />
+                      <rect x="41" y="21" width="19" height="15" rx="2" {...fill} />
+                    </Card>
+                    <Card selected={s.viewMode === "tabs"} onClick={() => set({ viewMode: "tabs" })} title="Tabs">
+                      <rect x="4" y="4" width="16" height="5" rx="1.5" {...strong} />
+                      <rect x="22" y="4" width="16" height="5" rx="1.5" {...fill} />
+                      <rect x="40" y="4" width="16" height="5" rx="1.5" {...fill} />
+                      <rect x="4" y="11" width="56" height="25" rx="2" {...strong} />
+                    </Card>
+                  </div>
+                </Field>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Server list" hint="Icons save room.">
                     <div className="flex gap-2" role="radiogroup" aria-label="Server list">

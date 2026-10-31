@@ -17,8 +17,10 @@ pub mod keys;
 pub mod metrics;
 pub mod secrets;
 pub mod session;
+pub mod shell_pool;
 pub mod ssh;
 mod text;
+pub mod tunnels;
 
 pub use error::{ErrorCode, OpError};
 pub use hosts::{Host, HostSource, HostStore, NewHost};

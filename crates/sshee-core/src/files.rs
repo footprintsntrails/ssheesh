@@ -2,7 +2,7 @@
 //! this computer.
 
 use crate::error::{ErrorCode, OpError};
-use crate::ssh::{remote_command, run_remote, shell_quote, spawn_error, SshEnv, SshTarget, Target};
+use crate::ssh::{remote_command, run_remote, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -85,7 +85,7 @@ fn list_remote(t: &SshTarget, env: &SshEnv, path: &str) -> Result<DirListing, Op
         "{}\nfind . -maxdepth 0 -printf '' 2>/dev/null || {{ echo 'Browsing files needs GNU find on the server (most Linux servers have it).' >&2; exit 4; }}\npwd\nLC_ALL=C find . -mindepth 1 -maxdepth 1 -printf '%y\\t%Y\\t%s\\t%T@\\t%M\\t%f\\0' 2>/dev/null\nexit 0",
         cd_script(path)
     );
-    let out = run_remote(t, env, &script, None)?;
+    let out = run_remote_read(t, env, &script)?;
     let (path, mut entries) = parse_find(&out);
     sort_entries(&mut entries);
     Ok(DirListing { path, entries })
@@ -217,7 +217,7 @@ pub fn read_text(target: &Target, env: &SshEnv, path: &str) -> Result<TextFile, 
                 r#"F={}; [ -f "$F" ] || {{ echo "This isn't a regular file." >&2; exit 4; }}; S=$(wc -c < "$F" | tr -d ' '); echo "$S"; [ "$S" -gt {MAX_TEXT} ] || cat -- "$F""#,
                 shell_quote(path)
             );
-            let out = run_remote(t, env, &script, None)?;
+            let out = run_remote_read(t, env, &script)?;
             let nl = out.iter().position(|&b| b == b'\n').unwrap_or(out.len());
             let size = String::from_utf8_lossy(&out[..nl]).trim().parse().unwrap_or(0);
             (size, out.get(nl + 1..).unwrap_or_default().to_vec())
@@ -767,7 +767,7 @@ mv -f -- {s} {d} || {{ rm -f -- {s}; exit 1; }}"
 pub fn session_cwd(target: &Target, env: &SshEnv, session_key: &str) -> Result<String, OpError> {
     let t = ssh_only(target).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "Not a server session."))?;
     let name = crate::session::tmux_session_for(session_key);
-    let out = run_remote(t, env, &format!("tmux display-message -p -t {} '#{{pane_current_path}}'", shell_quote(&name)), None)?;
+    let out = run_remote_read(t, env, &format!("tmux display-message -p -t {} '#{{pane_current_path}}'", shell_quote(&name)))?;
     let path = String::from_utf8_lossy(&out).trim().to_string();
     if path.is_empty() {
         Err(OpError::new(ErrorCode::NotFound, "Couldn't find the terminal's folder."))

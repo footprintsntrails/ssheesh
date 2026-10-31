@@ -2,7 +2,7 @@
 //! oh-my-pi), so a terminal can offer to start one in the folder you're in.
 
 use crate::error::{ErrorCode, OpError};
-use crate::ssh::{remote_command, run_remote, shell_quote, spawn_error, SshEnv, SshTarget, Target};
+use crate::ssh::{remote_command, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
 use serde::Serialize;
 use std::io::Read;
 use std::process::Stdio;
@@ -77,7 +77,7 @@ pub fn pane_info(target: &Target, env: &SshEnv, session_key: &str) -> Result<Pan
         return Err(OpError::new(ErrorCode::Unsupported, "Not a server session."));
     };
     let name = crate::session::tmux_session_for(session_key);
-    let out = run_remote(t, env, &format!("tmux display-message -p -t {} '#{{pane_current_command}}\t#{{pane_current_path}}'", shell_quote(&name)), None)?;
+    let out = run_remote_read(t, env, &format!("tmux display-message -p -t {} '#{{pane_current_command}}\t#{{pane_current_path}}'", shell_quote(&name)))?;
     parse_pane(&String::from_utf8_lossy(&out)).ok_or_else(|| OpError::new(ErrorCode::NotFound, "Couldn't read the terminal's state."))
 }
 

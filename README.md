@@ -12,7 +12,7 @@
 </div>
 
 > [!WARNING]
-> **Version 0.4 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
+> **Version 0.5 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
 <p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a short list of servers with their own icons, and a terminal"></p>
 
@@ -53,7 +53,7 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 
 ## Everything about a server in one window
 
-**A file manager that's nice to use.** An address bar you can type into, filter, sort, bookmarks for the folders you live in, recent folders, one-click places like Logs and Config. Preview and edit text files in place. Drag files from your desktop to upload; download files or whole folders. Every upload and download shows how far along it is and how fast it's going, with a button to stop it. Open a terminal in any folder, or send the one you're already using there.
+**A file manager that's nice to use, and quick.** An address bar where every folder is a click away, filter, sort, back and forward with the mouse's side buttons, bookmarks for the folders you live in, recent folders, one-click places like Logs and Config. Preview and edit text files in place. Drag files from your desktop to upload; download files or whole folders. Every upload and download shows how far along it is and how fast it's going, with a button to stop it. Open a terminal in any folder, or send the one you're already using there.
 
 <p align="center"><img src="docs/screenshots/files.png" alt="File manager with bookmarks, a file preview and a context menu"></p>
 
@@ -64,6 +64,10 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 **Server stats without installing anything.** A one-line vitals bar (CPU, memory, network, disk) that hides with one click, and a detailed Stats view with load, traffic and every disk.
 
 **A security check-up in one click.** SSHeesh looks at how people can log in, what's open to the internet, the firewall, Docker ports that slip past it, automatic updates, packages with security fixes waiting (with their CVE numbers), and protection against password guessing. It changes nothing. Each finding says in plain words why it matters, with a command to fix it that you can paste into the terminal.
+
+**The server's web apps in your browser.** SSHeesh finds what the server serves, like Grafana or a dev server, and opens it at `localhost` with one click, through your SSH login. Keep tunnels you use often; they reconnect on their own.
+
+**Recipes for the usual jobs.** Step-by-step guides to log in with a key, turn on the firewall, install Docker, add swap and more. Every command says what it does, and you run each one yourself.
 
 **See where your disk space went.** How full each disk is, the biggest folders (click one to look inside), Docker's images and build cache, and old logs, with safe cleanups that each say what they remove.
 
@@ -79,7 +83,9 @@ Your keys in `~/.ssh` and key managers like 1Password and Bitwarden are listed f
 
 **Start an agent where you are.** When Claude Code, Codex, OpenCode or oh-my-pi is installed on a server, its logo sits in the terminal's title bar. Click it to start the agent in the folder you're in, or in a new terminal beside yours if that one's busy. The terminal is tuned for them: full color, Shift+Enter for a new line, Esc that answers right away, and copying that reaches your clipboard.
 
-**Problems jump out.** Errors show up in red and warnings in yellow, and you can add your own words to highlight.
+**Problems jump out.** Errors show up in red and warnings in yellow, and you can add your own words to highlight. Ctrl+click a file path in the output to open it in the file manager.
+
+**Snippets.** Keep the commands you run again, with blanks SSHeesh asks for, like which container. Type `cmd:` in the palette to find them.
 
 ## Safe by default
 
@@ -114,7 +120,7 @@ All files are on the [Releases page](https://github.com/footprintsntrails/sshees
 
 | | macOS | Windows / Linux |
 | --- | --- | --- |
-| Jump to anything | ⌘K | Ctrl+Shift+K |
+| Jump to anything (`srv:` `cmd:` `file:` `set:` narrow it down) | ⌘K | Ctrl+Shift+K |
 | Split right / down | ⌘D / ⇧⌘D | Ctrl+Shift+D / Ctrl+Shift+E |
 | Close pane | ⌘W | Ctrl+Shift+W |
 | Show / hide sidebar | ⌘B | Ctrl+Shift+B |
@@ -125,6 +131,9 @@ All files are on the [Releases page](https://github.com/footprintsntrails/sshees
 | Settings | ⌘, | Ctrl+, |
 | Copy / paste in a terminal | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V, or Ctrl+C with text selected. Ctrl+V pastes on Windows |
 | New line in Claude Code, Codex, OpenCode | ⇧↩ | Shift+Enter |
+| Scroll back in a terminal | ⇧Page Up / ⇧Page Down | Shift+Page Up / Shift+Page Down |
+| Open a path or link from the terminal | ⌘-click | Ctrl+click |
+| Back / forward in the file manager | Mouse side buttons, ⌥← / ⌥→ | Mouse side buttons, Alt+← / Alt+→ |
 
 ## Ideas and bugs
 
@@ -153,7 +162,6 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 What's planned next. The order may still change.
 
-- **0.5: commands and tunnels.** Snippets with variables, step-by-step recipes that explain every command, and a command palette with prefixes. Saved tunnels, and the server's web apps opening in your browser with one click.
 - **0.6: Docker, files and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
 - **0.7: workspaces and windows.** A workspace per project, panes in their own windows, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
 - **0.8: sync and themes.** Encrypted sync through a folder you pick, with no account. Themes made from three colors, and theme sharing.

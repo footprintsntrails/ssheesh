@@ -1,4 +1,4 @@
-import { Activity, HardDrive, ShieldCheck, SquareTerminal, X } from "lucide-react";
+import { Activity, BookOpen, Cable, HardDrive, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { bytes, cn, monthName, percent, rate, uptime } from "../lib/format";
 import { useMetrics, type Sample } from "../lib/metrics";
@@ -6,6 +6,8 @@ import { useNames } from "../lib/privacy";
 import { useStore, type PaneState } from "../lib/store";
 import type { Metrics, OpError, TargetRef } from "../lib/types";
 import { openServerTool } from "./ServerTools";
+import { openRecipes } from "./Recipes";
+import { openTunnels } from "./Tunnels";
 import { Button, IconButton, Spinner } from "./ui";
 
 export function Sparkline({ series, max, color, fill = true, height = 28, width = 200 }: { series: number[]; max: number; color: string; fill?: boolean; height?: number; width?: number }) {
@@ -152,6 +154,12 @@ export function StatsPane({ pane, target }: { pane: PaneState; target: TargetRef
           </Button>
           <Button size="sm" variant="ghost" onClick={() => openServerTool("disk", target)}>
             <HardDrive size={13} /> What's using the disk
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => openTunnels(target)}>
+            <Cable size={13} /> Web apps and tunnels
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => openRecipes(target)}>
+            <BookOpen size={13} /> Recipes
           </Button>
         </div>
       )}

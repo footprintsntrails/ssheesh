@@ -4,10 +4,11 @@ import { useEffect, useRef } from "react";
 import { cn } from "../lib/format";
 import { HOST_COLORS, HOST_ICONS, type HostLook } from "../lib/labels";
 
-export function LookGrid({ look, onChange }: { look: HostLook; onChange: (look: HostLook) => void }) {
+/** Icons, and unless `colors` is off, a row of colors under them. */
+export function LookGrid({ look, onChange, colors = true }: { look: HostLook; onChange: (look: HostLook) => void; colors?: boolean }) {
   return (
     <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-6 gap-1">
+      <div className={colors ? "grid grid-cols-6 gap-1" : "flex flex-wrap gap-1"}>
         {Object.entries(HOST_ICONS).map(([id, { icon: I, name }]) => (
           <button
             key={id}
@@ -22,20 +23,22 @@ export function LookGrid({ look, onChange }: { look: HostLook; onChange: (look: 
           </button>
         ))}
       </div>
-      <div className="flex justify-between px-0.5" role="radiogroup" aria-label="Color">
-        {HOST_COLORS.map((c) => (
-          <button
-            key={c}
-            type="button"
-            role="radio"
-            aria-checked={look.color === c}
-            aria-label={`Color ${c}`}
-            onClick={() => onChange({ ...look, color: c })}
-            className={cn("size-[16px] rounded-full", look.color === c && "ring-2 ring-fg/80 ring-offset-2 ring-offset-[var(--ui-raised)]")}
-            style={{ background: c }}
-          />
-        ))}
-      </div>
+      {colors && (
+        <div className="flex justify-between px-0.5" role="radiogroup" aria-label="Color">
+          {HOST_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={look.color === c}
+              aria-label={`Color ${c}`}
+              onClick={() => onChange({ ...look, color: c })}
+              className={cn("size-[16px] rounded-full", look.color === c && "ring-2 ring-fg/80 ring-offset-2 ring-offset-[var(--ui-raised)]")}
+              style={{ background: c }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
