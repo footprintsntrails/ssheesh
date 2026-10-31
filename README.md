@@ -14,9 +14,9 @@
 > [!WARNING]
 > **Version 0.6 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
-<p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: servers in the sidebar with their tabs under them, an AI agent that needs you, and a terminal"></p>
+<p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a server's terminal with the log it printed opened beside it, its tabs along the top, and an AI agent that needs you"></p>
 
-SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site, and its tabs sit right under it.
+SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own.
 
 ## The idea
 
@@ -24,26 +24,30 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 
 **It's convenient from the first minute.** Paste a whole `ssh` command and every field fills in; your `~/.ssh/config`, keys and agent just work. Errors come in plain words, and every command SSHeesh suggests says what it does. A dropped Wi-Fi doesn't end your work: with `tmux` on the server, your session keeps running and SSHeesh tells you what you missed.
 
-**You make it yours.** Themes you can edit down to every color, your own keyboard shortcuts, tabs under each server or along the top, one tab at a time or side by side, an icon or your own picture for every server. Change it all in the first minute, with a live preview, or later in Settings.
+**You make it yours.** Themes you can edit down to every color, any accent color and your own terminal colors, your own keyboard shortcuts, tabs along the top or under each server, one tab at a time or side by side, an icon or your own picture for every server, and the welcome a server greets you with. Change it all in the first minute, with a live preview, or later in Settings.
 
 <p align="center"><img src="docs/media/onboarding.gif" alt="The first-run setup: picking servers from ~/.ssh/config, then a theme, terminal colors and a layout with a live preview of the app"></p>
 
 ## Tricks worth knowing
 
-- **Peek at a file.** Ctrl+click (⌘-click on a Mac) any path in a terminal's output, and the file opens beside it, Markdown nicely formatted.
+- **Peek at a file.** Paths in a terminal's output are faintly underlined: Ctrl+click one (⌘-click on a Mac) and the file opens beside the terminal, Markdown nicely formatted. A path an agent prints from its own project is found too.
 
 <p align="center"><img src="docs/media/peek.gif" alt="Ctrl+clicking a path in an agent's output opens the file beside the terminal"></p>
 
-- **Drag a tab onto the page** to see two at once; drag it back onto the list to make it a tab again. Ctrl+Shift+S switches between one tab at a time and side by side.
+- **Drag a tab onto the page** to see two at once; its × (or dragging it back to the tabs) makes it a tab again, still running. Ctrl+Shift+S switches between one tab at a time and side by side.
 
 <p align="center"><img src="docs/media/split.gif" alt="Dragging the Files tab onto the page splits it beside the terminal"></p>
 
-- **Agents on every server, at a glance.** Claude Code, Codex, OpenCode and oh-my-pi show up by name in the sidebar, and a tab says “needs you” when one waits for an answer, with a notification if SSHeesh is in the background.
+- **Agents on every server, at a glance.** Claude Code, Codex, OpenCode and OMP show up by name on their tab, like “Terminal 2 (Claude Code)”, and the server says “needs you” when one waits for an answer, with a notification if SSHeesh is in the background.
+- **A welcome that says where you are.** A new terminal shows the server's own welcome, or SSHeesh's: the system, uptime, memory and disk, containers and updates, beside the logo. The server's notices about updates always stay.
+
+<p align="center"><img src="docs/screenshots/welcome.png" alt="SSHeesh's welcome in a new terminal: the logo beside the server's system, uptime, memory and disk, containers and updates, with the server's own update notices under it"></p>
+
 - **The main menu** (the logo at the top left) is a start page with all your servers, what's running and the tabs you closed. Ctrl+Shift+Z brings back the last one.
 - **One bar for everything.** Ctrl+Shift+L (⌘L) finds servers, folders, commands and settings, and says which server a command runs on.
 - **Your keys.** Every shortcut is listed in Settings → Keyboard, and you can change any of them.
 - **Server icons that mean something.** SSHeesh sees what a server runs (a website, a database, Docker) and picks its icon; each server gets a color of its own.
-- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads, Docker containers in the sidebar, stats, a read-only security check-up, what's using the disk, web apps opened through your SSH login, and step-by-step recipes for the usual jobs.
+- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads, its Docker containers, stats, a read-only security check-up, what's using the disk, web apps opened through your SSH login, and step-by-step recipes for the usual jobs.
 
 <p align="center"><img src="docs/media/streamer.gif" alt="Streamer mode hides server names and addresses across the app and the terminal"></p>
 

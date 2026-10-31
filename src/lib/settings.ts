@@ -10,6 +10,9 @@ import { ACCENTS, customThemeVars, setCustomThemeSource, setTerminalColorsSource
 
 export type UpdateMode = "auto" | "notify" | "manual";
 
+export type WelcomeMode = "auto" | "ssheesh" | "first" | "server" | "off";
+export type WelcomePart = "logo" | "system" | "usage" | "status";
+
 /** After a dropped connection: reconnect by itself, show a Reconnect button, or stay quiet. */
 export type ReconnectMode = "auto" | "ask" | "off";
 
@@ -89,6 +92,18 @@ export interface Settings {
   highlightRules: HighlightRule[];
   /** System notification when a terminal needs you and SSHeesh isn't in front. */
   notifyAttention: boolean;
+  /**
+   * What a new terminal on a server shows first. "auto": the server's own
+   * welcome if it has one, else SSHeesh's; "first": SSHeesh's the first time,
+   * then as "auto".
+   */
+  welcomeMode: WelcomeMode;
+  /** What SSHeesh's welcome shows. */
+  welcomeParts: WelcomePart[];
+  /** Your own line under it. */
+  welcomeNote: string;
+  /** Servers that have had SSHeesh's welcome once ("first"). */
+  welcomedHosts: string[];
   /** Windows: the system's own title bar instead of SSHeesh's. */
   nativeTitleBar: boolean;
 }
@@ -126,8 +141,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarSide: "left",
   sidebarVisible: true,
   sidebarWidth: 232,
-  sidebarMode: "wide",
-  railStatus: "frame",
+  sidebarMode: "narrow",
+  railStatus: "off",
   expanded: [],
   // One page at a time; the hello offers side by side.
   viewMode: "tabs",
@@ -143,6 +158,10 @@ export const DEFAULT_SETTINGS: Settings = {
   highlightAddresses: false,
   highlightRules: [],
   notifyAttention: true,
+  welcomeMode: "auto",
+  welcomeParts: ["logo", "system", "usage", "status"],
+  welcomeNote: "",
+  welcomedHosts: [],
   nativeTitleBar: false,
 };
 

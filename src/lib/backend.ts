@@ -26,6 +26,13 @@ export interface UpdateInfo {
   date: string | null;
 }
 
+/** The welcome choice as the server-side script takes it. */
+export interface WelcomeSpec {
+  mode: "auto" | "ssheesh" | "server" | "off";
+  parts: string[];
+  note: string;
+}
+
 export interface Backend {
   readonly isDemo: boolean;
   appVersion(): Promise<string>;
@@ -80,6 +87,8 @@ export interface Backend {
     rows: number,
     container: ContainerRef | null,
     onEvent: (e: SessionEvent) => void,
+    /** What a new session on a server shows first. */
+    welcome?: WelcomeSpec,
   ): Promise<void>;
   writeSession(paneId: string, data: string): void;
   resizeSession(paneId: string, cols: number, rows: number): void;
@@ -225,11 +234,11 @@ async function tauriBackend(): Promise<Backend> {
       if (ok) n.sendNotification({ title, body });
     },
 
-    async openSession(paneId, target, sessionKey, cols, rows, container, onEvent) {
+    async openSession(paneId, target, sessionKey, cols, rows, container, onEvent, welcome) {
       const channel = new Channel<SessionEvent>();
       channel.onmessage = onEvent;
       const c = container && { engine: container.engine, id: container.id, run: container.run };
-      await call("open_session", { paneId, target, sessionKey, cols, rows, container: c, onEvent: channel });
+      await call("open_session", { paneId, target, sessionKey, cols, rows, container: c, welcome: welcome ?? null, onEvent: channel });
     },
     writeSession: (paneId, data) => fire("write_session", { paneId, data }),
     resizeSession: (paneId, cols, rows) => fire("resize_session", { paneId, cols, rows }),

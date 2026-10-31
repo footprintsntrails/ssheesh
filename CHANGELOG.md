@@ -1,8 +1,10 @@
 # Changelog
 
-## 0.6.4 — tabs on top, your own colors
+## 0.6.5 — tabs on top, a welcome, your own colors
 
+- **A welcome for your servers.** A new terminal shows the server's own welcome if it has one, and SSHeesh's if it doesn't: the logo beside the system, uptime, load, memory and disk, containers and updates waiting. The server's notices (updates, a restart needed) always stay. Settings → Terminal → Welcome: SSHeesh's every time, only the first time, the server's own, or nothing; pick what it shows and add a line of your own, with a live preview.
 - **Tabs are along the top by default**, as in a browser, and only there: they no longer show under the server at the same time. Under each server is still a choice in Settings → Layout. The server list says "Needs you" when an agent on that server waits for an answer.
+- **The server list is a slim column of icons by default**, so your work gets the room; point at an icon for the server's name, and it stays quiet: no load meters unless you turn them on (Settings → Layout → Server load). Settings → Layout → Server list → Names brings the wider list back.
 - **× never closes a tab while panes are side by side**, in either layout: it takes the pane off the screen and the tab stays, to close from the tab list. A pane on its own closes with × as before.
 - **Your own colors.** Pick any accent color from a palette, and give the terminal your own background and text color ("Your own" under Settings → Terminal).
 - **The interface size slider no longer jumps**: the new size applies when you let go.
@@ -12,6 +14,8 @@
 
 ### Fixed
 - **Paths are underlined in tmux sessions too**, where agents usually run; before, only plain shells got the marks.
+- **Ctrl+click on a file** opens the file beside the terminal every time; when the two were being put side by side, it sometimes showed only its folder.
+- **Ctrl+click on a path that's gone** (a log that was just deleted, say) says so clearly, and a search that takes a moment says it's looking.
 - **Ctrl+click finds** paths with brackets in them (`app/[id]/page.tsx`), and gives up after a few seconds instead of searching a big home folder for long.
 - **Side by side, one tab at a time:** closing one of three panes keeps the other two; switching the layout in Settings keeps the tab you're on visible; dropping a tab on the middle of a pane swaps it into the pair; Split adds a pane; Ctrl+Tab goes through all tabs.
 - **Your own terminal colors** apply to open terminals right away.

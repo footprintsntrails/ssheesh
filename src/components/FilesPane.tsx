@@ -430,14 +430,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     const entry = listing.entries.find((e) => e.name === name);
     // A listing from the cache may not have it yet; the fresh one will tell.
     if (!entry && loading) return;
-    setPane(pane.id, { reveal: undefined });
-    if (!entry) return;
+    const done = () => setPane(pane.id, { reveal: undefined });
+    if (!entry) return done();
     if (name.startsWith(".")) setShowHidden(true);
     setFilter("");
     setSelected([name]);
     setAnchor(name);
     requestAnimationFrame(() => scrollToRow(visibleRef.current.findIndex((e) => e.name === name)));
-    if (entry.kind !== "dir") void openPreview(entry);
+    // Asked for until the preview is open: a pane drawn again meanwhile (side
+    // by side being set up) opens it then.
+    if (entry.kind !== "dir") void openPreview(entry).then(done);
+    else done();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane.reveal, listing, loading]);
 

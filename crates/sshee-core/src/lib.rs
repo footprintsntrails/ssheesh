@@ -21,6 +21,7 @@ pub mod shell_pool;
 pub mod ssh;
 mod text;
 pub mod tunnels;
+pub mod welcome;
 
 pub use error::{ErrorCode, OpError};
 pub use hosts::{Host, HostSource, HostStore, NewHost};

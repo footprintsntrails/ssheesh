@@ -7,7 +7,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type IBufferLine } from "@xterm/xterm";
-import { backend } from "./backend";
+import { backend, type WelcomeSpec } from "./backend";
 import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
 import { findLinks } from "./paths";
 import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
@@ -543,6 +543,18 @@ class TerminalHandle {
     this.open();
   }
 
+  /** What this session shows first, from Settings; "first time" is decided here, once per server. */
+  private welcome(): WelcomeSpec | undefined {
+    if (this.target.kind !== "host" || this.container) return undefined;
+    const s = useSettings.getState();
+    let mode: WelcomeSpec["mode"] = s.welcomeMode === "first" ? "auto" : s.welcomeMode;
+    if (s.welcomeMode === "first" && !s.welcomedHosts.includes(this.target.hostId)) {
+      mode = "ssheesh";
+      s.update({ welcomedHosts: [...s.welcomedHosts, this.target.hostId] });
+    }
+    return { mode, parts: s.welcomeParts, note: s.welcomeNote };
+  }
+
   private markLinksSoon() {
     window.clearTimeout(this.markTimer);
     this.markTimer = window.setTimeout(() => this.markLinks(), 250);
@@ -586,7 +598,7 @@ class TerminalHandle {
   private open() {
     const { cols, rows } = this.term;
     backend
-      .openSession(this.paneId, this.target, this.sessionKey, cols, rows, this.container, (e) => this.onEvent(e))
+      .openSession(this.paneId, this.target, this.sessionKey, cols, rows, this.container, (e) => this.onEvent(e), this.welcome())
       .catch((e) => useStore.getState().setSession(this.paneId, { kind: "failed", message: toOpError(e).message }));
   }
 

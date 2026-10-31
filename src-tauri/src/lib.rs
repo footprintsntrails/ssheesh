@@ -132,11 +132,12 @@ fn open_session(
     cols: u16,
     rows: u16,
     container: Option<ContainerRef>,
+    welcome: Option<sshee_core::welcome::Welcome>,
     on_event: Channel<SessionEvent>,
 ) -> Result<(), OpError> {
     let target = resolve(&state, &target)?;
     let run = container.map(|c| containers::argv(c.engine, &c.id, c.run));
-    let spec = SessionSpec { target, key: session_key, cols, rows, env: state.env.clone(), run };
+    let spec = SessionSpec { target, key: session_key, cols, rows, env: state.env.clone(), run, welcome: welcome.unwrap_or_default() };
     let sink: EventSink = Arc::new(move |event| {
         let _ = on_event.send(event);
     });

@@ -29,6 +29,23 @@ export async function openTerminalLink(from: LinkSource, link: TextLink) {
     return;
   }
   const relative = !/^[/~]/.test(link.target);
+  // A big folder on a slow link takes a moment: say it's on its way.
+  const name = link.target.slice(link.target.lastIndexOf("/") + 1);
+  let looking: string | null = null;
+  const slow = window.setTimeout(() => (looking = st.toast({ tone: "info", title: `Looking for ${name}…` })), 500);
+  const settled = () => {
+    window.clearTimeout(slow);
+    if (looking) st.dismissToast(looking);
+  };
+  try {
+    await find(from, link, relative);
+  } finally {
+    settled();
+  }
+}
+
+async function find(from: LinkSource, link: TextLink, relative: boolean) {
+  const st = useStore.getState();
   let cwd = from.cwd ?? "~";
   if (relative && from.target.kind === "host" && from.durable) {
     cwd = await backend.sessionCwd(from.target, from.sessionKey).catch(() => cwd);
@@ -38,16 +55,20 @@ export async function openTerminalLink(from: LinkSource, link: TextLink) {
   let found = await look(from.target, path);
   // Not in the terminal's folder: a program (an agent, say) may have printed
   // it from its own folder, so the server looks around for it.
-  if (!found && relative && from.target.kind === "host") {
+  if (found.kind !== "found" && relative && from.target.kind === "host") {
     const there = await backend.findPath(from.target, link.target, cwd).catch(() => null);
     if (there) found = await look(from.target, there);
   }
-  if (!found) {
+  if (found.kind === "missing") {
     st.toast({
-      tone: "info",
-      title: `Couldn't find ${link.target}`,
-      body: relative ? "Not in the terminal's folder, the folders your programs run in, or your home folder." : "It isn't there, or you can't open that folder.",
+      tone: "error",
+      title: `${link.target} isn't there`,
+      body: relative ? "Not in the terminal's folder, the folders your programs run in, or your home folder." : `Nothing by that name in ${found.dir}: it may have been moved or deleted.`,
     });
+    return;
+  }
+  if (found.kind === "error") {
+    st.toast({ tone: "error", title: `Can't open ${link.target}`, body: found.message });
     return;
   }
   const { dir, name, isDir } = found;
@@ -55,16 +76,20 @@ export async function openTerminalLink(from: LinkSource, link: TextLink) {
   else showInFiles(from.paneId, from.target, dir, name);
 }
 
-/** The folder a path is in and whether it's a folder itself, or null if it isn't there. */
-async function look(target: TargetRef, path: string): Promise<{ dir: string; name: string; isDir: boolean } | null> {
+type Looked = { kind: "found"; dir: string; name: string; isDir: boolean } | { kind: "missing"; dir: string } | { kind: "error"; message: string };
+
+/** Where a path is: found (and whether it's a folder), not in its folder, or its folder can't be opened (and why). */
+async function look(target: TargetRef, path: string): Promise<Looked> {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const parent = /^~\/[^/]+$/.test(path) ? "~" : parentPath(path);
   try {
     const listing = await backend.listDir(target, parent);
     const entry = listing.entries.find((e) => e.name === name);
-    return entry ? { dir: listing.path, name, isDir: entry.kind === "dir" } : null;
-  } catch {
-    return null;
+    return entry ? { kind: "found", dir: listing.path, name, isDir: entry.kind === "dir" } : { kind: "missing", dir: listing.path };
+  } catch (e) {
+    const err = toOpError(e);
+    // A folder that's gone means the file is too.
+    return err.code === "notFound" ? { kind: "missing", dir: parent } : { kind: "error", message: err.message };
   }
 }
 

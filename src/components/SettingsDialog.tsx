@@ -32,7 +32,7 @@ import { backend } from "../lib/backend";
 import { ago, cn } from "../lib/format";
 import { isMac, isWindows, SHORTCUT_GROUPS, SHORTCUT_NAMES, shortcutLabel } from "../lib/keys";
 import type { Arrangement } from "../lib/layout";
-import { markHintSeen, useSettings, type Settings } from "../lib/settings";
+import { markHintSeen, useSettings, type Settings, type WelcomeMode, type WelcomePart } from "../lib/settings";
 import { useStore } from "../lib/store";
 import {
   ACCENTS,
@@ -87,6 +87,7 @@ const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
   { section: "appearance", label: "Match my system", words: "auto dark mode light mode night day schedule" },
   { section: "appearance", label: "Accent color", words: "highlight color blue" },
   { section: "appearance", label: "Interface size", words: "zoom scale bigger smaller ui text" },
+  { section: "terminal", label: "Welcome", words: "motd welcome banner logo login message greeting" },
   { section: "appearance", label: "Fade panes you're not using", words: "dim inactive focus opacity" },
   { section: "appearance", label: "Animations", words: "motion reduce effects" },
   { section: "appearance", label: "Logo", words: "icon wink animated mascot face" },
@@ -132,6 +133,76 @@ function Row({ label, hint, children, stack }: { label: string; hint?: string; c
         {hint && <div className="mt-0.5 text-[11.5px] leading-snug text-fg-3">{hint}</div>}
       </div>
       <div className={cn(stack ? "w-full" : "shrink-0")}>{children}</div>
+    </div>
+  );
+}
+
+const WELCOME_MODES: [WelcomeMode, string][] = [
+  ["auto", "The server's own welcome, or SSHeesh's if it has none"],
+  ["ssheesh", "SSHeesh's, every time"],
+  ["first", "SSHeesh's the first time, then the server's"],
+  ["server", "The server's own, every time"],
+  ["off", "Nothing"],
+];
+const WELCOME_PARTS: [WelcomePart, string][] = [
+  ["logo", "Logo"],
+  ["system", "System"],
+  ["usage", "Memory and disk"],
+  ["status", "Containers and updates"],
+];
+
+/** The SSHeesh logo as the welcome draws it, one cell per pixel. */
+const WELCOME_LOGO = [".TTTTTTTTT.", "TTTTTTTTTTT", "BBBBBBBBBBB", "BEBBBBBBBEB", "BBEBBBBBEBB", "BEBBBBBBBEB", "BBBBGGGBBBB", ".BBBBBBBBB."];
+const WELCOME_COLORS: Record<string, string> = { T: "#2f3136", B: "#232428", E: "#f2f0ea", G: "#3dd68c" };
+
+/** What SSHeesh's welcome will look like, with made-up facts. */
+function WelcomePreview({ s }: { s: Settings }) {
+  const has = (p: WelcomePart) => s.welcomeParts.includes(p);
+  const bar = (pct: number) => (
+    <span className="inline-flex h-[2px] w-[110px] translate-y-[-3px] rounded-full bg-[#2b3038]">
+      <span className="h-full rounded-full bg-[#3dd68c]" style={{ width: `${pct}%` }} />
+    </span>
+  );
+  return (
+    <div className="flex gap-5 overflow-hidden rounded-[10px] bg-[#0a0b0d] px-4 py-3.5 font-mono text-[11px] leading-[17px] text-[#d8dce2] ring-1 ring-ink/[0.08]">
+      {has("logo") && (
+        <div className="grid shrink-0 grid-cols-[repeat(11,9px)] grid-rows-[repeat(8,9px)] self-start pt-0.5" aria-hidden>
+          {WELCOME_LOGO.flatMap((row, r) =>
+            [...row].map((c, x) => (
+              <span key={`${r}-${x}`} className="flex items-center justify-center text-[6px] text-[#5c5f67]" style={{ background: WELCOME_COLORS[c] }}>
+                {r === 1 && x >= 1 && x <= 3 ? "•" : ""}
+              </span>
+            )),
+          )}
+        </div>
+      )}
+      <div className="min-w-0">
+        {has("system") && (
+          <>
+            <div className="truncate">
+              Ubuntu 24.04 LTS <span className="text-[#7d8590]">· x86_64 · 8 cores</span>
+            </div>
+            <div className="truncate text-[#7d8590]">up 41 days · load 0.42 0.38 0.31</div>
+          </>
+        )}
+        {has("usage") && (
+          <div className="mt-1.5">
+            <div>
+              <span className="text-[#5f6775]">mem </span> {bar(70)} 70% <span className="text-[#7d8590]">11.2 / 16 GiB</span>
+            </div>
+            <div>
+              <span className="text-[#5f6775]">disk</span> {bar(46)} 46% <span className="text-[#7d8590]">110 / 240 GB</span>
+            </div>
+          </div>
+        )}
+        {has("status") && (
+          <div className="mt-1.5 truncate">
+            <span className="text-[#3dd68c]">▲</span> 12 containers <span className="text-[#7d8590]">↑</span> 7 updates
+          </div>
+        )}
+        <div className="mt-1.5 truncate text-[#7d8590]">23 updates can be applied immediately.</div>
+        {s.welcomeNote.trim() && <div className="mt-1.5 truncate">{s.welcomeNote.trim()}</div>}
+      </div>
     </div>
   );
 }
@@ -405,6 +476,9 @@ function Terminal({ s, set, reset }: SectionProps) {
             "highlightAddresses",
             "highlightRules",
             "notifyAttention",
+            "welcomeMode",
+            "welcomeParts",
+            "welcomeNote",
           ])
         }
       >
@@ -539,6 +613,59 @@ function Terminal({ s, set, reset }: SectionProps) {
       >
         <Switch label="Tell me when a terminal needs me" checked={s.notifyAttention} onChange={(v) => set({ notifyAttention: v })} />
       </Row>
+
+      <SubHeading title="Welcome" hint="What a new terminal on a server shows first. The server's notices, like updates waiting or a restart needed, always show." />
+      <Row label="Show" stack>
+        <div className="flex flex-col gap-3">
+          <select
+            aria-label="Welcome"
+            value={s.welcomeMode}
+            onChange={(e) => set({ welcomeMode: e.target.value as WelcomeMode })}
+            className="h-8 w-full rounded-[8px] bg-ink/[0.05] px-2.5 text-[12.5px] text-fg outline-none ring-1 ring-inset ring-ink/[0.08] focus:ring-accent/70"
+          >
+            {WELCOME_MODES.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          {s.welcomeMode !== "off" && s.welcomeMode !== "server" && <WelcomePreview s={s} />}
+        </div>
+      </Row>
+      {s.welcomeMode !== "off" && s.welcomeMode !== "server" && (
+        <>
+          <Row label="SSHeesh's shows" hint="Facts come from the server each time, in a blink: no waiting on the network.">
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {WELCOME_PARTS.map(([part, label]) => {
+                const on = s.welcomeParts.includes(part);
+                return (
+                  <button
+                    key={part}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => set({ welcomeParts: on ? s.welcomeParts.filter((p) => p !== part) : [...s.welcomeParts, part] })}
+                    className={cn(
+                      "h-7 rounded-[7px] px-2.5 text-[12px] font-medium ring-1 ring-inset transition-colors",
+                      on ? "bg-accent/15 text-fg ring-accent/50" : "text-fg-3 ring-ink/[0.1] hover:text-fg-2",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
+          <Row label="Your own line" hint="Under SSHeesh's welcome, like a note to yourself: “production, careful”.">
+            <input
+              value={s.welcomeNote}
+              onChange={(e) => set({ welcomeNote: e.target.value })}
+              placeholder="Nothing"
+              maxLength={120}
+              className="h-8 w-[220px] rounded-[8px] bg-ink/[0.05] px-2.5 text-[12.5px] text-fg outline-none ring-1 ring-inset ring-ink/[0.08] placeholder:text-fg-3 focus:ring-accent/70"
+            />
+          </Row>
+        </>
+      )}
 
       <SubHeading title="Highlighting" hint="Colors words in terminal output so problems jump out, in your color scheme's own colors." />
       <Row label="Errors" hint="ERROR, FATAL, failed:, Permission denied, command not found…">

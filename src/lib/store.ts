@@ -160,7 +160,8 @@ interface AppState {
   closePane(id: string): void;
   setPaletteOpen(open: boolean): void;
   setAddHostOpen(open: boolean): void;
-  toast(t: Omit<Toast, "id">): void;
+  /** Shows a note in the corner; returns its id, to take it away early. */
+  toast(t: Omit<Toast, "id">): string;
   dismissToast(id: string): void;
   confirm(req: Omit<ConfirmRequest, "resolve">): Promise<boolean>;
   setDropPane(id: string | null): void;
@@ -544,6 +545,7 @@ export const useStore = create<AppState>()(
         const id = newId("t");
         set((s) => ({ toasts: [...s.toasts.slice(-3), { id, ...t }] }));
         setTimeout(() => get().dismissToast(id), t.tone === "error" ? 7000 : 3800);
+        return id;
       },
       dismissToast(id) {
         set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));

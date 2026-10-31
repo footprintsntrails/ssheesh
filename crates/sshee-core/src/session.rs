@@ -48,6 +48,8 @@ pub struct SessionSpec {
     pub env: SshEnv,
     /// Run this instead of a login shell (e.g. a shell inside a container).
     pub run: Option<Vec<String>>,
+    /// What a new session shows first (a login shell only).
+    pub welcome: crate::welcome::Welcome,
 }
 
 pub type EventSink = Arc<dyn Fn(SessionEvent) + Send + Sync>;
@@ -369,7 +371,7 @@ fn build_command(spec: &SessionSpec) -> CommandBuilder {
             c.args(common_args(t, &spec.env));
             c.args(["-tt", "--"]);
             c.arg(&t.destination);
-            c.arg(durable_command(&spec.key, spec.run.as_deref()));
+            c.arg(durable_command(&spec.key, spec.run.as_deref(), &spec.welcome));
             for (k, v) in password_env(t, &spec.env).unwrap_or_default() {
                 c.env(k, v);
             }

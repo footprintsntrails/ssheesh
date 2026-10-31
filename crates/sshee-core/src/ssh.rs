@@ -126,11 +126,6 @@ pub fn session_name(key: &str) -> String {
     format!("sshee-{clean}")
 }
 
-/// Prints the server's welcome message (motd), which ssh leaves out when it
-/// runs a command instead of a plain login. Skipped with ~/.hushlogin, as a
-/// login would. Each file once, even when one links to another.
-const MOTD: &str = r#"if [ ! -e "$HOME/.hushlogin" ]; then seen=; for f in /run/motd.dynamic /etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*; do [ -f "$f" ] && [ -r "$f" ] || continue; r=$(readlink -f "$f" 2>/dev/null || echo "$f"); case " $seen " in *" $r "*) continue ;; esac; seen="$seen $r"; cat "$f"; done 2>/dev/null; fi"#;
-
 /// tmux reports the scroll position through the window title, which the
 /// app reads to draw a scrollbar: in copy mode or not, lines scrolled up,
 /// lines of history, pane height and the history limit.
@@ -156,7 +151,7 @@ const ESCAPE_TIME_MS: u32 = if cfg!(windows) { 100 } else { 10 };
 /// own copy) reaching your clipboard. With tmux 3.2+ it also reports where
 /// you've scrolled to, and binds a key (ESC [ 9006 ~, which no keyboard
 /// sends) that leaves scrolling, so typing goes back to the prompt.
-pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
+pub fn durable_command(key: &str, run: Option<&[String]>, welcome: &crate::welcome::Welcome) -> String {
     let name = session_name(key);
     // With a command: tmux runs it as the session's only window; without
     // tmux it's exec'd directly. Without one: the login shell, after the
@@ -168,7 +163,7 @@ pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
             (format!(" {}", shell_quote(&cmd)), format!("exec {cmd}"))
         }
         None => {
-            let login = format!(r#"{MOTD}; exec "${{SHELL:-/bin/sh}}" -l"#);
+            let login = format!("{}\nexec \"${{SHELL:-/bin/sh}}\" -l", crate::welcome::script(welcome));
             (format!(" {}", shell_quote(&format!("sh -c {}", shell_quote(&login)))), login)
         }
     };
@@ -292,7 +287,7 @@ mod tests {
 
     #[test]
     fn durable_command_runs_through_sh() {
-        let c = durable_command("k1", None);
+        let c = durable_command("k1", None, &Default::default());
         assert!(c.starts_with("sh -c '"));
         assert!(c.contains(r#"set -- "$@" new-session -A -s sshee-k1"#));
         assert!(c.contains(r#"exec tmux "$@""#));

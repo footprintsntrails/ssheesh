@@ -59,6 +59,11 @@ const tree: Record<string, FileEntry[]> = {
     file("deploy.sh", 2210, 86400 * 2, "-rwxr-xr-x"),
     file(".env", 612, 86400 * 6, "-rw-------"),
   ],
+  "/home/deploy/logs": [
+    file("api.log", 812_004, 9),
+    file("worker.log", 241_330, 300),
+    file("nginx-access.log", 3_904_112, 4),
+  ],
   "/var/www/app": [
     dir("config", 86400 * 4),
     dir("public", 3600 * 3),
@@ -76,6 +81,20 @@ const tree: Record<string, FileEntry[]> = {
 };
 
 const textFiles: Record<string, string> = {
+  "api.log": [
+    "2026-10-29T23:09:41Z INFO  listening on :8080",
+    "2026-10-29T23:09:41Z INFO  connected to postgres (app-db-1:5432)",
+    "2026-10-29T23:09:42Z INFO  connected to redis (app-cache-1:6379)",
+    "2026-10-29T23:09:58Z INFO  GET /healthz 200 1ms",
+    "2026-10-29T23:10:01Z INFO  GET /v1/orders 200 22ms",
+    "2026-10-29T23:10:02Z INFO  GET /v1/orders 200 18ms",
+    "2026-10-29T23:10:04Z INFO  POST /v1/checkout 201 64ms",
+    "2026-10-29T23:10:05Z WARN  slow query: orders_by_customer (412ms)",
+    "2026-10-29T23:10:07Z INFO  GET /v1/orders/9f2c 200 9ms",
+    "2026-10-29T23:10:08Z ERROR payment provider timeout after 5000ms (retrying)",
+    "2026-10-29T23:10:09Z INFO  GET /healthz 200 1ms",
+    "",
+  ].join("\n"),
   "README.md": `# Acme API
 
 The orders and checkout service behind acme.example.
@@ -589,13 +608,21 @@ export const mockBackend: Backend = {
   cancelTransfer(id) {
     fakeCancels.get(id)?.();
   },
-  async sessionCwd() {
-    return "/var/www/app";
+  // The agents work in the app's folder; the plain shell is in home.
+  async sessionCwd(_target, sessionKey) {
+    return /claude|codex/.test(sessionKey) ? "/var/www/app" : "/home/deploy";
   },
   // The demo's agent works in /var/www/app.
+  // Looks through the demo's folders for the path, as the server's search would.
   async findPath(_target, path) {
     await wait(150);
-    return `/var/www/app/${path.replace(/^\.\//, "")}`;
+    const rel = path.replace(/^\.\//, "");
+    for (const folder of Object.keys(tree)) {
+      const full = `${folder}/${rel}`;
+      const at = full.lastIndexOf("/");
+      if (tree[full.slice(0, at)]?.some((e) => e.name === full.slice(at + 1))) return full;
+    }
+    throw { code: "notFound", message: "Couldn't find it on the server." };
   },
   async detectAgents() {
     await wait(300);
