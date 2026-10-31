@@ -30,7 +30,10 @@ export async function uploadTo(target: TargetRef, dir: string, paths: string[]):
   } catch (e) {
     const err = toOpError(e);
     if (err.code !== "exists") return failed(e);
-    if (!(await confirm({ title: "Replace existing files?", body: err.message, confirmLabel: "Replace" }))) return false;
+    // The server checks the whole batch before anything moves, so this
+    // names everything that would be replaced, and Cancel leaves it all.
+    const body = `${err.message} If you cancel, nothing is ${host ? "uploaded" : "copied"}.`;
+    if (!(await confirm({ title: "Replace existing files?", body, confirmLabel: "Replace" }))) return false;
     try {
       await send(true);
     } catch (e2) {

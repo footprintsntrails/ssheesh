@@ -239,6 +239,12 @@ export function removeSaved(hostId: string, id: string) {
   useSavedTunnels.getState().remove(hostId, id);
 }
 
+/** A removed server takes its tunnels with it: stopped now, and not saved for next time. */
+export function forgetHostTunnels(hostId: string) {
+  for (const t of useSavedTunnels.getState().byHost[hostId] ?? []) removeSaved(hostId, t.id);
+  for (const t of useTunnelRuntime.getState().temp[hostId] ?? []) closeTemp(hostId, t.id);
+}
+
 let restored = false;
 
 /** Starts the saved tunnels that were on when SSHeesh last closed. Once per run. */

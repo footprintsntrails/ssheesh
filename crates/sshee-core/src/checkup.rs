@@ -163,7 +163,18 @@ pub fn run(target: &Target, env: &SshEnv) -> Result<Checkup, OpError> {
         run_remote(t, env, "true", None)?;
         return Err(OpError::failed("The server didn't answer the check-up."));
     }
-    Ok(parse(&text))
+    let mut checkup = parse(&text);
+    if t.password.is_some() {
+        // SSHeesh itself logs in here with a password: turning password login
+        // off (or root's) would lock it out. Keys first, then the fix.
+        for c in &mut checkup.checks {
+            if (c.id == "password-login" || c.id == "root-login") && c.fix.as_deref().is_some_and(|f| f.contains("PasswordAuthentication no") || f.contains("prohibit-password")) {
+                c.fix = None;
+                c.fix_note = Some("SSHeesh logs in to this server with a password, so turning that off would lock it out too. Set up a key first: Recipes → Log in with a key.".into());
+            }
+        }
+    }
+    Ok(checkup)
 }
 
 fn parse(text: &str) -> Checkup {
@@ -313,14 +324,14 @@ impl<'a> Facts<'a> {
         let mut ports = Vec::new();
         let conn: Vec<&str> = self.s.lines("conn").first().map(|l| l.split_whitespace().collect()).unwrap_or_default();
         if let &[_, _, server, port] = conn.as_slice() {
-            if !is_local(server) {
+            if !off_internet(server) {
                 ports.extend(port.parse::<u16>());
             }
         }
         if let Some(sshd) = &self.sshd {
             ports.extend(&sshd.ports);
         }
-        let from_sshd = |l: &&Listener| !l.udp && !is_local(&l.host) && l.process.as_deref() == Some("sshd");
+        let from_sshd = |l: &&Listener| !l.udp && !off_internet(&l.host) && l.process.as_deref() == Some("sshd");
         ports.extend(self.listeners.iter().flatten().filter(from_sshd).map(|l| l.port));
         if ports.is_empty() {
             ports.push(22);
@@ -332,7 +343,7 @@ impl<'a> Facts<'a> {
 
     fn web_ports(&self) -> Vec<u16> {
         let mut ports: Vec<u16> =
-            self.listeners.iter().flatten().filter(|l| !l.udp && !is_local(&l.host) && matches!(l.port, 80 | 443)).map(|l| l.port).collect();
+            self.listeners.iter().flatten().filter(|l| !l.udp && !off_internet(&l.host) && matches!(l.port, 80 | 443)).map(|l| l.port).collect();
         ports.sort_unstable();
         ports.dedup();
         ports
@@ -705,6 +716,23 @@ pub(crate) fn is_local(host: &str) -> bool {
     }
 }
 
+/// Not reachable from the internet: this machine only, or a private network
+/// (10/8, 172.16/12, 192.168/16, Tailscale's 100.64/10, fc00::/7). A database
+/// on the Docker bridge or a LAN address isn't "open to the internet".
+fn off_internet(host: &str) -> bool {
+    if is_local(host) {
+        return true;
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let host = host.split('%').next().unwrap_or(host);
+    let v4 = |ip: std::net::Ipv4Addr| ip.is_private() || (ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1]));
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => v4(ip),
+        Ok(IpAddr::V6(ip)) => (ip.segments()[0] & 0xfe00) == 0xfc00 || ip.to_ipv4_mapped().is_some_and(v4),
+        Err(_) => false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Risk {
     Fine,
@@ -800,7 +828,7 @@ impl OpenPort {
 fn public_ports(list: &[Listener]) -> Vec<OpenPort> {
     let mut ports: BTreeMap<u16, OpenPort> = BTreeMap::new();
     // DHCP clients listen on 68 and 546 to get the server its address.
-    for l in list.iter().filter(|l| !is_local(&l.host) && !(l.udp && matches!(l.port, 68 | 546))) {
+    for l in list.iter().filter(|l| !off_internet(&l.host) && !(l.udp && matches!(l.port, 68 | 546))) {
         let known = PORTS.iter().find(|(p, ..)| *p == l.port).map(|&(_, name, risk)| (name, risk));
         let program = l.process.as_deref().map(|p| PROGRAMS.iter().find(|(n, ..)| *n == p).map_or((p, Risk::Fine), |&(_, name, risk)| (name, risk)));
         let entry = ports.entry(l.port).or_insert(OpenPort { port: l.port, tcp: false, udp: false, name: None, risk: Risk::Fine, docker: false });
@@ -961,7 +989,7 @@ fn published(ports: &str) -> Vec<(String, String)> {
             continue;
         };
         let pair = (port.to_string(), inside.trim_end_matches("/tcp").to_string());
-        if !is_local(host) && !out.contains(&pair) {
+        if !off_internet(host) && !out.contains(&pair) {
             out.push(pair);
         }
     }
@@ -1380,6 +1408,16 @@ fn reboot(f: &Facts) -> Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_addresses_are_not_open_to_the_internet() {
+        for private in ["10.0.0.5", "172.17.0.1", "192.168.1.20", "100.101.102.103", "[fd00::1]", "127.0.0.1", "::1"] {
+            assert!(off_internet(private), "{private}");
+        }
+        for public in ["0.0.0.0", "*", "203.0.113.7", "[2001:db8::1]", "::", "100.128.0.1"] {
+            assert!(!off_internet(public), "{public}");
+        }
+    }
 
     const UBUNTU_UFW: &str = r#"Welcome to Ubuntu
 @@root@@

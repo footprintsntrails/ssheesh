@@ -19,7 +19,6 @@ import {
   openWebApp,
   portError,
   removeSaved,
-  restoreTunnels,
   saveTunnel,
   setSavedOn,
   startTunnel,
@@ -50,10 +49,9 @@ const close = () => useDialog.setState({ target: null });
 const EMPTY_SAVED: SavedTunnel[] = [];
 const EMPTY_TEMP: TempTunnel[] = [];
 
-/** Always mounted: starts the tunnels left on last time, and shows the dialog when asked. */
+/** Always mounted: shows the dialog when asked. The main window starts the tunnels left on (App). */
 export function Tunnels() {
   const target = useDialog((s) => s.target);
-  useEffect(restoreTunnels, []);
   if (!target) return null;
   return <TunnelsDialog key={targetKey(target)} target={target} />;
 }

@@ -35,7 +35,10 @@ const STEPS: Step[] = [
   {
     scene: SceneTabs,
     title: "Every server keeps its tabs",
-    body: () => "Tabs live under their server. Agents on any server show up there too.",
+    body: () =>
+      useSettings.getState().tabsPlacement === "top"
+        ? "Each server has its own tabs along the top. The list says when an agent on any server needs you."
+        : "Tabs live under their server. Agents on any server show up there too.",
     detail: () => "“Needs you” means an agent is waiting for an answer.",
   },
   {

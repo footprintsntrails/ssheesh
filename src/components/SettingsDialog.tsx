@@ -27,7 +27,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { backend } from "../lib/backend";
 import { ago, cn } from "../lib/format";
 import { isMac, isWindows, SHORTCUT_GROUPS, SHORTCUT_NAMES, shortcutLabel } from "../lib/keys";
@@ -41,6 +41,7 @@ import {
   fontStack,
   isBuiltInTheme,
   newCustomThemeId,
+  OWN_SCHEME,
   resolveScheme,
   TERMINAL_FONTS,
   TERMINAL_SCHEMES,
@@ -57,6 +58,8 @@ import { Segmented, settingId, Slider, Switch } from "./controls";
 import { compileRule, HIGHLIGHT_COLORS, type HighlightColor, type HighlightRule } from "../lib/highlight";
 import { ShortcutsEditor } from "./ShortcutsEditor";
 import { ThemeEditor, ThemeImport } from "./ThemeEditor";
+import { ColorButton, OwnAccent } from "./ColorPicker";
+import { useEscapeLayer } from "./Overlays";
 import { Button, Logo, Spinner } from "./ui";
 
 const REPO = "https://github.com/footprintsntrails/ssheesh";
@@ -129,6 +132,16 @@ function Row({ label, hint, children, stack }: { label: string; hint?: string; c
         {hint && <div className="mt-0.5 text-[11.5px] leading-snug text-fg-3">{hint}</div>}
       </div>
       <div className={cn(stack ? "w-full" : "shrink-0")}>{children}</div>
+    </div>
+  );
+}
+
+/** A group of settings inside a section: a small label over a line, then its rows. */
+function SubHeading({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div id={settingId(title)} className="mt-7 border-b border-line pb-2">
+      <h4 className="text-[11.5px] font-semibold tracking-wide text-fg-3 uppercase">{title}</h4>
+      {hint && <p className="mt-1 text-[11.5px] leading-snug text-fg-3">{hint}</p>}
     </div>
   );
 }
@@ -298,10 +311,11 @@ function Appearance({ s, set, reset }: SectionProps) {
               {s.accent === a.value && <Check size={13} strokeWidth={3} className="text-white drop-shadow" />}
             </button>
           ))}
+          <OwnAccent value={s.accent} onChange={(accent) => set({ accent })} />
         </div>
       </Row>
       <Row label="Interface size" hint="Everything but the terminal text, which has its own size under Terminal.">
-        <Slider label="Interface size" value={s.uiZoom} min={85} max={130} step={5} onChange={(v) => set({ uiZoom: v })} format={(v) => `${v}%`} />
+        <Slider label="Interface size" value={s.uiZoom} min={85} max={130} step={5} onChange={(v) => set({ uiZoom: v })} format={(v) => `${v}%`} onRelease />
       </Row>
       <Row label="Fade panes you're not using" hint="Makes it obvious where you're typing.">
         <Slider label="Fade panes you're not using" value={s.dimInactive} min={0} max={50} step={5} onChange={(v) => set({ dimInactive: v })} format={(v) => (v ? `${v}%` : "Off")} />
@@ -361,7 +375,16 @@ export function TerminalPreview({ s }: { s: Settings }) {
 }
 
 function Terminal({ s, set, reset }: SectionProps) {
-  const schemes = [["auto", { name: "Match app" }] as const, ...Object.entries(TERMINAL_SCHEMES)];
+  const schemes = [["auto", { name: "Match app" }] as const, ...Object.entries(TERMINAL_SCHEMES), [OWN_SCHEME, { name: "Your own" }] as const];
+  const own = s.terminalScheme === OWN_SCHEME;
+  // Your own colors start from what's on screen now.
+  const pickOwn = () => {
+    const now = resolveScheme(s.terminalScheme, s.theme, s.accent);
+    set({ terminalScheme: OWN_SCHEME, terminalColors: s.terminalColors ?? { background: now.background ?? "#0a0b0d", foreground: now.foreground ?? "#d8dce2" } });
+  };
+  const colors = s.terminalColors ?? { background: "#0a0b0d", foreground: "#d8dce2" };
+  const backgrounds = Object.values(TERMINAL_SCHEMES).map((x) => ({ name: x.name, color: x.theme.background ?? "#000000" }));
+  const texts = Object.values(TERMINAL_SCHEMES).map((x) => ({ name: x.name, color: x.theme.foreground ?? "#ffffff" }));
   return (
     <>
       <SectionTitle
@@ -398,7 +421,7 @@ function Terminal({ s, set, reset }: SectionProps) {
             return (
               <button
                 key={id}
-                onClick={() => set({ terminalScheme: id })}
+                onClick={() => (id === OWN_SCHEME ? pickOwn() : set({ terminalScheme: id }))}
                 className={cn(
                   "flex items-center gap-2.5 rounded-[9px] p-2 text-left ring-1 transition-shadow",
                   active ? "ring-2 ring-accent" : "ring-ink/[0.08] hover:ring-ink/[0.18]",
@@ -418,6 +441,30 @@ function Terminal({ s, set, reset }: SectionProps) {
           })}
         </div>
       </Row>
+      {own && (
+        <Row label="Your colors" hint="Background and text. The other colors follow your app theme; the cursor is your accent color.">
+          <div className="flex items-center gap-4 text-[12px] text-fg-2">
+            {(
+              [
+                ["background", "Background", backgrounds],
+                ["foreground", "Text", texts],
+              ] as const
+            ).map(([key, name, palette]) => (
+              <span key={key} className="flex items-center gap-2">
+                <ColorButton
+                  label={`Terminal ${name.toLowerCase()}`}
+                  value={colors[key]}
+                  onChange={(hex) => set({ terminalColors: { ...colors, [key]: hex } })}
+                  palette={palette}
+                  className="size-7 rounded-[7px] ring-1 ring-inset ring-ink/[0.2] transition-transform hover:scale-105"
+                  style={{ background: colors[key] }}
+                />
+                {name}
+              </span>
+            ))}
+          </div>
+        </Row>
+      )}
       <Row label="Font">
         <select
           value={s.terminalFont}
@@ -493,8 +540,7 @@ function Terminal({ s, set, reset }: SectionProps) {
         <Switch label="Tell me when a terminal needs me" checked={s.notifyAttention} onChange={(v) => set({ notifyAttention: v })} />
       </Row>
 
-      <h4 className="mt-6 text-[13px] font-semibold text-fg">Highlighting</h4>
-      <p className="mt-0.5 text-[11.5px] leading-snug text-fg-3">Colors words in terminal output so problems jump out. Uses your color scheme's own colors.</p>
+      <SubHeading title="Highlighting" hint="Colors words in terminal output so problems jump out, in your color scheme's own colors." />
       <Row label="Errors" hint="ERROR, FATAL, failed:, Permission denied, command not found…">
         <Switch label="Highlight errors" checked={s.highlightErrors} onChange={(v) => set({ highlightErrors: v })} />
       </Row>
@@ -768,9 +814,7 @@ function Privacy({ s, set }: SectionProps) {
           </span>
         </div>
       )}
-      <h4 id={settingId("What SSHeesh connects to")} className="mt-6 text-[13px] font-semibold text-fg">
-        What SSHeesh connects to
-      </h4>
+      <SubHeading title="What SSHeesh connects to" />
       <NetworkList updates={s.updateMode !== "manual"} />
     </>
   );
@@ -830,7 +874,7 @@ function Updates({ s, set }: SectionProps) {
             </div>
           </div>
           {status.kind === "available" && (
-            <Button variant="primary" size="sm" onClick={install}>
+            <Button variant="primary" size="sm" onClick={() => void install()}>
               <Download size={13} /> Install
             </Button>
           )}
@@ -919,12 +963,12 @@ function About() {
           <ExternalLink size={12.5} /> All releases
         </Button>
       </div>
-      <h4 className="mt-7 text-[13px] font-semibold text-fg">Getting to know SSHeesh</h4>
+      <SubHeading title="Getting to know SSHeesh" />
       <div className="mt-2.5 flex flex-wrap gap-2">
         <Button size="sm" onClick={() => (useStore.getState().closeSettings(), useTour.getState().show())}>
           <GraduationCap size={12.5} /> Take the tour
         </Button>
-        <Button size="sm" onClick={() => (useStore.getState().closeSettings(), useSettings.getState().update({ onboardingVersion: 0 }))}>
+        <Button size="sm" onClick={() => (useStore.getState().closeSettings(), useSettings.getState().update({ onboardingVersion: 0, onboarded: false }))}>
           <Sparkles size={12.5} /> Show the welcome again
         </Button>
       </div>
@@ -955,12 +999,7 @@ export function SettingsDialog() {
   const close = useStore((st) => st.closeSettings);
   const s = useSettings();
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, close]);
+  useEscapeLayer(open, close);
 
   const [query, setQuery] = useState("");
   // Clicking a section in the list starts it afresh, out of the theme editor too.

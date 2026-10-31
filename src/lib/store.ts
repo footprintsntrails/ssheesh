@@ -404,7 +404,8 @@ export const useStore = create<AppState>()(
 
       mainTerminalFor(target) {
         const s = get();
-        const isOn = (id: string | undefined) => !!id && s.panes[id]?.kind === "terminal" && sameTarget(s.panes[id].target, target);
+        // The server's own shell: never a container's shell or its logs.
+        const isOn = (id: string | undefined) => !!id && s.panes[id]?.kind === "terminal" && !s.panes[id].container && sameTarget(s.panes[id].target, target);
         const last = s.lastTerminal[targetKey(target)];
         if (isOn(last)) return last;
         return panesOn(s, target).find((p) => isOn(p.id))?.id ?? null;
@@ -476,7 +477,7 @@ export const useStore = create<AppState>()(
         const pane = s.panes[id];
         if (!pane) return;
         if (pane.kind === "terminal") {
-          void import("./terminals").then((t) => t.disposeTerminal(id, true));
+          void import("./terminals").then((t) => t.disposeTerminal(id, true, pane));
         }
         const key = machine(pane);
         const tabs = pane.target ? tabsOn(s, pane.target).map((p) => p.id) : [];
@@ -531,7 +532,9 @@ export const useStore = create<AppState>()(
         const shown = target ? panesOn(s, target).filter((p) => !hidden.includes(p.id)) : [];
         if (target && !shown.length) return;
         const focused = hidden.includes(s.focused) && shown.length ? shown[0].id : s.focused;
-        set({ hidden, focused, zoomed: s.zoomed && hidden.includes(s.zoomed) ? null : s.zoomed });
+        // Focus moves the way every other move does, so the machine knows its front tab.
+        const moved = focused !== s.focused ? focusing({ ...s, hidden }, s.panes, focused) : { focused };
+        set({ hidden, ...moved, zoomed: s.zoomed && hidden.includes(s.zoomed) ? null : s.zoomed });
       },
 
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
@@ -691,7 +694,11 @@ export function splitByMachine(saved: Saved1): Record<string, unknown> {
 
 /** Changing the default in Settings applies to every machine, also ones you'd switched by hand. */
 useSettings.subscribe((s, prev) => {
-  if (s.viewMode !== prev.viewMode) useStore.setState({ splitOn: {} });
+  if (s.viewMode === prev.viewMode) return;
+  // Every machine follows the new default, and the tab you were on shows.
+  const st = useStore.getState();
+  const fronts = new Set([st.focused, ...Object.values(st.lastFocusedFor)]);
+  useStore.setState({ splitOn: {}, hidden: st.hidden.filter((h) => !fronts.has(h)) });
 });
 
 /**

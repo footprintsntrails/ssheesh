@@ -1,6 +1,7 @@
 import { Command } from "cmdk";
 import { Activity, BookOpen, Braces, Cable, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, GraduationCap, HardDrive, House, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Play, Plus, RefreshCw, RotateCcw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
@@ -88,6 +89,7 @@ export function CommandPalette() {
     { target: { kind: "local" }, name: "This computer", hint: "local" },
     ...hosts.map((h) => ({ target: { kind: "host", hostId: h.id } as TargetRef, name: names.host(h), hint: names.address(h) })),
   ];
+  const keyOf = (t: TargetRef) => (t.kind === "local" ? "local" : t.hostId);
 
   return (
     <Command.Dialog
@@ -137,8 +139,8 @@ export function CommandPalette() {
         <Command.Group heading="Connect">
           {targets.map(({ target, name, hint }) => (
             <Item
-              key={`t-${name}`}
-              value={`connect ${name} ${hint}`}
+              key={`t-${keyOf(target)}`}
+              value={`connect ${name} ${hint} ${keyOf(target)}`}
               icon={target.kind === "local" ? Laptop : SquareTerminal}
               label={name}
               hint={hint}
@@ -178,11 +180,11 @@ export function CommandPalette() {
           {targets.flatMap(({ target, name }) =>
             (pins[targetKey(target)] ?? []).map((path) => (
               <Item
-                key={`b-${name}-${path}`}
-                value={`bookmark folder ${folderName(path)} ${path} ${name}`}
+                key={`b-${keyOf(target)}-${path}`}
+                value={`bookmark folder ${folderName(path)} ${path} ${name} ${keyOf(target)}`}
                 icon={Star}
-                label={`${folderName(path)} on ${name}`}
-                hint={path}
+                label={`${names.text(folderName(path))} on ${name}`}
+                hint={names.text(path)}
                 onSelect={run(() => showFiles(target, path))}
               />
             )),
@@ -193,11 +195,11 @@ export function CommandPalette() {
               .slice(0, 5)
               .map((path) => (
                 <Item
-                  key={`r-${name}-${path}`}
-                  value={`recent folder ${folderName(path)} ${path} ${name}`}
+                  key={`r-${keyOf(target)}-${path}`}
+                  value={`recent folder ${folderName(path)} ${path} ${name} ${keyOf(target)}`}
                   icon={FolderOpen}
-                  label={`${folderName(path)} on ${name}`}
-                  hint={path}
+                  label={`${names.text(folderName(path))} on ${name}`}
+                  hint={names.text(path)}
                   onSelect={run(() => showFiles(target, path))}
                 />
               )),
@@ -210,8 +212,8 @@ export function CommandPalette() {
         <Command.Group heading="Workspaces">
           {targets.map(({ target, name }) => (
             <Item
-              key={`w-${name}`}
-              value={`workspace layout ${name}`}
+              key={`w-${keyOf(target)}`}
+              value={`workspace layout ${name} ${keyOf(target)}`}
               icon={LayoutDashboard}
               label={`Workspace for ${name}`}
               hint="terminal · files"
@@ -222,10 +224,10 @@ export function CommandPalette() {
 
         <Command.Group heading="Files and stats">
           {targets.map(({ target, name }) => (
-            <Item key={`f-${name}`} value={`files browse ${name}`} icon={FolderOpen} label={`Browse files on ${name}`} onSelect={run(() => showFiles(target))} />
+            <Item key={`f-${keyOf(target)}`} value={`files browse ${name} ${keyOf(target)}`} icon={FolderOpen} label={`Browse files on ${name}`} onSelect={run(() => showFiles(target))} />
           ))}
           {targets.map(({ target, name }) => (
-            <Item key={`s-${name}`} value={`stats metrics cpu memory traffic ${name}`} icon={Activity} label={`Stats for ${name}`} onSelect={run(() => showTab("stats", target))} />
+            <Item key={`s-${keyOf(target)}`} value={`stats metrics cpu memory traffic ${name} ${keyOf(target)}`} icon={Activity} label={`Stats for ${name}`} onSelect={run(() => showTab("stats", target))} />
           ))}
         </Command.Group>
         </>
@@ -329,15 +331,36 @@ export function CommandPalette() {
 
 // ---------------------------------------------------------------- dialogs
 
-export function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
+/** Open dialogs, oldest first: Esc closes only the newest. */
+const layers: symbol[] = [];
+
+/**
+ * Esc closes this layer while it's the one on top, and only if nothing
+ * handled the key first (a menu, the command bar).
+ */
+export function useEscapeLayer(open: boolean, onClose: () => void) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const me = Symbol("layer");
+    layers.push(me);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || layers[layers.length - 1] !== me) return;
+      e.preventDefault();
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      layers.splice(layers.indexOf(me), 1);
+    };
   }, [open, onClose]);
+}
+
+export function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
+  useEscapeLayer(open, onClose);
   if (!open) return null;
-  return (
+  // On top of everything already open, Settings included: the last one opened sits highest.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[16vh] animate-fade-in" onMouseDown={onClose}>
       <div
         role="dialog"
@@ -348,7 +371,8 @@ export function Modal({ open, onClose, children, width = 420 }: { open: boolean;
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -385,6 +409,8 @@ export function ConfirmDialog() {
 export function Toasts() {
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismissToast);
+  // Errors quote addresses and paths: streamer mode hides them here too.
+  const names = useNames();
   // Above the vitals bar, so a long upload's card doesn't hide it.
   const overVitals = useSettings((s) => s.showVitals && !s.compactMode);
   return (
@@ -396,8 +422,8 @@ export function Toasts() {
           <div key={t.id} role="status" className="glass pointer-events-auto flex animate-slide-up items-start gap-2.5 rounded-[13px] px-3.5 py-3">
             <Icon size={15} className={cn("mt-px shrink-0", t.tone === "success" && "text-ok", t.tone === "error" && "text-bad", t.tone === "info" && "text-accent")} />
             <div className="min-w-0 flex-1">
-              <p className="text-[12.5px] font-medium text-fg">{t.title}</p>
-              {t.body && <p className="selectable mt-0.5 break-words text-[11.5px] leading-snug text-fg-3">{t.body}</p>}
+              <p className="text-[12.5px] font-medium text-fg">{names.text(t.title)}</p>
+              {t.body && <p className="selectable mt-0.5 break-words text-[11.5px] leading-snug text-fg-3">{names.text(t.body)}</p>}
             </div>
             <button onClick={() => dismiss(t.id)} className="-mr-1 shrink-0 rounded p-0.5 text-fg-3 hover:text-fg" aria-label="Dismiss">
               <X size={13} />

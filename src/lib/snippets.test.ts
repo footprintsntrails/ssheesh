@@ -23,4 +23,10 @@ describe("snippet blanks", () => {
     expect(blankLabel("max_lines")).toBe("Max lines");
     expect(blankLabel("container")).toBe("Container");
   });
+
+  it("leaves Go templates alone", () => {
+    const cmd = "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' {{container}}";
+    expect(blanks(cmd).map((b) => b.name)).toEqual(["container"]);
+    expect(fill(cmd, { container: "web" })).toBe("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web");
+  });
 });

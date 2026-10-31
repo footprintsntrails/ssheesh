@@ -52,6 +52,12 @@ pub struct TextFile {
     pub content: Option<String>,
     pub binary: bool,
     pub size: u64,
+    /// Not valid UTF-8: `content` shows it with stand-ins for the bytes it
+    /// couldn't read, and saving would change those, so it's read-only.
+    pub lossy: bool,
+    /// Lines end in `\r\n`. `content` has plain `\n` for editing; put the
+    /// `\r\n` back to save it.
+    pub crlf: bool,
 }
 
 pub const MAX_TEXT: u64 = 2 * 1024 * 1024;
@@ -223,23 +229,63 @@ pub fn read_text(target: &Target, env: &SshEnv, path: &str) -> Result<TextFile, 
         }
         None => {
             let p = resolve_local(path);
-            let size = std::fs::metadata(&p)?.len();
-            let bytes = if size > MAX_TEXT { Vec::new() } else { std::fs::read(&p)? };
-            (size, bytes)
+            let meta = std::fs::metadata(&p)?;
+            // A device or a pipe (/dev/zero, a FIFO) never ends.
+            if !meta.is_file() {
+                return Err(OpError::failed("This isn't a regular file."));
+            }
+            let mut bytes = Vec::new();
+            if meta.len() <= MAX_TEXT {
+                // One byte past the cap tells a file that grew since.
+                File::open(&p)?.take(MAX_TEXT + 1).read_to_end(&mut bytes)?;
+            }
+            (meta.len(), bytes)
         }
     };
+    Ok(decode_text(path, size, bytes))
+}
+
+/// A file's bytes as text to show and edit.
+fn decode_text(path: &str, size: u64, bytes: Vec<u8>) -> TextFile {
+    let size = size.max(bytes.len() as u64);
+    let mut file = TextFile { path: path.into(), content: None, binary: false, size, lossy: false, crlf: false };
     if size > MAX_TEXT {
-        return Ok(TextFile { path: path.into(), content: None, binary: false, size });
+        return file;
     }
-    let binary = bytes.iter().take(8000).any(|&b| b == 0);
-    let content = if binary { None } else { Some(String::from_utf8_lossy(&bytes).into_owned()) };
-    Ok(TextFile { path: path.into(), content, binary, size })
+    if bytes.iter().take(8000).any(|&b| b == 0) {
+        file.binary = true;
+        return file;
+    }
+    let text = String::from_utf8(bytes).unwrap_or_else(|e| {
+        file.lossy = true;
+        String::from_utf8_lossy(e.as_bytes()).into_owned()
+    });
+    // Windows line endings, when most lines have them.
+    let crlf = text.matches("\r\n").count();
+    file.crlf = crlf * 2 > text.matches('\n').count();
+    file.content = Some(if file.crlf { text.replace("\r\n", "\n") } else { text });
+    file
+}
+
+/// The script `write_text` runs on a server; the content comes on stdin.
+/// It lands in a temporary file first and is copied over the file only once
+/// all of it arrived, so a dropped connection never leaves the file cut off.
+/// Copying (not moving) keeps the file's owner and permissions.
+fn save_script(path: &str, size: usize) -> String {
+    format!(
+        r#"u=$(umask); umask 077; S=$(mktemp 2>/dev/null) || S="${{TMPDIR:-/tmp}}/.sshee-save.$$"
+cat > "$S" || {{ rm -f -- "$S"; exit 1; }}
+umask "$u"
+[ $(($(wc -c < "$S"))) -eq {size} ] || {{ rm -f -- "$S"; echo 'Saving stopped before the end. The file was left as it was.' >&2; exit 7; }}
+cat -- "$S" > {f}; r=$?; rm -f -- "$S"; exit $r"#,
+        f = shell_quote(path)
+    )
 }
 
 pub fn write_text(target: &Target, env: &SshEnv, path: &str, content: &str) -> Result<(), OpError> {
     match ssh_only(target) {
         Some(t) => {
-            run_remote(t, env, &format!("cat > {}", shell_quote(path)), Some(content.as_bytes().to_vec()))?;
+            run_remote(t, env, &save_script(path, content.len()), Some(content.as_bytes().to_vec()))?;
             Ok(())
         }
         None => Ok(std::fs::write(resolve_local(path), content)?),
@@ -282,22 +328,73 @@ fn copy_here(from: &Path, dir: &Path, overwrite: bool) -> Result<(), OpError> {
     if dest == from {
         return Err(OpError::failed("That's already in this folder."));
     }
-    if dest.exists() && !overwrite {
-        return Err(OpError::new(ErrorCode::Exists, format!("\"{}\" already exists in this folder.", name.to_string_lossy())));
+    // The same checks on the real paths, past links and "..". A folder
+    // copied into itself, or a folder inside it, would never end.
+    if let (Ok(src), Ok(into)) = (from.canonicalize(), dir.canonicalize()) {
+        if into.join(name) == src {
+            return Err(OpError::failed("That's already in this folder."));
+        }
+        if src.is_dir() && into.starts_with(&src) {
+            return Err(OpError::failed("A folder can't be copied into itself."));
+        }
     }
-    fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
-        if from.is_dir() {
+    if dest.exists() && !overwrite {
+        return Err(OpError::new(ErrorCode::Exists, exists_message(&[name.to_string_lossy().into_owned()])));
+    }
+    // The link you picked is followed; links inside a folder are copied as
+    // links, so one that points back up can't loop.
+    fn copy_all(from: &Path, to: &Path, follow: bool) -> std::io::Result<()> {
+        let meta = if follow { std::fs::metadata(from)? } else { std::fs::symlink_metadata(from)? };
+        if meta.is_symlink() {
+            copy_link(from, to)
+        } else if meta.is_dir() {
             std::fs::create_dir_all(to)?;
             for entry in std::fs::read_dir(from)? {
                 let entry = entry?;
-                copy_all(&entry.path(), &to.join(entry.file_name()))?;
+                copy_all(&entry.path(), &to.join(entry.file_name()), false)?;
             }
             Ok(())
         } else {
             std::fs::copy(from, to).map(|_| ())
         }
     }
-    Ok(copy_all(from, &dest)?)
+    Ok(copy_all(from, &dest, true)?)
+}
+
+#[cfg(unix)]
+fn copy_link(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
+        std::fs::remove_file(to)?;
+    }
+    std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+}
+
+/// Making links on Windows needs extra rights: a linked file is copied, a
+/// linked folder left out.
+#[cfg(not(unix))]
+fn copy_link(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::metadata(from).is_ok_and(|m| m.is_file()) {
+        std::fs::copy(from, to).map(|_| ())
+    } else {
+        Ok(())
+    }
+}
+
+/// Shell that sets `"$@"` to `items` (quoted names) for tar, a link to a
+/// folder as `link/.`: tar then packs the folder it points to, under the
+/// link's name. Links further in stay links, so nothing loops.
+fn tar_items(items: &str) -> String {
+    format!(r#"set --; for n in {items}; do [ -L "$n" ] && [ -d "$n" ] && n="$n/."; set -- "$@" "$n"; done"#)
+}
+
+/// `tar_items` for a path on this computer.
+fn local_tar_item(path: &Path, name: &str) -> String {
+    let link = path.symlink_metadata().is_ok_and(|m| m.is_symlink());
+    if link && path.is_dir() {
+        format!("{name}/.")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Packs `names` (all inside `dir`) into `dir/archive` as a .tar.gz.
@@ -310,9 +407,10 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
         Some(t) => {
             let items = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
             let script = format!(
-                r#"cd -- {dir} || exit 1; [ -e {name} ] && {{ echo EXISTS >&2; exit 5; }}; tar -czf {name} -- {items}"#,
+                r#"cd -- {dir} || exit 1; [ -e {name} ] && {{ echo EXISTS >&2; exit 5; }}; {set}; tar -czf {name} -- "$@""#,
                 dir = shell_quote(dir),
                 name = shell_quote(archive),
+                set = tar_items(&items),
             );
             run_remote(t, env, &script, None).map(|_| ()).map_err(|e| if e.message == "EXISTS" { exists() } else { e })
         }
@@ -322,8 +420,9 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
                 return Err(exists());
             }
             // tar ships with macOS, Linux and Windows 10 and newer.
+            let items = names.iter().map(|n| local_tar_item(&base.join(n), n));
             let mut cmd = std::process::Command::new("tar");
-            cmd.current_dir(&base).arg("-czf").arg(archive).arg("--").args(names);
+            cmd.current_dir(&base).arg("-czf").arg(archive).arg("--").args(items);
             crate::ssh::hide_console(&mut cmd);
             let out = cmd.output()?;
             if out.status.success() {
@@ -510,43 +609,131 @@ fn scratch_name(name: &str) -> String {
 /// Size of a server file, or roughly of a folder (its disk usage), for the
 /// progress bar. 0 when it can't be told.
 fn remote_size(t: &SshTarget, env: &SshEnv, path: &str, is_dir: bool) -> u64 {
-    let p = shell_quote(path);
-    let script = if is_dir {
-        format!("du -sk -- {p}")
-    } else {
-        // GNU stat, then BSD stat.
-        format!("stat -L -c %s -- {p} 2>/dev/null || stat -L -f %z -- {p}")
-    };
-    run_remote(t, env, &script, None)
+    run_remote(t, env, &size_script(path, is_dir), None)
         .ok()
         .and_then(|out| String::from_utf8_lossy(&out).split_whitespace().next()?.parse::<u64>().ok())
         .map_or(0, |n| if is_dir { n * 1024 } else { n })
 }
 
+/// The script for `remote_size`. `/.` makes du count the folder a link
+/// points to (as `download` packs it), not the link.
+fn size_script(path: &str, is_dir: bool) -> String {
+    let p = shell_quote(path);
+    if is_dir {
+        format!("du -sk -- {p}/.")
+    } else {
+        // GNU stat, then BSD stat.
+        format!("stat -L -c %s -- {p} 2>/dev/null || stat -L -f %z -- {p}")
+    }
+}
+
+/// The script `download` runs to pack a folder: `name` inside `parent`,
+/// as a tar stream on stdout.
+fn pack_script(parent: &str, name: &str) -> String {
+    format!("cd -- {} || exit 1; {}; tar -cf - -- \"$@\"", shell_quote(parent), tar_items(&shell_quote(name)))
+}
+
 /// What a local file or folder holds: bytes of file content, and the size of
 /// the tar stream that carries it (a 512-byte header per entry, content
-/// padded to 512, two empty blocks at the end, all padded to 10 KiB).
+/// padded to 512, two empty blocks at the end, all padded to 10 KiB). The
+/// path itself may be a link, which is followed, as `upload` does.
 fn local_tree_size(path: &Path) -> (u64, u64) {
-    fn walk(p: &Path, acc: &mut (u64, u64)) {
-        let Ok(meta) = p.symlink_metadata() else { return };
+    fn walk(p: &Path, acc: &mut (u64, u64), follow: bool) {
+        let meta = if follow { p.metadata() } else { p.symlink_metadata() };
+        let Ok(meta) = meta else { return };
         acc.1 += 512;
         if meta.is_file() {
             acc.0 += meta.len();
             acc.1 += meta.len().div_ceil(512) * 512;
         } else if meta.is_dir() {
             for entry in std::fs::read_dir(p).into_iter().flatten().flatten() {
-                walk(&entry.path(), acc);
+                walk(&entry.path(), acc, false);
             }
         }
     }
     let mut acc = (0, 0);
-    walk(path, &mut acc);
+    walk(path, &mut acc, true);
     (acc.0, (acc.1 + 1024).div_ceil(10240) * 10240)
 }
 
 /// How many bytes `upload` will send for this path, for the transfer's total.
 pub fn upload_size(path: &Path) -> u64 {
     local_tree_size(path).0
+}
+
+/// `"a.txt" already exists in this folder.`, or a few names and how many
+/// more.
+fn exists_message(names: &[String]) -> String {
+    let q = |n: &String| format!("\"{n}\"");
+    match names {
+        [] => String::new(),
+        [one] => format!("{} already exists in this folder.", q(one)),
+        [rest @ .., last] if names.len() <= 5 => {
+            format!("{} and {} already exist in this folder.", rest.iter().map(q).collect::<Vec<_>>().join(", "), q(last))
+        }
+        _ => format!(
+            "{} and {} more already exist in this folder.",
+            names[..4].iter().map(q).collect::<Vec<_>>().join(", "),
+            names.len() - 4
+        ),
+    }
+}
+
+/// Refuses an upload into `dir` that would replace anything there, naming
+/// all of it, so one question covers the whole batch before anything moves.
+pub fn check_upload(target: &Target, env: &SshEnv, local_paths: &[PathBuf], dir: &str) -> Result<(), OpError> {
+    let names: Vec<String> = local_paths.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+    let mut taken = Vec::new();
+    match ssh_only(target) {
+        Some(t) => {
+            // In batches, to stay well inside the longest command a server takes.
+            for batch in names.chunks(200) {
+                let out = run_remote_read(t, env, &taken_script(dir, batch))?;
+                taken.extend(taken_in(&out, batch));
+            }
+        }
+        None => {
+            let dir = resolve_local(dir);
+            taken.extend(names.into_iter().filter(|n| dir.join(n).symlink_metadata().is_ok()));
+        }
+    }
+    if taken.is_empty() {
+        Ok(())
+    } else {
+        Err(OpError::new(ErrorCode::Exists, exists_message(&taken)))
+    }
+}
+
+/// A script that prints the place in `names` of each one that's in `dir`,
+/// a line each. Nothing when the folder can't be opened: the upload says why.
+fn taken_script(dir: &str, names: &[String]) -> String {
+    let items = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
+    format!(
+        r#"cd -- {} 2>/dev/null || exit 0; i=0; for n in {items}; do if [ -e "$n" ] || [ -L "$n" ]; then echo "$i"; fi; i=$((i+1)); done"#,
+        shell_quote(dir)
+    )
+}
+
+/// The names `taken_script` printed.
+fn taken_in(out: &[u8], names: &[String]) -> Vec<String> {
+    String::from_utf8_lossy(out).lines().filter_map(|l| names.get(l.trim().parse::<usize>().ok()?).cloned()).collect()
+}
+
+/// The script `upload` runs on a server for one file; the file comes on
+/// stdin, and `s` and `d` (quoted) are where it's staged and where it goes.
+/// If ssh goes away midway, cat on the server just sees the end of its
+/// input, so the size check is what tells a whole file from a cut one.
+/// A file that's there is then written over in place, which keeps its owner
+/// and permissions (and a link that points to it). When that can't be done
+/// (no write permission, a program running from it) or nothing's there yet,
+/// the staged file takes its place.
+fn upload_file_script(guard: &str, s: &str, d: &str, size: u64) -> String {
+    format!(
+        "{guard}[ -d {d} ] && {{ echo 'A folder with this name is already here.' >&2; exit 1; }}
+cat > {s} || {{ rm -f -- {s}; exit 1; }}
+[ $(($(wc -c < {s}))) -eq {size} ] || {{ rm -f -- {s}; echo 'The upload stopped before the end.' >&2; exit 7; }}
+if [ -f {d} ] && cat -- {s} 2>/dev/null > {d}; then rm -f -- {s}; else mv -f -- {s} {d} || {{ rm -f -- {s}; exit 1; }}; fi"
+    )
 }
 
 /// Removes the hidden folder of an upload that didn't finish, in the
@@ -604,8 +791,7 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         untar.args(["-xf", "-", "-C"]).arg(&scratch).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut untar);
         let mut untar = untar.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
-        let script = format!("cd -- {} && tar -cf - -- {}", shell_quote(&parent_dir(remote_path)), shell_quote(&name));
-        let mut cmd = remote_command(t, env, &script);
+        let mut cmd = remote_command(t, env, &pack_script(&parent_dir(remote_path), &name));
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut ssh = match cmd.spawn() {
             Ok(ssh) => ssh,
@@ -661,11 +847,11 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     let guard = if overwrite {
         String::new()
     } else {
-        format!("[ -e {d} ] && {{ echo EXISTS >&2; exit 5; }}; ")
+        format!("{{ [ -e {d} ] || [ -L {d} ]; }} && {{ echo EXISTS >&2; exit 5; }}; ")
     };
     let exists = |e: OpError| {
         if e.message == "EXISTS" {
-            OpError::new(ErrorCode::Exists, format!("\"{name}\" already exists in this folder."))
+            OpError::new(ErrorCode::Exists, exists_message(std::slice::from_ref(&name)))
         } else {
             e
         }
@@ -673,15 +859,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
 
     if local_path.is_file() {
         let source = File::open(local_path)?;
-        // If ssh goes away midway, cat on the server just sees the end of its
-        // input, so the size check is what tells a whole file from a cut one.
-        let script = format!(
-            "{guard}[ -d {d} ] && {{ echo 'A folder with this name is already here.' >&2; exit 1; }}
-cat > {s} || {{ rm -f -- {s}; exit 1; }}
-[ $(($(wc -c < {s}))) -eq {size} ] || {{ rm -f -- {s}; echo 'The upload stopped before the end.' >&2; exit 7; }}
-mv -f -- {s} {d} || {{ rm -f -- {s}; exit 1; }}"
-        );
-        let mut cmd = remote_command(t, env, &script);
+        let mut cmd = remote_command(t, env, &upload_file_script(&guard, &s, &d, size));
         cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         let mut ssh = cmd.spawn().map_err(spawn_error)?;
         let errors = drain(ssh.stderr.take());
@@ -710,7 +888,7 @@ mv -f -- {s} {d} || {{ rm -f -- {s}; exit 1; }}"
     };
     let parent = local_path.parent().unwrap_or(Path::new("."));
     let mut pack = Command::new("tar");
-    pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(&name).stdout(Stdio::piped()).stderr(Stdio::piped());
+    pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(local_tar_item(local_path, &name)).stdout(Stdio::piped()).stderr(Stdio::piped());
     crate::ssh::hide_console(&mut pack);
     let mut pack = pack.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
     let mut cmd = remote_command(t, env, &script);
@@ -781,16 +959,17 @@ pub fn session_cwd(target: &Target, env: &SshEnv, session_key: &str) -> Result<S
 /// is), in home, or a few levels down from home. The script for `find_path`.
 fn find_path_script(rel: &str, cwd: &str) -> String {
     format!(
-        r#"p={rel}; d={cwd}; case "$d" in "~") d=$HOME ;; "~/"*) d="$HOME/${{d#\~/}}" ;; esac
-hit() {{ [ -e "$1/$p" ] && {{ printf '%s\n' "$1/$p"; exit 0; }}; }}
+        r#"set -f; p={rel}; d={cwd}; case "$d" in "~") d=$HOME ;; "~/"*) d="$HOME/${{d#\~/}}" ;; esac
+hit() {{ case "$1" in /) f="/$p" ;; *) f="$1/$p" ;; esac; [ -e "$f" ] && {{ printf '%s\n' "$f"; exit 0; }}; }}
 while [ -n "$d" ]; do hit "$d"; [ "$d" = / ] && break; d=$(dirname -- "$d"); done
 u=$(id -u); ws=$(find /proc -mindepth 2 -maxdepth 2 -name cwd -user "$u" -printf '%l\n' 2>/dev/null | sort -u)
 [ -n "$ws" ] || ws=$(for pid in $(pgrep -u "$u" 2>/dev/null); do readlink "/proc/$pid/cwd"; done 2>/dev/null | sort -u)
 IFS='
 '; for w in $ws; do hit "$w"; done; unset IFS
 hit "$HOME"
-t=; command -v timeout >/dev/null 2>&1 && t="timeout 3"
-$t find "$HOME" -maxdepth 6 \( -name node_modules -o -name .git -o -name .cache \) -prune -o -path "*/$p" -print 2>/dev/null | head -n 1"#,
+pe=$(printf '%s' "$p" | sed 's/[][*?\\]/\\&/g')
+t=; if timeout 1 true 2>/dev/null; then t="timeout 3"; elif timeout -t 1 true 2>/dev/null; then t="timeout -t 3"; fi
+$t find "$HOME" -maxdepth 5 \( -name node_modules -o -name .git -o -name .cache -o -name Library -o -name .npm -o -name .cargo \) -prune -o -path "*/$pe" -print 2>/dev/null | head -n 1"#,
         rel = shell_quote(rel.trim_start_matches("./")),
         cwd = shell_quote(cwd),
     )
@@ -909,6 +1088,210 @@ mod tests {
         let again = archive(&Target::Local, &env, &d, &["notes.txt".into()], "backup.tar.gz");
         assert_eq!(again.unwrap_err().code, ErrorCode::Exists);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Runs a script with `sh`, `input` on stdin; its exit status.
+    #[cfg(unix)]
+    fn sh_with_input(script: &str, input: &[u8]) -> std::process::ExitStatus {
+        let mut child = Command::new("sh").arg("-c").arg(script).stdin(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait().unwrap()
+    }
+
+    #[cfg(unix)]
+    fn mode_of(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        p.metadata().unwrap().permissions().mode() & 0o777
+    }
+
+    /// A folder `real` with a file, a subfolder and a link inside that points
+    /// back up, and `link` pointing to `real`.
+    #[cfg(unix)]
+    fn linked_folder(base: &Path) {
+        std::fs::create_dir_all(base.join("real/sub")).unwrap();
+        std::fs::write(base.join("real/a.txt"), "hello").unwrap();
+        std::fs::write(base.join("real/sub/b.txt"), "x").unwrap();
+        std::os::unix::fs::symlink("..", base.join("real/sub/loop")).unwrap();
+        std::os::unix::fs::symlink("real", base.join("link")).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_folder_downloads_as_the_folder() {
+        let base = std::env::temp_dir().join(format!("sshee-pack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        linked_folder(&base);
+        let out = base.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        // The server's side packs, this computer's side unpacks, as `download` does.
+        let packed = Command::new("sh").arg("-c").arg(pack_script(&base.to_string_lossy(), "link")).output().unwrap();
+        assert!(packed.status.success());
+        let mut untar = Command::new("tar").args(["-xf", "-", "-C"]).arg(&out).stdin(Stdio::piped()).spawn().unwrap();
+        untar.stdin.take().unwrap().write_all(&packed.stdout).unwrap();
+        assert!(untar.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(out.join("link/a.txt")).unwrap(), "hello");
+        assert_eq!(std::fs::read_to_string(out.join("link/sub/b.txt")).unwrap(), "x");
+        // The link inside stays a link instead of looping.
+        assert!(out.join("link/sub/loop").symlink_metadata().unwrap().is_symlink());
+        // A plain folder still packs as itself.
+        let plain = Command::new("sh").arg("-c").arg(format!("{} | tar -tf -", pack_script(&base.to_string_lossy(), "real"))).output().unwrap();
+        assert!(String::from_utf8_lossy(&plain.stdout).lines().any(|l| l == "real/a.txt"));
+        // And its size is the folder's, not the link's.
+        let du = Command::new("sh").arg("-c").arg(size_script(&base.join("link").to_string_lossy(), true)).output().unwrap();
+        let kb: u64 = String::from_utf8_lossy(&du.stdout).split_whitespace().next().unwrap().parse().unwrap();
+        assert!(kb > 0);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archives_the_folder_a_link_points_to() {
+        let base = std::env::temp_dir().join(format!("sshee-archive-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        linked_folder(&base);
+        let env = SshEnv::default();
+        archive(&Target::Local, &env, &base.to_string_lossy(), &["link".into()], "link.tar.gz").unwrap();
+        let list = Command::new("tar").arg("-tzf").arg(base.join("link.tar.gz")).output().unwrap();
+        let names = String::from_utf8_lossy(&list.stdout).to_string();
+        assert!(names.lines().any(|l| l.ends_with("a.txt")), "{names}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_on_a_server_keeps_the_file_whole_and_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sshee-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("secret.env");
+        std::fs::write(&f, "OLD=1\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let p = f.to_string_lossy();
+        assert!(sh_with_input(&save_script(&p, 6), b"NEW=2\n").success());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "NEW=2\n");
+        assert_eq!(mode_of(&f), 0o600);
+        // Cut off on the way: the file stays as it was.
+        assert!(!sh_with_input(&save_script(&p, 100), b"NEW=3\n").success());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "NEW=2\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_an_upload_keeps_the_old_files_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sshee-replace-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (d, s) = (dir.join("key.pem"), dir.join(".key.pem.sshee-part"));
+        std::fs::write(&d, "old").unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let (dq, sq) = (shell_quote(&d.to_string_lossy()), shell_quote(&s.to_string_lossy()));
+        assert!(sh_with_input(&upload_file_script("", &sq, &dq, 3), b"new").success());
+        assert_eq!(std::fs::read_to_string(&d).unwrap(), "new");
+        assert_eq!(mode_of(&d), 0o600);
+        assert!(!s.exists());
+        // Cut off on the way: the old file stays, and nothing's left behind.
+        assert!(!sh_with_input(&upload_file_script("", &sq, &dq, 10), b"cut").success());
+        assert_eq!(std::fs::read_to_string(&d).unwrap(), "new");
+        assert!(!s.exists());
+        // A new file just moves into place.
+        let (n, nq) = (dir.join("fresh.txt"), shell_quote(&dir.join("fresh.txt").to_string_lossy()));
+        assert!(sh_with_input(&upload_file_script("", &sq, &nq, 2), b"hi").success());
+        assert_eq!(std::fs::read_to_string(&n).unwrap(), "hi");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reads_text_as_it_can_be_saved() {
+        let t = decode_text("a", 9, b"one\r\ntwo\r\n".to_vec());
+        assert!(t.crlf && !t.lossy);
+        assert_eq!(t.content.as_deref(), Some("one\ntwo\n"));
+        let t = decode_text("a", 8, b"one\ntwo\n".to_vec());
+        assert!(!t.crlf);
+        assert_eq!(t.content.as_deref(), Some("one\ntwo\n"));
+        // Latin-1 isn't UTF-8: shown, but not to be saved back.
+        let t = decode_text("a", 4, b"caf\xe9".to_vec());
+        assert!(t.lossy);
+        assert!(t.content.is_some());
+        let t = decode_text("a", 3, b"a\0b".to_vec());
+        assert!(t.binary && t.content.is_none());
+        let t = decode_text("a", MAX_TEXT + 1, Vec::new());
+        assert!(t.content.is_none() && !t.binary);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn previews_only_regular_files_here() {
+        let env = SshEnv::default();
+        assert!(read_text(&Target::Local, &env, "/dev/zero").is_err());
+    }
+
+    #[test]
+    fn names_what_an_upload_would_replace() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(exists_message(&names(&["a"])), "\"a\" already exists in this folder.");
+        assert_eq!(exists_message(&names(&["a", "b", "c"])), "\"a\", \"b\" and \"c\" already exist in this folder.");
+        assert_eq!(
+            exists_message(&names(&["a", "b", "c", "d", "e", "f", "g"])),
+            "\"a\", \"b\", \"c\", \"d\" and 3 more already exist in this folder."
+        );
+        let base = std::env::temp_dir().join(format!("sshee-check-{}", std::process::id()));
+        let (src, dst) = (base.join("src"), base.join("dst"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        for n in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(src.join(n), n).unwrap();
+        }
+        std::fs::write(dst.join("a.txt"), "old").unwrap();
+        std::fs::write(dst.join("c.txt"), "old").unwrap();
+        let paths: Vec<PathBuf> = ["a.txt", "b.txt", "c.txt"].iter().map(|n| src.join(n)).collect();
+        let err = check_upload(&Target::Local, &SshEnv::default(), &paths, &dst.to_string_lossy()).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Exists);
+        assert_eq!(err.message, "\"a.txt\" and \"c.txt\" already exist in this folder.");
+        // The same on a server, with a name a shell could trip on.
+        #[cfg(unix)]
+        {
+            std::fs::write(dst.join("it's -x"), "").unwrap();
+            let batch = names(&["a.txt", "b.txt", "it's -x", "c.txt"]);
+            let out = Command::new("sh").arg("-c").arg(taken_script(&dst.to_string_lossy(), &batch)).output().unwrap();
+            assert_eq!(taken_in(&out.stdout, &batch), names(&["a.txt", "it's -x", "c.txt"]));
+            let out = Command::new("sh").arg("-c").arg(taken_script("/no/such/folder", &batch)).output().unwrap();
+            assert!(out.status.success() && taken_in(&out.stdout, &batch).is_empty());
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copies_here_without_looping() {
+        let base = std::env::temp_dir().join(format!("sshee-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        linked_folder(&base);
+        let env = SshEnv::default();
+        let xfer = Transfer::quiet();
+        // Into itself, or a folder inside it: refused.
+        let into = upload(&Target::Local, &env, &base.join("real"), &base.join("real/sub").to_string_lossy(), false, &xfer);
+        assert!(into.is_err());
+        assert!(!base.join("real/sub/real").exists());
+        // A link inside is copied as a link; the picked link is followed.
+        let dst = base.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        upload(&Target::Local, &env, &base.join("link"), &dst.to_string_lossy(), false, &xfer).unwrap();
+        assert!(dst.join("link").symlink_metadata().unwrap().is_dir());
+        assert!(dst.join("link/sub/loop").symlink_metadata().unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(dst.join("link/a.txt")).unwrap(), "hello");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_file_counts_its_target() {
+        let base = std::env::temp_dir().join(format!("sshee-linked-file-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("real.txt"), "12345").unwrap();
+        std::os::unix::fs::symlink("real.txt", base.join("link.txt")).unwrap();
+        assert_eq!(upload_size(&base.join("link.txt")), 5);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

@@ -48,18 +48,22 @@ fn resolve(state: &AppState, spec: &TargetSpec) -> Result<Target, OpError> {
     match spec {
         TargetSpec::Local => Ok(Target::Local),
         TargetSpec::Host { host_id } => {
-            let mut hosts = state.hosts.lock().unwrap();
-            let h = hosts
-                .get(host_id)
-                .ok_or_else(|| OpError::new(ErrorCode::NotFound, "That server isn't in your list anymore."))?;
-            let mut t = h.target();
-            t.password = state.passwords.get(&h.id, h.remembered_password);
+            // The keychain may take a while (or ask to be unlocked): the
+            // server list isn't held meanwhile.
+            let (mut t, remembered, saved) = {
+                let mut hosts = state.hosts.lock().unwrap();
+                let h = hosts
+                    .get(host_id)
+                    .ok_or_else(|| OpError::new(ErrorCode::NotFound, "That server isn't in your list anymore."))?;
+                (h.target(), h.remembered_password, h.source == HostSource::Saved)
+            };
+            t.password = state.passwords.get(host_id, remembered);
             // A server added in the app may have its password in the keychain
             // without a note saying so (0.3.4 and earlier). Find it, note it.
-            if t.password.is_none() && !h.remembered_password && h.source == HostSource::Saved {
-                t.password = state.passwords.recover(&h.id);
+            if t.password.is_none() && !remembered && saved {
+                t.password = state.passwords.recover(host_id);
                 if t.password.is_some() {
-                    let _ = hosts.set_remembered_password(&h.id, true);
+                    let _ = state.hosts.lock().unwrap().set_remembered_password(host_id, true);
                 }
             }
             Ok(Target::Ssh(t))
@@ -365,6 +369,11 @@ async fn upload_paths(
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
     run_transfer(&state, transfer_id, on_progress, move |xfer| {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        // Everything that would be replaced, asked about once, before anything moves.
+        if !overwrite {
+            files::check_upload(&t, &env, &paths, &remote_dir)?;
+        }
+        xfer.check()?;
         xfer.add_total(paths.iter().map(|p| files::upload_size(p)).sum());
         for p in &paths {
             files::upload(&t, &env, p, &remote_dir, overwrite, &xfer)?;

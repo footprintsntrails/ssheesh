@@ -16,6 +16,7 @@ import { ONBOARDING_VERSION, useSettings, type Settings } from "../lib/settings"
 import { hostAddress, useStore } from "../lib/store";
 import { ACCENTS, APP_THEMES, resolveScheme, TERMINAL_FONTS, TERMINAL_SCHEMES } from "../lib/themes";
 import { MiniApp } from "./MiniApp";
+import { OwnAccent } from "./ColorPicker";
 import { Modal } from "./Overlays";
 import { Segmented, Slider, Switch } from "./controls";
 import { useTour } from "../lib/tour";
@@ -289,7 +290,8 @@ export function Welcome() {
   // Mounted only while the hello is due; it waits for your servers to load.
   const open = hostsLoaded && !demoSkip;
   const done = (tour: boolean) => {
-    if (configIds.length) useLabels.getState().chooseConfig(configIds, keep);
+    // Only the servers step decides about ~/.ssh/config; what changed doesn't show that list.
+    if (configIds.length && !returning) useLabels.getState().chooseConfig(configIds, keep);
     set({ onboarded: true, onboardingVersion: ONBOARDING_VERSION });
     if (addAfter) useStore.getState().setAddHostOpen(true);
     else if (tour) useTour.getState().show();
@@ -416,6 +418,7 @@ export function Welcome() {
                         style={{ background: a.value }}
                       />
                     ))}
+                    <OwnAccent value={s.accent} onChange={(accent) => set({ accent })} />
                   </div>
                 </Field>
                 <Field label="Terminal colors" hint="“Match app” follows your theme; the others are well-known palettes.">
@@ -469,17 +472,17 @@ export function Welcome() {
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Tabs">
                     <div className="flex gap-2" role="radiogroup" aria-label="Where tabs sit">
-                      <Card selected={s.tabsPlacement === "sidebar"} onClick={() => set({ tabsPlacement: "sidebar" })} title="Under each server">
-                        <rect x="4" y="4" width="18" height="32" rx="2" {...fill} />
-                        {[9, 15, 21].map((y) => (
-                          <rect key={y} x={y === 9 ? 6 : 9} y={y} width={y === 9 ? 14 : 11} height="3" rx="1" {...(y === 15 ? strong : { fill: "currentColor", fillOpacity: 0.6 })} />
-                        ))}
-                      </Card>
                       <Card selected={s.tabsPlacement === "top"} onClick={() => set({ tabsPlacement: "top" })} title="Along the top">
                         {[4, 18, 32].map((x, i) => (
                           <rect key={x} x={x} y="4" width="12" height="5" rx="1.5" {...(i === 0 ? strong : fill)} />
                         ))}
                         <rect x="4" y="11" width="56" height="25" rx="2" {...fill} />
+                      </Card>
+                      <Card selected={s.tabsPlacement === "sidebar"} onClick={() => set({ tabsPlacement: "sidebar" })} title="Under each server">
+                        <rect x="4" y="4" width="18" height="32" rx="2" {...fill} />
+                        {[9, 15, 21].map((y) => (
+                          <rect key={y} x={y === 9 ? 6 : 9} y={y} width={y === 9 ? 14 : 11} height="3" rx="1" {...(y === 15 ? strong : { fill: "currentColor", fillOpacity: 0.6 })} />
+                        ))}
                       </Card>
                     </div>
                   </Field>

@@ -6,7 +6,7 @@ import { contrast, parseHex } from "./color";
 import { quietStorage } from "./persist";
 import type { HighlightRule } from "./highlight";
 import { isWindows, setShortcutSource, type ShortcutOverrides } from "./keys";
-import { ACCENTS, customThemeVars, setCustomThemeSource, type AppThemeId, type CustomTheme } from "./themes";
+import { ACCENTS, customThemeVars, setCustomThemeSource, setTerminalColorsSource, type AppThemeId, type CustomTheme, type TerminalColors } from "./themes";
 
 export type UpdateMode = "auto" | "notify" | "manual";
 
@@ -51,6 +51,8 @@ export interface Settings {
   lastSeenVersion: string;
   accent: string;
   terminalScheme: string;
+  /** Your own terminal background and text, for the "Your own" scheme. */
+  terminalColors: TerminalColors | null;
   terminalFont: string;
   terminalFontSize: number;
   terminalLineHeight: number;
@@ -107,10 +109,11 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingVersion: 0,
   hintsSeen: [],
   envStripe: false,
-  tabsPlacement: "sidebar",
+  tabsPlacement: "top",
   lastSeenVersion: "",
   accent: ACCENTS[0].value,
   terminalScheme: "auto",
+  terminalColors: null,
   terminalFont: "system",
   terminalFontSize: 13,
   terminalLineHeight: 1.22,
@@ -161,6 +164,7 @@ export const useSettings = create<SettingsStore>()(
 );
 
 setCustomThemeSource(() => useSettings.getState().customThemes);
+setTerminalColorsSource(() => useSettings.getState().terminalColors);
 setShortcutSource(() => useSettings.getState().shortcuts);
 
 /** Bump to show a new hello once to everybody, existing users too. */

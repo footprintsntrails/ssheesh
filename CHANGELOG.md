@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.4 — tabs on top, your own colors
+
+- **Tabs are along the top by default**, as in a browser, and only there: they no longer show under the server at the same time. Under each server is still a choice in Settings → Layout. The server list says "Needs you" when an agent on that server waits for an answer.
+- **× never closes a tab while panes are side by side**, in either layout: it takes the pane off the screen and the tab stays, to close from the tab list. A pane on its own closes with × as before.
+- **Your own colors.** Pick any accent color from a palette, and give the terminal your own background and text color ("Your own" under Settings → Terminal).
+- **The interface size slider no longer jumps**: the new size applies when you let go.
+- **Clearer settings**: groups like Highlighting have a heading of their own instead of looking like one more setting.
+- The tour draws tabs where yours are.
+- **Faster connects** where the system tries Kerberos first (Debian and Ubuntu do): SSHeesh skips it.
+
+### Fixed
+- **Paths are underlined in tmux sessions too**, where agents usually run; before, only plain shells got the marks.
+- **Ctrl+click finds** paths with brackets in them (`app/[id]/page.tsx`), and gives up after a few seconds instead of searching a big home folder for long.
+- **Side by side, one tab at a time:** closing one of three panes keeps the other two; switching the layout in Settings keeps the tab you're on visible; dropping a tab on the middle of a pane swaps it into the pair; Split adds a pane; Ctrl+Tab goes through all tabs.
+- **Your own terminal colors** apply to open terminals right away.
+- **Dialogs opened from Settings** (What's new, choosing ~/.ssh/config servers) show on top instead of behind it, and Esc closes only the dialog on top.
+- **Streamer mode** also hides names and addresses in the ~/.ssh/config list, the command bar's folders, notifications, tooltips and container errors.
+- **Two servers with the same name** no longer mix up in the command bar.
+- **The welcome for returning users** no longer adds every server from ~/.ssh/config, and "Show the welcome again" shows the whole welcome.
+- **Ctrl+Shift+Z is redo** in text fields again.
+- **Adding a server typed as `1.2.3.4:2222`** keeps the port, and port 0 is refused.
+- **The portable app** no longer opens the download page by itself every few hours when an automatic update fails.
+- **Pasting a lot of text** into a terminal whose program isn't reading can no longer freeze SSHeesh.
+- **1Password's SSH agent** works on a Mac (its path has a space).
+- **A dropped connection** is never mistaken for a refused login because the server's last output said "Permission denied".
+- **Closing a tab you hadn't opened since launch** ends its session on the server too.
+- **Agent buttons** open a new terminal when SSHeesh can't tell whether a program is running, instead of typing into it.
+- **"Needs you"** no longer fires for prompts that report their folder (oh-my-posh, Windows Terminal setups).
+- **Linux: no crash** when a saved password is read from the keychain, which could break the server list until a restart.
+- **Tunnels** start once, from the main window, and a removed server's tunnels stop.
+- **"Paste into terminal"** never goes into a container's shell or logs.
+- **Security check-up:** private addresses (10.x, 192.168.x, Docker, Tailscale) aren't called open to the internet, and it doesn't offer to turn off password login while SSHeesh itself logs in with a password.
+- **Network traffic** is no longer counted several times over bridges, bonds, VLANs and Proxmox devices.
+- **Snippets** leave Go templates like `{{end}}` alone, and Paste puts a multi-line snippet in as one paste instead of running each line.
+- **Files:** a link to a folder downloads as the folder, not just the link. Uploading several files asks once about every file that would be replaced, and replacing keeps the old file's permissions. Unsaved edits ask before a folder change or another file closes them. Files that aren't UTF-8 open read-only instead of being saved back changed, Windows line endings stay as they were, and a dropped connection can't leave a file cut off. A folder that fails to open says so instead of showing the previous one. Opening a folder from a terminal link clears the old selection and filter. "New file" won't empty a file that already has that name, and copying a folder into itself is refused.
+
 ## 0.6.3 — one tab at a time, for real
 
 - **Side by side is a pair, as in a browser.** With one tab at a time, a tab you drop onto the page (or Ctrl+Shift+D) makes a pair with the one you're on. A new tab, or a click on a tab outside the pair, shows that tab on its own; a click on either tab of the pair brings both back.

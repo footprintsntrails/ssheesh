@@ -158,8 +158,11 @@ pub fn parse(text: &str) -> Metrics {
 }
 
 fn is_virtual_iface(name: &str) -> bool {
-    const VIRTUAL: [&str; 12] =
-        ["docker", "veth", "br-", "virbr", "cni", "flannel", "cali", "kube", "tailscale", "wg", "tun", "zt"];
+    // Bridges, bonds and VLANs (eth0.100) carry traffic the physical
+    // interface counts too; so do Proxmox's vmbr/tap/fw* devices.
+    const VIRTUAL: [&str; 17] = [
+        "docker", "veth", "br", "virbr", "cni", "flannel", "cali", "kube", "tailscale", "wg", "tun", "zt", "vmbr", "tap", "fwbr", "fwpr", "fwln",
+    ];
     // IPv6-in-IPv4 tunnels (sit0, he-ipv6, ...) carry traffic that also
     // shows up on the real interface.
     const TUNNELS: [&str; 5] = ["sit", "ip6tnl", "ipip", "gre", "6in4"];
@@ -167,6 +170,8 @@ fn is_virtual_iface(name: &str) -> bool {
         || VIRTUAL.iter().any(|p| name.starts_with(p))
         || TUNNELS.iter().any(|p| name.starts_with(p))
         || name.contains("ipv6")
+        || name.starts_with("bond")
+        || name.contains('.')
 }
 
 fn parse_net_line(line: &str, all: &mut Vec<(String, u64, u64)>) {

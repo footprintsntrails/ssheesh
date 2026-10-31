@@ -126,11 +126,14 @@ export function startForegroundWatch(): () => void {
 export async function startAgent(pane: PaneState, agent: AgentId) {
   if (!pane.target) return;
   const info = pane.sessionKey ? await backend.paneInfo(pane.target, pane.sessionKey).catch(() => null) : null;
-  if (!info || info.idle) {
+  if (info?.idle) {
     // Ctrl+E Ctrl+U first: clear anything half-typed at the prompt.
     backend.writeSession(pane.id, `\x05\x15${agent}\r`);
     findTerminal(pane.id)?.focus();
     return;
   }
-  useStore.getState().openIn("terminal", pane.target, { from: pane.id, split: true, initialCommand: `cd ${shellQuote(info.cwd)} && ${agent}` });
+  // Busy, or no way to tell (no tmux on the server): typing could land in
+  // vim or a password prompt, so the agent gets a terminal of its own.
+  const initialCommand = info ? `cd ${shellQuote(info.cwd)} && ${agent}` : agent;
+  useStore.getState().openIn("terminal", pane.target, { from: pane.id, split: true, initialCommand });
 }

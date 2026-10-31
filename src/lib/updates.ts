@@ -24,7 +24,10 @@ interface UpdatesState {
   status: UpdateStatus;
   lastChecked: number | null;
   check(opts?: { quiet?: boolean }): Promise<void>;
-  install(): Promise<void>;
+  /** `auto`: started by itself after a check, so a failure doesn't open the browser. */
+  install(opts?: { auto?: boolean }): Promise<void>;
+  /** An automatic install failed this run: later checks only offer the update. */
+  autoFailed: boolean;
   restart(): Promise<void>;
 }
 
@@ -33,6 +36,7 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
   portable: false,
   status: { kind: "idle" },
   lastChecked: null,
+  autoFailed: false,
 
   async check({ quiet = false } = {}) {
     const busy = get().status.kind;
@@ -43,14 +47,14 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
       set({ lastChecked: Date.now() });
       if (!info) return set({ status: { kind: "upToDate" } });
       set({ status: { kind: "available", version: info.version, notes: info.notes } });
-      if (useSettings.getState().updateMode === "auto") await get().install();
+      if (useSettings.getState().updateMode === "auto" && !get().autoFailed) await get().install({ auto: true });
     } catch (e) {
       // Background checks fail quietly (offline, server down); manual ones say why.
       set({ status: quiet ? { kind: "idle" } : { kind: "error", message: toOpError(e).message } });
     }
   },
 
-  async install() {
+  async install({ auto = false } = {}) {
     const s = get().status;
     if (s.kind !== "available") return;
     const portable = get().portable;
@@ -63,7 +67,9 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
       // Releases before 0.4.2 have no signed portable file; the download page always works.
       const fallback = portable ? " Get the new file from the download page instead." : "";
       set({ status: { kind: "error", message: `The update didn't install: ${toOpError(e).message}${fallback}` } });
-      if (portable) void backend.openExternal(RELEASES);
+      // The download page opens when you asked for the update, not behind your back every few hours.
+      if (auto) set({ autoFailed: true });
+      else if (portable) void backend.openExternal(RELEASES);
     }
   },
 

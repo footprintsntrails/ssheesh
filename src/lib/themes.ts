@@ -245,6 +245,18 @@ export const ACCENTS: { name: string; value: string }[] = [
   { name: "Silver", value: "#9aa3ad" },
 ];
 
+/** The scheme with your own background and text color; the rest follows the app theme. */
+export const OWN_SCHEME = "own";
+export interface TerminalColors {
+  background: string;
+  foreground: string;
+}
+// Settings hands them over, as with custom themes.
+let terminalColorsSource: () => TerminalColors | null = () => null;
+export function setTerminalColorsSource(get: () => TerminalColors | null) {
+  terminalColorsSource = get;
+}
+
 export interface TerminalScheme {
   name: string;
   light?: boolean;
@@ -386,6 +398,11 @@ export function fontStack(id: string): string {
 /** "auto" follows the app theme and blends into the pane background. */
 export function resolveScheme(id: string, appTheme: AppThemeId, accent: string): ITheme {
   if (id !== "auto" && TERMINAL_SCHEMES[id]) return TERMINAL_SCHEMES[id].theme;
+  const own = id === OWN_SCHEME ? terminalColorsSource() : null;
+  if (own) {
+    const base = resolveScheme("auto", appTheme, accent);
+    return { ...base, background: own.background, cursorAccent: own.background, foreground: own.foreground };
+  }
   const t = themeInfo(appTheme);
   const base = t.light ? DAY : NIGHT;
   return {

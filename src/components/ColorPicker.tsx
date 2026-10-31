@@ -1,8 +1,11 @@
 // The theme editor's color picker: a saturation and brightness square, hue
 // and transparency sliders, a hex box and a row of ready colors.
 
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { Check, Plus } from "lucide-react";
+import { createPortal } from "react-dom";
 import { hsvToRgb, parseHex, rgbToHsv, toHex, type Hsv, type Rgba } from "../lib/color";
+import { ACCENTS } from "../lib/themes";
 import { cn } from "../lib/format";
 
 const HUES = "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)";
@@ -200,5 +203,100 @@ export function ColorPicker({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Every color, for a swatch that stands for "pick your own". */
+export const RAINBOW = "conic-gradient(#ff5f5f, #ffcf5f, #7fe07f, #5fd7ff, #7c83ff, #e07fff, #ff5f5f)";
+
+/**
+ * A swatch that opens the picker beside it, above everything (a dialog's
+ * scrolling can't cut it off). A click outside or Esc closes it; the color
+ * applies as you pick.
+ */
+export function ColorButton({
+  value,
+  onChange,
+  palette,
+  label,
+  className,
+  style,
+  children,
+}: {
+  value: string;
+  onChange: (hex: string) => void;
+  palette: { name: string; color: string }[];
+  label: string;
+  className?: string;
+  style?: CSSProperties;
+  children?: ReactNode;
+}) {
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!at) return;
+    const away = (e: globalThis.PointerEvent) => {
+      if (!pop.current?.contains(e.target as Node) && !button.current?.contains(e.target as Node)) setAt(null);
+    };
+    const esc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setAt(null);
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", esc, true);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", esc, true);
+    };
+  }, [at]);
+  const open = () => {
+    const r = button.current!.getBoundingClientRect();
+    const w = 460;
+    const h = 200;
+    const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left - 12));
+    const top = r.bottom + 8 + h > window.innerHeight ? Math.max(8, r.top - h - 8) : r.bottom + 8;
+    setAt({ left, top });
+  };
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        title={label}
+        aria-label={label}
+        aria-expanded={!!at}
+        onClick={() => (at ? setAt(null) : open())}
+        className={className}
+        style={style}
+      >
+        {children}
+      </button>
+      {at &&
+        createPortal(
+          <div ref={pop} role="dialog" aria-label={label} className="fixed z-[80] w-[460px] rounded-[12px] bg-raised p-1.5 shadow-2xl ring-1 ring-ink/[0.12]" style={at}>
+            <ColorPicker value={value} onChange={onChange} palette={palette} label={label} />
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** Any accent color you like: rainbow until you pick one, then that color. */
+export function OwnAccent({ value, onChange, size = "size-6" }: { value: string; onChange: (hex: string) => void; size?: string }) {
+  const own = !ACCENTS.some((a) => a.value === value);
+  return (
+    <ColorButton
+      label="Your own accent color"
+      value={value}
+      onChange={onChange}
+      palette={ACCENTS.map((a) => ({ name: a.name, color: a.value }))}
+      className={cn("flex items-center justify-center rounded-full ring-1 ring-inset ring-black/20 transition-transform hover:scale-110", size)}
+      style={{ background: own ? value : RAINBOW }}
+    >
+      {own ? <Check size={13} strokeWidth={3} className="text-white drop-shadow" /> : <Plus size={13} strokeWidth={3} className="text-white drop-shadow" />}
+    </ColorButton>
   );
 }

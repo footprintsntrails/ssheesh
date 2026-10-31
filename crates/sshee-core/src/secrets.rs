@@ -36,6 +36,13 @@ impl fmt::Debug for Secret {
     }
 }
 
+/// Runs a keychain call on a thread of its own. On Linux the keychain client
+/// starts its own async runtime, which panics inside Tauri's (every async
+/// command runs on one), so it never runs on the caller's thread.
+fn off_runtime<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    std::thread::spawn(f).join().ok()
+}
+
 #[derive(Default)]
 pub struct PasswordStore {
     memory: Mutex<HashMap<String, Secret>>,
@@ -53,7 +60,8 @@ impl PasswordStore {
         if !remembered {
             return None;
         }
-        let pw = keyring::Entry::new(SERVICE, host_id).ok()?.get_password().ok()?;
+        let id = host_id.to_string();
+        let pw = off_runtime(move || keyring::Entry::new(SERVICE, &id).ok()?.get_password().ok()).flatten()?;
         let s = Secret::new(pw);
         self.memory.lock().unwrap().insert(host_id.to_string(), s.clone());
         Some(s)
@@ -76,16 +84,20 @@ impl PasswordStore {
         if !remember {
             return Ok(());
         }
-        keyring::Entry::new(SERVICE, host_id)
-            .and_then(|e| e.set_password(password.expose()))
+        let (id, pw) = (host_id.to_string(), password.expose().to_string());
+        off_runtime(move || keyring::Entry::new(SERVICE, &id).and_then(|e| e.set_password(&pw)).map_err(|e| e.to_string()))
+            .unwrap_or_else(|| Err("the keychain stopped".into()))
             .map_err(|e| format!("Couldn't save the password in your keychain ({e}). It works until you quit SSHeesh."))
     }
 
     pub fn forget(&self, host_id: &str) {
         self.memory.lock().unwrap().remove(host_id);
-        if let Ok(e) = keyring::Entry::new(SERVICE, host_id) {
-            let _ = e.delete_credential();
-        }
+        let id = host_id.to_string();
+        off_runtime(move || {
+            if let Ok(e) = keyring::Entry::new(SERVICE, &id) {
+                let _ = e.delete_credential();
+            }
+        });
     }
 }
 

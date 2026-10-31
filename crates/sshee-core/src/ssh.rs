@@ -67,6 +67,9 @@ pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
     opt("ServerAliveInterval=5");
     opt("ServerAliveCountMax=3");
     opt("ConnectTimeout=10");
+    // Kerberos is tried first where a system turns it on (Debian and Ubuntu
+    // do), and can cost a second or more on every connect; nobody here uses it.
+    opt("GSSAPIAuthentication=no");
     if t.password.is_some() {
         // A wrong saved password should fail once, not three times.
         opt("NumberOfPasswordPrompts=1");
@@ -92,7 +95,8 @@ pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
     }
     if let Some(agent) = &t.identity_agent {
         a.push("-o".into());
-        a.push(format!("IdentityAgent={}", expand_tilde(agent)));
+        // Quoted: 1Password's socket on a Mac lives under "Group Containers".
+        a.push(format!("IdentityAgent=\"{}\"", expand_tilde(agent)));
     }
     a
 }

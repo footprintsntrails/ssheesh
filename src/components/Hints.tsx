@@ -39,7 +39,7 @@ export const HINTS: Hint[] = [
   {
     id: "tabs",
     anchor: "tabs",
-    title: "Tabs live under their server",
+    title: "Each server has its own tabs",
     body: () => "Drag one onto the screen to see two side by side, and back onto this list to make it a tab again. Right-click a tab for more.",
     when: (s) => tabsOnScreenServer(s) >= 2,
     used: anySplit,

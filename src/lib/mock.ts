@@ -2,8 +2,12 @@
 // Everything here is sample data: documentation IP ranges, made-up servers.
 
 import type { Backend, TransferHooks } from "./backend";
+import pkg from "../../package.json";
 import type { Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
 import type { WebApp } from "./types";
+
+/** The demo pretends the next patch version is out. */
+const NEXT_VERSION = pkg.version.replace(/\d+$/, (n) => String(Number(n) + 1));
 
 const hosts: Host[] = [
   { id: "cfg:prod-api", name: "prod-api", hostname: "203.0.113.24", user: "deploy", port: null, identityFile: null, source: "sshConfig" },
@@ -334,14 +338,14 @@ function metricsFor(t: TargetRef): Metrics {
 
 export const mockBackend: Backend = {
   isDemo: true,
-  appVersion: async () => "0.3.5",
+  appVersion: async () => pkg.version,
   localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
     // ?quiet: no pretend update, for screenshots and recordings.
     if (new URLSearchParams(location.search).has("quiet")) return null;
     return {
-      version: "0.3.6",
+      version: NEXT_VERSION,
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
       date: new Date().toISOString(),
     };

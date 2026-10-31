@@ -229,7 +229,11 @@ export function AddHostDialog() {
   };
 
   const input = (): NewHost => {
-    const address = `${user.trim() ? `${user.trim()}@` : ""}${host.trim().includes(":") ? `[${host.trim()}]` : host.trim()}${port.trim() ? `:${port.trim()}` : ""}`;
+    // "1.2.3.4:2222" typed and sent with Enter (no blur to split it): host and port.
+    const typed = /^([^:[\]\s]+):(\d{1,5})$/.exec(host.trim());
+    const h = typed ? typed[1] : host.trim();
+    const p = port.trim() || (typed ? typed[2] : "");
+    const address = `${user.trim() ? `${user.trim()}@` : ""}${h.includes(":") ? `[${h}]` : h}${p ? `:${p}` : ""}`;
     return {
       address,
       name: name.trim() || undefined,
@@ -271,6 +275,11 @@ export function AddHostDialog() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!host.trim()) return;
+    const p = Number(port.trim());
+    if (port.trim() && (!Number.isInteger(p) || p < 1 || p > 65535)) {
+      setError("The port is a number from 1 to 65535.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {

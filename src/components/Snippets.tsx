@@ -45,14 +45,21 @@ function send(command: string, target: TargetRef, enter: boolean) {
   const st = useStore.getState();
   const focused = st.panes[st.focused];
   const id =
-    focused?.kind === "terminal" && sameTarget(focused.target, target) ? focused.id : st.mainTerminalFor(target);
+    focused?.kind === "terminal" && !focused.container && sameTarget(focused.target, target) ? focused.id : st.mainTerminalFor(target);
   if (!id) {
     st.openIn("terminal", target, { split: true, initialCommand: enter ? command : undefined });
     return;
   }
-  backend.writeSession(id, enter ? `${command}\r` : command);
   st.focus(id);
-  void import("../lib/terminals").then((t) => t.findTerminal(id)?.focus());
+  void import("../lib/terminals").then((t) => {
+    const term = t.findTerminal(id);
+    // Pasting goes in as a paste, so a shell doesn't run each line of a
+    // multi-line snippet as it arrives.
+    if (enter) backend.writeSession(id, `${command}\r`);
+    else if (term) term.term.paste(command);
+    else backend.writeSession(id, command);
+    term?.focus();
+  });
 }
 
 function Title({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {

@@ -2,7 +2,7 @@
 // switch, a segmented choice and a slider. Kept apart from Settings so those
 // can load without it.
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { cn } from "../lib/format";
 
 /** The anchor Settings search scrolls to for a setting's label. */
@@ -59,6 +59,7 @@ export function Slider({
   onChange,
   format = (v) => String(v),
   label,
+  onRelease = false,
 }: {
   value: number;
   min: number;
@@ -67,8 +68,19 @@ export function Slider({
   onChange: (v: number) => void;
   format?: (v: number) => string;
   label: string;
+  /**
+   * Applies the value when you let go instead of while you drag: for what
+   * resizes the slider itself (the interface size), which made it jump.
+   */
+  onRelease?: boolean;
 }) {
-  const fill = ((value - min) / (max - min)) * 100;
+  const [dragging, setDragging] = useState<number | null>(null);
+  const shown = dragging ?? value;
+  const fill = ((shown - min) / (max - min)) * 100;
+  const commit = () => {
+    if (dragging !== null && dragging !== value) onChange(dragging);
+    setDragging(null);
+  };
   return (
     <div className="flex w-[220px] items-center gap-3">
       <input
@@ -78,11 +90,14 @@ export function Slider({
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={shown}
         style={{ ["--fill" as string]: `${fill}%` }}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => (onRelease ? setDragging(Number(e.target.value)) : onChange(Number(e.target.value)))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
       />
-      <span className="w-12 text-right text-[12px] tabular-nums text-fg-2">{format(value)}</span>
+      <span className="w-12 text-right text-[12px] tabular-nums text-fg-2">{format(shown)}</span>
     </div>
   );
 }

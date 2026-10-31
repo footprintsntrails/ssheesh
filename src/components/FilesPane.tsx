@@ -19,10 +19,18 @@ import { track } from "../lib/transfers";
 
 type SortKey = "name" | "size" | "modified";
 
+/** A file as the app reads it, with what it tells about the text in it. */
+type OpenedFile = TextFile & {
+  /** Not UTF-8 text: shown, but saving would change it, so it's read-only. */
+  lossy?: boolean;
+  /** Lines end in \r\n; `content` has plain \n, and saving puts the \r\n back. */
+  crlf?: boolean;
+};
+
 interface Preview {
   name: string;
   path: string;
-  file: TextFile | null;
+  file: OpenedFile | null;
   draft: string;
   saving: boolean;
   /** A Markdown file shown as its text rather than formatted. */
@@ -272,6 +280,31 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const toggleBookmark = useBookmarks((b) => b.toggle);
   const visit = useBookmarks((b) => b.visit);
   const previewWidth = useSettings((st) => st.previewWidth);
+  const dirty = preview?.file?.content != null && preview.draft !== preview.file.content;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  /** Unsaved edits in the preview go only if you say so. */
+  const canDiscard = async () => !dirtyRef.current || (await confirm({ title: "Discard your changes?", confirmLabel: "Discard", danger: true }));
+
+  /** The folder this pane went to itself, to tell it from one picked elsewhere. */
+  const moved = useRef<string | null>(null);
+  const seenPath = useRef(path);
+  // Another folder picked from outside (a terminal's "show in Files"): what
+  // was selected, typed or previewed belonged to the one before. Edits not
+  // saved yet stay; the preview knows its own file.
+  useEffect(() => {
+    if (seenPath.current === path) return;
+    seenPath.current = path;
+    const own = moved.current === path;
+    moved.current = null;
+    if (own) return;
+    setSelected([]);
+    setAnchor(null);
+    setFilter("");
+    setRenaming(null);
+    setCreating(null);
+    if (!dirtyRef.current) setPreview(null);
+  }, [path]);
 
   useEffect(() => {
     if (skipFetch.current === path) {
@@ -287,14 +320,13 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       visit(tk, l.path);
       if (l.path !== path) {
         skipFetch.current = l.path;
+        moved.current = l.path;
         setPane(pane.id, { path: l.path });
       }
     };
     const cached = dirCache.get(tk, path);
-    if (cached) {
-      setListing(cached.listing);
-      setError(null);
-    }
+    setError(null);
+    if (cached) setListing(cached.listing);
     // A file to pick out may be newer than a listing from a moment ago.
     if (cached && !force && !pane.reveal && Date.now() - cached.at < FRESH_MS) {
       show(cached.listing);
@@ -309,12 +341,12 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         if (!alive) return;
         const err = toOpError(e);
         setError(err);
-        // What's on screen is this folder as it was. If it's gone or closed
-        // now, the error shows instead; offline, the last listing stays.
-        if (cached && err.code !== "network" && err.code !== "auth" && err.code !== "hostKey") {
-          dirCache.forget(tk, path);
-          setListing(null);
-        }
+        // Offline, this folder as it was stays on screen, under a note that
+        // says so. Otherwise (it's gone or closed, or the folder still on
+        // screen is the one before) the error shows instead.
+        const offline = err.code === "network" || err.code === "auth" || err.code === "hostKey";
+        if (cached && !offline) dirCache.forget(tk, path);
+        setListing((l) => (offline && l && (l === cached?.listing || l.path === path) ? l : null));
       })
       .finally(() => alive && setLoading(false));
     return () => {
@@ -409,8 +441,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane.reveal, listing, loading]);
 
-  const navigate = (to: string, remember = true) => {
-    if (to === dir) return refresh();
+  /** Shows another folder here; `navigate` asks about unsaved edits first. */
+  const go = (to: string, remember: boolean) => {
     if (remember) {
       history.current.push(dir);
       future.current = [];
@@ -419,27 +451,36 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     setAnchor(null);
     setFilter("");
     setPreview(null);
+    moved.current = to;
     setPane(pane.id, { path: to });
   };
 
-  const goBack = () => {
-    const prev = history.current.pop();
-    if (!prev) return;
-    future.current.push(dir);
-    navigate(prev, false);
+  const navigate = async (to: string, remember = true) => {
+    if (to === dir) return refresh();
+    if (await canDiscard()) go(to, remember);
   };
 
-  const goForward = () => {
-    const next = future.current.pop();
-    if (!next) return;
+  const goBack = async () => {
+    const prev = history.current[history.current.length - 1];
+    if (!prev || !(await canDiscard())) return;
+    history.current.pop();
+    future.current.push(dir);
+    go(prev, false);
+  };
+
+  const goForward = async () => {
+    const next = future.current[future.current.length - 1];
+    if (!next || !(await canDiscard())) return;
+    future.current.pop();
     history.current.push(dir);
-    navigate(next, false);
+    go(next, false);
   };
 
   const fail = (title: string, e: unknown) => toast({ tone: "error", title, body: toOpError(e).message });
 
   const openPreview = async (entry: FileEntry) => {
     const full = joinPath(dir, entry.name);
+    if (!(await canDiscard())) return;
     setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false });
     if (MARKDOWN.test(entry.name)) void loadMarkdownView().catch(() => {});
     try {
@@ -457,25 +498,31 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   };
 
   const savePreview = async () => {
-    if (!preview?.file) return;
-    setPreview({ ...preview, saving: true });
+    const file = preview?.file;
+    // Only text that opened for editing: a binary or too big file has no
+    // text to save, and one that isn't UTF-8 would change.
+    if (!preview || !file || file.content == null || file.lossy || preview.saving) return;
+    const { path: at, name, draft: sent } = preview;
+    setPreview((p) => (p && p.path === at ? { ...p, saving: true } : p));
     try {
-      await backend.writeFile(target, preview.path, preview.draft);
-      setPreview((p) => (p ? { ...p, saving: false, file: p.file && { ...p.file, content: p.draft } } : p));
-      toast({ tone: "success", title: `Saved ${preview.name}` });
-      changed();
+      // Lines go back with the endings the file had.
+      await backend.writeFile(target, at, file.crlf ? sent.replace(/\r?\n/g, "\r\n") : sent);
+      // What was saved is what was sent; anything typed meanwhile is still unsaved.
+      setPreview((p) => (p && p.path === at ? { ...p, saving: false, file: p.file && { ...p.file, content: sent } } : p));
+      toast({ tone: "success", title: `Saved ${name}` });
+      dirCache.changed(tk, parentPath(at));
     } catch (e) {
-      setPreview((p) => (p ? { ...p, saving: false } : p));
-      fail(`Couldn't save ${preview.name}`, e);
+      setPreview((p) => (p && p.path === at ? { ...p, saving: false } : p));
+      fail(`Couldn't save ${name}`, e);
     }
   };
 
   // Progress for both shows on a card in the corner, with a Stop button.
-  const download = async (entries: FileEntry[]) => {
-    if (!remote || entries.length === 0) return;
-    for (const e of entries) {
+  const download = async (items: { name: string; path: string; isDir: boolean }[]) => {
+    if (!remote || items.length === 0) return;
+    for (const e of items) {
       try {
-        const saved = await track("download", e.name, (hooks) => backend.downloadPath(target, joinPath(dir, e.name), e.kind === "dir", hooks));
+        const saved = await track("download", e.name, (hooks) => backend.downloadPath(target, e.path, e.isDir, hooks));
         toast({ tone: "success", title: `Downloaded ${e.name}`, body: saved });
       } catch (err) {
         if (toOpError(err).code === "cancelled") toast({ tone: "info", title: "Download stopped", body: e.name });
@@ -539,7 +586,18 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         await backend.archivePaths(target, dir, c.names, name);
         toast({ tone: "success", title: `Made ${name}`, body: `${c.names.length} item${c.names.length === 1 ? "" : "s"} packed` });
       } else if (c.kind === "folder") await backend.makeDir(target, joinPath(dir, name));
-      else await backend.writeFile(target, joinPath(dir, name), "");
+      else {
+        // Asks the folder itself, not this listing: a file made there since
+        // must not be emptied.
+        const full = joinPath(dir, name);
+        const there = await backend.listDir(target, parentPath(full));
+        if (there.entries.some((e) => e.name === full.slice(full.lastIndexOf("/") + 1))) {
+          toast({ tone: "error", title: `“${name}” already exists here`, body: "Pick another name." });
+          changed();
+          return;
+        }
+        await backend.writeFile(target, full, "");
+      }
       setSelected([name]);
       changed();
     } catch (e) {
@@ -701,7 +759,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     const full = joinPath(dir, entry.name);
     return [
       ...(!many ? [{ label: entry.kind === "dir" ? "Open" : "Open preview", icon: entry.kind === "dir" ? Folder : FileText, run: () => open(entry), hint: "↵" }] : []),
-      ...(remote ? [{ label: many ? `Download ${targets.length} items` : "Download", icon: Download, run: () => download(targets) }] : []),
+      ...(remote ? [{ label: many ? `Download ${targets.length} items` : "Download", icon: Download, run: () => download(targets.map((t) => ({ name: t.name, path: joinPath(dir, t.name), isDir: t.kind === "dir" }))) }] : []),
       ...(!many
         ? [
             { label: "Rename", icon: Pencil, run: () => setRenaming(entry.name), hint: "F2" },
@@ -734,7 +792,6 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   );
 
   const authProblem = error && (error.code === "auth" || error.code === "hostKey");
-  const dirty = preview?.file?.content != null && preview.draft !== preview.file.content;
   /** Formatted or as text; only a Markdown file that opened as text has the choice. */
   const markdown = preview?.file?.content != null && MARKDOWN.test(preview.name);
 
@@ -838,6 +895,22 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 <span className="hidden @2xl:block">Permissions</span>
                 {headerCell("modified", "Modified", "hidden @md:flex")}
               </div>
+              {/* Couldn't list it again: this is the folder as it was last seen. */}
+              {error && listing && (
+                <div role="status" className="flex shrink-0 items-center gap-2 border-b border-line bg-warn/10 py-1 pr-1.5 pl-4 text-[12px] text-fg-2">
+                  <span className="min-w-0 flex-1 truncate" title={error.message}>
+                    Showing this folder as it was. {error.message}
+                  </span>
+                  {authProblem && (
+                    <Button size="sm" variant="ghost" onClick={() => openIn("terminal", target, { from: pane.id, split: true })} className="h-6 px-2">
+                      Open terminal
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={refresh} className="h-6 px-2">
+                    Try again
+                  </Button>
+                </div>
+              )}
               {loading && listing && (
                 <div className="pointer-events-none absolute inset-x-0 top-7 z-10 h-px animate-pulse bg-accent/70" />
               )}
@@ -1054,7 +1127,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 <IconButton
                   label="Download"
                   className="size-6"
-                  onClick={() => download([{ name: preview.name, kind: "file", isLink: false, size: 0, modified: 0, mode: "" }])}
+                  onClick={() => download([{ name: preview.name, path: preview.path, isDir: false }])}
                 >
                   <Download size={13.5} />
                 </IconButton>
@@ -1063,13 +1136,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 label="Close preview"
                 className="size-6"
                 onClick={async () => {
-                  if (dirty && !(await confirm({ title: "Discard your changes?", confirmLabel: "Discard", danger: true }))) return;
-                  setPreview(null);
+                  if (await canDiscard()) setPreview(null);
                 }}
               >
                 <X size={14} />
               </IconButton>
             </div>
+            {preview.file?.lossy && (
+              <p className="shrink-0 border-b border-line bg-warn/10 px-3 py-1.5 text-[12px] leading-relaxed text-fg-2">
+                Read-only: this file isn't UTF-8 text, so saving it here would change the characters it couldn't read.
+              </p>
+            )}
             {!preview.file ? (
               <PreviewLoading />
             ) : preview.file.content == null ? (
@@ -1080,7 +1157,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 {remote && (
                   <Button
                     size="sm"
-                    onClick={() => download([{ name: preview.name, kind: "file", isLink: false, size: 0, modified: 0, mode: "" }])}
+                    onClick={() => download([{ name: preview.name, path: preview.path, isDir: false }])}
                   >
                     <Download size={13} /> Download
                   </Button>
@@ -1097,7 +1174,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 autoCorrect="off"
                 autoCapitalize="off"
                 wrap="off"
-                onChange={(e) => setPreview({ ...preview, draft: e.target.value })}
+                readOnly={preview.file.lossy}
+                onChange={(e) => {
+                  const draft = e.target.value;
+                  setPreview((p) => p && { ...p, draft });
+                }}
                 className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[12px] leading-[1.6] text-fg-2 outline-none focus:text-fg"
               />
             )}

@@ -10,6 +10,7 @@ import { useShallow } from "zustand/react/shallow";
 import { agentRunning, agentShort } from "../lib/agents";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
+import { useSettings } from "../lib/settings";
 import type { DropZone } from "../lib/layout";
 import { useNames } from "../lib/privacy";
 import { closeTab, newTab, placeBeside, showFiles, toOwnTab } from "../lib/tabs";
@@ -126,7 +127,15 @@ export function dragPane(
     if (at) {
       opts.onCancel?.();
       const target = st.panes[paneId]?.target ?? null;
-      if (at.zone === "center" && sideBySide(st, target)) st.movePane(paneId, at.paneId, "center");
+      if (at.zone === "center" && sideBySide(st, target)) {
+        st.movePane(paneId, at.paneId, "center");
+        // One tab at a time, it takes the other's place in the pair.
+        if (useSettings.getState().viewMode === "tabs") {
+          const s2 = useStore.getState();
+          useStore.setState({ hidden: [...s2.hidden.filter((h) => h !== paneId), at.paneId] });
+          s2.focus(paneId);
+        }
+      }
       else placeBeside(paneId, at.zone === "center" ? "right" : at.zone, at.paneId);
     } else if (opts.onDrop) opts.onDrop();
     else if (document.elementFromPoint(ev.clientX, ev.clientY)?.closest("[data-tab-list]")) toOwnTab(paneId);
@@ -168,9 +177,10 @@ function TabState({ id, noInput = false }: { id: string; noInput?: boolean }) {
   const attention = useStore((s) => s.attention[id]);
   const progress = useStore((s) => !!s.progress[id]);
   const state = useStore((s) => s.sessions[id]?.kind);
+  const names = useNames();
   if (attention?.kind === "input" && !noInput)
     return (
-      <span title={attention.message ?? "Waiting for you"} className="shrink-0 text-[11px] font-medium text-warn">
+      <span title={attention.message ? names.text(attention.message) : "Waiting for you"} className="shrink-0 text-[11px] font-medium text-warn">
         Needs you
       </span>
     );
@@ -279,6 +289,7 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
   const active = useStore((s) => !s.home && s.focused === id);
   const onScreen = useStore((s) => split && !s.home && !s.hidden.includes(id) && sameTarget(s.panes[s.focused]?.target, s.panes[id]?.target));
   const command = useStore((s) => s.foreground[id]);
+  const names = useNames();
   const waiting = useStore((s) => (s.attention[id]?.kind === "input" ? (s.attention[id]?.message ?? "Waiting for you") : null));
   if (!pane) return null;
   const label = tabLabel(pane, command);
@@ -288,7 +299,7 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
       aria-selected={active}
       aria-label={waiting ? `${label}, needs you` : label}
       data-hint={agentRunning(command) ? "agent-tab" : undefined}
-      title={narrow ? label : `${waiting ? `${waiting}\n` : ""}${label}. Drag onto the screen to show it beside, middle-click to close`}
+      title={narrow ? label : `${waiting ? `${names.text(waiting)}\n` : ""}${label}. Drag onto the screen to show it beside, middle-click to close`}
       className={cn(
         "group/tab relative flex cursor-default items-center select-none outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
         narrow ? "size-7 justify-center rounded-[7px]" : "min-h-[26px] gap-2 rounded-[6px] py-[3px] pr-1 pl-1.5 text-[12px]",
@@ -331,8 +342,10 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
 export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boolean }) {
   const names = useNames();
   const split = useSideBySide(target);
+  // Tabs are in one place: along the top, or here, never both.
+  const here = useSettings((s) => s.tabsPlacement === "sidebar");
   const { shown, tabProps, menuEl } = useTabList(target, "y");
-  if (!shown.length) return null;
+  if (!here || !shown.length) return null;
   return (
     <div
       data-tab-list
@@ -365,9 +378,11 @@ const StripTab = memo(function StripTab({ id, props }: { id: string; props: TabP
     <div
       {...props}
       aria-selected={active}
+      aria-label={label}
+      data-hint={agentRunning(command) ? "agent-tab" : undefined}
       title={`${label}. Drag onto the screen to show it beside, middle-click to close`}
       className={cn(
-        "group flex h-7 max-w-[200px] min-w-[96px] shrink-0 cursor-default items-center gap-1.5 rounded-[7px] pr-1 pl-2.5 text-[12px] font-medium transition-colors select-none",
+        "group flex h-7 max-w-[280px] min-w-[96px] shrink-0 cursor-default items-center gap-1.5 rounded-[7px] pr-1 pl-2.5 text-[12px] font-medium transition-colors select-none",
         active ? "bg-ink/[0.1] text-fg" : "text-fg-3 hover:bg-ink/[0.05] hover:text-fg-2",
       )}
     >
@@ -393,6 +408,7 @@ export function TabStrip({ target }: { target: TargetRef }) {
     <div className="flex min-w-0 items-center gap-1">
       <div
         data-tab-list
+        data-hint="tabs"
         role="tablist"
         aria-label="Tabs"
         onWheel={(e) => {

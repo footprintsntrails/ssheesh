@@ -6,7 +6,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal, type IBufferLine, type IDecoration, type IMarker } from "@xterm/xterm";
+import { Terminal, type IBufferLine } from "@xterm/xterm";
 import { backend } from "./backend";
 import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
 import { findLinks } from "./paths";
@@ -62,8 +62,6 @@ function rowText(line: IBufferLine, cols: number): { text: string; cells: number
   return { text, cells };
 }
 
-/** At most this many paths stay underlined; the oldest marks go first. */
-const MAX_LINK_MARKS = 400;
 const OPEN_HINT = `${isMac ? "⌘" : "Ctrl"}+click to open`;
 
 /** Keys and mouse reports that aren't typing: they don't end scrolling back. */
@@ -111,7 +109,7 @@ class TerminalHandle {
   private scrollWant: number | null | undefined;
   private scrollBusy = false;
   /** Paths and links on screen, faintly underlined so you can tell they open. */
-  private linkMarks: { marker: IMarker; deco: IDecoration; x: number; text: string }[] = [];
+  private linkLayer: HTMLDivElement | null = null;
   private markTimer = 0;
 
   constructor(
@@ -253,7 +251,9 @@ class TerminalHandle {
     this.term.onBell(() => this.notice({ kind: "input" }));
     this.term.parser.registerOscHandler(9, (data) => {
       if (data.startsWith("4;")) this.onProgress(data);
-      else this.notice({ kind: "input", message: data });
+      // "9;9;C:\…" and the like are ConEmu's numbered commands (a prompt
+      // reporting its folder), not a message for you.
+      else if (!/^\d+;/.test(data)) this.notice({ kind: "input", message: data });
       return true;
     });
     // A program's own copy (OSC 52): tmux sends one for a mouse selection,
@@ -549,45 +549,38 @@ class TerminalHandle {
   }
 
   /**
-   * Underlines the paths and links on screen. Full-screen programs (vim,
-   * htop) redraw all the time, so their screen gets none; a line a program
-   * redraws with something else loses its mark when it's next drawn.
+   * Underlines the paths and links on screen, on a layer of its own over the
+   * text. It works on tmux's screen too (tmux draws on the terminal's second
+   * screen, where xterm keeps no marks), and it's drawn again from what's on
+   * screen each time, so no line keeps a mark its text has lost.
    */
   private markLinks() {
     if (this.disposed) return;
+    const screen = this.term.element?.querySelector<HTMLElement>(".xterm-screen");
+    if (!screen) return;
+    if (this.linkLayer?.parentElement !== screen) {
+      this.linkLayer = document.createElement("div");
+      this.linkLayer.className = "term-link-layer";
+      screen.appendChild(this.linkLayer);
+    }
+    const { cols, rows } = this.term;
+    const w = screen.clientWidth / cols;
+    const h = screen.clientHeight / rows;
     const buf = this.term.buffer.active;
-    if (buf.type === "alternate") return;
-    this.linkMarks = this.linkMarks.filter((m) => !m.marker.isDisposed);
-    const have = new Set(this.linkMarks.map((m) => `${m.marker.line}:${m.x}:${m.text}`));
-    const cursor = buf.baseY + buf.cursorY;
-    for (let y = buf.viewportY; y < buf.viewportY + this.term.rows; y++) {
-      const line = buf.getLine(y);
+    const marks = document.createDocumentFragment();
+    for (let r = 0; r < rows; r++) {
+      const line = buf.getLine(buf.viewportY + r);
       if (!line) continue;
-      const { text, cells } = rowText(line, this.term.cols);
+      const { text, cells } = rowText(line, cols);
       for (const link of findLinks(text)) {
         const x = cells[link.start];
-        const label = text.slice(link.start, link.end);
-        if (have.has(`${y}:${x}:${label}`)) continue;
-        const marker = this.term.registerMarker(y - cursor);
-        if (!marker) continue;
-        const deco = this.term.registerDecoration({ marker, x, width: cells[link.end - 1] + 1 - x, layer: "top" });
-        if (!deco) {
-          marker.dispose();
-          continue;
-        }
-        deco.onRender((el) => {
-          el.classList.add("term-link-mark");
-          const now = buf.getLine(marker.line);
-          const row = now && rowText(now, this.term.cols);
-          const at = row ? row.cells.indexOf(x) : -1;
-          // Not while xterm is drawing its marks: right after.
-          if (!row || at < 0 || row.text.slice(at, at + label.length) !== label) queueMicrotask(() => deco.dispose());
-        });
-        deco.onDispose(() => marker.dispose());
-        this.linkMarks.push({ marker, deco, x, text: label });
+        const mark = document.createElement("span");
+        mark.className = "term-link-mark";
+        mark.style.cssText = `left:${x * w}px;top:${(r + 1) * h - 2}px;width:${(cells[link.end - 1] + 1 - x) * w}px`;
+        marks.appendChild(mark);
       }
     }
-    while (this.linkMarks.length > MAX_LINK_MARKS) this.linkMarks.shift()?.deco.dispose();
+    this.linkLayer.replaceChildren(marks);
   }
 
   private open() {
@@ -688,14 +681,18 @@ function noteMacClear() {
   useStore.getState().toast({ tone: "info", title: "⌘K clears the terminal now", body: "As in other Mac terminals. The command bar moved to ⌘L." });
 }
 
-export function disposeTerminal(paneId: string, endRemote: boolean) {
-  handles.get(paneId)?.dispose(endRemote);
+export function disposeTerminal(paneId: string, endRemote: boolean, pane?: PaneState) {
+  const h = handles.get(paneId);
   handles.delete(paneId);
+  if (h) return h.dispose(endRemote);
+  // A tab you never opened this run has no terminal here, but its session
+  // still runs on the server: end it too.
+  if (endRemote && pane?.target?.kind === "host" && pane.sessionKey) backend.closeSession(paneId, pane.target, pane.sessionKey, true);
 }
 
 // Settings changes restyle every open terminal; web fonts may arrive after
 // terminals measured their cells.
-const LOOK_KEYS = ["terminalScheme", "terminalFont", "terminalFontSize", "terminalLineHeight", "cursorStyle", "cursorBlink", "theme", "accent"] as const;
+const LOOK_KEYS = ["terminalScheme", "terminalColors", "terminalFont", "terminalFontSize", "terminalLineHeight", "cursorStyle", "cursorBlink", "theme", "accent"] as const;
 useSettings.subscribe((s, prev) => {
   if (LOOK_KEYS.every((k) => s[k] === prev[k])) return;
   for (const h of handles.values()) h.applyLook();

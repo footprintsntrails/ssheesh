@@ -11,6 +11,7 @@ import { useStore } from "../lib/store";
 import { useSettings } from "../lib/settings";
 import type { Host } from "../lib/types";
 import { Modal } from "./Overlays";
+import { useNames } from "../lib/privacy";
 import { Button } from "./ui";
 
 /** "new": only servers you haven't decided about. "all": change your mind about any. */
@@ -29,6 +30,7 @@ export function ConfigImportDialog() {
   const seen = useLabels((s) => s.configSeen);
   const hidden = useLabels((s) => s.hidden);
   const [keep, setKeep] = useState<string[]>([]);
+  const names = useNames();
 
   const list: Host[] = mode === "all" ? allHosts.filter((h) => h.source === "sshConfig") : undecided;
 
@@ -80,8 +82,8 @@ export function ConfigImportDialog() {
             <label key={h.id} className="flex h-10 cursor-pointer items-center gap-3 rounded-[7px] px-2.5 hover:bg-ink/[0.04]">
               <input type="checkbox" checked={keep.includes(h.id)} onChange={() => toggle(h.id)} className="accent-[var(--ui-accent)]" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] text-fg">{h.name}</span>
-                {hostAddress(h) !== h.name && <span className="block truncate font-mono text-[11px] text-fg-3">{hostAddress(h)}</span>}
+                <span className="block truncate text-[13px] text-fg">{names.host(h)}</span>
+                {!names.on && hostAddress(h) !== h.name && <span className="block truncate font-mono text-[11px] text-fg-3">{hostAddress(h)}</span>}
               </span>
             </label>
           ))}

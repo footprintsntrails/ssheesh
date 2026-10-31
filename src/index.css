@@ -289,9 +289,15 @@
 }
 
 /* A path or link in a terminal: faintly underlined, so you can tell it opens with Ctrl+click. */
-.term-link-mark {
+.term-link-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
   pointer-events: none;
-  box-sizing: border-box;
+}
+.term-link-mark {
+  position: absolute;
+  height: 0;
   border-bottom: 1px dotted color-mix(in srgb, var(--ui-accent) 60%, transparent);
 }
 

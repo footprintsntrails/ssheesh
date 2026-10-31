@@ -65,7 +65,9 @@ impl Default for SessionManager {
 }
 
 struct Shared {
-    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    /// Keys and pastes for the terminal, written by a thread of its own: a
+    /// program that doesn't read its input can't freeze the app.
+    writer: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
     size: Mutex<PtySize>,
@@ -132,9 +134,8 @@ impl SessionManager {
 
     pub fn write(&self, id: &str, data: &[u8]) {
         if let Some(s) = self.get(id) {
-            if let Some(w) = s.writer.lock().unwrap().as_mut() {
-                let _ = w.write_all(data);
-                let _ = w.flush();
+            if let Some(w) = s.writer.lock().unwrap().as_ref() {
+                let _ = w.send(data.to_vec());
             }
         }
     }
@@ -219,7 +220,10 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
         ever_ready |= exit.ready;
         if is_ssh && exit.code == 255 {
             let line = last_meaningful_line(&exit.tail);
-            if let Some(message) = fatal_reason(&line, ever_ready) {
+            // Once connected, the last line may be the server's own output (a
+            // log saying "Permission denied", say), not ssh's: never fatal then.
+            let fatal = if exit.ready { None } else { fatal_reason(&line, ever_ready) };
+            if let Some(message) = fatal {
                 sink(SessionEvent::Status { state: SessionState::Failed { message } });
                 return;
             }
@@ -263,8 +267,17 @@ fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Resul
     })?;
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    *shared.writer.lock().unwrap() = Some(writer);
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let (input, keys) = mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        // Ends when the session drops its sender, or the terminal stops taking input.
+        for data in keys {
+            if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
+                break;
+            }
+        }
+    });
+    *shared.writer.lock().unwrap() = Some(input);
     *shared.master.lock().unwrap() = Some(pair.master);
     *shared.killer.lock().unwrap() = Some(child.clone_killer());
     if shared.closed.load(Ordering::SeqCst) {

@@ -4,7 +4,7 @@ import { ContextMenu, type Menu } from "./ContextMenu";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { useSideBySide, useStore, type PaneState } from "../lib/store";
+import { panesOn, useSideBySide, useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
 import { backend } from "../lib/backend";
@@ -24,11 +24,12 @@ import { EnvChip, Face, IconButton, moodOf } from "./ui";
 /** "Needs you" when a program is waiting, "Went quiet" when a long run stopped. */
 function AttentionPill({ id }: { id: string }) {
   const a = useStore((s) => s.attention[id]);
+  const names = useNames();
   if (!a) return null;
   const input = a.kind === "input";
   return (
     <span
-      title={a.message ?? (input ? "A program in this terminal is waiting for you" : "Output stopped after a long run. It may be done.")}
+      title={a.message ? names.text(a.message) : (input ? "A program in this terminal is waiting for you" : "Output stopped after a long run. It may be done.")}
       className={cn(
         "inline-flex h-[20px] shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-semibold",
         input ? "bg-warn/15 text-warn" : "bg-ink/[0.08] text-fg-2",
@@ -98,10 +99,11 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const zoomed = useStore((s) => s.zoomed === pane.id);
   const command = useStore((s) => s.foreground[pane.id]);
   const tabs = !useSideBySide(pane.target);
-  // As tabs, side by side is only for a moment: × takes the pane out of it,
-  // and the tab keeps running. Closing the tab itself is in ⋯ and the tab list.
-  const asTabs = useSettings((s) => s.viewMode === "tabs");
-  const leave = !tabs && asTabs;
+  // With others beside it, × only takes the pane off the screen: it goes back
+  // to being a tab, still running. Closing the tab is in ⋯ and the tab list;
+  // a pane on its own closes with ×.
+  const beside = useStore((s) => (pane.target ? panesOn(s, pane.target).filter((p) => !s.hidden.includes(p.id)).length > 1 : false));
+  const leave = !tabs && beside;
 
   // Drag a pane by its title bar onto another pane: a side to dock there,
   // the middle to swap places.

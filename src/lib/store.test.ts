@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { paneIds, type LayoutNode } from "./layout";
 import { activePane, currentTarget, panesOn, sideBySide, splitByMachine, tabsOn, useStore, type PaneState } from "./store";
 import { useSettings } from "./settings";
-import { placeBeside, toggleSplit, toOwnTab } from "./tabs";
+import { nextTab, placeBeside, splitPane, toggleSplit, toOwnTab } from "./tabs";
 import type { TargetRef } from "./types";
 
 const web: TargetRef = { kind: "host", hostId: "cfg:web" };
@@ -140,6 +140,51 @@ describe("side by side, one tab at a time", () => {
     } finally {
       useSettings.setState({ viewMode: "tabs" });
     }
+  });
+
+  it("with side by side as the layout, × takes a pane off the screen and keeps its tab", () => {
+    useSettings.setState({ viewMode: "split" });
+    try {
+      useStore.getState().setHidden(["w3"], false);
+      toOwnTab("w2");
+      const s = useStore.getState();
+      expect(Object.keys(s.panes).sort()).toEqual(["w1", "w2", "w3"]);
+      expect(onScreen().sort()).toEqual(["w1", "w3"]);
+    } finally {
+      useSettings.setState({ viewMode: "tabs" });
+    }
+  });
+
+  it("× on one of three panes leaves the other two side by side", () => {
+    useStore.getState().focus("w3");
+    toggleSplit();
+    expect(onScreen().sort()).toEqual(["w1", "w2", "w3"]);
+    toOwnTab("w3");
+    expect(onScreen().sort()).toEqual(["w1", "w2"]);
+  });
+
+  it("switching the layout to side by side keeps the tab you're on on screen", () => {
+    useStore.getState().focus("w3");
+    try {
+      useSettings.getState().update({ viewMode: "split" });
+      expect(useStore.getState().hidden).not.toContain("w3");
+    } finally {
+      useSettings.getState().update({ viewMode: "tabs" });
+    }
+  });
+
+  it("splitting a pane of the pair adds a third instead of swapping one out", () => {
+    splitPane("w1", "row");
+    expect(onScreen()).toHaveLength(3);
+  });
+
+  it("Ctrl+Tab goes through every tab, not only the pair", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 3; i++) {
+      nextTab(1);
+      seen.add(useStore.getState().focused);
+    }
+    expect([...seen].sort()).toEqual(["w1", "w2", "w3"]);
   });
 
   it("the shortcut goes back to one tab at a time, and again to the pair", () => {

@@ -19,11 +19,14 @@ export interface Blank {
 }
 
 const BLANK = /\{\{\s*([A-Za-z_][\w-]*)\s*(?::([^}]*))?\}\}/g;
+/** Go templates (docker inspect -f, kubectl -o go-template) use these: they aren't blanks. */
+const GO_WORDS = new Set(["end", "else", "break", "continue", "nil"]);
 
 /** The blanks in a command, each once, in order. */
 export function blanks(command: string): Blank[] {
   const seen = new Map<string, Blank>();
   for (const m of command.matchAll(BLANK)) {
+    if (GO_WORDS.has(m[1])) continue;
     if (!seen.has(m[1])) seen.set(m[1], { name: m[1], fallback: (m[2] ?? "").trim() });
   }
   return [...seen.values()];
@@ -31,7 +34,9 @@ export function blanks(command: string): Blank[] {
 
 /** The command with its blanks filled in. */
 export function fill(command: string, values: Record<string, string>): string {
-  return command.replace(BLANK, (_, name: string, fallback?: string) => values[name]?.trim() || (fallback ?? "").trim());
+  return command.replace(BLANK, (whole: string, name: string, fallback?: string) =>
+    GO_WORDS.has(name) ? whole : values[name]?.trim() || (fallback ?? "").trim(),
+  );
 }
 
 /** "max_lines" → "Max lines". */

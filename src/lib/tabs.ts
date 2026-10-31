@@ -22,7 +22,9 @@ export function nextTab(step: 1 | -1) {
   const s = useStore.getState();
   const target = currentTarget(s);
   if (!target) return;
-  const ids = sideBySide(s, target)
+  // One tab at a time it goes through all of them, as a browser does; side by
+  // side as the layout, through the panes on screen.
+  const ids = sideBySide(s, target) && useSettings.getState().viewMode === "split"
     ? panesOn(s, target)
         .filter((p) => !s.hidden.includes(p.id))
         .map((p) => p.id)
@@ -59,8 +61,12 @@ export function placeBeside(id: string, zone: DropZone = "right", nextTo?: strin
 export function splitPane(id: string, dir: Dir) {
   const s = useStore.getState();
   const target = s.panes[id]?.target ?? null;
+  // Already side by side: one more pane on screen. Otherwise these two pair up.
+  const beside = sideBySide(s, target);
   const nid = s.split(id, dir);
-  if (nid !== id && !sideBySide(useStore.getState(), target)) placeBeside(nid, dir === "row" ? "right" : "bottom", id);
+  if (nid === id) return;
+  if (beside) useStore.getState().setHidden([nid], false);
+  else placeBeside(nid, dir === "row" ? "right" : "bottom", id);
 }
 
 /**

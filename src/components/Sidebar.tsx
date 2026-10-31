@@ -18,6 +18,7 @@ import { SidebarTabs } from "./Tabs";
 import { newTab } from "../lib/tabs";
 import { toolItems } from "./Tabs";
 import { openInNewWindow } from "../lib/windows";
+import { forgetHostTunnels } from "../lib/tunnels";
 import { useCustomTitleBar, WindowControls } from "./WindowControls";
 
 const RANK: Record<Health, number> = { idle: 0, busy: 1, live: 2, warn: 3, bad: 4 };
@@ -136,6 +137,7 @@ function ContainerRow({ target, c, indent, onChanged }: { target: TargetRef; c: 
 /** XPipe-style tree: the containers living on a machine, grouped by Compose project. */
 function ContainerTree({ target }: { target: TargetRef }) {
   const { list, error, refresh } = useContainers(target);
+  const names = useNames();
   if (error)
     return (
       <TreeNote>
@@ -143,7 +145,7 @@ function ContainerTree({ target }: { target: TargetRef }) {
           ? "Open a terminal to sign in, then containers show up here."
           : error.code === "hostKey"
             ? "Open a terminal to confirm this server's identity, then containers show up here."
-            : error.message}
+            : names.text(error.message)}
       </TreeNote>
     );
   if (!list)
@@ -215,6 +217,7 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
   const health = useHealth(target);
   const railStatus = useSettings((s) => s.railStatus);
   const side = useSettings((s) => s.sidebarSide);
+  const tabsHere = useSettings((s) => s.tabsPlacement === "sidebar");
   const [hover, setHover] = useState<DOMRect | null>(null);
   const hoverTimer = useRef(0);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -272,6 +275,7 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
             danger: true,
             run: async () => {
               if (!(await confirm({ title: `Remove ${names.host(host)}?`, body: "Only removes it from SSHeesh. Nothing changes on the server.", confirmLabel: "Remove", danger: true }))) return;
+              forgetHostTunnels(host.id);
               await backend.removeHost(host.id);
               void loadHosts();
             },
@@ -336,6 +340,8 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
           {showLoad && <RailLoad target={target} style={railStatus} panes={panes} waiting={waiting} />}
           {env && <span className={cn("absolute bottom-[4px] left-1/2 h-[3px] w-3.5 -translate-x-1/2 rounded-full", ENV_LABELS[env].bar)} />}
           {dot && <span className={cn("absolute right-[5px] bottom-[5px] size-[7px] rounded-full ring-2 ring-[var(--ui-window)]", dot)} />}
+          {/* With tabs along the top, the icon says an agent waits for you here. */}
+          {waiting && !tabsHere && <span aria-label="Needs you" className="absolute top-[5px] right-[5px] size-2 rounded-full bg-warn ring-2 ring-[var(--ui-window)]" />}
         </button>
         <SidebarTabs target={target} narrow />
         {hover && !menu && (
@@ -385,6 +391,8 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
           <span className="flex h-8 items-center gap-2">
             <HostIcon hostId={host?.id} local={target.kind === "local"} size={16.5} strokeWidth={1.8} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">{label}</span>
+            {/* With tabs along the top, the list still says where an agent waits for you. */}
+            {waiting && !tabsHere && <span className="shrink-0 text-[11px] font-medium text-warn">Needs you</span>}
             <EnvChip env={env} />
             <StatusMark health={health} />
             <span className="w-5 shrink-0" />

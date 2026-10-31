@@ -11,6 +11,7 @@ import { ArrowUp, Bookmark, CornerDownLeft, Database, FileCode, FileText, Folder
 import type { CSSProperties, ReactNode } from "react";
 import { cn } from "../lib/format";
 import { isMac, shortcutLabel } from "../lib/keys";
+import { useSettings } from "../lib/settings";
 import { AgentIcon } from "./AgentIcons";
 import { Logo } from "./ui";
 
@@ -89,15 +90,50 @@ function Side({ children, menu }: { children: ReactNode; menu?: boolean }) {
   );
 }
 
-function ServerRow({ machine, name }: { machine: Machine; name?: ReactNode }) {
+function ServerRow({ machine, name, mark }: { machine: Machine; name?: ReactNode; mark?: ReactNode }) {
   const Icon = machine.icon;
   return (
     <div className="flex h-[22px] shrink-0 items-center gap-1.5 px-1.5 text-[11px] font-medium text-fg">
       <Icon size={12} strokeWidth={1.9} className="shrink-0" style={{ color: machine.color }} />
       <span className="min-w-0 flex-1 truncate">{name ?? machine.name}</span>
+      {mark}
     </div>
   );
 }
+
+/** The scenes draw tabs where yours are: along the top, or under each server. */
+const useTopTabs = () => useSettings((s) => s.tabsPlacement === "top");
+
+interface StripTabProps {
+  label: string;
+  icon: ReactNode;
+  active?: boolean;
+  mark?: ReactNode;
+  style?: CSSProperties;
+}
+
+/** Tabs along the top of the page. */
+function Strip({ tabs }: { tabs: StripTabProps[] }) {
+  return (
+    <div className="absolute top-2 right-2 left-[194px] flex h-[22px] items-center gap-0.5">
+      {tabs.map((t) => (
+        <span
+          key={t.label}
+          className={cn("flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[5px] px-1.5 text-[10px] font-medium", t.active ? "bg-ink/[0.1] text-fg" : "text-fg-3")}
+          style={t.style}
+        >
+          {t.icon}
+          <span className="truncate">{t.label}</span>
+          {t.mark}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+const spinner = (style?: CSSProperties) => (
+  <span className="size-2 shrink-0 rounded-full border-[1.5px] border-accent border-t-transparent opacity-0" style={style} />
+);
 
 /** A server's tabs, hanging from a line under its icon. */
 function TabGroup({ children, style }: { children: ReactNode; style?: CSSProperties }) {
@@ -200,17 +236,21 @@ export function SceneCommandBar() {
     </div>
   );
   const Heading = ({ children }: { children: ReactNode }) => <div className="px-2 pt-1.5 pb-0.5 text-[9.5px] font-medium text-fg-3">{children}</div>;
+  const top = useTopTabs();
   return (
     <Frame label="The command bar opens, “ngi” is typed, and the Reload nginx command is picked; it says it runs on demo-box">
       <Side>
         <ServerRow machine={DEMO} />
-        <TabGroup>
-          <TabRow label="Terminal" icon={TERMINAL} active />
-        </TabGroup>
+        {!top && (
+          <TabGroup>
+            <TabRow label="Terminal" icon={TERMINAL} active />
+          </TabGroup>
+        )}
         <ServerRow machine={LAB} />
         <ServerRow machine={DB} />
       </Side>
-      <Main>
+      {top && <Strip tabs={[{ label: "Terminal", icon: TERMINAL, active: true }]} />}
+      <Main className={top ? "top-9" : undefined}>
         <Pane title="Terminal" icon={TERMINAL} className="flex-1">
           <Prompt />
         </Pane>
@@ -253,26 +293,45 @@ export function SceneCommandBar() {
 
 /** T2: each server keeps its tabs, and agents show up on every server. */
 export function SceneTabs() {
+  const top = useTopTabs();
   return (
-    <Frame label="Tabs appear under demo-box; Codex works on homelab while Claude Code on demo-box needs you">
+    <Frame label="demo-box gets its tabs; Codex works on homelab while Claude Code on demo-box needs you">
       <Side>
-        <ServerRow machine={DEMO} />
-        <TabGroup>
-          <TabRow label="Terminal" icon={TERMINAL} style={anim("tour-in-1")} />
-          <TabRow label="Terminal 2 (Claude Code)" icon={CLAUDE} active style={anim("tour-in-2")} below={needsYou(anim("tour-in-late"))} />
-          <TabRow label="Files" icon={FILES} style={anim("tour-in-3")} />
-        </TabGroup>
-        <ServerRow machine={LAB} />
-        <TabGroup>
-          <TabRow
-            label="Terminal (Codex)"
-            icon={CODEX}
-            mark={<span className="size-2 shrink-0 rounded-full border-[1.5px] border-accent border-t-transparent opacity-0" style={anim("tour-working")} />}
-          />
-        </TabGroup>
+        <ServerRow
+          machine={DEMO}
+          mark={
+            top && (
+              <span className="shrink-0 text-[9.5px] font-medium text-warn" style={anim("tour-in-late")}>
+                Needs you
+              </span>
+            )
+          }
+        />
+        {!top && (
+          <TabGroup>
+            <TabRow label="Terminal" icon={TERMINAL} style={anim("tour-in-1")} />
+            <TabRow label="Terminal 2 (Claude Code)" icon={CLAUDE} active style={anim("tour-in-2")} below={needsYou(anim("tour-in-late"))} />
+            <TabRow label="Files" icon={FILES} style={anim("tour-in-3")} />
+          </TabGroup>
+        )}
+        <ServerRow machine={LAB} mark={top && spinner(anim("tour-working"))} />
+        {!top && (
+          <TabGroup>
+            <TabRow label="Terminal (Codex)" icon={CODEX} mark={spinner(anim("tour-working"))} />
+          </TabGroup>
+        )}
         <ServerRow machine={DB} />
       </Side>
-      <Main>
+      {top && (
+        <Strip
+          tabs={[
+            { label: "Terminal", icon: TERMINAL, style: anim("tour-in-1") },
+            { label: "Terminal 2 (Claude Code)", icon: CLAUDE, active: true, style: anim("tour-in-2"), mark: <span className="size-1.5 shrink-0 rounded-full bg-warn" style={anim("tour-in-late")} /> },
+            { label: "Files", icon: FILES, style: anim("tour-in-3") },
+          ]}
+        />
+      )}
+      <Main className={top ? "top-9" : undefined}>
         <Pane title="Terminal 2 (Claude Code)" icon={CLAUDE} className="flex-1">
           <span className="text-[#d97757]">✻ Claude Code</span>
           <span className="text-fg">&gt; checkout skips the rate limit, fix it</span>
@@ -406,19 +465,31 @@ const FILE_ROWS: { name: string; folder?: boolean; size?: string; code?: boolean
 
 /** T5: drag a tab onto the page to see two at once. */
 export function SceneDragSplit() {
+  const top = useTopTabs();
   return (
     <Frame label="The Files tab is dragged onto the page and the page splits in two">
       <Side>
         <ServerRow machine={DEMO} />
-        <TabGroup>
-          <TabRow label="Terminal" icon={TERMINAL} active />
-          <TabRow label="Files" icon={FILES} />
-          <TabRow label="Terminal 2 (Claude Code)" icon={CLAUDE} />
-        </TabGroup>
+        {!top && (
+          <TabGroup>
+            <TabRow label="Terminal" icon={TERMINAL} active />
+            <TabRow label="Files" icon={FILES} />
+            <TabRow label="Terminal 2 (Claude Code)" icon={CLAUDE} />
+          </TabGroup>
+        )}
         <ServerRow machine={LAB} />
         <ServerRow machine={DB} />
       </Side>
-      <Main>
+      {top && (
+        <Strip
+          tabs={[
+            { label: "Terminal", icon: TERMINAL, active: true },
+            { label: "Files", icon: FILES },
+            { label: "Terminal 2 (Claude Code)", icon: CLAUDE },
+          ]}
+        />
+      )}
+      <Main className={top ? "top-9" : undefined}>
         <Pane title="Terminal" icon={TERMINAL} className="flex-[1.1]">
           <span>
             <Prompt /> ls
@@ -446,8 +517,11 @@ export function SceneDragSplit() {
         </Pane>
       </Main>
       <div
-        className="absolute top-[85px] left-[24px] flex items-center gap-1.5 rounded-[4px] bg-raised px-2 py-[3px] text-[10.5px] text-fg opacity-0 shadow-lg ring-1 ring-ink/[0.15]"
-        style={{ ...anim("tour-ghost"), ["--to" as string]: "translate(410px, 40px)" }}
+        className={cn(
+          "absolute flex items-center gap-1.5 rounded-[4px] bg-raised px-2 py-[3px] text-[10.5px] text-fg opacity-0 shadow-lg ring-1 ring-ink/[0.15]",
+          top ? "top-[10px] left-[268px]" : "top-[85px] left-[24px]",
+        )}
+        style={{ ...anim("tour-ghost"), ["--to" as string]: top ? "translate(200px, 100px)" : "translate(410px, 40px)" }}
       >
         {FILES} Files
       </div>
@@ -468,13 +542,16 @@ export function SceneStreamer() {
       </span>
     </span>
   );
+  const top = useTopTabs();
   return (
     <Frame label="Streamer mode is switched on and server names and addresses are replaced">
       <Side>
         <ServerRow machine={DEMO} name={swap("demo-box", "Server 1")} />
-        <TabGroup>
-          <TabRow label="Terminal" icon={TERMINAL} active />
-        </TabGroup>
+        {!top && (
+          <TabGroup>
+            <TabRow label="Terminal" icon={TERMINAL} active />
+          </TabGroup>
+        )}
         <ServerRow machine={LAB} name={swap("homelab", "Server 2")} />
         <ServerRow machine={DB} name={swap("db-main", "Server 3")} />
         <div className="mt-auto mb-2 flex items-center gap-1.5 px-1.5 text-[10.5px] text-fg-2">
@@ -484,7 +561,8 @@ export function SceneStreamer() {
           Streamer mode
         </div>
       </Side>
-      <Main>
+      {top && <Strip tabs={[{ label: "Terminal", icon: TERMINAL, active: true }]} />}
+      <Main className={top ? "top-9" : undefined}>
         <Pane title={<>Terminal · {swap("you@demo-box", "Server 1")}</>} icon={TERMINAL} className="flex-1">
           <span>{swap("Last login: Fri Oct 30 09:12 from 198.51.100.3", "Last login: Fri Oct 30 09:12 from address hidden")}</span>
           <span>
