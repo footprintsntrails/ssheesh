@@ -26,9 +26,9 @@ pub struct Welcome {
 /// draws SSHeesh's welcome with the server's facts: a few quick reads of
 /// /proc, df and docker, nothing that waits on the network.
 const SCRIPT: &str = r#"E=$(printf '\033'); R="$E[0m"; w_mode=@MODE@; w_parts=@PARTS@; w_note=@NOTE@
-w_dyn=/run/motd.dynamic; w_static='/etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*'; w_scripts=/etc/update-motd.d
-w_notice='updates? can be applied|security updates?|apt list --upgradable|ESM|ubuntu\.com/esm|pro status|restart required|New release .* available|do-release-upgrade|Learn more about enabling'
-w_boiler='^[[:space:]]*\* (Documentation|Management|Support):|^Welcome to (Ubuntu|Debian|Alpine|Fedora|CentOS|Rocky|AlmaLinux|Arch|Void)|System information as of|System load:|Usage of /|Memory usage:|Swap usage:|Processes:|Users logged in:|IPv[46] address for|Expanded Security Maintenance for Applications is not enabled|Strictly confined Kubernetes|ubuntu\.com/engage|just raised the bar|programs included with the Debian|exact distribution terms|/usr/share/doc/\*/copyright|ABSOLUTELY NO WARRANTY|permitted by applicable law|This system has been minimized|unminimize|Alpine Wiki|setup-alpine|You may change this message|Web console:|Activate the web console|cockpit\.socket|^[[:space:]]*Last login:'
+w_dyn=/run/motd.dynamic; w_static='/etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*'; w_scripts=/etc/update-motd.d; w_news=/var/cache/motd-news
+w_notice='updates? can be applied|security updates?|apt list --upgradable|ESM|ubuntu\.com/esm|pro status|restart required|New release .* available|do-release-upgrade|Learn more about enabling|is not supported anymore|Hardware Enablement Stack|checked for errors at next reboot|could not be installed automatically|unattended-upgrades\.log|firmware upgrades? available|fwupdmgr'
+w_boiler='^[[:space:]]*\* (Documentation|Management|Support):|^Welcome to (Ubuntu|Debian|Alpine|Fedora|CentOS|Rocky|AlmaLinux|Arch|Void)|System information as of|System load:|Usage of /|Memory usage:|Swap usage:|Processes:|Users logged in:|IPv[46] address for|Expanded Security Maintenance for Applications is not enabled|Strictly confined Kubernetes|ubuntu\.com/engage|just raised the bar|programs included with the Debian|exact distribution terms|/usr/share/doc/\*/copyright|ABSOLUTELY NO WARRANTY|permitted by applicable law|This system has been minimized|unminimize|Alpine Wiki|setup-alpine|You may change this message|Web console:|Activate the web console|cockpit\.socket|^[[:space:]]*Last login:|^Linux [^ ]+ [^ ]+ #[0-9]|=> There (is|are) [0-9]+ zombie|=> .* is using [0-9.]+%'
 w_has() { case " $w_parts " in *" $1 "*) return 0 ;; esac; return 1; }
 w_bar() { n=$(( $1 * $2 / 100 )); c=$grn; [ "$1" -ge 80 ] && c=$amb; [ "$1" -ge 90 ] && c=$red; s="$c"; i=0; while [ $i -lt "$2" ]; do [ $i -eq $n ] && s="$s$trk"; s="$s━"; i=$((i+1)); done; printf '%s%s' "$s" "$R"; }
 w_pct() { c=$txt; [ "$1" -ge 80 ] && c=$amb; [ "$1" -ge 90 ] && c=$red; printf '%s%3d%%%s' "$c" "$1" "$R"; }
@@ -73,7 +73,12 @@ m=; w_own=; if [ ! -e "$HOME/.hushlogin" ]; then
   # distribution's, or a script someone added to Ubuntu's generated message.
   dyn=$(readlink -f "$w_dyn" 2>/dev/null || echo "$w_dyn")
   for f in $w_static; do [ -f "$f" ] && [ -r "$f" ] || continue; [ "$(readlink -f "$f" 2>/dev/null || echo "$f")" = "$dyn" ] && continue; cat "$f"; done 2>/dev/null | grep -Ev "$w_boiler" | grep -Ev "$w_notice" | grep -q '[^[:space:]]' && w_own=1
-  for f in "$w_scripts"/*; do [ -f "$f" ] && [ -x "$f" ] || continue; case "${f##*/}" in 00-header|10-help-text|50-motd-news|50-landscape-sysinfo|80-esm|80-livepatch|85-fwupd|88-esm-announce|90-updates-available|91-contract-ua-esm-status|91-release-upgrade|92-unattended-upgrades|95-hwe-eol|97-overlayroot|98-fsck-at-reboot|98-reboot-required) ;; *) w_own=1 ;; esac; done
+  # run-parts skips names with a dot (backups like .dpkg-old).
+  w_added=; for f in "$w_scripts"/*; do [ -f "$f" ] && [ -x "$f" ] || continue; case "${f##*/}" in *.*|*~) ;; 00-header|10-help-text|10-uname|50-motd-news|50-landscape-sysinfo|51-cloudguest|60-unminimize|80-esm|80-livepatch|85-fwupd|88-esm-announce|90-updates-available|91-contract-ua-esm-status|91-release-upgrade|92-unattended-upgrades|95-hwe-eol|97-overlayroot|98-fsck-at-reboot|98-reboot-required) ;; *) w_added=1 ;; esac; done
+  # An added script counts once the generated message says more than
+  # Ubuntu's scripts do (a hosting company's may say nothing). The news
+  # there is a copy of its cache.
+  if [ -n "$w_added" ] && [ -f "$w_dyn" ]; then n=$w_news; [ -r "$n" ] || n=/dev/null; grep -Ev "$w_boiler" "$w_dyn" | grep -Ev "$w_notice" | grep -vxF -f "$n" | grep -q '[^[:space:]]' && w_own=1; fi
 elif [ "$w_mode" != ssheesh ]; then w_mode=off; fi
 case "$w_mode" in off) ;; server) [ -n "$m" ] && printf '%s\n' "$m" ;; ssheesh) w_banner ;; *) if [ -n "$w_own" ]; then printf '%s\n' "$m"; else w_banner; fi ;; esac"#;
 
@@ -155,6 +160,12 @@ See https://ubuntu.com/esm or run: sudo pro status
 New release '26.04.1 LTS' available.
 Run 'do-release-upgrade' to upgrade to it.
 ";
+    /// Ubuntu's news as it caches it; the generated message has a copy.
+    const NEWS: &str = " * Canonical Workshop gives developers fast, composable, reproducible, and
+   secure developer environments that are perfect for agentic workflows.
+
+   https://ubuntu.com/workshop
+";
     const DEBIAN: &str = "
 The programs included with the Debian GNU/Linux system are free software;
 the exact distribution terms for each program are described in the
@@ -174,6 +185,7 @@ permitted by applicable law.
         std::fs::create_dir_all(&scripts_dir).unwrap();
         std::fs::write(root.join("motd.dynamic"), generated).unwrap();
         std::fs::write(root.join("motd"), motd).unwrap();
+        std::fs::write(root.join("motd-news"), NEWS).unwrap();
         for name in scripts {
             let f = scripts_dir.join(name);
             std::fs::write(&f, "#!/bin/sh\n").unwrap();
@@ -182,7 +194,8 @@ permitted by applicable law.
         let s = script(&Welcome::default())
             .replace("w_dyn=/run/motd.dynamic", &format!("w_dyn={}", root.join("motd.dynamic").display()))
             .replace("w_static='/etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*'", &format!("w_static='{}'", root.join("motd").display()))
-            .replace("w_scripts=/etc/update-motd.d", &format!("w_scripts={}", scripts_dir.display()));
+            .replace("w_scripts=/etc/update-motd.d", &format!("w_scripts={}", scripts_dir.display()))
+            .replace("w_news=/var/cache/motd-news", &format!("w_news={}", root.join("motd-news").display()));
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let out = std::process::Command::new("sh").arg("-c").arg(s).env("HOME", &home).env("COLUMNS", "120").output().unwrap();
@@ -218,9 +231,29 @@ permitted by applicable law.
     #[cfg(unix)]
     #[test]
     fn a_script_you_added_counts_as_your_own() {
-        let out = auto_on("script", UBUNTU, "", &[&UBUNTU_SCRIPTS[..], &["99-mine"]].concat());
+        let said = format!("{UBUNTU}\n  Deploys after 6 pm only.\n");
+        let out = auto_on("script", &said, "", &[&UBUNTU_SCRIPTS[..], &["99-mine"]].concat());
+        assert!(out.contains("Deploys after 6 pm only."));
         assert!(out.contains("Welcome to Ubuntu"));
         assert!(!out.contains(LOGO));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_script_that_says_nothing_is_not_your_own() {
+        let scripts = [&UBUNTU_SCRIPTS[..], &["60-unminimize", "70-hoster-check", "99-old.dpkg-old"]].concat();
+        let out = auto_on("quiet", UBUNTU, "", &scripts);
+        assert!(out.contains(LOGO), "SSHeesh's welcome: {out}");
+        assert!(!out.contains("Canonical Workshop"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_firmware_notice_is_not_your_own() {
+        let fwupd = "1 device has a firmware upgrade available.\nRun `fwupdmgr get-upgrades` for more information.\n";
+        let out = auto_on("fwupd", UBUNTU, fwupd, &UBUNTU_SCRIPTS);
+        assert!(out.contains(LOGO), "SSHeesh's welcome: {out}");
+        assert!(out.contains("firmware upgrade available"));
     }
 
     #[cfg(unix)]

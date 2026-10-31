@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.7 — the welcome, with any hosting
+
+- **SSHeesh's welcome shows even when your hosting adds a script of its own** to the server's message. A script that adds nothing to what you see no longer makes the server look like it has a welcome of its own; one that does still counts. Backup copies of scripts (`.dpkg-old` and the like) are left out, as the server leaves them out too, and the standard scripts of Azure, minimal Ubuntu and Debian are known.
+- **A firmware update waiting** (fwupd) is kept with the other notices, instead of making the server look like it has a welcome of its own. Notices about an old release, the hardware support stack, a disk check at the next reboot and updates that couldn't install on their own stay too.
+
 ## 0.6.6 — the welcome on Ubuntu
 
 - **SSHeesh's welcome shows on Ubuntu servers too.** Ubuntu's own message (its news, help links and system summary) is the distribution's, not the server's, so SSHeesh's welcome takes its place; before, Ubuntu's news made it look like the server had a welcome of its own. A server has its own when there's text in /etc/motd or a script someone added to /etc/update-motd.d. The notices stay, in their paragraphs: updates, a security update, a new release, ESM.
