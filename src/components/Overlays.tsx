@@ -1,13 +1,15 @@
 import { Command } from "cmdk";
-import { Activity, BookOpen, Braces, Cable, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, HardDrive, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Play, Plus, RefreshCw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
+import { Activity, BookOpen, Braces, Cable, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, GraduationCap, HardDrive, House, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Play, Plus, RefreshCw, RotateCcw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
 import { useSettings } from "../lib/settings";
-import { useStore } from "../lib/store";
+import { activePane, isSplit, useStore } from "../lib/store";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { showCurrentNotes } from "./WhatsNew";
+import { closeTab, toggleSplit } from "../lib/tabs";
+import { useTour } from "../lib/tour";
 import { useUpdates } from "../lib/updates";
 import { targetKey, type TargetRef } from "../lib/types";
 import { Button, Kbd } from "./ui";
@@ -53,10 +55,10 @@ export function CommandPalette() {
   const open = useStore((s) => s.paletteOpen);
   const setOpen = useStore((s) => s.setPaletteOpen);
   const hosts = useVisibleHosts();
-  const focused = useStore((s) => s.panes[s.focused]);
+  // On the main menu nothing is on screen to split, close or run commands in.
+  const focused = useStore(activePane) ?? undefined;
   const openIn = useStore((s) => s.openIn);
   const split = useStore((s) => s.split);
-  const closePane = useStore((s) => s.closePane);
   const setAddHostOpen = useStore((s) => s.setAddHostOpen);
   const openSettings = useStore((s) => s.openSettings);
   const openWorkspace = useStore((s) => s.openWorkspace);
@@ -142,14 +144,14 @@ export function CommandPalette() {
               icon={target.kind === "local" ? Laptop : SquareTerminal}
               label={name}
               hint={hint}
-              onSelect={run(() => openIn("terminal", target))}
+              onSelect={run(() => useStore.getState().goTo(target))}
             />
           ))}
         </Command.Group>
         )}
 
         {shows("cmd") && (
-          <Command.Group heading="Snippets">
+          <Command.Group heading={focused?.target ? `Snippets · run on ${names.target(focused.target)}` : "Snippets · pick a server first"}>
             {snippets.map((sn) => (
               <Item key={`sn-${sn.id}`} value={`snippet command run ${sn.name} ${sn.command}`} icon={Play} label={sn.name} hint={sn.command} onSelect={run(() => runSnippet(sn))} />
             ))}
@@ -237,7 +239,14 @@ export function CommandPalette() {
             <>
               <Item icon={Columns2} label="Split right" hint={shortcutLabel("splitRight")} onSelect={run(() => split(focused.id, "row"))} />
               <Item icon={Rows2} label="Split down" hint={shortcutLabel("splitDown")} onSelect={run(() => split(focused.id, "col"))} />
-              <Item icon={X} label="Close pane" hint={shortcutLabel("closePane")} onSelect={run(() => closePane(focused.id))} />
+              <Item icon={X} label="Close tab" hint={shortcutLabel("closePane")} onSelect={run(() => closeTab(focused.id))} />
+              <Item
+                icon={Columns2}
+                value="tabs side by side split one at a time toggle"
+                label={isSplit(useStore.getState(), focused.target) ? "One tab at a time" : "Tabs side by side"}
+                hint={shortcutLabel("toggleSplit")}
+                onSelect={run(toggleSplit)}
+              />
               {focused.target?.kind === "host" && (
                 <>
                   <Item
@@ -273,6 +282,10 @@ export function CommandPalette() {
           <Item icon={Rows3} value="arrange rows" label="Arrange: rows" onSelect={run(() => arrangePanes("rows"))} />
           <Item icon={LayoutGrid} value="arrange grid" label="Arrange: grid" onSelect={run(() => arrangePanes("grid"))} />
           <Item icon={PanelLeft} label="Toggle sidebar" hint={shortcutLabel("sidebar")} onSelect={run(toggleSidebar)} />
+          <Item icon={House} value="main menu home start page new tab" label="Main menu" onSelect={run(() => useStore.getState().showHome())} />
+          {useStore.getState().closedTabs.length > 0 && (
+            <Item icon={RotateCcw} value="reopen closed tab undo close" label="Reopen closed tab" hint={shortcutLabel("reopenTab")} onSelect={run(() => useStore.getState().reopenClosed())} />
+          )}
           <Item icon={Plus} label="Add server…" hint={shortcutLabel("addHost")} onSelect={run(() => setAddHostOpen(true))} />
         </Command.Group>
         )}
@@ -297,6 +310,7 @@ export function CommandPalette() {
             onSelect={run(toggleStreamer)}
           />
           <Item icon={Sparkles} value="what's new changelog release notes" label="What's new in SSHeesh" onSelect={run(showCurrentNotes)} />
+          <Item icon={GraduationCap} value="tour tips tricks features help learn onboarding" label="Take the tour" onSelect={run(() => useTour.getState().show())} />
           <Item
             icon={RefreshCw}
             label="Check for updates"

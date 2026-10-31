@@ -468,6 +468,13 @@ async fn detect_agents(state: State<'_, AppState>, target: TargetSpec) -> Result
     blocking(move || agents::detect(&t, &env)).await
 }
 
+/// What every SSHeesh terminal on the server is running, in one round trip.
+#[tauri::command]
+async fn foreground(state: State<'_, AppState>, target: TargetSpec) -> Result<Vec<agents::Foreground>, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || agents::foreground(&t, &env)).await
+}
+
 /// A terminal's foreground program and folder, from tmux on the server.
 #[tauri::command]
 async fn pane_info(state: State<'_, AppState>, target: TargetSpec, session_key: String) -> Result<PaneInfo, OpError> {
@@ -574,6 +581,30 @@ fn pick_local_port(preferred: u16, avoid: Vec<u16>) -> Result<u16, OpError> {
     sshee_core::tunnels::pick_local_port(preferred, &avoid)
 }
 
+/// Opens Windows 11's Snap Layouts for this window, as hovering the
+/// maximize button of a system title bar does. With SSHeesh's own title bar
+/// the system can't see that button, so it presses Win+Z, which shows the
+/// same panel, then Alt, which hides the number hints Windows adds when the
+/// panel comes from the keyboard. Elsewhere it does nothing.
+#[tauri::command]
+fn show_snap_layouts() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_LWIN, VK_MENU};
+        let key = |vk: u16, up: bool| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { 0 }, time: 0, dwExtraInfo: 0 } },
+        };
+        let send = |inputs: &[INPUT]| unsafe {
+            SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+        };
+        const VK_Z: u16 = 0x5A;
+        send(&[key(VK_LWIN, false), key(VK_Z, false), key(VK_Z, true), key(VK_LWIN, true)]);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        send(&[key(VK_MENU, false), key(VK_MENU, true)]);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -637,6 +668,8 @@ pub fn run() {
             upload_paths,
             cancel_transfer,
             detect_agents,
+            foreground,
+            show_snap_layouts,
             pane_info,
             security_checkup,
             disk_report,

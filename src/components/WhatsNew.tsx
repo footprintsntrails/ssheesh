@@ -5,7 +5,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { create } from "zustand";
 import { backend } from "../lib/backend";
 import { releasesSince, RELEASES, type Release } from "../lib/changelog";
-import { useSettings } from "../lib/settings";
+import { ONBOARDING_VERSION, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
 import { Modal } from "./Overlays";
 import { Button, Logo } from "./ui";
@@ -84,7 +84,9 @@ export function WhatsNew() {
     // from before SSHeesh remembered versions.
     const updated = seen ? true : st.onboarded;
     st.update({ lastSeenVersion: current });
-    if (!updated || demoQuiet) return;
+    // A new hello shows the changes itself; the notes stay in the command bar.
+    const hello = st.onboardingVersion < ONBOARDING_VERSION;
+    if (!updated || demoQuiet || hello) return;
     const r = releasesSince(seen || null, current);
     if (r.length) useWhatsNew.getState().show(seen ? r : r.slice(0, 1));
   }, [current]);

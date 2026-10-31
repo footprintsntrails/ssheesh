@@ -11,9 +11,10 @@ import { useNames } from "../lib/privacy";
 import { useStore } from "../lib/store";
 import { RECIPE_FOR_CHECK } from "../lib/recipes";
 import { findTerminal } from "../lib/terminals";
-import { targetKey, toOpError, type Check, type OpError, type TargetRef } from "../lib/types";
+import { targetKey, toOpError, type Check, type Cleanup, type OpError, type TargetRef } from "../lib/types";
 import { Modal } from "./Overlays";
 import { openRecipes } from "./Recipes";
+import { Segmented } from "./controls";
 import { Button, IconButton, Spinner } from "./ui";
 
 type Tool = "checkup" | "disk";
@@ -243,6 +244,32 @@ export function Section({ title, aside, children }: { title: string; aside?: Rea
   );
 }
 
+/** A cleanup, and when it comes in strengths (how old temporary files must be), a pick. */
+function CleanupCard({ cleanup: c, target }: { cleanup: Cleanup; target: TargetRef }) {
+  const [pick, setPick] = useState(() => Math.max(0, c.choices?.findIndex((x) => x.command === c.command) ?? 0));
+  const chosen = c.choices?.[pick];
+  const size = chosen ? chosen.bytes : c.bytes;
+  return (
+    <li className="rounded-[11px] bg-ink/[0.035] px-3.5 py-3 ring-1 ring-inset ring-ink/[0.06]">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[13px] font-medium text-fg">{c.title}</p>
+        {size != null && (
+          <span className={cn("shrink-0 text-[12px] font-medium tabular-nums", size > 0 ? "text-ok" : "text-fg-3")}>
+            {size > 0 ? `frees about ${bytes(size)}` : "nothing that old"}
+          </span>
+        )}
+      </div>
+      <p className="mt-0.5 text-[12px] leading-relaxed text-fg-2">{c.detail}</p>
+      {c.choices && c.choices.length > 1 && (
+        <div className="mt-2" role="radiogroup" aria-label={`${c.title}: how old`}>
+          <Segmented value={String(pick)} options={c.choices.map((x, i) => ({ value: String(i), label: x.label }))} onChange={(v) => setPick(Number(v))} />
+        </div>
+      )}
+      <Command command={chosen?.command ?? c.command} target={target} />
+    </li>
+  );
+}
+
 function DiskDialog({ target }: { target: TargetRef }) {
   const names = useNames();
   const openIn = useStore((s) => s.openIn);
@@ -303,14 +330,7 @@ function DiskDialog({ target }: { target: TargetRef }) {
           <Section title="Safe to clean up">
             <ul className="flex flex-col gap-2">
               {r.cleanups.map((c) => (
-                <li key={c.id} className="rounded-[11px] bg-ink/[0.035] px-3.5 py-3 ring-1 ring-inset ring-ink/[0.06]">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <p className="text-[13px] font-medium text-fg">{c.title}</p>
-                    {c.bytes != null && <span className="shrink-0 text-[12px] font-medium text-ok tabular-nums">frees about {bytes(c.bytes)}</span>}
-                  </div>
-                  <p className="mt-0.5 text-[12px] leading-relaxed text-fg-2">{c.detail}</p>
-                  <Command command={c.command} target={target} />
-                </li>
+                <CleanupCard key={c.id} cleanup={c} target={target} />
               ))}
             </ul>
           </Section>

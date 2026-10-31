@@ -1,23 +1,28 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { AddHostDialog } from "./components/AddServerDialog";
 import { ConfigImportDialog } from "./components/ConfigImport";
-import { Welcome } from "./components/Welcome";
+import { Hints } from "./components/Hints";
+import { useWindowFrame } from "./components/WindowControls";
 import { WhatsNew } from "./components/WhatsNew";
 import { UploadDialog, useUploadAsk } from "./components/UploadDialog";
 import { findTerminal } from "./lib/terminals";
 import { shellQuote } from "./lib/format";
 import { EdgeReveal } from "./components/EdgeReveal";
 import { CommandPalette, ConfirmDialog, Toasts } from "./components/Overlays";
-import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
-import { Workspace } from "./components/Workspace";
+import { EnvStripe, Workspace } from "./components/Workspace";
 import { backend } from "./lib/backend";
 import { matchShortcut, tabStep } from "./lib/keys";
-import { closeTab, nextTab } from "./components/Tabs";
+import { closeTab, newTab, nextTab, toggleSplit } from "./lib/tabs";
 import { cn } from "./lib/format";
-import { applyAppearance, useSettings } from "./lib/settings";
-import { useStore } from "./lib/store";
-import { startUpdateChecks } from "./lib/updates";
+import { applyAppearance, ONBOARDING_VERSION, useSettings } from "./lib/settings";
+import { useTour } from "./lib/tour";
+import { activePane, useStore } from "./lib/store";
+import { startForegroundWatch } from "./lib/agents";
+import { startRoleDetection } from "./lib/roles";
+import { useLabels } from "./lib/labels";
+import { isMainWindow, openedFor } from "./lib/windowInfo";
+import { startUpdateChecks, useUpdates } from "./lib/updates";
 import { toggleStreamer, useLearnLocalIdentity } from "./lib/privacy";
 import { ServerTools } from "./components/ServerTools";
 import { Recipes } from "./components/Recipes";
@@ -40,15 +45,16 @@ function useShortcuts() {
       e.preventDefault();
       e.stopPropagation();
       const s = useStore.getState();
+      // Only what's on screen: on the main menu there's no tab to split or close.
+      const pane = activePane(s);
       if (id === "palette") s.setPaletteOpen(!s.paletteOpen);
       else if (id === "addHost") s.setAddHostOpen(true);
-      else if (id === "splitRight") s.split(s.focused, "row");
-      else if (id === "splitDown") s.split(s.focused, "col");
-      else if (id === "closePane") closeTab(s.focused);
-      else if (id === "newTerminal") {
-        const target = s.panes[s.focused]?.target;
-        if (target) s.openIn("terminal", target, { split: true });
-      }
+      else if (id === "splitRight") pane && s.split(pane.id, "row");
+      else if (id === "splitDown") pane && s.split(pane.id, "col");
+      else if (id === "closePane") pane && closeTab(pane.id);
+      else if (id === "newTerminal") pane?.target && newTab("terminal", pane.target);
+      else if (id === "reopenTab") s.reopenClosed();
+      else if (id === "toggleSplit") toggleSplit();
       else if (id === "settings") s.settingsOpen ? s.closeSettings() : s.openSettings();
       else if (id === "zoomPane") s.toggleZoom();
       else if (id === "streamer") toggleStreamer();
@@ -124,27 +130,72 @@ function useFileDrop() {
   );
 }
 
+// Loaded the first time they're needed, so starting SSHeesh doesn't wait on
+// Settings, the hello or the tour.
+const SettingsDialog = lazy(() => import("./components/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
+const Welcome = lazy(() => import("./components/Welcome").then((m) => ({ default: m.Welcome })));
+const Tour = lazy(() => import("./components/Tour").then((m) => ({ default: m.Tour })));
+
+/** What applyAppearance reads. */
+const LOOK = ["theme", "customThemes", "accent", "animations", "paneGap", "paneRadius"] as const;
+
+/** Settings and labels changed in another window show up in this one. */
+function useSharedAcrossWindows() {
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "sshee-settings") void useSettings.persist.rehydrate();
+      else if (e.key === "sshee-labels") void useLabels.persist.rehydrate();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+}
+
 export function App() {
   const loadHosts = useStore((s) => s.loadHosts);
   useEffect(() => {
-    void loadHosts();
+    void loadHosts().then(() => {
+      // A window opened for one server goes straight to it.
+      const t = openedFor();
+      if (t && !isMainWindow) useStore.getState().goTo(t);
+    });
   }, [loadHosts]);
+  useSharedAcrossWindows();
+  useWindowFrame();
+  // Shortcut labels all over the app follow your own keys at once.
+  useSettings((s) => s.shortcuts);
+  useEffect(() => startForegroundWatch(), []);
+  useEffect(() => startRoleDetection(), []);
   useShortcuts();
   useFileDrop();
   useLearnLocalIdentity();
-  useEffect(() => useSettings.subscribe(applyAppearance), []);
+  // Colors and spacing are applied again only when one of them changes.
+  useEffect(
+    () =>
+      useSettings.subscribe((s, prev) => {
+        if (LOOK.some((k) => s[k] !== prev[k])) applyAppearance(s);
+      }),
+    [],
+  );
   // Keep the session core's reconnect behaviour in step with Settings.
   const reconnectMode = useSettings((s) => s.reconnectMode);
   useEffect(() => backend.setAutoReconnect(reconnectMode === "auto"), [reconnectMode]);
-  useEffect(() => startUpdateChecks(), []);
+  // Once per app, in its first window.
+  useEffect(() => {
+    if (isMainWindow) startUpdateChecks();
+    else void backend.appVersion().then((current) => useUpdates.setState({ current }));
+  }, []);
   // Saved tunnels that were on when SSHeesh closed come back on.
-  useEffect(() => restoreTunnels(), []);
+  useEffect(() => (isMainWindow ? restoreTunnels() : undefined), []);
   const uiZoom = useSettings((s) => s.uiZoom);
   useEffect(() => void backend.setZoom(uiZoom / 100).catch(() => {}), [uiZoom]);
   useFollowSystemTheme();
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const sidebarSide = useSettings((s) => s.sidebarSide);
   const compact = useSettings((s) => s.compactMode);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const hello = useSettings((s) => s.onboardingVersion < ONBOARDING_VERSION);
+  const tourOpen = useTour((s) => s.open);
 
   // Right-click belongs to our own menus, not the webview's.
   useEffect(() => {
@@ -165,19 +216,24 @@ export function App() {
         </EdgeReveal>
       )}
       <Workspace />
-      <SettingsDialog />
       <CommandPalette />
       <AddHostDialog />
       <ConfigImportDialog />
-      <Welcome />
       <WhatsNew />
       <UploadDialog />
       <ServerTools />
       <Recipes />
       <Snippets />
       <Tunnels />
+      <Suspense fallback={null}>
+        {settingsOpen && <SettingsDialog />}
+        {hello && <Welcome />}
+        {tourOpen && <Tour />}
+      </Suspense>
+      <Hints />
       <ConfirmDialog />
       <Toasts />
+      <EnvStripe />
     </div>
   );
 }

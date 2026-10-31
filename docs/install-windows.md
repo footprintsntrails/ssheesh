@@ -8,7 +8,7 @@
 
 Open the [latest release](https://github.com/footprintsntrails/ssheesh/releases/latest). There are two ways to get SSHeesh; pick one:
 
-- **`SSHeesh_<version>_x64-portable.exe`**: the whole app in one file. Nothing to install: put it anywhere (the desktop, a USB stick) and double-click it. It updates itself too: the new version takes the file's place, keeping its name, so shortcuts keep working. Keep it in a folder you can write to (not Program Files).
+- **`SSHeesh.exe`**: the whole app in one file. Nothing to install: put it anywhere (the desktop, a USB stick) and double-click it. It updates itself too: the new version takes the file's place, keeping its name, so shortcuts keep working. Keep it in a folder you can write to (not Program Files).
 - **`SSHeesh_<version>_x64-setup.exe`**: installs SSHeesh for your user (no admin rights needed), adds it to the Start menu, and updates itself in the background.
 
 Either way, your servers and settings live in `%APPDATA%\io.github.footprintsntrails.ssheesh`, and remembered passwords in Windows Credential Manager. You can switch between the two, or move the portable file around, without losing anything.

@@ -1,22 +1,26 @@
-// First launch: a guided tour of the main ways to make SSHeesh yours, with a
-// live preview of the app next to the choices. Everything applies at once,
-// every step can be skipped, and all of it lives in Settings later.
+// The hello. New here: your servers first, then one page to make SSHeesh
+// yours with a live preview of the app beside it; the one-minute tour is
+// offered at the end. Everything applies at once, every step can be skipped,
+// and all of it lives in Settings later.
+// Known SSHeesh before a redesign: one screen of what changed, with the old
+// way one click away, and every choice you made kept.
 
-import { Check, Command, MousePointer2, Plus, RotateCw } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, FileUp, MessageSquare, Plus } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
-import { shortcutLabel } from "../lib/keys";
+import { isMac, shortcutLabel } from "../lib/keys";
 import { useLabels, useUndecidedConfig } from "../lib/labels";
-import { useSettings, type Settings } from "../lib/settings";
+import { toggleStreamer, useNames } from "../lib/privacy";
+import { ONBOARDING_VERSION, useSettings, type Settings } from "../lib/settings";
 import { hostAddress, useStore } from "../lib/store";
 import { ACCENTS, APP_THEMES, resolveScheme, TERMINAL_FONTS, TERMINAL_SCHEMES } from "../lib/themes";
 import { MiniApp } from "./MiniApp";
 import { Modal } from "./Overlays";
-import { Segmented, Slider, Switch } from "./SettingsDialog";
+import { Segmented, Slider, Switch } from "./controls";
+import { useTour } from "../lib/tour";
+import { SceneNewLayout } from "./TourScenes";
 import { Button, Logo } from "./ui";
-
-const STEPS = ["Welcome", "Colors", "Terminal", "Layout", "Behavior", "Servers", "Tips"] as const;
 
 function set(patch: Partial<Settings>) {
   useSettings.getState().update(patch);
@@ -95,70 +99,262 @@ function LoadPicture({ style }: { style: (typeof LOAD_STYLES)[number]["id"] }) {
   );
 }
 
+/** A switch with its label and a line about what it does. */
+function Toggle({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-3">
+      <span>
+        <span className="block text-[12.5px] font-medium text-fg">{label}</span>
+        <span className="block text-[11.5px] leading-snug text-fg-3">{hint}</span>
+      </span>
+      <Switch label={label} checked={checked} onChange={onChange} />
+    </label>
+  );
+}
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-4">
+      <h3 className="border-b border-line pb-1.5 text-[11.5px] font-semibold text-fg-3">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/** Names on screen while you set up: one click hides them, as streamer mode does everywhere. */
+function HideNames() {
+  const on = useSettings((s) => s.streamerMode);
+  return (
+    <button
+      type="button"
+      onClick={toggleStreamer}
+      title={`Streamer mode: hide server names and addresses (${shortcutLabel("streamer")})`}
+      className={cn("flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[12px] font-medium", on ? "bg-accent/15 text-accent" : "text-fg-3 hover:bg-ink/[0.06] hover:text-fg-2")}
+    >
+      {on ? <EyeOff size={13} /> : <Eye size={13} />}
+      {on ? "Names hidden" : "Hide names"}
+    </button>
+  );
+}
+
+/** The settings "Make it yours" offers, and what "Use defaults" puts back. */
+const MADE_YOURS: (keyof Settings)[] = [
+  "theme",
+  "themeFollowsSystem",
+  "accent",
+  "terminalScheme",
+  "terminalFont",
+  "terminalFontSize",
+  "cursorStyle",
+  "tabsPlacement",
+  "viewMode",
+  "sidebarMode",
+  "sidebarSide",
+  "railStatus",
+  "compactMode",
+  "envStripe",
+  "reconnectMode",
+  "notifyAttention",
+  "highlightErrors",
+  "highlightWarnings",
+  "logo",
+];
+
+const ISSUES = "https://github.com/footprintsntrails/ssheesh/issues/new/choose";
+
+/** What the redesign changed, for people who knew SSHeesh before it. */
+function WhatChanged({ onCustomize, onDone }: { onCustomize: () => void; onDone: (tour: boolean) => void }) {
+  const s = useSettings();
+  const openTour = (step: number) => {
+    onDone(false);
+    useTour.getState().show(step);
+  };
+  const rows = [
+    { title: "Main menu", body: "A start page with your servers, agents at work and tabs you closed.", show: () => (onDone(false), useStore.getState().showHome()) },
+    { title: "Peek at files", body: `${isMac ? "⌘-click" : "Ctrl+click"} a path in a terminal to see the file beside it.`, show: () => openTour(3) },
+    { title: "Agents in the sidebar", body: "Claude Code and Codex show up by name, on every server.", show: () => openTour(1) },
+    { title: "Your own colors and keys", body: "Edit any theme color, and set your own keyboard shortcuts.", show: () => (onDone(false), useStore.getState().openSettings("appearance")) },
+  ];
+  return (
+    <div className="flex flex-col gap-5 p-6">
+      <div className="flex items-center gap-3">
+        <Logo size={36} winking />
+        <h2 className="flex-1 text-[20px] font-semibold tracking-tight text-fg">SSHeesh has a new layout</h2>
+        <HideNames />
+      </div>
+      <SceneNewLayout />
+      <p className="-mt-1 text-[13px] text-fg-2">Your servers, sessions and settings are where you left them.</p>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-2">
+          <span className="text-[12px] font-medium text-fg">Tabs</span>
+          <Segmented
+            value={s.tabsPlacement}
+            onChange={(v) => set({ tabsPlacement: v })}
+            options={[
+              { value: "sidebar", label: "Under each server" },
+              { value: "top", label: "Along the top, as before" },
+            ]}
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <span className="text-[12px] font-medium text-fg">Files</span>
+          <Segmented
+            value={s.viewMode}
+            onChange={(v) => set({ viewMode: v })}
+            options={[
+              { value: "tabs", label: "As a tab" },
+              { value: "split", label: "Beside the terminal" },
+            ]}
+          />
+        </div>
+      </div>
+      <div className="flex flex-col">
+        <h3 className="pb-1 text-[11.5px] font-semibold text-fg-3">Also new</h3>
+        {rows.map((r) => (
+          <div key={r.title} className="flex items-center gap-3 border-t border-line py-2">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12.5px] font-medium text-fg">{r.title}</span>
+              <span className="block text-[11.5px] text-fg-3">{r.body}</span>
+            </span>
+            <Button size="sm" variant="ghost" onClick={r.show}>
+              Show me
+            </Button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => void backend.openExternal(ISSUES)} className="flex items-center gap-1.5 text-[12px] text-fg-3 hover:text-fg-2">
+          <MessageSquare size={12.5} /> Tell us what you miss
+        </button>
+        <span className="flex-1" />
+        <Button variant="ghost" onClick={onCustomize}>
+          Customize more
+        </Button>
+        <Button variant="ghost" onClick={() => onDone(true)}>
+          Take the tour
+        </Button>
+        <Button variant="primary" autoFocus onClick={() => onDone(false)}>
+          Start
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function Welcome() {
-  const onboarded = useSettings((s) => s.onboarded);
+  const version = useSettings((s) => s.onboardingVersion);
   const s = useSettings();
   const hostsLoaded = useStore((st) => st.hostsLoaded);
   const hosts = useStore((st) => st.hosts);
   const undecided = useUndecidedConfig();
-  const [step, setStep] = useState(0);
+  // Decided once, when the hello opens: whether you used SSHeesh before.
+  const [returning] = useState(() => useSettings.getState().onboarded);
+  const [step, setStep] = useState<"servers" | "yours" | "changed">(returning ? "changed" : "servers");
   const [keep, setKeep] = useState<string[]>([]);
   const [addAfter, setAddAfter] = useState(false);
+  const [more, setMore] = useState(false);
 
   // The demo build skips the hello unless asked for it.
   const demoSkip = backend.isDemo && !new URLSearchParams(location.search).has("firstrun");
   useEffect(() => {
-    if (demoSkip && !onboarded) set({ onboarded: true });
-  }, [demoSkip, onboarded]);
+    if (demoSkip && version < ONBOARDING_VERSION) set({ onboarded: true, onboardingVersion: ONBOARDING_VERSION });
+  }, [demoSkip, version]);
 
   const configIds = useMemo(() => undecided.map((h) => h.id), [undecided]);
   useEffect(() => setKeep(configIds), [configIds]);
 
-  const open = hostsLoaded && !onboarded && !demoSkip;
-  const last = STEPS.length - 1;
-  const finish = () => {
+  // Mounted only while the hello is due; it waits for your servers to load.
+  const open = hostsLoaded && !demoSkip;
+  const done = (tour: boolean) => {
     if (configIds.length) useLabels.getState().chooseConfig(configIds, keep);
-    set({ onboarded: true });
+    set({ onboarded: true, onboardingVersion: ONBOARDING_VERSION });
     if (addAfter) useStore.getState().setAddHostOpen(true);
+    else if (tour) useTour.getState().show();
   };
-  // Skipping doesn't decide for you: new config servers wait behind a quiet note.
-  const skip = () => set({ onboarded: true });
-  const focus = step === 2 ? "terminal" : step === 5 ? "sidebar" : undefined;
+  // Skipping keeps the defaults, and doesn't decide for you: new config
+  // servers wait behind a quiet note.
+  const skip = () => set({ onboarded: true, onboardingVersion: ONBOARDING_VERSION });
   const schemes = [["auto", "Match app"] as const, ...Object.entries(TERMINAL_SCHEMES).map(([id, v]) => [id, v.name] as const)];
+  const names = useNames();
+
+  if (step === "changed")
+    return (
+      <Modal open={open} onClose={skip} width={680}>
+        <WhatChanged onCustomize={() => setStep("yours")} onDone={done} />
+      </Modal>
+    );
 
   return (
-    <Modal open={open} onClose={skip} width={860}>
-      <div className="flex min-h-[min(480px,calc(84vh-16px))] flex-col p-6">
-        <div className="mb-4 flex items-center gap-2 text-[11.5px] text-fg-3">
-          {STEPS.map((name, i) => (
-            <button
-              key={name}
-              type="button"
-              onClick={() => setStep(i)}
-              aria-current={i === step || undefined}
-              className={cn("rounded-full px-2 py-0.5 transition-colors", i === step ? "bg-accent/15 font-medium text-accent" : "hover:text-fg-2")}
-            >
-              {name}
-            </button>
-          ))}
+    <Modal open={open} onClose={skip} width={step === "yours" ? 900 : 620}>
+      {step === "servers" ? (
+        <div className="flex flex-col gap-5 p-6">
+          <div className="flex items-center gap-3">
+            <Logo size={36} winking />
+            <span className="flex-1 text-[13px] font-medium text-fg-2">Welcome to SSHeesh</span>
+            <HideNames />
+          </div>
+          <div>
+            <h2 className="text-[22px] font-semibold tracking-tight text-fg">Your servers</h2>
+            <p className="mt-1 text-[13.5px] leading-relaxed text-fg-2">
+              {configIds.length > 0
+                ? `Found ${configIds.length} in your SSH config. Pick the ones you want; the file isn't changed.`
+                : hosts.length
+                  ? `Your ${hosts.length} server${hosts.length === 1 ? " is" : "s are"} here.`
+                  : "Add your first one: paste its address, or a whole ssh command, and SSHeesh fills in the rest."}
+            </p>
+          </div>
+          {configIds.length > 0 && (
+            <div className="flex max-h-[300px] flex-col gap-0.5 overflow-y-auto rounded-[10px] p-1 ring-1 ring-inset ring-ink/[0.08]">
+              {undecided.map((h) => (
+                <label key={h.id} className="flex h-10 cursor-pointer items-center gap-3 rounded-[7px] px-2.5 hover:bg-ink/[0.04]">
+                  <input
+                    type="checkbox"
+                    checked={keep.includes(h.id)}
+                    onChange={() => setKeep((k) => (k.includes(h.id) ? k.filter((x) => x !== h.id) : [...k, h.id]))}
+                    className="accent-[var(--ui-accent)]"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] text-fg">{names.host(h)}</span>
+                    {!names.on && hostAddress(h) !== h.name && <span className="block truncate font-mono text-[11px] text-fg-3">{hostAddress(h)}</span>}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-[10px] bg-ink/[0.04] px-3 py-2.5 text-[13px] text-fg">
+            <input type="checkbox" checked={addAfter} onChange={(e) => setAddAfter(e.target.checked)} className="accent-[var(--ui-accent)]" />
+            <Plus size={14} className="text-accent" /> {configIds.length || hosts.length ? "Add another server when I'm done" : "Add a server when I'm done"}
+          </label>
+          <p className="text-[11.5px] text-fg-3">Nothing connects yet. No account, no cloud: your servers and keys stay on this computer.</p>
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" onClick={skip}>
+              Skip setup
+            </Button>
+            <span className="flex-1" />
+            <Button variant="primary" autoFocus onClick={() => setStep("yours")}>
+              {configIds.length ? (
+                <>
+                  <FileUp size={14} /> Add {keep.length} server{keep.length === 1 ? "" : "s"}
+                </>
+              ) : (
+                "Next"
+              )}
+            </Button>
+          </div>
         </div>
+      ) : (
+        <div className="flex max-h-[calc(84vh-16px)] flex-col p-6">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <h2 className="text-[22px] font-semibold tracking-tight text-fg">Make it yours</h2>
+              <p className="mt-1 text-[13px] text-fg-2">Everything changes as you click. It's all in Settings later.</p>
+            </div>
+            <HideNames />
+          </div>
 
-        <div className="flex min-h-0 flex-1 items-start gap-6">
-          <div className="flex min-w-0 flex-1 flex-col gap-5">
-            {step === 0 && (
-              <div className="flex flex-col items-start">
-                <Logo size={72} winking />
-                <h2 className="mt-4 text-[24px] font-semibold tracking-tight text-fg">Welcome to SSHeesh</h2>
-                <p className="mt-2 max-w-[440px] text-[13.5px] leading-relaxed text-fg-2">
-                  A terminal for your servers that you make your own. Let's set it up the way you like it: colors, terminal, layout and
-                  how it behaves. It takes about a minute, you'll see every change as you make it, and all of it stays in Settings for later.
-                </p>
-              </div>
-            )}
-
-            {step === 1 && (
-              <>
-                <h2 className="text-[20px] font-semibold tracking-tight text-fg">Colors</h2>
+          <div className="mt-5 flex min-h-0 flex-1 items-start gap-7">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 self-stretch overflow-y-auto pr-1">
+              <Group title="Look">
                 <Field label="Theme">
                   <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Theme">
                     {APP_THEMES.map((t) => (
@@ -166,13 +362,11 @@ export function Welcome() {
                         key={t.id}
                         role="radio"
                         aria-checked={s.theme === t.id}
-                        onClick={() =>
-                          set(s.themeFollowsSystem ? { theme: t.id, ...(t.light ? { lightTheme: t.id } : { darkTheme: t.id }) } : { theme: t.id })
-                        }
+                        onClick={() => set(s.themeFollowsSystem ? { theme: t.id, ...(t.light ? { lightTheme: t.id } : { darkTheme: t.id }) } : { theme: t.id })}
                         className="group flex flex-col items-start gap-1 text-left"
                       >
                         <span
-                          className={cn("relative block h-[44px] w-full overflow-hidden rounded-[8px] ring-1", s.theme === t.id ? "ring-2 ring-accent" : "ring-ink/[0.1] group-hover:ring-ink/[0.2]")}
+                          className={cn("relative block h-[38px] w-full overflow-hidden rounded-[8px] ring-1", s.theme === t.id ? "ring-2 ring-accent" : "ring-ink/[0.1] group-hover:ring-ink/[0.2]")}
                           style={{ background: t.window }}
                         >
                           <span className="absolute top-1.5 right-1.5 bottom-1.5 left-[34%] rounded-[3px]" style={{ background: t.canvas }}>
@@ -184,14 +378,8 @@ export function Welcome() {
                     ))}
                   </div>
                 </Field>
-                <label className="flex items-center justify-between gap-3">
-                  <span>
-                    <span className="block text-[12.5px] font-medium text-fg">Match my system</span>
-                    <span className="block text-[11.5px] text-fg-3">Light by day, dark by night, as your system switches.</span>
-                  </span>
-                  <Switch label="Match my system" checked={s.themeFollowsSystem} onChange={(v) => set({ themeFollowsSystem: v })} />
-                </label>
-                <Field label="Accent color" hint="Buttons, selection and focus.">
+                <Toggle label="Match my system" hint="Light by day, dark by night, as your system switches." checked={s.themeFollowsSystem} onChange={(v) => set({ themeFollowsSystem: v })} />
+                <Field label="Accent color" hint="Focus and the main buttons.">
                   <div className="flex items-center gap-2" role="radiogroup" aria-label="Accent color">
                     {ACCENTS.map((a) => (
                       <button
@@ -201,22 +389,14 @@ export function Welcome() {
                         aria-label={a.name}
                         title={a.name}
                         onClick={() => set({ accent: a.value })}
-                        className="flex size-6 items-center justify-center rounded-full ring-1 ring-inset ring-black/20"
+                        className={cn("size-6 rounded-full ring-1 ring-inset ring-black/20", s.accent === a.value && "ring-2 ring-fg/80 ring-offset-2 ring-offset-[var(--ui-raised)]")}
                         style={{ background: a.value }}
-                      >
-                        {s.accent === a.value && <Check size={13} strokeWidth={3} className="text-white" />}
-                      </button>
+                      />
                     ))}
                   </div>
                 </Field>
-              </>
-            )}
-
-            {step === 2 && (
-              <>
-                <h2 className="text-[20px] font-semibold tracking-tight text-fg">Terminal</h2>
-                <Field label="Color scheme" hint="“Match app” follows your theme; the others are well-known palettes.">
-                  <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Color scheme">
+                <Field label="Terminal colors" hint="“Match app” follows your theme; the others are well-known palettes.">
+                  <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Terminal colors">
                     {schemes.map(([id, name]) => {
                       const t = resolveScheme(id, s.theme, s.accent);
                       return (
@@ -241,8 +421,8 @@ export function Welcome() {
                     })}
                   </div>
                 </Field>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Font">
+                <Field label="Terminal font and size">
+                  <div className="flex items-center gap-3">
                     <select
                       aria-label="Font"
                       value={s.terminalFont}
@@ -255,281 +435,192 @@ export function Welcome() {
                         </option>
                       ))}
                     </select>
-                  </Field>
-                  <Field label="Cursor">
-                    <Segmented
-                      value={s.cursorStyle}
-                      onChange={(v) => set({ cursorStyle: v })}
-                      options={[
-                        { value: "bar", label: "Bar" },
-                        { value: "block", label: "Block" },
-                        { value: "underline", label: "Line" },
-                      ]}
-                    />
-                  </Field>
-                </div>
-                <Field label="Text size">
-                  <Slider label="Text size" value={s.terminalFontSize} min={10} max={20} onChange={(v) => set({ terminalFontSize: v })} format={(v) => `${v} px`} />
-                </Field>
-              </>
-            )}
-
-            {step === 3 && (
-              <>
-                <h2 className="text-[20px] font-semibold tracking-tight text-fg">Layout</h2>
-                <Field
-                  label="Terminal and Files"
-                  hint={
-                    s.viewMode === "tabs"
-                      ? "One at a time, as tabs at the top. Each keeps running while you look at another."
-                      : "Switch each on or off at the top. With both on, they share the window."
-                  }
-                >
-                  <div className="flex gap-2" role="radiogroup" aria-label="Terminal and Files">
-                    <Card selected={s.viewMode === "split"} onClick={() => set({ viewMode: "split" })} title="Side by side">
-                      <rect x="4" y="4" width="34" height="32" rx="2" {...strong} />
-                      <rect x="41" y="4" width="19" height="15" rx="2" {...fill} />
-                      <rect x="41" y="21" width="19" height="15" rx="2" {...fill} />
-                    </Card>
-                    <Card selected={s.viewMode === "tabs"} onClick={() => set({ viewMode: "tabs" })} title="Tabs">
-                      <rect x="4" y="4" width="16" height="5" rx="1.5" {...strong} />
-                      <rect x="22" y="4" width="16" height="5" rx="1.5" {...fill} />
-                      <rect x="40" y="4" width="16" height="5" rx="1.5" {...fill} />
-                      <rect x="4" y="11" width="56" height="25" rx="2" {...strong} />
-                    </Card>
+                    <div className="min-w-[150px] flex-1">
+                      <Slider label="Text size" value={s.terminalFontSize} min={10} max={20} onChange={(v) => set({ terminalFontSize: v })} format={(v) => `${v} px`} />
+                    </div>
                   </div>
                 </Field>
+              </Group>
+
+              <Group title="Layout">
                 <div className="grid grid-cols-2 gap-4">
-                  <Field label="Server list" hint="Icons save room.">
-                    <div className="flex gap-2" role="radiogroup" aria-label="Server list">
-                      <Card selected={s.sidebarMode === "wide"} onClick={() => set({ sidebarMode: "wide" })} title="Names">
-                        <rect x="4" y="4" width="20" height="32" rx="2" {...fill} />
-                        {[9, 15, 21, 27].map((y) => (
-                          <rect key={y} x="7" y={y} width="14" height="3" rx="1" fill="currentColor" fillOpacity="0.6" />
+                  <Field label="Tabs">
+                    <div className="flex gap-2" role="radiogroup" aria-label="Where tabs sit">
+                      <Card selected={s.tabsPlacement === "sidebar"} onClick={() => set({ tabsPlacement: "sidebar" })} title="Under each server">
+                        <rect x="4" y="4" width="18" height="32" rx="2" {...fill} />
+                        {[9, 15, 21].map((y) => (
+                          <rect key={y} x={y === 9 ? 6 : 9} y={y} width={y === 9 ? 14 : 11} height="3" rx="1" {...(y === 15 ? strong : { fill: "currentColor", fillOpacity: 0.6 })} />
                         ))}
                       </Card>
-                      <Card selected={s.sidebarMode === "narrow"} onClick={() => set({ sidebarMode: "narrow" })} title="Icons">
-                        <rect x="4" y="4" width="8" height="32" rx="2" {...fill} />
-                        {[8, 15, 22, 29].map((y) => (
-                          <rect key={y} x="5.5" y={y} width="5" height="5" rx="1.2" {...strong} />
+                      <Card selected={s.tabsPlacement === "top"} onClick={() => set({ tabsPlacement: "top" })} title="Along the top">
+                        {[4, 18, 32].map((x, i) => (
+                          <rect key={x} x={x} y="4" width="12" height="5" rx="1.5" {...(i === 0 ? strong : fill)} />
                         ))}
+                        <rect x="4" y="11" width="56" height="25" rx="2" {...fill} />
                       </Card>
                     </div>
                   </Field>
-                  <Field label="Sidebar side" hint="Where the list sits.">
-                    <div className="flex gap-2" role="radiogroup" aria-label="Sidebar side">
-                      <Card selected={s.sidebarSide === "left"} onClick={() => set({ sidebarSide: "left" })} title="Left">
-                        <rect x="4" y="4" width="14" height="32" rx="2" {...strong} />
+                  <Field label="Files and other tabs">
+                    <div className="flex gap-2" role="radiogroup" aria-label="Tabs on screen">
+                      <Card selected={s.viewMode === "tabs"} onClick={() => set({ viewMode: "tabs" })} title="One at a time">
+                        <rect x="4" y="4" width="56" height="32" rx="2" {...strong} />
                       </Card>
-                      <Card selected={s.sidebarSide === "right"} onClick={() => set({ sidebarSide: "right" })} title="Right">
-                        <rect x="46" y="4" width="14" height="32" rx="2" {...strong} />
+                      <Card selected={s.viewMode === "split"} onClick={() => set({ viewMode: "split" })} title="Side by side">
+                        <rect x="4" y="4" width="34" height="32" rx="2" {...strong} />
+                        <rect x="41" y="4" width="19" height="32" rx="2" {...fill} />
                       </Card>
                     </div>
                   </Field>
                 </div>
-                <Field
-                  label="Server load"
-                  hint={
-                    s.railStatus === "off"
-                      ? "Servers show only whether they're connected."
-                      : "How busy each open server is. The list shows small CPU and memory meters; icons show the style you pick."
-                  }
-                >
-                  <div className="flex gap-2" role="radiogroup" aria-label="Server load">
-                    {LOAD_STYLES.map(({ id, title }) => (
-                      <Card key={id} selected={s.railStatus === id} onClick={() => set({ railStatus: id })} title={title}>
-                        <LoadPicture style={id} />
-                      </Card>
-                    ))}
-                  </div>
-                </Field>
-                <Field label="Bookmarks in the file manager">
-                  <div className="flex gap-2" role="radiogroup" aria-label="Bookmarks column">
-                    {(["wide", "narrow", "hidden"] as const).map((m) => (
-                      <Card key={m} selected={s.placesMode === m} onClick={() => set({ placesMode: m })} title={m === "wide" ? "Wide" : m === "narrow" ? "Narrow" : "Hidden"}>
-                        {m !== "hidden" && <rect x="4" y="4" width={m === "wide" ? 18 : 8} height="32" rx="2" {...strong} />}
-                        {[10, 17, 24].map((y) => (
-                          <rect key={y} x={m === "wide" ? 26 : m === "narrow" ? 16 : 8} y={y} width="30" height="3" rx="1" fill="currentColor" fillOpacity="0.5" />
-                        ))}
-                      </Card>
-                    ))}
-                  </div>
-                </Field>
-                <div className="flex flex-col gap-3">
-                  <label className="flex items-center justify-between gap-3">
-                    <span>
-                      <span className="block text-[12.5px] font-medium text-fg">Server vitals</span>
-                      <span className="block text-[11.5px] text-fg-3">A one-line CPU, memory, network and disk readout under your panes.</span>
-                    </span>
-                    <Switch label="Server vitals" checked={s.showVitals} onChange={(v) => set({ showVitals: v })} />
-                  </label>
-                  <label className="flex items-center justify-between gap-3">
-                    <span>
-                      <span className="block text-[12.5px] font-medium text-fg">Compact mode</span>
-                      <span className="block text-[11.5px] text-fg-3">
-                        Just your panes. The sidebar and toolbar slide in when you point at the window's edge. {shortcutLabel("compact")} toggles it.
-                      </span>
-                    </span>
-                    <Switch label="Compact mode" checked={s.compactMode} onChange={(v) => set({ compactMode: v })} />
-                  </label>
-                </div>
-              </>
-            )}
-
-            {step === 4 && (
-              <>
-                <h2 className="text-[20px] font-semibold tracking-tight text-fg">Behavior</h2>
-                <Field
-                  label="When the connection drops"
-                  hint={
-                    s.reconnectMode === "auto"
-                      ? "Reconnects on its own and lands you back in the same session."
-                      : s.reconnectMode === "ask"
-                        ? "Shows a Reconnect button over the terminal and waits for you."
-                        : "Stays quiet: the pane shows Disconnected with a small Reconnect button."
-                  }
-                >
+                <Field label="Server list" hint={s.viewMode === "tabs" ? `${shortcutLabel("toggleSplit")} or dragging a tab onto the page shows two side by side any time.` : undefined}>
                   <Segmented
-                    value={s.reconnectMode}
-                    onChange={(v) => set({ reconnectMode: v })}
+                    value={s.sidebarMode}
+                    onChange={(v) => set({ sidebarMode: v })}
                     options={[
-                      { value: "auto", label: "Reconnect" },
-                      { value: "ask", label: "Ask me" },
-                      { value: "off", label: "Off" },
+                      { value: "wide", label: "Names" },
+                      { value: "narrow", label: "Icons" },
                     ]}
                   />
                 </Field>
-                <label className="flex items-center justify-between gap-3">
-                  <span>
-                    <span className="block text-[12.5px] font-medium text-fg">Tell me when a terminal needs me</span>
-                    <span className="block text-[11.5px] text-fg-3">When an AI agent or a program waits for an answer, or a long run goes quiet.</span>
-                  </span>
-                  <Switch label="Tell me when a terminal needs me" checked={s.notifyAttention} onChange={(v) => set({ notifyAttention: v })} />
-                </label>
-                <label className="flex items-center justify-between gap-3">
-                  <span>
-                    <span className="block text-[12.5px] font-medium text-fg">Highlight errors and warnings</span>
-                    <span className="block text-[11.5px] text-fg-3">ERROR in red and WARN in yellow, so problems jump out of the output.</span>
-                  </span>
-                  <Switch
-                    label="Highlight errors and warnings"
-                    checked={s.highlightErrors || s.highlightWarnings}
-                    onChange={(v) => set({ highlightErrors: v, highlightWarnings: v })}
-                  />
-                </label>
-                <Field label="Logo" hint="In the sidebar's corner. The winking one blinks at you now and then.">
-                  <div className="flex items-center gap-3">
-                    {s.logo !== "hidden" && <Logo size={30} winking={s.logo === "winking"} />}
-                    <Segmented
-                      value={s.logo}
-                      onChange={(v) => set({ logo: v })}
-                      options={[
-                        { value: "winking", label: "Winking" },
-                        { value: "still", label: "Still" },
-                        { value: "hidden", label: "Hidden" },
-                      ]}
-                    />
-                  </div>
-                </Field>
-              </>
-            )}
+              </Group>
 
-            {step === 5 && (
-              <>
-                <h2 className="text-[20px] font-semibold tracking-tight text-fg">Your servers</h2>
-                {configIds.length > 0 ? (
+              <Group title="Safety and privacy">
+                <Toggle
+                  label="Streamer mode"
+                  hint={`Hides server names, addresses and users everywhere, for streams and screen shares. ${shortcutLabel("streamer")} any time.`}
+                  checked={s.streamerMode}
+                  onChange={(v) => v !== s.streamerMode && toggleStreamer()}
+                />
+                <Toggle
+                  label="A colored line for Production and Staging"
+                  hint="Labeled servers always show the word. This adds a thin red or yellow line along the top of the window."
+                  checked={s.envStripe}
+                  onChange={(v) => set({ envStripe: v })}
+                />
+              </Group>
+
+              <section className="flex flex-col gap-4 pb-1">
+                <button type="button" onClick={() => setMore((m) => !m)} aria-expanded={more} className="flex items-center gap-1.5 self-start text-[12.5px] font-medium text-fg-2 hover:text-fg">
+                  <ChevronDown size={14} className={cn("transition-transform", !more && "-rotate-90")} /> More options
+                </button>
+                {more && (
                   <>
-                    <p className="text-[13px] leading-relaxed text-fg-2">
-                      You have {configIds.length} server{configIds.length === 1 ? "" : "s"} in ~/.ssh/config. Which ones should show up here? Your
-                      config file isn't changed.
-                    </p>
-                    <div className="flex max-h-[220px] flex-col gap-0.5 overflow-y-auto rounded-[10px] p-1 ring-1 ring-inset ring-ink/[0.08]">
-                      {undecided.map((h) => (
-                        <label key={h.id} className="flex h-10 cursor-pointer items-center gap-3 rounded-[7px] px-2.5 hover:bg-ink/[0.04]">
-                          <input
-                            type="checkbox"
-                            checked={keep.includes(h.id)}
-                            onChange={() => setKeep((k) => (k.includes(h.id) ? k.filter((x) => x !== h.id) : [...k, h.id]))}
-                            className="accent-[var(--ui-accent)]"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] text-fg">{h.name}</span>
-                            {hostAddress(h) !== h.name && <span className="block truncate font-mono text-[11px] text-fg-3">{hostAddress(h)}</span>}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
+                    <Field label="Cursor">
+                      <Segmented
+                        value={s.cursorStyle}
+                        onChange={(v) => set({ cursorStyle: v })}
+                        options={[
+                          { value: "bar", label: "Bar" },
+                          { value: "block", label: "Block" },
+                          { value: "underline", label: "Line" },
+                        ]}
+                      />
+                    </Field>
+                    <Field label="Sidebar side">
+                      <Segmented
+                        value={s.sidebarSide}
+                        onChange={(v) => set({ sidebarSide: v })}
+                        options={[
+                          { value: "left", label: "Left" },
+                          { value: "right", label: "Right" },
+                        ]}
+                      />
+                    </Field>
+                    <Field label="Server load" hint={s.railStatus === "off" ? "Servers show only whether they're connected." : "How busy each open server is, at a glance in the list."}>
+                      <div className="flex gap-2" role="radiogroup" aria-label="Server load">
+                        {LOAD_STYLES.map(({ id, title }) => (
+                          <Card key={id} selected={s.railStatus === id} onClick={() => set({ railStatus: id })} title={title}>
+                            <LoadPicture style={id} />
+                          </Card>
+                        ))}
+                      </div>
+                    </Field>
+                    <Toggle
+                      label="Compact mode"
+                      hint={`Just your work. The sidebar and top row slide in at the window's edge. ${shortcutLabel("compact")} toggles it.`}
+                      checked={s.compactMode}
+                      onChange={(v) => set({ compactMode: v })}
+                    />
+                    <Field
+                      label="When the connection drops"
+                      hint={
+                        s.reconnectMode === "auto"
+                          ? "Reconnects on its own and lands you back in the same session."
+                          : s.reconnectMode === "ask"
+                            ? "Shows a Reconnect button over the terminal and waits for you."
+                            : "Stays quiet: the tab shows Disconnected with a small Reconnect button."
+                      }
+                    >
+                      <Segmented
+                        value={s.reconnectMode}
+                        onChange={(v) => set({ reconnectMode: v })}
+                        options={[
+                          { value: "auto", label: "Reconnect" },
+                          { value: "ask", label: "Ask me" },
+                          { value: "off", label: "Off" },
+                        ]}
+                      />
+                    </Field>
+                    <Toggle
+                      label="Tell me when a terminal needs me"
+                      hint="When an AI agent or a program waits for an answer, or a long run goes quiet."
+                      checked={s.notifyAttention}
+                      onChange={(v) => set({ notifyAttention: v })}
+                    />
+                    <Toggle
+                      label="Highlight errors and warnings"
+                      hint="ERROR in red and WARN in yellow, so problems jump out of the output."
+                      checked={s.highlightErrors || s.highlightWarnings}
+                      onChange={(v) => set({ highlightErrors: v, highlightWarnings: v })}
+                    />
+                    <Field label="Logo" hint="In the sidebar's corner. The winking one blinks at you now and then.">
+                      <Segmented
+                        value={s.logo}
+                        onChange={(v) => set({ logo: v })}
+                        options={[
+                          { value: "winking", label: "Winking" },
+                          { value: "still", label: "Still" },
+                          { value: "hidden", label: "Hidden" },
+                        ]}
+                      />
+                    </Field>
+                    <p className="text-[11.5px] text-fg-3">Your own theme colors, keyboard shortcuts and the rest are in Settings ({shortcutLabel("settings")}).</p>
                   </>
-                ) : (
-                  <p className="text-[13px] leading-relaxed text-fg-2">
-                    {hosts.length
-                      ? `You already have ${hosts.length} server${hosts.length === 1 ? "" : "s"} here. Add more any time with the + in the sidebar.`
-                      : "Add the first one: paste its address, or a whole ssh command, and SSHeesh fills in the rest."}
-                  </p>
                 )}
-                <label className="flex cursor-pointer items-center gap-2.5 rounded-[10px] bg-ink/[0.04] px-3 py-2.5 text-[13px] text-fg">
-                  <input type="checkbox" checked={addAfter} onChange={(e) => setAddAfter(e.target.checked)} className="accent-[var(--ui-accent)]" />
-                  <Plus size={14} className="text-accent" /> Add a server when I'm done
-                </label>
-              </>
-            )}
+              </section>
+            </div>
 
-            {step === 6 && (
+            <div className="sticky top-0 hidden w-[330px] shrink-0 flex-col gap-2 md:flex">
+              <MiniApp />
+              <p className="text-center text-[11px] text-fg-3">Your SSHeesh, as you set it up</p>
+            </div>
+          </div>
+
+          <div className="mt-5 flex items-center gap-3">
+            {returning ? (
+              <span className="flex-1" />
+            ) : (
               <>
-                <h2 className="text-[20px] font-semibold tracking-tight text-fg">Three things worth knowing</h2>
-                <ul className="flex flex-col gap-3.5">
-                  {[
-                    { icon: Command, title: `${shortcutLabel("palette")} finds anything`, body: "Servers, files, settings and actions, all from one search box." },
-                    { icon: MousePointer2, title: "Right-click almost anything", body: "Servers, files, containers and panes all have a menu of what you can do with them." },
-                    { icon: RotateCw, title: "Dropped connections aren't the end", body: "With tmux on the server, your shell keeps running, and SSHeesh shows what you missed." },
-                  ].map(({ icon: I, title, body }) => (
-                    <li key={title} className="flex gap-3">
-                      <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-accent/12 text-accent">
-                        <I size={15} />
-                      </span>
-                      <span>
-                        <span className="block text-[13.5px] font-medium text-fg">{title}</span>
-                        <span className="block text-[12.5px] leading-snug text-fg-3">{body}</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-[12.5px] text-fg-3">Everything you picked is in Settings ({shortcutLabel("settings")}), with a search box and a Reset in every section.</p>
+                <Button variant="ghost" onClick={() => setStep("servers")}>
+                  Back
+                </Button>
+                <Button variant="ghost" onClick={() => useSettings.getState().reset(MADE_YOURS)}>
+                  Use defaults
+                </Button>
+                <span className="flex-1" />
               </>
             )}
-          </div>
-
-          <div className="sticky top-0 hidden w-[320px] shrink-0 flex-col gap-2 md:flex">
-            <MiniApp focus={focus} />
-            <p className="text-center text-[11px] text-fg-3">Your SSHeesh, as you set it up</p>
+            <Button variant="ghost" onClick={() => done(false)}>
+              {returning ? "Done" : "Start using SSHeesh"}
+            </Button>
+            {!returning && (
+              <Button variant="primary" autoFocus onClick={() => done(true)}>
+                Take the 1-minute tour
+              </Button>
+            )}
           </div>
         </div>
-
-        <div className="mt-auto flex items-center gap-3 pt-6">
-          <span className="text-[11.5px] text-fg-3 tabular-nums">
-            {step + 1} of {STEPS.length}
-          </span>
-          <span className="flex-1" />
-          {step === 0 ? (
-            <Button variant="ghost" onClick={skip}>
-              Skip setup
-            </Button>
-          ) : (
-            <Button variant="ghost" onClick={() => setStep((x) => x - 1)}>
-              Back
-            </Button>
-          )}
-          {step < last ? (
-            <Button variant="primary" onClick={() => setStep((x) => x + 1)}>
-              {step === 0 ? "Let's go" : "Next"}
-            </Button>
-          ) : (
-            <Button variant="primary" onClick={finish}>
-              Start using SSHeesh
-            </Button>
-          )}
-        </div>
-      </div>
+      )}
     </Modal>
   );
 }

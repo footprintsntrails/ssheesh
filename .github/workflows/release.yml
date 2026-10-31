@@ -88,6 +88,40 @@ jobs:
 
       - run: npm ci
 
+      # Every macOS build is signed with the same certificate (SSHeesh's own,
+      # self-signed), so macOS sees an update as the same app: Keychain access
+      # to saved server passwords ("Always Allow") carries over instead of
+      # asking for the Mac's password again after every update. Ad-hoc
+      # signatures change with every build. If the certificate is missing or
+      # codesign can't use it, the build stays ad-hoc signed, as before.
+      - name: Use SSHeesh's signing certificate
+        if: matrix.name == 'macOS'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo "::warning::No MACOS_SIGNING_CERTIFICATE secret; this build stays ad-hoc signed."
+            exit 0
+          fi
+          kc="$RUNNER_TEMP/ssheesh-signing.keychain-db"
+          kc_password=$(uuidgen)
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$kc_password" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kc_password" "$kc"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_password" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/signing.p12"
+          # Try it on a scratch copy before the build relies on it.
+          cp /bin/echo "$RUNNER_TEMP/probe"
+          if codesign --force --sign "SSHeesh Code Signing" "$RUNNER_TEMP/probe"; then
+            echo "APPLE_SIGNING_IDENTITY=SSHeesh Code Signing" >> "$GITHUB_ENV"
+          else
+            echo "::warning::codesign couldn't use the SSHeesh certificate; this build stays ad-hoc signed."
+          fi
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,6 +131,14 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
+
+      # Says in the log which signature the Mac app got.
+      - name: Show the macOS signature
+        if: matrix.name == 'macOS'
+        run: |
+          app=$(find target src-tauri/target -path '*/bundle/macos/SSHeesh.app' -prune 2>/dev/null | head -n 1)
+          codesign -dv "$app" 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
+          codesign -d -r- "$app" 2>&1 | grep designated || true
 
       # Signed with the update key, so the portable app can update itself
       # and check the new file the same way installed apps do.
@@ -121,7 +163,6 @@ jobs:
         with:
           script: |
             const fs = require("fs");
-            const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
             const exe = ["target/release/ssheesh.exe", "src-tauri/target/release/ssheesh.exe"].find((p) => fs.existsSync(p));
             if (!exe) throw new Error("Couldn't find the built ssheesh.exe");
             const upload = (path, name) =>
@@ -133,9 +174,11 @@ jobs:
                 data: fs.readFileSync(path),
                 headers: { "content-type": "application/octet-stream", "content-length": fs.statSync(path).size },
               });
-            await upload(exe, `SSHeesh_${version}_x64-portable.exe`);
+            // Just "SSHeesh.exe": it's the file people keep and run, and its
+            // updates keep whatever name it has.
+            await upload(exe, "SSHeesh.exe");
             // Read by the publish job, which puts it into latest.json.
-            await upload(`${exe}.sig`, `SSHeesh_${version}_x64-portable.exe.sig`);
+            await upload(`${exe}.sig`, "SSHeesh.exe.sig");
 
   publish-release:
     name: Publish release
@@ -152,8 +195,8 @@ jobs:
             let assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
             // The portable app updates itself from its own entry in latest.json. Added
             // here, after every build, so no build job's own latest.json upload can drop it.
-            const exe = assets.find((a) => a.name.endsWith("_x64-portable.exe"));
-            const sig = assets.find((a) => a.name.endsWith("_x64-portable.exe.sig"));
+            const exe = assets.find((a) => a.name === "SSHeesh.exe");
+            const sig = assets.find((a) => a.name === "SSHeesh.exe.sig");
             const manifest = assets.find((a) => a.name === "latest.json");
             if (exe && sig && manifest) {
               const read = async (a) => {

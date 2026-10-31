@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
 import { blankLabel, blanks, fill, useSnippets, type Snippet } from "../lib/snippets";
-import { useStore } from "../lib/store";
+import { currentTarget, useStore } from "../lib/store";
 import { sameTarget, type Container, type TargetRef } from "../lib/types";
 import { Modal } from "./Overlays";
 import { Button, IconButton } from "./ui";
@@ -27,8 +27,7 @@ export function newSnippet(command = "") {
 
 /** The machine a snippet runs on: the focused pane's. */
 function focusedTarget(): TargetRef | null {
-  const st = useStore.getState();
-  return st.panes[st.focused]?.target ?? null;
+  return currentTarget(useStore.getState());
 }
 
 /** Runs a snippet in the focused machine's terminal, asking for its blanks first. */

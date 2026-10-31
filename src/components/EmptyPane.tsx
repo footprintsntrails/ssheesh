@@ -5,14 +5,14 @@ import { useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import type { TargetRef } from "../lib/types";
 import { AppLogo, Button, IconButton, Kbd } from "./ui";
-import { useHostLook, useVisibleHosts } from "../lib/labels";
+import { useVisibleHosts } from "../lib/labels";
+import { HostIcon } from "./HostIcon";
 
-/** A server's own icon, in its color, on a small tile. */
+/** A server's own icon, in its color, or its picture, on a small tile. */
 function HostTile({ hostId }: { hostId: string }) {
-  const { icon: Icon, color } = useHostLook(hostId);
   return (
     <span className="inline-flex size-[26px] items-center justify-center rounded-[7px] bg-ink/[0.06] ring-1 ring-inset ring-ink/[0.07]">
-      <Icon size={14} strokeWidth={1.9} className={color ? undefined : "text-accent"} style={color ? { color } : undefined} />
+      <HostIcon hostId={hostId} size={14} />
     </span>
   );
 }

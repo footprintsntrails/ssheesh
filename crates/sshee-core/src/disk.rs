@@ -46,6 +46,16 @@ pub struct DockerUsage {
     pub unused_images: Option<u64>,
 }
 
+/// One strength of a cleanup, like how old temporary files must be.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupChoice {
+    /// "Older than a week".
+    pub label: String,
+    pub command: String,
+    pub bytes: Option<u64>,
+}
+
 /// A safe cleanup you can run, with what it frees when that's known.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +71,9 @@ pub struct Cleanup {
     pub command: String,
     /// Roughly how much it frees, when known.
     pub bytes: Option<u64>,
+    /// Strengths to pick from; `command` and `bytes` above are the one picked first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<CleanupChoice>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,6 +117,7 @@ echo @@mounts@@; cat /proc/mounts 2>/dev/null
 echo @@journal@@; command -v journalctl >/dev/null 2>&1 && $S journalctl --disk-usage 2>/dev/null
 echo @@apt@@; command -v apt-get >/dev/null 2>&1 && [ -d /var/cache/apt/archives ] && $S du -s -k /var/cache/apt/archives 2>/dev/null
 echo @@dnf@@; command -v dnf >/dev/null 2>&1 && for d in /var/cache/dnf /var/cache/libdnf5; do [ -d "$d" ] && $S du -s -k "$d" 2>/dev/null; done
+echo @@tmp@@; $S find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*' ! -name '.X*-lock' -printf '%T@ %A@ %s\n' 2>/dev/null | awk -v now="$(date +%s)" '{t=($1>$2)?$1:$2; a=(now-t)/86400; if (a>1) d1+=$3; if (a>7) d7+=$3; if (a>30) d30+=$3} END {print d1+0, d7+0, d30+0}'
 echo @@oldlogs@@; [ -d /var/log ] && $S find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -exec du -k {} + 2>/dev/null | awk '{s+=$1} END {print s+0}'
 echo @@docker@@
 if command -v docker >/dev/null 2>&1; then
@@ -222,6 +236,7 @@ fn parse_report(s: &Sections) -> DiskReport {
         apt: kb_total(lines(s, "apt")),
         dnf: kb_total(lines(s, "dnf")),
         old_logs: kb_total(lines(s, "oldlogs")),
+        temp: temp_by_age(lines(s, "tmp")),
     };
     DiskReport {
         volumes: parse_volumes(lines(s, "df"), lines(s, "mounts")),
@@ -241,6 +256,8 @@ struct Found {
     apt: Option<u64>,
     dnf: Option<u64>,
     old_logs: Option<u64>,
+    /// Bytes in /tmp and /var/tmp unused for over a day, a week and a month.
+    temp: Option<[u64; 3]>,
 }
 
 impl Found {
@@ -256,6 +273,7 @@ impl Found {
                     detail: detail.into(),
                     command,
                     bytes: Some(bytes),
+                    choices: Vec::new(),
                 });
             }
         };
@@ -321,8 +339,41 @@ impl Found {
                 b,
             );
         }
+        // Only files nobody has opened or changed for that long (whichever is
+        // later counts), never sockets like tmux's, a systemd service's private
+        // folder, or a display's lock file. A week is picked first.
+        if let Some(by_age) = self.temp.filter(|t| t[0] >= WORTH) {
+            let choices: Vec<CleanupChoice> = [("Older than a day", 1440), ("Older than a week", 10_080), ("Older than a month", 43_200)]
+                .iter()
+                .zip(by_age)
+                .map(|((label, minutes), bytes)| CleanupChoice {
+                    label: label.to_string(),
+                    command: format!(
+                        "{sudo}find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*' ! -name '.X*-lock' -mmin +{minutes} -amin +{minutes} -delete"
+                    ),
+                    bytes: Some(bytes),
+                })
+                .collect();
+            out.push(Cleanup {
+                id: "temp".into(),
+                title: "Temporary files".into(),
+                detail: "Deletes files in /tmp and /var/tmp that nothing has opened or changed for as long as you pick. Programs leave these behind and often forget them.".into(),
+                command: choices[1].command.clone(),
+                bytes: choices[1].bytes,
+                choices,
+            });
+        }
         out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
         out
+    }
+}
+
+/// "d1 d7 d30": bytes of temporary files unused for over a day, a week, a month.
+fn temp_by_age(rows: &[&str]) -> Option<[u64; 3]> {
+    let n: Vec<u64> = rows.first()?.split_whitespace().map(|w| w.parse().ok()).collect::<Option<_>>()?;
+    match n.as_slice() {
+        [a, b, c] => Some([*a, *b, *c]),
+        _ => None,
     }
 }
 
@@ -626,6 +677,24 @@ cgroup_root              10240         0     10240   0% /sys/fs/cgroup
         assert_eq!(d.build_cache, 2_040_000_000);
         assert_eq!(d.build_cache_reclaimable, 2_040_000_000);
         assert_eq!(parse_docker(&["not json", r#"{"Type":"Images","Size":"0B","Reclaimable":"0B"}"#]).images, 0);
+    }
+
+    #[test]
+    fn temporary_files_by_age() {
+        assert_eq!(temp_by_age(&["734003200 314572800 0"]), Some([734_003_200, 314_572_800, 0]));
+        assert_eq!(temp_by_age(&["1 2"]), None);
+        assert_eq!(temp_by_age(&[]), None);
+        let found = |temp| Found { sudo: "sudo ", docker: "docker", apt: None, dnf: None, old_logs: None, temp };
+        let cleanups = found(Some([700 * MIB, 300 * MIB, 0])).cleanups(None, None);
+        let t = cleanups.iter().find(|c| c.id == "temp").expect("offered");
+        // A week is picked first; each choice has its own age and size.
+        assert_eq!(t.bytes, Some(300 * MIB));
+        assert_eq!(t.choices.len(), 3);
+        assert!(t.command.contains("-mmin +10080 -amin +10080 -delete"));
+        assert!(t.choices[0].command.starts_with("sudo find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*'"));
+        assert_eq!(t.choices[2].bytes, Some(0));
+        // Not worth it when even day-old files add up to little.
+        assert!(found(Some([10 * MIB, 0, 0])).cleanups(None, None).is_empty());
     }
 
     #[test]

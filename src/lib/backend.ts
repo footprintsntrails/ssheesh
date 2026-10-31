@@ -105,6 +105,10 @@ export interface Backend {
   detectAgents(target: TargetRef): Promise<string[]>;
   /** What a terminal runs in the foreground and its folder; fails without tmux. */
   paneInfo(target: TargetRef, sessionKey: string): Promise<PaneInfo>;
+  /** Windows 11's Snap Layouts for this window, for the custom title bar's maximize button. */
+  showSnapLayouts(): void;
+  /** What every SSHeesh terminal on the server runs in the foreground, by session key. */
+  foreground(target: TargetRef): Promise<{ sessionKey: string; command: string }[]>;
   /** A read-only security check of the server. */
   securityCheckup(target: TargetRef): Promise<Checkup>;
   /** Disks, Docker, the journal and safe cleanups. */
@@ -246,6 +250,8 @@ async function tauriBackend(): Promise<Backend> {
     sessionCwd: (target, sessionKey) => call("session_cwd", { target, sessionKey }),
     detectAgents: (target) => call("detect_agents", { target }),
     paneInfo: (target, sessionKey) => call("pane_info", { target, sessionKey }),
+    foreground: (target) => call("foreground", { target }),
+    showSnapLayouts: () => fire("show_snap_layouts", {}),
     securityCheckup: (target) => call("security_checkup", { target }),
     diskReport: (target) => call("disk_report", { target }),
     diskBiggest: (target, path) => call("disk_biggest", { target, path }),

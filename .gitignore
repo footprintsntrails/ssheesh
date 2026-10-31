@@ -13,3 +13,6 @@ src-tauri/gen/
 .entire/
 CLAUDE.local.md
 *.jsonl
+
+# Local research notes, not part of the app
+research/

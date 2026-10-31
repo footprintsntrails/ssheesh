@@ -32,6 +32,8 @@
   --color-fg-2: var(--ui-fg-2);
   --color-fg-3: var(--ui-fg-3);
   --color-accent: var(--ui-accent);
+  /* Text on an accent fill: dark on light accents, white on deep ones (set with the accent). */
+  --color-on-accent: var(--ui-on-accent, #06101f);
   --color-ok: var(--ui-ok);
   --color-warn: var(--ui-warn);
   --color-bad: var(--ui-bad);
@@ -101,8 +103,8 @@
   --ui-fg: #eceef1;
   --ui-fg-2: #a2a8b1;
   --ui-fg-3: #8a919b;
-  --ui-glass: rgb(26 28 33 / 0.62);
-  --ui-glass-soft: rgb(19 21 24 / 0.5);
+  --ui-glass: #1f2126;
+  --ui-glass-soft: #131518;
   --ui-glow: 0.13;
   --ui-file-code: #c792eacc;
   --ui-file-image: #f5c451cc;
@@ -118,8 +120,8 @@
   --ui-fg: #ededed;
   --ui-fg-2: #a6a6a6;
   --ui-fg-3: #8e8e8e;
-  --ui-glass: rgb(34 34 34 / 0.66);
-  --ui-glass-soft: rgb(24 24 24 / 0.5);
+  --ui-glass: #282828;
+  --ui-glass-soft: #1a1a1a;
   --ui-glow: 0.06;
 }
 
@@ -131,8 +133,8 @@
   --ui-fg: #f2f2f2;
   --ui-fg-2: #a0a0a0;
   --ui-fg-3: #8a8a8a;
-  --ui-glass: rgb(18 18 18 / 0.7);
-  --ui-glass-soft: rgb(0 0 0 / 0.4);
+  --ui-glass: #161616;
+  --ui-glass-soft: #070707;
   --ui-glow: 0;
 }
 
@@ -148,8 +150,8 @@
   --ui-fg: #14171c;
   --ui-fg-2: #4d5560;
   --ui-fg-3: #626973;
-  --ui-glass: rgb(255 255 255 / 0.72);
-  --ui-glass-soft: rgb(255 255 255 / 0.45);
+  --ui-glass: #ffffff;
+  --ui-glass-soft: #f6f7f9;
   --ui-glow: 0.16;
   color-scheme: light;
 }
@@ -163,17 +165,20 @@
   --ui-radius: 11px;
 }
 
+/* Status colors dark enough to read as small text on the light window (4.5:1 or more). */
 [data-theme="daylight"] {
-  --ui-ok: #16a34a;
-  --ui-warn: #d97706;
-  --ui-bad: #e5484d;
+  --ui-ok: #15803d;
+  --ui-warn: #9a5800;
+  --ui-bad: #c4352d;
 }
 
-/* Frosted layers that float above terminals: palette, menus, dialogs, banners. */
+/* Layers that float above terminals: palette, menus, dialogs, banners. Solid,
+   so text never sits over other text. A custom theme can make them
+   see-through; it then sets --ui-glass-filter and they frost what's behind. */
 @utility glass {
   background: var(--ui-glass);
-  -webkit-backdrop-filter: blur(28px) saturate(175%);
-  backdrop-filter: blur(28px) saturate(175%);
+  -webkit-backdrop-filter: var(--ui-glass-filter, none);
+  backdrop-filter: var(--ui-glass-filter, none);
   border: 1px solid rgb(var(--ui-ink) / 0.1);
   box-shadow:
     0 24px 64px -18px rgb(0 0 0 / 0.55),
@@ -182,18 +187,17 @@
 }
 
 /* Webviews without backdrop blur (some Linux setups) would show text right
-   through the frost, so floating layers go nearly solid there. */
+   through see-through glass, so it goes solid there (--ui-glass-solid is
+   the custom glass laid over --ui-raised). */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass {
-    background: color-mix(in srgb, var(--ui-glass), var(--ui-raised) 85%);
+    background: var(--ui-glass-solid, var(--ui-glass));
   }
 }
 
-/* Lighter frost for surfaces that sit in the layout (the sidebar). */
+/* For surfaces that sit in the layout (the sidebar). Solid too. */
 @utility glass-soft {
   background: var(--ui-glass-soft);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
-  backdrop-filter: blur(24px) saturate(160%);
 }
 
 @layer base {
@@ -299,6 +303,28 @@
    also covers tmux's history on servers. */
 .term-host .xterm .xterm-scrollable-element > .scrollbar {
   display: none !important;
+}
+
+/* Hue and transparency sliders in the theme editor: the track is the
+   gradient itself (set inline), the thumb a ring you can see on any color. */
+input[type="range"].color-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 12px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgb(var(--ui-ink) / 0.12);
+  outline: none;
+}
+input[type="range"].color-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 0 0 3px #fff, 0 0 0 4px rgb(0 0 0 / 0.35), inset 0 0 0 1px rgb(0 0 0 / 0.35);
+}
+input[type="range"].color-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--ui-accent);
 }
 
 /* Range sliders in Settings. */

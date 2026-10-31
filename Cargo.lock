@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "sshee-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "dirs 6.0.0",
  "keyring",
@@ -4092,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "ssheesh"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -4107,6 +4107,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -222,6 +222,13 @@ pub fn run_remote_read(t: &SshTarget, env: &SshEnv, script: &str) -> Result<Vec<
     crate::shell_pool::run(t, env, script, Some(std::time::Duration::from_secs(60)))
 }
 
+/// Like `run_remote_read`, for polls that repeat every few seconds (metrics,
+/// what each terminal runs). They take turns and never hold up something
+/// you asked for; see `shell_pool::run_poll`.
+pub fn run_remote_poll(t: &SshTarget, env: &SshEnv, script: &str) -> Result<Vec<u8>, OpError> {
+    crate::shell_pool::run_poll(t, env, script, std::time::Duration::from_secs(60))
+}
+
 /// Runs a script on this computer with `sh` (used for "This computer").
 pub fn run_local(script: &str) -> Result<Vec<u8>, OpError> {
     let mut cmd = Command::new("sh");

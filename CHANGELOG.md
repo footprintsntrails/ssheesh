@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.6.0 — a calm window for your servers
+
+SSHeesh now works like a browser for your servers: each server is like a site, with its tabs right under it. The first time you open this version, a short hello shows what changed, and every choice you made before stays.
+
+### Tabs under their server
+- **Every server's tabs sit under it in the sidebar**: terminals, files, stats and AI agents. Only one server is on screen at a time, and clicking a server takes you back to the tab you were on there. Prefer a strip along the top? Settings → Layout.
+- **Agents show up by name**, on every server: a tab running Claude Code, Codex, OpenCode or oh-my-pi is called after it, and says **Needs you** when it waits for an answer.
+- **Drag a tab onto the page** to see two at once, dropping it where you want it. Drag a pane's title bar back onto the list, or click its "Back to its own tab" button, to make it a tab again. **Ctrl+Shift+S** (⇧⌘S) switches between one tab at a time and side by side; right-click a tab to show it beside or below the one you're on.
+- **Reopen the tab you closed** with Ctrl+Shift+Z (⇧⌘T), or from the main menu.
+- **Shift+click a server** to open it in a window of its own.
+- One tab at a time is the new starting point for new users; the hello offers side by side.
+
+### The main menu
+- **The logo at the top of the sidebar opens the main menu**, a start page like a browser's new tab: a search field, your servers as tiles, the agents at work on any of them, and the tabs you closed lately.
+- **Server icons say what a server is for**: the first time it connects, SSHeesh sees whether it serves a website, runs a database or hosts Docker containers, and picks the icon. Every server also gets a color of its own, so they're told apart at a glance. Pick another icon, or **your own picture**, from the server's menu.
+
+### Make it yours
+- **A new hello.** Your servers first, then one page to make SSHeesh yours with a live preview of the app beside it, then an optional one-minute tour of the best tricks. "Hide names" is there from the first second, in case you're sharing your screen.
+- **Edit any theme down to every color**: start from a built-in theme, then change colors with a picker, hex values, a palette and transparency. SSHeesh warns when text gets hard to read. Share a theme as text, and import one.
+- **Your own keyboard shortcuts.** Settings → Keyboard lists them all; click one and press new keys. Keys the terminal needs can't be taken.
+- **Tips** appear the first time you meet a feature, one at a time, and never take your keystrokes. Settings → About turns them off, shows the welcome again or starts the tour.
+
+### Files
+- **Markdown files open formatted** in the preview, with a Preview / Source switch. Links open in your browser; images aren't loaded.
+- **Bookmarks, places and recent folders sit behind one button** instead of a column.
+- **Ctrl+click a path in a terminal** now always opens it beside the terminal, also when you work with one tab at a time.
+
+### Quieter and clearer
+- **One top row** with the server's name and address (click it for the server's tools), Files, Tools, side by side and Settings. "Connected" no longer shows all the time; only trouble does.
+- **On Windows, SSHeesh draws its own title bar** and gives the space to your work. Hovering maximize opens Snap Layouts. Settings → Layout → "Use the Windows title bar" brings back the system's.
+- **Menus and dialogs are solid**, never see-through over your text. A theme of your own can make them translucent.
+- **Text on accent buttons is dark**, and readable (7:1 instead of 2.7:1). Light theme status colors are darker, so warnings read as small text too. Orange and pink are gone from the accents: they looked like warnings.
+- **An optional red or yellow line** along the top of the window for servers labeled Production or Staging.
+- **The command bar moved to Ctrl+Shift+L** (Ctrl+Shift+K still works), and to ⌘L on a Mac, where **⌘K now clears the terminal**, as in other Mac terminals. Snippets say which server they run on.
+- **Shortcuts work on any keyboard layout**, Russian or German included.
+
+### Faster
+- **Folders open in about one network round trip.** Every request to a server costs about 20 ms less, and background updates (stats, agents, containers) no longer hold up the folder you're opening: on Windows that could take most of a second.
+- **Folders you just saw open instantly** and refresh in the background, and a folder starts loading when you point at it.
+- **Big folders sort about 20 times faster**, and typing in the filter only filters.
+- **SSHeesh starts faster**: Settings, the hello, the tour and the Markdown preview load the first time you open them, and saving your tabs waits for a quiet moment instead of writing on every change.
+- Each server keeps its own layout, so arranging, filling the window or "Terminal and files side by side" on one server leaves the others as they were.
+
+### Also in this version
+- **The app icon fills its tile on Windows and Linux**, as other apps' icons do, instead of looking a size smaller in the taskbar. macOS keeps the icon drawn on Apple's grid, which leaves the margin the Dock expects.
+- **The portable Windows app is just `SSHeesh.exe`** on the release page. A copy you already have keeps its name when it updates.
+- **On a Mac, saved passwords stop asking for your Mac's password after every update.** Every macOS build is now signed with the same certificate, so macOS knows an update is the same app. Updating to 0.6.0 asks one last time: click **Always Allow**.
+- **Clean up temporary files** in "What's using the disk": pick how old they must be (a day, a week or a month) and see what that frees. Only files in /tmp and /var/tmp that nothing has opened or changed for that long; sockets like tmux's, services' private folders and display lock files stay.
+
 ## 0.5.1 — real tabs
 
 - **Tabs you can move and close.** In the Tabs layout every terminal and file manager of the server is a tab: drag one to move it, close it with its × or a middle click, or right-click for "Close other tabs" and "Close tabs to the right". The + next to them opens a new terminal or file manager.

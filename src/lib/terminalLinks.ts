@@ -4,10 +4,11 @@
 
 import { backend } from "./backend";
 import { joinPath, parentPath } from "./format";
-import { paneIds } from "./layout";
 import { resolvePath, type TextLink } from "./paths";
-import { useStore } from "./store";
-import { targetKey, toOpError, type TargetRef } from "./types";
+import { markHintSeen } from "./settings";
+import { isSplit, panesOn, useStore } from "./store";
+import { placeBeside } from "./tabs";
+import { toOpError, type TargetRef } from "./types";
 
 export interface LinkSource {
   paneId: string;
@@ -21,6 +22,8 @@ export interface LinkSource {
 
 export async function openTerminalLink(from: LinkSource, link: TextLink) {
   const st = useStore.getState();
+  // You found it: the tip about it never needs to show.
+  markHintSeen("peek");
   if (link.kind === "url") {
     backend.openExternal(link.target).catch((e) => st.toast({ tone: "error", title: "Couldn't open the link", body: toOpError(e).message }));
     return;
@@ -50,21 +53,24 @@ export async function openTerminalLink(from: LinkSource, link: TextLink) {
 }
 
 /**
- * Shows a folder in a Files pane for the same server, the one already on
- * screen if there is one, else a new one beside `from`. `reveal` picks out a
- * file in it and previews it.
+ * Shows a folder in a Files pane for the same server, beside the terminal
+ * you clicked in (also when you work with one tab at a time): the Files tab
+ * you have if there is one, else a new one. `reveal` picks out a file in it
+ * and previews it.
  */
 export function showInFiles(from: string, target: TargetRef, path: string, reveal?: string) {
   const st = useStore.getState();
-  const key = targetKey(target);
-  const existing = paneIds(st.root)
-    .map((id) => st.panes[id])
-    .find((p) => p?.kind === "files" && p.target && targetKey(p.target) === key);
+  const existing = panesOn(st, target).find((p) => p.kind === "files");
+  let id: string;
   if (existing) {
-    st.setPane(existing.id, { path, reveal });
-    st.focus(existing.id);
-    return;
+    id = existing.id;
+    st.setPane(id, { path, reveal });
+  } else {
+    id = st.openIn("files", target, { from, split: true, path });
+    if (reveal) st.setPane(id, { reveal });
   }
-  const id = st.openIn("files", target, { from, split: true, path });
-  if (reveal) st.setPane(id, { reveal });
+  // Already beside it on screen: just look there. Otherwise put it there.
+  const s = useStore.getState();
+  if (existing && isSplit(s, target) && !s.hidden.includes(id)) s.focus(id);
+  else placeBeside(id, "right", from);
 }

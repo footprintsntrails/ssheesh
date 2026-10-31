@@ -10,7 +10,7 @@
 | System | Download |
 | --- | --- |
 | **macOS** 11+, Apple Silicon and Intel | [**SSHeesh_{{version}}_universal.dmg**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_universal.dmg) |
-| **Windows** 10 and 11 | [**SSHeesh_{{version}}_x64-portable.exe**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_x64-portable.exe), nothing to install · or the [installer](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_x64-setup.exe), which also updates itself |
+| **Windows** 10 and 11 | [**SSHeesh.exe**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh.exe), nothing to install · or the [installer](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_x64-setup.exe), which also updates itself |
 | **Linux** | [**SSHeesh_{{version}}_amd64.AppImage**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_amd64.AppImage) |
 
 The app isn't signed by Apple or Microsoft yet, so the first launch needs a few extra clicks:

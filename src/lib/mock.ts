@@ -72,6 +72,30 @@ const tree: Record<string, FileEntry[]> = {
 };
 
 const textFiles: Record<string, string> = {
+  "README.md": `# Acme API
+
+The orders and checkout service behind acme.example.
+
+## Run it
+
+\`\`\`bash
+docker compose up -d
+npm run migrate
+\`\`\`
+
+## Rate limits
+
+Checkout is limited **before** payment, per customer:
+
+| Route | Limit | Window |
+| --- | --- | --- |
+| \`POST /v1/checkout\` | 10 | 1 minute |
+| \`GET /v1/orders\` | 120 | 1 minute |
+
+- Limits live in \`src/middleware/rateLimit.ts\`
+- Tests: \`npm test -- rateLimit\`
+- [ ] Move the limits to config
+`,
   // A key made up for the demo; its private half was thrown away.
   "id_ed25519.pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII5PL2EOb31cCbJC+OjU74tjgLeisDMLh51dTLBg849P sam@macbook\n",
   "docker-compose.yml": `services:
@@ -117,6 +141,27 @@ const C = {
   c: "\x1b[36m",
   r: "\x1b[0m",
 };
+
+/** A coding agent mid-task, for demo terminals whose key names one. */
+function agentScreen(agent: "claude" | "codex"): string {
+  const o = "\x1b[38;5;173m";
+  const name = agent === "claude" ? "Claude Code" : "Codex";
+  return [
+    `${o}╭──────────────────────────────────────────────╮${C.r}`,
+    `${o}│${C.r} ${o}✻${C.r} Welcome to ${C.b}${name}${C.r}                          ${o}│${C.r}`,
+    `${o}│${C.r}   ${C.dim}cwd: /var/www/app${C.r}                          ${o}│${C.r}`,
+    `${o}╰──────────────────────────────────────────────╯${C.r}`,
+    "",
+    `${C.dim}>${C.r} Add rate limiting to the checkout endpoint`,
+    "",
+    `${o}●${C.r} I'll add a token bucket as middleware and cover it with tests.`,
+    `  ${C.dim}⎿${C.r} Updated ${C.b}src/middleware/rateLimit.ts${C.r} ${C.g}(+42)${C.r}`,
+    `  ${C.dim}⎿${C.r} Updated ${C.b}src/routes/checkout.ts${C.r} ${C.g}(+3 -1)${C.r}`,
+    `  ${C.dim}⎿${C.r} Documented the limits in ./README.md`,
+    "",
+    `${o}●${C.r} Run the test suite now? ${C.dim}(y/n)${C.r} `,
+  ].join("\r\n");
+}
 
 /** A short, friendly session for the README's first picture. */
 function simpleBanner(name: string, user: string): string {
@@ -293,6 +338,8 @@ export const mockBackend: Backend = {
   localIdentity: async () => ({ user: "sam", hostname: "sams-macbook.local" }),
   async checkUpdate() {
     await wait(900);
+    // ?quiet: no pretend update, for screenshots and recordings.
+    if (new URLSearchParams(location.search).has("quiet")) return null;
     return {
       version: "0.3.6",
       notes: "Faster file browser\nNew terminal themes\nFixes for reconnecting after sleep",
@@ -366,10 +413,14 @@ export const mockBackend: Backend = {
             ? "2026-10-29T23:10:02Z INFO  GET /v1/orders 200 18ms\r\n2026-10-29T23:10:04Z INFO  POST /v1/checkout 201 64ms\r\n"
             : container || target.kind === "local"
               ? prompt
+              : sessionKey.includes("claude") || sessionKey.includes("codex")
+                ? agentScreen(sessionKey.includes("claude") ? "claude" : "codex")
               : new URLSearchParams(location.search).get("scene") === "simple"
                 ? simpleBanner(name, user)
                 : banner(name, user),
         });
+        // The agent asks a question a moment later, as a real one rings for you.
+        if (sessionKey.includes("claude")) s.timers.push(window.setTimeout(() => s.emit({ type: "output", data: "\x1b]777;notify;Claude Code;Waiting for your answer\x07" }), 2500));
         if (new URLSearchParams(location.search).get("scene") === "reconnect" && target.kind !== "local") {
           s.timers.push(window.setTimeout(() => simulateDrop(s), 600));
         }
@@ -544,6 +595,12 @@ export const mockBackend: Backend = {
   async paneInfo() {
     return { command: "zsh", cwd: "/var/www/app", idle: true };
   },
+  showSnapLayouts() {},
+  // Demo terminals whose key mentions an agent are running it.
+  async foreground() {
+    const keys = new Set([...byKey.keys(), "demo-claude", "demo-codex"]);
+    return [...keys].map((sessionKey) => ({ sessionKey, command: sessionKey.includes("claude") ? "claude" : sessionKey.includes("codex") ? "codex" : "zsh" }));
+  },
   async securityCheckup() {
     await wait(1400);
     return {
@@ -577,6 +634,18 @@ export const mockBackend: Backend = {
         { id: "docker-build-cache", title: "Docker build cache", detail: "Leftovers from building images. The next build just takes a bit longer.", command: "docker builder prune -a", bytes: 3.7 * GB },
         { id: "journal", title: "Old system logs", detail: "Trims the systemd journal to the newest 200 MB.", command: "sudo journalctl --vacuum-size=200M", bytes: 1.4 * GB },
         { id: "apt-cache", title: "Downloaded packages", detail: "Installers apt keeps after installing. Nothing installed is removed.", command: "sudo apt-get clean", bytes: 0.6 * GB },
+        {
+          id: "temp",
+          title: "Temporary files",
+          detail: "Deletes files in /tmp and /var/tmp that nothing has opened or changed for as long as you pick. Programs leave these behind and often forget them.",
+          command: "sudo find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*' ! -name '.X*-lock' -mmin +10080 -amin +10080 -delete",
+          bytes: 0.9 * GB,
+          choices: [
+            { label: "Older than a day", command: "sudo find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*' ! -name '.X*-lock' -mmin +1440 -amin +1440 -delete", bytes: 2.1 * GB },
+            { label: "Older than a week", command: "sudo find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*' ! -name '.X*-lock' -mmin +10080 -amin +10080 -delete", bytes: 0.9 * GB },
+            { label: "Older than a month", command: "sudo find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*' ! -name '.X*-lock' -mmin +43200 -amin +43200 -delete", bytes: 0.3 * GB },
+          ],
+        },
       ],
     };
   },

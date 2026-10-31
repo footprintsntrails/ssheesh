@@ -1,17 +1,22 @@
 import {
   Check,
+  ClipboardPaste,
   Columns3,
+  Copy,
   Download,
   ExternalLink,
   EyeOff,
   Globe,
+  GraduationCap,
   Info,
+  Keyboard as KeyboardIcon,
   LayoutDashboard,
   LayoutGrid,
   Palette,
   Plus,
   PanelLeft,
   PanelRight,
+  Pencil,
   RefreshCw,
   RotateCcw,
   Search,
@@ -24,16 +29,34 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { backend } from "../lib/backend";
-import { cn } from "../lib/format";
-import { isMac, shortcutLabel } from "../lib/keys";
+import { ago, cn } from "../lib/format";
+import { isMac, isWindows, SHORTCUT_GROUPS, SHORTCUT_NAMES, shortcutLabel } from "../lib/keys";
 import type { Arrangement } from "../lib/layout";
-import { useSettings, type Settings } from "../lib/settings";
+import { markHintSeen, useSettings, type Settings } from "../lib/settings";
 import { useStore } from "../lib/store";
-import { ACCENTS, APP_THEMES, resolveScheme, TERMINAL_FONTS, TERMINAL_SCHEMES, fontStack, type AppThemeId } from "../lib/themes";
+import {
+  ACCENTS,
+  APP_THEMES,
+  findCustomTheme,
+  fontStack,
+  isBuiltInTheme,
+  newCustomThemeId,
+  resolveScheme,
+  TERMINAL_FONTS,
+  TERMINAL_SCHEMES,
+  themeInfo,
+  type AppThemeId,
+  type CustomTheme,
+  type CustomThemeId,
+} from "../lib/themes";
 import { useUpdates } from "../lib/updates";
 import { useConfigImport } from "./ConfigImport";
 import { showCurrentNotes } from "./WhatsNew";
+import { useTour } from "../lib/tour";
+import { Segmented, settingId, Slider, Switch } from "./controls";
 import { compileRule, HIGHLIGHT_COLORS, type HighlightColor, type HighlightRule } from "../lib/highlight";
+import { ShortcutsEditor } from "./ShortcutsEditor";
+import { ThemeEditor, ThemeImport } from "./ThemeEditor";
 import { Button, Logo, Spinner } from "./ui";
 
 const REPO = "https://github.com/footprintsntrails/ssheesh";
@@ -42,6 +65,7 @@ const SECTIONS = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "layout", label: "Layout", icon: LayoutDashboard },
+  { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
   { id: "privacy", label: "Privacy", icon: ShieldCheck },
   { id: "updates", label: "Updates", icon: RefreshCw },
   { id: "about", label: "About", icon: Info },
@@ -49,11 +73,14 @@ const SECTIONS = [
 
 // ---------------------------------------------------------------- controls
 
-const settingId = (label: string) => `setting-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 
 /** Every setting, for search. Words are other ways people might say it. */
 const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
-  { section: "appearance", label: "Theme", words: "dark light colors look midnight graphite oled daylight" },
+  {
+    section: "appearance",
+    label: "Theme",
+    words: "dark light colors look midnight graphite oled daylight custom own edit editor hex palette transparency see-through opacity glass import export share",
+  },
   { section: "appearance", label: "Match my system", words: "auto dark mode light mode night day schedule" },
   { section: "appearance", label: "Accent color", words: "highlight color blue" },
   { section: "appearance", label: "Interface size", words: "zoom scale bigger smaller ui text" },
@@ -81,6 +108,11 @@ const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
   { section: "layout", label: "Server vitals", words: "stats cpu memory bar metrics" },
   { section: "layout", label: "Space between panes", words: "gap spacing" },
   { section: "layout", label: "Corner roundness", words: "radius rounded corners" },
+  ...(isWindows
+    ? [{ section: "layout", label: "Use the Windows title bar", words: "title bar window frame decorations native snap drag minimize maximize close buttons" }]
+    : []),
+  { section: "keyboard", label: "Keyboard shortcuts", words: "keys hotkeys keybindings bindings combos remap" },
+  ...SHORTCUT_GROUPS.flatMap((g) => g.ids).map((id) => ({ section: "keyboard", label: SHORTCUT_NAMES[id], words: "shortcut keys hotkey keybinding" })),
   { section: "privacy", label: "Streamer mode", words: "hide names ip addresses screen share recording obs twitch" },
   { section: "privacy", label: "What SSHeesh connects to", words: "network telemetry tracking internet" },
   { section: "updates", label: "Install updates", words: "auto update version check" },
@@ -101,85 +133,6 @@ function Row({ label, hint, children, stack }: { label: string; hint?: string; c
   );
 }
 
-export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        // Never squeezed by a long label next to it.
-        "relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors",
-        checked ? "bg-accent" : "bg-ink/[0.14]",
-      )}
-    >
-      <span
-        className={cn(
-          "absolute top-[2px] left-[2px] size-[18px] rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/0.35)] transition-transform",
-          checked && "translate-x-4",
-        )}
-      />
-    </button>
-  );
-}
-
-export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
-  return (
-    <div className="flex h-8 w-fit items-center rounded-[9px] bg-ink/[0.05] p-[3px] ring-1 ring-inset ring-ink/[0.06]">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "flex h-[26px] items-center gap-1.5 rounded-[6px] px-3 text-[12px] font-medium transition-all",
-            value === o.value ? "bg-raised text-fg shadow-[0_1px_2px_rgb(0_0_0/0.25)] ring-1 ring-ink/[0.06]" : "text-fg-3 hover:text-fg-2",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function Slider({
-  value,
-  min,
-  max,
-  step = 1,
-  onChange,
-  format = (v) => String(v),
-  label,
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  onChange: (v: number) => void;
-  format?: (v: number) => string;
-  label: string;
-}) {
-  const fill = ((value - min) / (max - min)) * 100;
-  return (
-    <div className="flex w-[220px] items-center gap-3">
-      <input
-        type="range"
-        aria-label={label}
-        className="slider flex-1"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        style={{ ["--fill" as string]: `${fill}%` }}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-      <span className="w-12 text-right text-[12px] tabular-nums text-fg-2">{format(value)}</span>
-    </div>
-  );
-}
-
 function SectionTitle({ children, onReset }: { children: string; onReset?: () => void }) {
   return (
     <div className="mb-1 flex items-center justify-between pr-10">
@@ -195,19 +148,46 @@ function SectionTitle({ children, onReset }: { children: string; onReset?: () =>
 
 // ---------------------------------------------------------------- sections
 
+/** "My Midnight", or "My Midnight 2" when that's taken. */
+function freeName(name: string, list: CustomTheme[]): string {
+  const taken = new Set(list.map((t) => t.name));
+  if (!taken.has(name)) return name;
+  let n = 2;
+  while (taken.has(`${name} ${n}`)) n++;
+  return `${name} ${n}`;
+}
+
 function Appearance({ s, set, reset }: SectionProps) {
+  const [editing, setEditing] = useState<CustomThemeId | null>(null);
+  const [importing, setImporting] = useState(false);
+  const themes = [...APP_THEMES, ...s.customThemes.map((t) => themeInfo(t.id, s.customThemes))];
+  const custom = findCustomTheme(s.theme, s.customThemes);
   // Picking a theme while following the system sets it for that side (light or dark).
-  const pick = (id: AppThemeId) => {
-    const light = APP_THEMES.find((t) => t.id === id)?.light;
-    set(s.themeFollowsSystem ? { theme: id, ...(light ? { lightTheme: id } : { darkTheme: id }) } : { theme: id });
+  const choose = (id: AppThemeId, list = s.customThemes): Partial<Settings> => {
+    if (!s.themeFollowsSystem) return { theme: id };
+    return { theme: id, ...(themeInfo(id, list).light ? { lightTheme: id } : { darkTheme: id }) };
+  };
+  const pick = (id: AppThemeId) => set(choose(id));
+  const add = (t: CustomTheme) => {
+    const list = [...s.customThemes, { ...t, name: freeName(t.name, s.customThemes) }];
+    set({ customThemes: list, ...choose(t.id, list) });
+  };
+  // A copy of the theme you're on, to change. It's in use right away, so edits show live.
+  const duplicate = () => {
+    const base = custom?.base ?? (isBuiltInTheme(s.theme) ? s.theme : "midnight");
+    const name = custom ? `${custom.name} copy` : `My ${themeInfo(s.theme).name}`;
+    const t: CustomTheme = { id: newCustomThemeId(), name, base, colors: { ...custom?.colors } };
+    add(t);
+    setImporting(false);
+    setEditing(t.id);
   };
   // Arrow keys walk through the themes and show each one right away.
   const onKey = (e: React.KeyboardEvent) => {
     const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const i = APP_THEMES.findIndex((t) => t.id === s.theme);
-    const next = APP_THEMES[(i + step + APP_THEMES.length) % APP_THEMES.length];
+    const i = themes.findIndex((t) => t.id === s.theme);
+    const next = themes[(i + step + themes.length) % themes.length];
     pick(next.id);
     (e.currentTarget.querySelector(`[data-theme-id="${next.id}"]`) as HTMLElement | null)?.focus();
   };
@@ -223,16 +203,26 @@ function Appearance({ s, set, reset }: SectionProps) {
           {t.name}
         </option>
       ))}
+      {s.customThemes.length > 0 && (
+        <optgroup label="Yours">
+          {s.customThemes.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
     </select>
   );
+  if (editing) return <ThemeEditor id={editing} onClose={() => setEditing(null)} onUse={pick} />;
   return (
     <>
       <SectionTitle onReset={() => reset(["theme", "accent", "themeFollowsSystem", "lightTheme", "darkTheme", "uiZoom", "dimInactive", "animations", "logo"])}>
         Appearance
       </SectionTitle>
-      <Row label="Theme" hint="Use the arrow keys to flip through them." stack>
+      <Row label="Theme" hint="Use the arrow keys to flip through them. Duplicate one to change any of its colors, transparency included." stack>
         <div role="radiogroup" aria-label="Theme" onKeyDown={onKey} className="grid grid-cols-4 gap-2.5">
-          {APP_THEMES.map((t) => (
+          {themes.map((t) => (
             <button
               key={t.id}
               role="radio"
@@ -240,7 +230,7 @@ function Appearance({ s, set, reset }: SectionProps) {
               tabIndex={s.theme === t.id ? 0 : -1}
               data-theme-id={t.id}
               onClick={() => pick(t.id)}
-              className="group flex flex-col items-start gap-1.5 rounded-[10px] text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              className="group flex min-w-0 flex-col items-start gap-1.5 rounded-[10px] text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
             >
               <div
                 className={cn(
@@ -256,10 +246,32 @@ function Appearance({ s, set, reset }: SectionProps) {
                   <div className="mt-1.5 ml-2 h-1 w-[30%] rounded-full opacity-25" style={{ background: t.fg }} />
                 </div>
               </div>
-              <span className={cn("text-[12px]", s.theme === t.id ? "font-medium text-fg" : "text-fg-2")}>{t.name}</span>
+              <span className={cn("w-full truncate text-[12px]", s.theme === t.id ? "font-medium text-fg" : "text-fg-2")}>{t.name}</span>
             </button>
           ))}
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {custom && (
+            <Button size="sm" onClick={() => setEditing(custom.id)}>
+              <Pencil size={12} /> Edit colors
+            </Button>
+          )}
+          <Button size="sm" onClick={duplicate}>
+            <Copy size={12} /> Duplicate and edit
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setImporting(!importing)} aria-expanded={importing}>
+            <ClipboardPaste size={12} /> Import
+          </Button>
+        </div>
+        {importing && (
+          <ThemeImport
+            onAdd={(t) => {
+              add(t);
+              setImporting(false);
+            }}
+            onCancel={() => setImporting(false)}
+          />
+        )}
       </Row>
       <Row label="Match my system" hint="A light theme by day and a dark one by night, switching when your system does.">
         <Switch label="Match my system" checked={s.themeFollowsSystem} onChange={(v) => set({ themeFollowsSystem: v })} />
@@ -585,20 +597,36 @@ function Layout({ s, set, reset }: SectionProps) {
   ];
   return (
     <>
-      <SectionTitle onReset={() => reset(["viewMode", "sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "placesMode", "placesSide", "paneGap", "paneRadius"])}>Layout</SectionTitle>
+      <SectionTitle
+        onReset={() =>
+          reset(["tabsPlacement", "viewMode", "sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "envStripe", "paneGap", "paneRadius", "nativeTitleBar"])
+        }
+      >
+        Layout
+      </SectionTitle>
+      <Row label="Tabs" hint="Under each server in the sidebar, or in a strip along the top. Never both.">
+        <Segmented
+          value={s.tabsPlacement}
+          options={[
+            { value: "sidebar", label: "Under each server" },
+            { value: "top", label: "Along the top" },
+          ]}
+          onChange={(v) => set({ tabsPlacement: v })}
+        />
+      </Row>
       <Row
-        label="Terminal and Files"
+        label="Tabs on screen"
         hint={
           s.viewMode === "tabs"
-            ? "One at a time, as tabs at the top. Each keeps running while you look at another."
-            : "Switch each on or off at the top. With both on, they share the window."
+            ? `One at a time; the rest keep running. ${shortcutLabel("toggleSplit")}, or dragging a tab onto the page, shows two side by side.`
+            : `The tabs you switch on share the window. Drag one by its title bar onto the tab list to make it a tab of its own again. ${shortcutLabel("toggleSplit")} goes back to one at a time.`
         }
       >
         <Segmented
           value={s.viewMode}
           options={[
+            { value: "tabs", label: "One at a time" },
             { value: "split", label: "Side by side" },
-            { value: "tabs", label: "Tabs" },
           ]}
           onChange={(v) => set({ viewMode: v })}
         />
@@ -660,26 +688,8 @@ function Layout({ s, set, reset }: SectionProps) {
         />
       </Row>
       <HiddenServers />
-      <Row label="Places and bookmarks" hint={`The column on the ${s.placesSide} of the file manager. Drag its edge to fold or unfold it.`}>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Segmented
-            value={s.placesSide}
-            onChange={(v) => set({ placesSide: v })}
-            options={[
-              { value: "left", label: "Left" },
-              { value: "right", label: "Right" },
-            ]}
-          />
-          <Segmented
-            value={s.placesMode}
-            onChange={(v) => set({ placesMode: v })}
-            options={[
-              { value: "wide", label: "Wide" },
-              { value: "narrow", label: "Narrow" },
-              { value: "hidden", label: "Hidden" },
-            ]}
-          />
-        </div>
+      <Row label="A line for Production and Staging" hint="Servers you label Production or Staging always show the word. This adds a thin red or yellow line along the top of the window.">
+        <Switch label="A line for Production and Staging" checked={s.envStripe} onChange={(v) => set({ envStripe: v })} />
       </Row>
       <Row label="Server vitals" hint="A one-line CPU, memory, network and disk readout under your panes.">
         <Switch label="Show server vitals" checked={s.showVitals} onChange={(v) => set({ showVitals: v })} />
@@ -690,15 +700,25 @@ function Layout({ s, set, reset }: SectionProps) {
       <Row label="Corner roundness">
         <Slider label="Corner roundness" value={s.paneRadius} min={0} max={18} onChange={(v) => set({ paneRadius: v })} format={(v) => `${v} px`} />
       </Row>
+      {isWindows && (
+        <Row
+          label="Use the Windows title bar"
+          hint="SSHeesh draws its own title bar to save room. Switch this on if dragging, snapping or the window buttons misbehave."
+        >
+          <Switch label="Use the Windows title bar" checked={s.nativeTitleBar} onChange={(v) => set({ nativeTitleBar: v })} />
+        </Row>
+      )}
     </>
   );
 }
 
-function ago(ms: number): string {
-  const m = Math.round((Date.now() - ms) / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m} min ago`;
-  return `${Math.round(m / 60)} h ago`;
+function Keyboard({ reset }: SectionProps) {
+  return (
+    <>
+      <SectionTitle onReset={() => reset(["shortcuts"])}>Keyboard</SectionTitle>
+      <ShortcutsEditor />
+    </>
+  );
 }
 
 /** Everything the app itself reaches out to. Kept short on purpose. */
@@ -868,6 +888,9 @@ function Updates({ s, set }: SectionProps) {
 
 function About() {
   const current = useUpdates((u) => u.current);
+  const hintsSeen = useSettings((x) => x.hintsSeen);
+  const tipsOff = hintsSeen.includes("*");
+  const tipsShown = hintsSeen.filter((h) => h !== "*").length;
   const open = (url: string) => void backend.openExternal(url);
   return (
     <>
@@ -896,6 +919,25 @@ function About() {
           <ExternalLink size={12.5} /> All releases
         </Button>
       </div>
+      <h4 className="mt-7 text-[13px] font-semibold text-fg">Getting to know SSHeesh</h4>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        <Button size="sm" onClick={() => (useStore.getState().closeSettings(), useTour.getState().show())}>
+          <GraduationCap size={12.5} /> Take the tour
+        </Button>
+        <Button size="sm" onClick={() => (useStore.getState().closeSettings(), useSettings.getState().update({ onboardingVersion: 0 }))}>
+          <Sparkles size={12.5} /> Show the welcome again
+        </Button>
+      </div>
+      <Row label="Tips" hint="Small notes the first time you meet a feature, one at a time.">
+        <div className="flex items-center gap-2">
+          {tipsShown > 0 && (
+            <Button size="sm" variant="ghost" onClick={() => useSettings.getState().update({ hintsSeen: [] })}>
+              Show them again
+            </Button>
+          )}
+          <Switch label="Tips" checked={!tipsOff} onChange={(v) => (v ? useSettings.getState().update({ hintsSeen: hintsSeen.filter((h) => h !== "*") }) : markHintSeen("*"))} />
+        </div>
+      </Row>
     </>
   );
 }
@@ -921,6 +963,8 @@ export function SettingsDialog() {
   }, [open, close]);
 
   const [query, setQuery] = useState("");
+  // Clicking a section in the list starts it afresh, out of the theme editor too.
+  const [visit, setVisit] = useState(0);
   const results = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return [];
@@ -978,7 +1022,7 @@ export function SettingsDialog() {
             (results.length ? (
               results.map((r) => (
                 <button
-                  key={r.label}
+                  key={`${r.section}-${r.label}`}
                   onClick={() => jump(r.section, r.label)}
                   className="flex flex-col items-start rounded-[8px] px-2.5 py-1.5 text-left hover:bg-ink/[0.06]"
                 >
@@ -992,10 +1036,13 @@ export function SettingsDialog() {
           {!query && SECTIONS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
-              onClick={() => openSettings(id)}
+              onClick={() => {
+                openSettings(id);
+                setVisit((n) => n + 1);
+              }}
               className={cn(
                 "flex h-8 items-center gap-2.5 rounded-[8px] px-2.5 text-[13px] transition-colors",
-                section === id ? "bg-accent text-white" : "text-fg-2 hover:bg-ink/[0.06] hover:text-fg",
+                section === id ? "bg-accent text-on-accent" : "text-fg-2 hover:bg-ink/[0.06] hover:text-fg",
               )}
             >
               <Icon size={14.5} strokeWidth={1.8} />
@@ -1011,10 +1058,11 @@ export function SettingsDialog() {
         >
           <X size={15} />
         </button>
-        <div className="relative min-w-0 flex-1 overflow-y-auto px-7 py-6">
+        <div key={visit} className="relative min-w-0 flex-1 overflow-y-auto px-7 py-6">
           {section === "appearance" && <Appearance {...props} />}
           {section === "terminal" && <Terminal {...props} />}
           {section === "layout" && <Layout {...props} />}
+          {section === "keyboard" && <Keyboard {...props} />}
           {section === "privacy" && <Privacy {...props} />}
           {section === "updates" && <Updates {...props} />}
           {section === "about" && <About />}

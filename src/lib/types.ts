@@ -203,12 +203,21 @@ export interface DockerUsage {
 }
 
 /** A safe cleanup: a command you run, and roughly what it frees. */
+/** One strength of a cleanup, like how old temporary files must be. */
+export interface CleanupChoice {
+  label: string;
+  command: string;
+  bytes: number | null;
+}
+
 export interface Cleanup {
   id: string;
   title: string;
   detail: string;
   command: string;
   bytes: number | null;
+  /** Strengths to pick from; `command` and `bytes` are the one picked first. */
+  choices?: CleanupChoice[];
 }
 
 export interface DiskReport {

@@ -1,7 +1,7 @@
 {
   "name": "ssheesh",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -29,7 +29,9 @@
     "lucide-react": "^1.64.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.15.2",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.16"
   },
   "devDependencies": {

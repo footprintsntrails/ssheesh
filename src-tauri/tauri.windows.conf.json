@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SSHeesh",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 880,
+        "minHeight": 540,
+        "backgroundColor": "#0b0c0e",
+        "decorations": false
+      }
+    ]
+  }
+}

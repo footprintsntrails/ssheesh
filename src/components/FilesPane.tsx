@@ -1,13 +1,15 @@
-import { ArrowUp, ChevronLeft, ChevronRight, Clock, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, Globe, HardDrive, House, Link, Package, PanelLeft, PanelRight, Pencil, Plus, RefreshCw, RotateCcw, ScrollText, Search, Settings2, SquareTerminal, Star, Timer, Trash, Upload, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ArrowUp, ChevronLeft, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
-import { folderName, LINUX_PLACES, useBookmarks } from "../lib/bookmarks";
+import { dirCache } from "../lib/dirCache";
+import { folderName, useBookmarks } from "../lib/bookmarks";
 import { bytes, cn, joinPath, modified, parentPath, shellQuote } from "../lib/format";
 import { isMac } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { useStore, type PaneState } from "../lib/store";
 import { targetKey, toOpError, type DirListing, type FileEntry, type OpError, type TargetRef, type TextFile } from "../lib/types";
 import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
+import { PlacesButton } from "./PlacesPopover";
 import { Button, IconButton, ResizeHandle, Spinner } from "./ui";
 import { useNames } from "../lib/privacy";
 import { findTerminal } from "../lib/terminals";
@@ -23,6 +25,8 @@ interface Preview {
   file: TextFile | null;
   draft: string;
   saving: boolean;
+  /** A Markdown file shown as its text rather than formatted. */
+  source: boolean;
 }
 
 
@@ -31,6 +35,21 @@ const TEXT = /\.(md|txt|log|csv|rst)$/i;
 const IMAGE = /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif|heic)$/i;
 const ARCHIVE = /\.(zip|tar|gz|tgz|bz2|xz|7z|rar|zst|deb|rpm)$/i;
 const SCRIPT = /\.(sh|bash|zsh|fish)$/i;
+/** Files the preview shows formatted, with a switch to their text. */
+const MARKDOWN = /\.(md|markdown)$/i;
+
+// The Markdown renderer (and its parser) loads the first time a Markdown
+// file is previewed, alongside the file itself, not when the app starts.
+const loadMarkdownView = () => import("./MarkdownView");
+const MarkdownView = lazy(() => loadMarkdownView().then((m) => ({ default: m.MarkdownView })));
+
+function PreviewLoading() {
+  return (
+    <div className="flex flex-1 items-center justify-center text-fg-3">
+      <Spinner />
+    </div>
+  );
+}
 
 function EntryIcon({ entry }: { entry: FileEntry }) {
   const common = { size: 15, strokeWidth: 1.7, className: "shrink-0" };
@@ -46,6 +65,13 @@ function EntryIcon({ entry }: { entry: FileEntry }) {
   return <File {...common} className="shrink-0 text-fg-3" />;
 }
 
+/**
+ * "file2" before "file10", case aside. One collator for every comparison:
+ * `localeCompare` with options builds one each time, which made sorting a
+ * folder of 1,000 files take 50 ms and one of 10,000 over half a second.
+ */
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 function sortEntries(list: FileEntry[], key: SortKey, asc: boolean): FileEntry[] {
   const dir = asc ? 1 : -1;
   return list.slice().sort((a, b) => {
@@ -54,7 +80,7 @@ function sortEntries(list: FileEntry[], key: SortKey, asc: boolean): FileEntry[]
     if (ad !== bd) return ad - bd;
     if (key === "size" && a.size !== b.size) return (a.size - b.size) * dir;
     if (key === "modified" && a.modified !== b.modified) return (a.modified - b.modified) * dir;
-    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) * (key === "name" ? dir : 1);
+    return byName.compare(a.name, b.name) * (key === "name" ? dir : 1);
   });
 }
 
@@ -63,7 +89,7 @@ function sortEntries(list: FileEntry[], key: SortKey, asc: boolean): FileEntry[]
  * click on the current folder or the free space after it turns the bar
  * into a text field to type or paste a path.
  */
-function AddressBar({ path, onGo }: { path: string; onGo: (p: string) => void }) {
+function AddressBar({ path, onGo, onPoint }: { path: string; onGo: (p: string) => void; onPoint: (p: string | null) => void }) {
   const names = useNames();
   const [value, setValue] = useState(path);
   const [editing, setEditing] = useState(false);
@@ -106,6 +132,8 @@ function AddressBar({ path, onGo }: { path: string; onGo: (p: string) => void })
                 {i > 0 && !(i === 1 && crumbs[0].label === "/") && <span className="px-px text-fg-3/60">/</span>}
                 <button
                   type="button"
+                  onPointerEnter={last ? undefined : () => onPoint(c.path)}
+                  onPointerLeave={last ? undefined : () => onPoint(null)}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (last) setEditing(true);
@@ -189,368 +217,20 @@ function InlineName({ initial, onDone }: { initial: string; onDone: (name: strin
 
 const EMPTY: string[] = [];
 
+/** Every folder but the top of the disk has one above it. */
+const upRowFor = (dir: string) => dir !== "/" && !/^[A-Za-z]:\/?$/.test(dir);
+
 /** Height of a row in the list, in CSS pixels (`h-7`). */
 const ROW = 28;
 /** Past this many items only the rows in view (and a few around them) are drawn. */
 const WINDOW_FROM = 250;
 
 /**
- * Folders seen lately, per server. Going back, up, or into a folder the
- * pointer rested on shows its last listing at once while a fresh one loads.
+ * A listing this young is shown without asking the server again: the
+ * folder was just listed, most likely ahead of time because the pointer
+ * rested on it. Refresh, and anything the app changes there, still ask.
  */
-const listings = new Map<string, DirListing>();
-const cacheKey = (tk: string, path: string) => `${tk}\n${path}`;
-
-function remember(tk: string, asked: string, l: DirListing) {
-  for (const p of new Set([asked, l.path])) {
-    const k = cacheKey(tk, p);
-    listings.delete(k);
-    listings.set(k, l);
-  }
-  while (listings.size > 300) listings.delete(listings.keys().next().value as string);
-}
-
-let prefetching = false;
-/** Lists a folder ahead of time, one at a time, unless it's already known. */
-function prefetch(target: TargetRef, tk: string, path: string) {
-  if (prefetching || listings.has(cacheKey(tk, path))) return;
-  prefetching = true;
-  backend
-    .listDir(target, path)
-    .then((l) => remember(tk, path, l))
-    .catch(() => {})
-    .finally(() => (prefetching = false));
-}
-
-const PLACE_ICONS: Record<string, typeof File> = { "/var/log": ScrollText, "/etc": Settings2, "/var/www": Globe, "/opt": Package, "/tmp": Timer };
-
-function PlaceItem({
-  icon: Icon,
-  label,
-  title,
-  active,
-  onClick,
-  onRemove,
-  iconClass,
-  narrow,
-  starred,
-}: {
-  icon: typeof File;
-  label: string;
-  title: string;
-  active: boolean;
-  onClick: () => void;
-  onRemove?: () => void;
-  iconClass?: string;
-  narrow: boolean;
-  /** A bookmark: in the narrow column it's a folder with a small star. */
-  starred?: boolean;
-}) {
-  if (narrow) {
-    return (
-      <button
-        type="button"
-        title={title}
-        onClick={onClick}
-        className={cn(
-          "flex w-full flex-col items-center gap-[3px] rounded-[9px] pt-[7px] pb-[5px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
-          active ? "bg-accent/15 text-accent" : "text-fg-2 hover:bg-ink/[0.06] hover:text-fg",
-        )}
-      >
-        <span className="relative">
-          <Icon size={18} strokeWidth={1.9} className="shrink-0" />
-          {starred && <Star size={9} strokeWidth={0} className="absolute -right-[5px] -bottom-[3px] fill-warn" />}
-        </span>
-        <span className="w-full truncate px-1 text-center text-[10px] font-medium leading-[12px]">{label}</span>
-      </button>
-    );
-  }
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      title={title}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === "Enter" && onClick()}
-      className={cn(
-        "group flex h-7 items-center gap-2 rounded-[7px] pr-1 pl-2 text-[12.5px] outline-none",
-        active ? "bg-ink/[0.09] text-fg" : "text-fg-2 hover:bg-ink/[0.045] hover:text-fg",
-      )}
-    >
-      <Icon size={13.5} strokeWidth={1.8} className={cn("shrink-0", iconClass ?? "text-fg-3")} />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {onRemove && (
-        <button
-          aria-label={`Remove ${label} from bookmarks`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="hidden size-5 items-center justify-center rounded text-fg-3 hover:bg-ink/[0.08] hover:text-fg group-hover:flex"
-        >
-          <X size={11} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-const NARROW_WIDTH = 64;
-/** Dragging the wide column narrower than this folds it into the narrow one. */
-const FOLD_AT = 118;
-
-/** Each machine's home folder, looked up once, for the Home place. */
-const homes = new Map<string, string>();
-function useHomeFolder(target: TargetRef): string | null {
-  const key = targetKey(target);
-  const [home, setHome] = useState(homes.get(key) ?? null);
-  useEffect(() => {
-    if (homes.has(key)) return;
-    let live = true;
-    backend
-      .listDir(target, "~")
-      .then((l) => {
-        homes.set(key, l.path);
-        if (live) setHome(l.path);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-    // target is identified by its key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-  return home;
-}
-
-function Places({
-  target,
-  remote,
-  dir,
-  pins,
-  recent,
-  onGo,
-  onUnpin,
-  onForgetRecent,
-  compact,
-}: {
-  target: TargetRef;
-  remote: boolean;
-  dir: string;
-  pins: string[];
-  recent: string[];
-  onGo: (path: string) => void;
-  onUnpin: (path: string) => void;
-  onForgetRecent: (path: string) => void;
-  /** Make room for the preview when the pane is narrow. */
-  compact: boolean;
-}) {
-  const mode = useSettings((st) => st.placesMode);
-  const right = useSettings((st) => st.placesSide === "right");
-  const names = useNames();
-  const wideWidth = useSettings((st) => st.placesWidth);
-  const narrow = mode === "narrow";
-  const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const width = dragWidth ?? (narrow ? NARROW_WIDTH : wideWidth);
-  // Pointer moves arrive faster than renders, so the running width lives here.
-  const live = useRef<number | null>(null);
-  const before = useRef(wideWidth);
-  const heading = narrow ? "mx-3 my-2 h-px bg-ink/[0.08]" : "px-2 pt-3 pb-1 text-[11px] font-semibold text-fg-3";
-  const recentShown = recent.filter((p) => !pins.includes(p) && p !== dir).slice(0, 5);
-
-  // While dragging, the column follows the pointer; it snaps to the narrow
-  // or wide form depending on where it ends up.
-  const onResize = (dx: number) => {
-    const st = useSettings.getState();
-    if (live.current === null) before.current = st.placesWidth;
-    // On the right, the edge you drag is the left one, so dragging left widens it.
-    let next = Math.round(Math.min(360, Math.max(NARROW_WIDTH, (live.current ?? width) + (right ? -dx : dx))));
-    // Folding keeps the wide width from before the drag; unfolding brings it back.
-    if (next < FOLD_AT && st.placesMode === "wide") st.update({ placesMode: "narrow", placesWidth: before.current });
-    else if (next >= FOLD_AT && st.placesMode === "narrow") {
-      next = st.placesWidth;
-      st.update({ placesMode: "wide" });
-    } else if (next >= FOLD_AT) st.update({ placesWidth: next });
-    live.current = next;
-    setDragWidth(next);
-  };
-  useEffect(() => {
-    if (dragWidth === null) return;
-    const done = () => {
-      live.current = null;
-      setDragWidth(null);
-    };
-    window.addEventListener("pointerup", done);
-    return () => window.removeEventListener("pointerup", done);
-  }, [dragWidth]);
-
-  const hidden = useSettings((st) => st.hiddenPlaces);
-  const home = useHomeFolder(target);
-  const shown = (id: string) => !hidden.includes(id);
-  const column = useRef<HTMLDivElement>(null);
-  const [menu, setMenu] = useState<Menu | null>(null);
-  const [drag, setDrag] = useState<{ id: string; label: string; icon: typeof File; x: number; y: number; out: boolean } | null>(null);
-  const justDragged = useRef(false);
-
-  /** Takes something out of the column: a place hides, a bookmark or recent folder goes. */
-  const takeOut = (id: string) => {
-    const [kind, ...rest] = id.split(":");
-    const path = rest.join(":");
-    if (kind === "pin") onUnpin(path);
-    else if (kind === "recent") onForgetRecent(path);
-    else useSettings.getState().update({ hiddenPlaces: [...new Set([...useSettings.getState().hiddenPlaces, path])] });
-  };
-
-  // Hold an item and drag it out of the column to take it out, like the macOS Dock.
-  const startDrag = (e: React.PointerEvent, id: string, label: string, icon: typeof File) => {
-    if (e.button !== 0) return;
-    const from = { x: e.clientX, y: e.clientY };
-    let moved = false;
-    const outside = (x: number, y: number) => {
-      const r = column.current?.getBoundingClientRect();
-      return !!r && (x < r.left - 16 || x > r.right + 16 || y < r.top - 16 || y > r.bottom + 16);
-    };
-    const move = (ev: PointerEvent) => {
-      if (!moved && Math.hypot(ev.clientX - from.x, ev.clientY - from.y) < 6) return;
-      moved = true;
-      setDrag({ id, label, icon, x: ev.clientX, y: ev.clientY, out: outside(ev.clientX, ev.clientY) });
-    };
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setDrag(null);
-      if (!moved) return;
-      justDragged.current = true;
-      setTimeout(() => (justDragged.current = false), 0);
-      if (outside(ev.clientX, ev.clientY)) takeOut(id);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-
-  const entry = (id: string, props: Omit<Parameters<typeof PlaceItem>[0], "narrow">) => (
-    <div
-      key={id}
-      onPointerDown={(e) => startDrag(e, id, props.label, props.icon)}
-      onClickCapture={(e) => {
-        if (justDragged.current) {
-          e.stopPropagation();
-          e.preventDefault();
-        }
-      }}
-      className={cn(drag?.id === id && "opacity-40")}
-    >
-      <PlaceItem {...props} narrow={narrow} />
-    </div>
-  );
-
-  const places: { id: string; label: string; icon: typeof File; path: string; title: string }[] = [
-    { id: "home", label: "Home", icon: House, path: home ?? "~", title: home ? `Your home folder: ${home}` : "Your home folder" },
-    // "Root" would read like the root user's folder; this is the top of the disk.
-    { id: "root", label: "Disk", icon: HardDrive, path: "/", title: "/ — the top of the whole disk" },
-    ...(remote ? LINUX_PLACES.map((p) => ({ id: p.path, label: p.label, icon: PLACE_ICONS[p.path] ?? Folder, path: p.path, title: p.path })) : []),
-  ];
-  const visiblePlaces = places.filter((p) => shown(p.id));
-  const showRecent = shown("recent") && recentShown.length > 0;
-
-  // Right-click: tick what the column shows.
-  const menuItems: (MenuItem | "sep")[] = [
-    ...places.map((p) => ({
-      label: p.label,
-      icon: p.icon,
-      checked: shown(p.id),
-      run: () => {
-        const st = useSettings.getState();
-        st.update({ hiddenPlaces: shown(p.id) ? [...st.hiddenPlaces, p.id] : st.hiddenPlaces.filter((h) => h !== p.id) });
-      },
-    })),
-    "sep",
-    {
-      label: "Recent folders",
-      icon: Clock,
-      checked: shown("recent"),
-      run: () => {
-        const st = useSettings.getState();
-        st.update({ hiddenPlaces: shown("recent") ? [...st.hiddenPlaces, "recent"] : st.hiddenPlaces.filter((h) => h !== "recent") });
-      },
-    },
-    ...(hidden.length ? ["sep" as const, { label: "Show everything", icon: RotateCcw, run: () => useSettings.getState().update({ hiddenPlaces: [] }) }] : []),
-  ];
-
-  return (
-    <div
-      ref={column}
-      style={{ width }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenu({ x: e.clientX, y: e.clientY });
-      }}
-      // The wide column only shows once the list beside it still has room.
-      className={cn(
-        "relative shrink-0 flex-col border-line",
-        right ? "order-last border-l" : "border-r",
-        compact ? "hidden @3xl:flex" : narrow ? "hidden @xs:flex" : "hidden @lg:flex",
-      )}
-    >
-      <ResizeHandle
-        edge={right ? "left" : "right"}
-        label="Resize places"
-        onResize={onResize}
-        onReset={() => useSettings.getState().update({ placesMode: "wide", placesWidth: 172 })}
-      />
-      <div className={cn("min-h-0 flex-1 overflow-y-auto pb-2", narrow ? "flex flex-col gap-0.5 px-1.5 pt-1.5" : "px-1.5")}>
-        {!narrow && visiblePlaces.length > 0 && <div className={heading}>Places</div>}
-        {visiblePlaces.map((p) =>
-          entry(`place:${p.id}`, { icon: p.icon, label: p.label, title: names.text(p.title), active: p.path !== "~" && dir === p.path, onClick: () => onGo(p.path) }),
-        )}
-
-        <div className={heading}>{!narrow && "Bookmarks"}</div>
-        {pins.length === 0
-          ? !narrow && (
-              <p className="px-2 py-1 text-[11.5px] leading-snug text-fg-3">
-                Star a folder <Star size={10.5} className="inline -translate-y-px" /> to keep it here.
-              </p>
-            )
-          : pins.map((p) =>
-              entry(`pin:${p}`, {
-                icon: narrow ? Folder : Star,
-                iconClass: narrow ? undefined : "fill-warn text-warn",
-                starred: true,
-                label: names.text(folderName(p)),
-                title: names.text(p),
-                active: dir === p,
-                onClick: () => onGo(p),
-                onRemove: () => onUnpin(p),
-              }),
-            )}
-
-        {showRecent && (
-          <>
-            <div className={heading}>{!narrow && "Recent"}</div>
-            {recentShown.map((p) =>
-              entry(`recent:${p}`, { icon: Clock, label: names.text(folderName(p)), title: names.text(p), active: false, onClick: () => onGo(p) }),
-            )}
-          </>
-        )}
-      </div>
-      {menu && <ContextMenu menu={menu} items={menuItems} onClose={() => setMenu(null)} />}
-      {drag && (
-        <div
-          aria-hidden
-          style={{ left: drag.x + 10, top: drag.y + 8 }}
-          className={cn(
-            "glass pointer-events-none fixed z-50 flex items-center gap-1.5 rounded-[8px] px-2 py-1 text-[12px] text-fg",
-            drag.out && "ring-1 ring-bad/50",
-          )}
-        >
-          <drag.icon size={13} />
-          {drag.label}
-          {drag.out && <span className="text-[11px] text-bad">· remove</span>}
-        </div>
-      )}
-    </div>
-  );
-}
+const FRESH_MS = 3000;
 
 type Creating = { kind: "file" | "folder" } | { kind: "archive"; names: string[] } | null;
 
@@ -583,16 +263,14 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   /** Folders you went back from, for Forward. */
   const future = useRef<string[]>([]);
   const skipFetch = useRef<string | null>(null);
+  /** Set by Refresh: list the folder again even if it was listed a moment ago. */
+  const forced = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const tk = targetKey(target);
   const pins = useBookmarks((b) => b.pins[tk] ?? EMPTY);
-  const recent = useBookmarks((b) => b.recent[tk] ?? EMPTY);
   const toggleBookmark = useBookmarks((b) => b.toggle);
-  const removeBookmark = useBookmarks((b) => b.remove);
   const visit = useBookmarks((b) => b.visit);
-  const placesMode = useSettings((st) => st.placesMode);
-  const placesSide = useSettings((st) => st.placesSide);
   const previewWidth = useSettings((st) => st.previewWidth);
 
   useEffect(() => {
@@ -601,26 +279,43 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       return;
     }
     let alive = true;
-    const cached = listings.get(cacheKey(tk, path));
+    const force = forced.current;
+    forced.current = false;
+    const show = (l: DirListing) => {
+      setListing(l);
+      setError(null);
+      visit(tk, l.path);
+      if (l.path !== path) {
+        skipFetch.current = l.path;
+        setPane(pane.id, { path: l.path });
+      }
+    };
+    const cached = dirCache.get(tk, path);
     if (cached) {
-      setListing(cached);
+      setListing(cached.listing);
       setError(null);
     }
+    // A file to pick out may be newer than a listing from a moment ago.
+    if (cached && !force && !pane.reveal && Date.now() - cached.at < FRESH_MS) {
+      show(cached.listing);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    backend
-      .listDir(target, path)
-      .then((l) => {
-        remember(tk, path, l);
+    dirCache
+      .load(target, path)
+      .then((l) => alive && show(l))
+      .catch((e) => {
         if (!alive) return;
-        setListing(l);
-        setError(null);
-        visit(tk, l.path);
-        if (l.path !== path) {
-          skipFetch.current = l.path;
-          setPane(pane.id, { path: l.path });
+        const err = toOpError(e);
+        setError(err);
+        // What's on screen is this folder as it was. If it's gone or closed
+        // now, the error shows instead; offline, the last listing stays.
+        if (cached && err.code !== "network" && err.code !== "auth" && err.code !== "hostKey") {
+          dirCache.forget(tk, path);
+          setListing(null);
         }
       })
-      .catch((e) => alive && setError(toOpError(e)))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -629,16 +324,31 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   }, [tk, path, reload]);
 
   const dir = listing?.path ?? path;
-  const refresh = useCallback(() => setReload((n) => n + 1), []);
+  const refresh = useCallback(() => {
+    forced.current = true;
+    setReload((n) => n + 1);
+  }, []);
+  /** After changing something here: every pane showing this folder lists it again, this one too. */
+  const changed = () => dirCache.changed(tk, dir);
+  const dirRef = useRef(dir);
+  dirRef.current = dir;
+  useEffect(() => dirCache.watch((k, d) => k === tk && d === dirRef.current && refresh()), [tk, refresh]);
 
+  // The folder above is a likely next stop (Up, Backspace, ".."); list it
+  // ahead of time when nothing else is going on.
+  useEffect(() => {
+    if (!listing || loading || !upRowFor(listing.path)) return;
+    const t = window.setTimeout(() => dirCache.prefetch(target, parentPath(listing.path)), 400);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listing, loading, tk]);
+
+  // Sorted once per listing; typing in the filter only filters.
+  const sorted = useMemo(() => (listing ? sortEntries(listing.entries, sort.key, sort.asc) : []), [listing, sort]);
   const visible = useMemo(() => {
-    if (!listing) return [];
     const q = filter.trim().toLowerCase();
-    const list = listing.entries.filter(
-      (e) => (showHidden || !e.name.startsWith(".")) && (!q || e.name.toLowerCase().includes(q)),
-    );
-    return sortEntries(list, sort.key, sort.asc);
-  }, [listing, filter, showHidden, sort]);
+    return sorted.filter((e) => (showHidden || !e.name.startsWith(".")) && (!q || e.name.toLowerCase().includes(q)));
+  }, [sorted, filter, showHidden]);
 
   const hiddenCount = listing ? listing.entries.filter((e) => e.name.startsWith(".")).length : 0;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
@@ -665,7 +375,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     };
   }, [listEl]);
   /** Every folder but the top of the disk starts with "..", the folder above. */
-  const upRow = !!listing && dir !== "/" && !/^[A-Za-z]:\/?$/.test(dir);
+  const upRow = !!listing && upRowFor(dir);
   /** Space above the first row: the list's padding, "..", and a row being named. */
   const lead = 4 + (upRow ? ROW : 0) + (creating ? ROW : 0);
   const windowed = visible.length > WINDOW_FROM;
@@ -730,7 +440,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   const openPreview = async (entry: FileEntry) => {
     const full = joinPath(dir, entry.name);
-    setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false });
+    setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false });
+    if (MARKDOWN.test(entry.name)) void loadMarkdownView().catch(() => {});
     try {
       const file = await backend.readFile(target, full);
       setPreview((p) => (p && p.path === full ? { ...p, file, draft: file.content ?? "" } : p));
@@ -752,7 +463,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       await backend.writeFile(target, preview.path, preview.draft);
       setPreview((p) => (p ? { ...p, saving: false, file: p.file && { ...p.file, content: p.draft } } : p));
       toast({ tone: "success", title: `Saved ${preview.name}` });
-      refresh();
+      changed();
     } catch (e) {
       setPreview((p) => (p ? { ...p, saving: false } : p));
       fail(`Couldn't save ${preview.name}`, e);
@@ -776,7 +487,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const upload = async (paths: string[]) => {
     if (paths.length === 0) return;
     await uploadTo(target, dir, paths);
-    refresh();
+    changed();
   };
 
   const remove = async (entries: FileEntry[]) => {
@@ -792,10 +503,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     setBusy(`Deleting ${what}…`);
     for (const e of entries) {
       await backend.deletePath(target, joinPath(dir, e.name)).catch((err) => fail(`Couldn't delete ${e.name}`, err));
+      dirCache.forget(tk, joinPath(dir, e.name));
     }
     setBusy(null);
     setSelected([]);
-    refresh();
+    changed();
   };
 
   const finishRename = async (from: string, to: string | null) => {
@@ -803,8 +515,9 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     if (!to || to === from) return;
     try {
       await backend.renamePath(target, joinPath(dir, from), joinPath(dir, to));
+      dirCache.forget(tk, joinPath(dir, from));
       setSelected([to]);
-      refresh();
+      changed();
     } catch (e) {
       fail("Couldn't rename", e);
     }
@@ -828,7 +541,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       } else if (c.kind === "folder") await backend.makeDir(target, joinPath(dir, name));
       else await backend.writeFile(target, joinPath(dir, name), "");
       setSelected([name]);
-      refresh();
+      changed();
     } catch (e) {
       fail(`Couldn't create ${what}`, e);
     } finally {
@@ -924,12 +637,14 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     }
   };
 
-  // Resting the pointer on a folder lists it ahead of time, so opening it is instant.
+  // Resting the pointer on a folder (or "..", or a folder in the path) lists
+  // it ahead of time, so opening it is instant.
   const hoverTimer = useRef(0);
-  const hoverFolder = (name: string) => {
+  const pointAt = (folder: string | null) => {
     window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => prefetch(target, tk, joinPath(dir, name)), 150);
+    if (folder) hoverTimer.current = window.setTimeout(() => dirCache.prefetch(target, folder), 150);
   };
+  const hoverFolder = (name: string) => pointAt(joinPath(dir, name));
 
   const typeahead = useRef({ text: "", at: 0 });
   const onListKey = (e: ReactKeyboardEvent) => {
@@ -1020,6 +735,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   const authProblem = error && (error.code === "auth" || error.code === "hostKey");
   const dirty = preview?.file?.content != null && preview.draft !== preview.file.content;
+  /** Formatted or as text; only a Markdown file that opened as text has the choice. */
+  const markdown = preview?.file?.content != null && MARKDOWN.test(preview.name);
 
   return (
     <div
@@ -1034,18 +751,15 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     >
       {/* toolbar */}
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-1.5">
-        <span className="hidden @xs:flex">
-          <IconButton
-            label={`Places: ${placesMode}. Click for ${placesMode === "wide" ? "narrow" : placesMode === "narrow" ? "hidden" : "wide"}`}
-            active={placesMode !== "hidden"}
-            onClick={() =>
-              useSettings.getState().update({ placesMode: placesMode === "wide" ? "narrow" : placesMode === "narrow" ? "hidden" : "wide" })
-            }
-            className="size-6"
-          >
-            {placesSide === "right" ? <PanelRight size={14} /> : <PanelLeft size={14} />}
-          </IconButton>
-        </span>
+        {/* Places, bookmarks and recent folders; it stays in narrow panes too. */}
+        <PlacesButton
+          target={target}
+          dir={dir}
+          onGo={(p) => {
+            navigate(p);
+            listRef.current?.focus();
+          }}
+        />
         <div className="mx-0.5 hidden h-4 w-px bg-ink/[0.08] @xs:block" />
         <span className="hidden items-center @xs:flex">
           <IconButton label="Back (mouse back button, Alt+←)" onClick={goBack} disabled={history.current.length === 0} className="size-6">
@@ -1060,7 +774,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             <ArrowUp size={14} />
           </IconButton>
         </span>
-        <AddressBar path={dir} onGo={(p) => navigate(p)} />
+        <AddressBar path={dir} onGo={(p) => navigate(p)} onPoint={pointAt} />
         {/* The address bar always stays. As the pane narrows, the filter and the
             less-used buttons step out first; the ⋯ menu always has them all. */}
         <div className="relative ml-1 hidden w-[120px] shrink-0 items-center @lg:flex @3xl:w-[160px]">
@@ -1076,14 +790,6 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
           />
         </div>
         <span className="hidden items-center gap-1 @2xl:flex">
-          <IconButton
-            label={pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder"}
-            active={pins.includes(dir)}
-            onClick={() => toggleBookmark(tk, dir)}
-            className="size-6"
-          >
-            <Star size={14} className={cn(pins.includes(dir) && "fill-warn text-warn")} />
-          </IconButton>
           {remote && (
             <IconButton label="Upload files" onClick={pickAndUpload} className="size-6">
               <Upload size={14} />
@@ -1105,19 +811,6 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {placesMode !== "hidden" && (
-          <Places
-            target={target}
-            compact={!!preview}
-            remote={remote}
-            dir={dir}
-            pins={pins}
-            recent={recent}
-            onGo={(p) => navigate(p)}
-            onUnpin={(p) => removeBookmark(tk, p)}
-            onForgetRecent={(p) => useBookmarks.getState().forgetRecent(tk, p)}
-          />
-        )}
         {/* list */}
         <div className={cn("@container relative min-w-[220px] flex-1 flex-col", preview ? "hidden @2xl:flex" : "flex")}>
           {error && !listing ? (
@@ -1174,6 +867,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 {upRow && (
                   <div
                     onDoubleClick={() => navigate(parentPath(dir))}
+                    onPointerEnter={() => pointAt(parentPath(dir))}
+                    onPointerLeave={() => pointAt(null)}
                     onClick={() => setSelected([])}
                     title="Double-click to go to the folder above"
                     className="mx-1.5 flex h-7 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-fg-2 hover:bg-ink/[0.035]"
@@ -1302,7 +997,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         {/* preview / editor */}
         {preview && (
           // Beside the list when there's room; in a narrow pane it takes the whole width.
-          <div style={{ width: previewWidth }} className="relative flex min-w-[220px] flex-1 flex-col border-l border-line bg-ink/[0.012] @2xl:max-w-[70%] @2xl:flex-none">
+          <div
+            style={{ width: previewWidth }}
+            // Saving works from the formatted view too, after an edit in Source.
+            onKeyDown={(e) => {
+              if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "s") {
+                e.preventDefault();
+                void savePreview();
+              }
+            }}
+            className="relative flex min-w-[220px] flex-1 flex-col border-l border-line bg-ink/[0.012] @2xl:max-w-[70%] @2xl:flex-none"
+          >
             <ResizeHandle
               edge="left"
               label="Resize preview"
@@ -1317,6 +1022,29 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
               {dirty && <span className="size-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes" />}
               {preview.file && <span className="shrink-0 text-[11px] text-fg-3">{bytes(preview.file.size)}</span>}
               <span className="flex-1" />
+              {markdown && (
+                <div role="tablist" aria-label="Show the file" className="flex h-6 shrink-0 items-center rounded-[7px] bg-ink/[0.045] p-[2px] ring-1 ring-inset ring-ink/[0.06]">
+                  {(["Preview", "Source"] as const).map((v) => {
+                    const on = (v === "Source") === preview.source;
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        role="tab"
+                        aria-selected={on}
+                        title={v === "Preview" ? "Show it formatted" : "Show the text, to edit it"}
+                        onClick={() => setPreview((p) => p && { ...p, source: v === "Source" })}
+                        className={cn(
+                          "flex h-5 items-center rounded-[5px] px-2 text-[11.5px] font-medium transition-colors",
+                          on ? "bg-ink/[0.11] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.35),inset_0_1px_0_rgb(255_255_255/0.07)]" : "text-fg-3 hover:text-fg-2",
+                        )}
+                      >
+                        {v}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {dirty && (
                 <Button size="sm" variant="primary" disabled={preview.saving} onClick={savePreview} className="h-6 px-2">
                   {preview.saving ? <Spinner className="size-3" /> : "Save"}
@@ -1343,9 +1071,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
               </IconButton>
             </div>
             {!preview.file ? (
-              <div className="flex flex-1 items-center justify-center text-fg-3">
-                <Spinner />
-              </div>
+              <PreviewLoading />
             ) : preview.file.content == null ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
                 <p className="text-[12.5px] text-fg-2">
@@ -1360,6 +1086,10 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                   </Button>
                 )}
               </div>
+            ) : markdown && !preview.source ? (
+              <Suspense fallback={<PreviewLoading />}>
+                <MarkdownView text={preview.draft} />
+              </Suspense>
             ) : (
               <textarea
                 value={preview.draft}
@@ -1368,12 +1098,6 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 autoCapitalize="off"
                 wrap="off"
                 onChange={(e) => setPreview({ ...preview, draft: e.target.value })}
-                onKeyDown={(e) => {
-                  if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "s") {
-                    e.preventDefault();
-                    void savePreview();
-                  }
-                }}
                 className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[12px] leading-[1.6] text-fg-2 outline-none focus:text-fg"
               />
             )}

@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the SSHeesh window is allowed to do",
+  "description": "What SSHeesh's windows are allowed to do",
   "windows": [
-    "main"
+    "main",
+    "server-*"
   ],
   "permissions": [
     "core:default",
@@ -14,6 +15,13 @@
     "opener:default",
     "notification:default",
     "clipboard-manager:allow-write-text",
-    "core:webview:allow-set-webview-zoom"
+    "core:webview:allow-set-webview-zoom",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-create",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-focus"
   ]
 }

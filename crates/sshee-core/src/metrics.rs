@@ -5,7 +5,7 @@
 //! turns two snapshots into rates (CPU %, MB/s).
 
 use crate::error::{ErrorCode, OpError};
-use crate::ssh::{run_local, run_remote_read, SshEnv, Target};
+use crate::ssh::{run_local, run_remote_poll, SshEnv, Target};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -64,7 +64,7 @@ exit 0"#;
 
 pub fn fetch(target: &Target, env: &SshEnv) -> Result<Metrics, OpError> {
     let out = match target {
-        Target::Ssh(t) => run_remote_read(t, env, SCRIPT)?,
+        Target::Ssh(t) => run_remote_poll(t, env, SCRIPT)?,
         Target::Local => run_local(SCRIPT)?,
     };
     let mut m = parse(&String::from_utf8_lossy(&out));

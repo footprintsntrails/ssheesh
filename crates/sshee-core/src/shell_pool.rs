@@ -6,11 +6,21 @@
 //! once; after that each command costs about one round trip.
 //!
 //! Each command runs in its own `sh -c` with no input, so it can't change
-//! the shell or read what comes next. Its output and errors go to temporary
-//! files on the server, and come back after a header line that gives the
-//! exit code and both sizes, so binary output (`find -printf '\0'`) is safe.
+//! the shell or read what comes next. Its output streams back between two
+//! marks that are new for every command, so binary output (`find -printf
+//! '\0'`) is safe; then its exit code, and its errors from a file the shell
+//! made once when it started. Past the command itself that's no extra
+//! programs on the server: the wrapper used to start seven (`mktemp`, `wc`,
+//! `cat`, `rm`), about 20 ms of every folder you opened.
+//!
+//! Polls that come back every few seconds (metrics, what each terminal
+//! runs) go through `run_poll`: they take turns, and leave the last idle
+//! shell to you, so opening a folder never waits for a new sign-in behind
+//! them.
 
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -22,11 +32,14 @@ use std::time::{Duration, Instant};
 use crate::error::OpError;
 use crate::ssh::{remote_command, shell_quote, spawn_error, SshEnv, SshTarget};
 
-/// Idle shells kept per server, and how long one may sit unused.
-const KEEP_IDLE: usize = 2;
+/// Idle shells kept per server, and how long one may sit unused. Three
+/// covers a poll, a folder you open and one listed ahead of time.
+const KEEP_IDLE: usize = 3;
 const IDLE_LIMIT: Duration = Duration::from_secs(120);
-/// Lines of shell start-up noise (an `echo` in .bashrc) skipped before a reply.
-const MAX_NOISE: usize = 1000;
+/// Shell start-up noise (an `echo` in .bashrc) skipped before a reply.
+const MAX_NOISE: usize = 256 * 1024;
+/// Sent to a new shell first: the file each command's errors go to.
+const SETUP: &str = "e=$(mktemp) || exit 1; trap 'rm -f \"$e\"' EXIT\n";
 
 struct Shell {
     child: Arc<Mutex<Child>>,
@@ -38,6 +51,14 @@ struct Shell {
 }
 
 impl Shell {
+    /// Wraps a freshly started `sh` and has it make its error file. One that
+    /// can't is gone by the first command, which says so.
+    fn start(child: Arc<Mutex<Child>>, mut stdin: ChildStdin, stdout: ChildStdout, stderr: Arc<Mutex<Vec<u8>>>) -> Shell {
+        // The pipe holds it until ssh has signed in.
+        let _ = stdin.write_all(SETUP.as_bytes());
+        Shell { child, stdin, stdout: BufReader::with_capacity(64 * 1024, stdout), stderr, used: Instant::now() }
+    }
+
     fn alive(&self) -> bool {
         self.child.lock().map(|mut c| matches!(c.try_wait(), Ok(None))).unwrap_or(false)
     }
@@ -117,15 +138,18 @@ fn key(t: &SshTarget, env: &SshEnv) -> String {
     )
 }
 
-fn take_idle(key: &str) -> Option<Shell> {
+/// An idle shell, if there's one to take. You get the one used last, the
+/// likeliest to still be connected. A poll gets the one waiting longest, so
+/// all of them keep in use, and never the last one: that stays for you.
+fn take_idle(key: &str, poll: bool) -> Option<Shell> {
     let mut map = pool().lock().unwrap_or_else(|e| e.into_inner());
     let shells = map.get_mut(key)?;
-    while let Some(s) = shells.pop() {
-        if s.used.elapsed() < IDLE_LIMIT && s.alive() {
-            return Some(s);
-        }
+    shells.retain(|s| s.used.elapsed() < IDLE_LIMIT && s.alive());
+    match (poll, shells.len()) {
+        (false, n) if n > 0 => shells.pop(),
+        (true, n) if n > 1 => Some(shells.remove(0)),
+        _ => None,
     }
-    None
 }
 
 fn give_back(key: String, mut shell: Shell) {
@@ -161,7 +185,7 @@ fn spawn(t: &SshTarget, env: &SshEnv) -> Result<Shell, OpError> {
             }
         });
     }
-    Ok(Shell { child: Arc::new(Mutex::new(child)), stdin, stdout: BufReader::new(stdout), stderr, used: Instant::now() })
+    Ok(Shell::start(Arc::new(Mutex::new(child)), stdin, stdout, stderr))
 }
 
 /// What went wrong talking to a shell.
@@ -178,53 +202,91 @@ struct Reply {
     err: Vec<u8>,
 }
 
-/// The text sent to the shell for one command. `mark` starts the reply's header line.
+/// The text sent to the shell for one command. What comes back:
+///
+/// ```text
+/// <noise>\x1f{mark}S\n<stdout>\x1f{mark}E<code>\n<stderr>\x1f{mark}Z\n
+/// ```
 fn request(script: &str, mark: &str) -> String {
     format!(
-        "o=$(mktemp) && e=$(mktemp) || exit 1\nsh -c {} </dev/null >\"$o\" 2>\"$e\"; c=$?\nprintf '%s %s %s %s\\n' {mark} \"$c\" \"$(wc -c <\"$o\")\" \"$(wc -c <\"$e\")\"\ncat \"$o\" \"$e\"; rm -f \"$o\" \"$e\"\n",
+        "printf '\\037%sS\\n' {mark}\nsh -c {} </dev/null 2>\"$e\"; c=$?\nprintf '\\037%sE%s\\n' {mark} \"$c\"\n[ -s \"$e\" ] && cat -- \"$e\"\nprintf '\\037%sZ\\n' {mark}\n",
         shell_quote(script)
     )
 }
 
-/// "MARK 0 120 0" → (code, stdout bytes, stderr bytes). `wc` may pad with spaces.
-fn parse_header(line: &[u8], mark: &str) -> Option<(i32, usize, usize)> {
-    let text = std::str::from_utf8(line).ok()?;
-    let mut parts = text.split_whitespace();
-    if parts.next()? != mark {
-        return None;
+/// The three marks around a reply, each followed by the rest of its line.
+/// \x1f hardly ever shows up in text, so looking for them is quick.
+fn marks(mark: &str) -> [Vec<u8>; 3] {
+    ["S", "E", "Z"].map(|end| format!("\x1f{mark}{end}").into_bytes())
+}
+
+/// The rest of a mark's line: nothing, or the exit code.
+fn rest_of_line(r: &mut impl BufRead) -> Result<String, Broken> {
+    let mut line = Vec::new();
+    match r.read_until(b'\n', &mut line) {
+        Ok(0) | Err(_) => Err(Broken::Lost),
+        Ok(_) => Ok(String::from_utf8_lossy(&line).trim().to_string()),
     }
-    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// Where `needle` first starts in `hay`.
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    let (&first, rest) = needle.split_first()?;
+    let mut from = 0;
+    while let Some(i) = hay.get(from..)?.iter().position(|&b| b == first) {
+        let at = from + i;
+        let tail = hay.get(at + 1..at + needle.len())?;
+        if tail == rest {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// Reads up to and past `mark`, and returns what came before it. Reads
+/// nothing beyond the mark, which may well arrive split over two reads.
+fn read_to_mark(r: &mut impl BufRead, mark: &[u8], limit: usize) -> Result<Vec<u8>, Broken> {
+    let mut got = Vec::new();
+    loop {
+        let chunk = r.fill_buf().map_err(|_| Broken::Lost)?;
+        if chunk.is_empty() {
+            return Err(Broken::Lost);
+        }
+        let (had, len) = (got.len(), chunk.len());
+        got.extend_from_slice(chunk);
+        let from = had.saturating_sub(mark.len() - 1);
+        if let Some(at) = find(&got[from..], mark).map(|i| from + i) {
+            r.consume(at + mark.len() - had);
+            got.truncate(at);
+            return Ok(got);
+        }
+        r.consume(len);
+        if got.len() > limit {
+            return Err(Broken::Lost);
+        }
+    }
 }
 
 fn exchange(shell: &mut Shell, script: &str, mark: &str) -> Result<Reply, Broken> {
     shell.stdin.write_all(request(script, mark).as_bytes()).and_then(|_| shell.stdin.flush()).map_err(|_| Broken::Unsent)?;
-    let mut line = Vec::new();
-    let mut noise = 0;
-    let (code, out_len, err_len) = loop {
-        line.clear();
-        match shell.stdout.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => return Err(Broken::Lost),
-            Ok(_) => {}
-        }
-        if let Some(h) = parse_header(&line, mark) {
-            break h;
-        }
-        noise += 1;
-        if noise > MAX_NOISE {
-            return Err(Broken::Lost);
-        }
-    };
-    let mut out = vec![0; out_len];
-    let mut err = vec![0; err_len];
-    shell.stdout.read_exact(&mut out).map_err(|_| Broken::Lost)?;
-    shell.stdout.read_exact(&mut err).map_err(|_| Broken::Lost)?;
+    let [start, end, done] = marks(mark);
+    let r = &mut shell.stdout;
+    read_to_mark(r, &start, MAX_NOISE)?;
+    rest_of_line(r)?;
+    let out = read_to_mark(r, &end, usize::MAX)?;
+    let code = rest_of_line(r)?.parse().map_err(|_| Broken::Lost)?;
+    let err = read_to_mark(r, &done, usize::MAX)?;
+    rest_of_line(r)?;
     Ok(Reply { code, out, err })
 }
 
+/// A mark no file can hold: new for every command, and random.
 fn next_mark() -> String {
     static N: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    format!("__sshee_{}_{}_{nanos}__", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
+    let mut h = RandomState::new().build_hasher();
+    h.write_u64(N.fetch_add(1, Ordering::Relaxed));
+    format!("__sshee_{}_{:016x}__", std::process::id(), h.finish())
 }
 
 /// Runs `script` with `sh` on the server through a signed-in shell and
@@ -233,9 +295,29 @@ fn next_mark() -> String {
 /// others are retried only if they never reached the server, and may take
 /// as long as they need.
 pub fn run(t: &SshTarget, env: &SshEnv, script: &str, read_only: Option<Duration>) -> Result<Vec<u8>, OpError> {
+    run_on(t, env, script, read_only, false)
+}
+
+type Lanes = Mutex<HashMap<String, Arc<Mutex<()>>>>;
+
+/// Like `run` for a read-only command, for polls that come back every few
+/// seconds. One server's polls take turns, and leave the last idle shell
+/// for whatever you do: a poll that finds only that one starts another
+/// shell, and the pool keeps both. Without this, metrics and the terminal
+/// watch could hold every shell just when you open a folder, and on Windows
+/// that folder waited a whole new sign-in.
+pub fn run_poll(t: &SshTarget, env: &SshEnv, script: &str, limit: Duration) -> Result<Vec<u8>, OpError> {
+    static LANES: OnceLock<Lanes> = OnceLock::new();
+    let key = key(t, env);
+    let lane = LANES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default().clone();
+    let _turn = lane.lock().unwrap_or_else(|e| e.into_inner());
+    run_on(t, env, script, Some(limit), true)
+}
+
+fn run_on(t: &SshTarget, env: &SshEnv, script: &str, read_only: Option<Duration>, poll: bool) -> Result<Vec<u8>, OpError> {
     let key = key(t, env);
     for attempt in 0..2 {
-        let (mut shell, reused) = match take_idle(&key) {
+        let (mut shell, reused) = match take_idle(&key, poll) {
             Some(s) => (s, true),
             None => (spawn(t, env)?, false),
         };
@@ -281,20 +363,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_the_header() {
-        assert_eq!(parse_header(b"__m__ 0 120 0\n", "__m__"), Some((0, 120, 0)));
-        assert_eq!(parse_header(b"__m__ 3       12        7\n", "__m__"), Some((3, 12, 7)));
-        assert_eq!(parse_header(b"hello from .bashrc\n", "__m__"), None);
-        assert_eq!(parse_header(b"__other__ 0 1 1\n", "__m__"), None);
+    fn finds_marks_split_across_reads() {
+        let mark = b"\x1f__m__E";
+        assert_eq!(find(b"ab\x1f__m__E0", mark), Some(2));
+        assert_eq!(find(b"\x1f__m_\x1f__m__E", mark), Some(5));
+        assert_eq!(find(b"\x1f__m__", mark), None);
+        // A reader that hands out three bytes at a time.
+        let data = b"noise\n\x1f__m__S\nbin\0ary\x1f__m__E0\r\nrest";
+        let mut r = BufReader::with_capacity(3, &data[..]);
+        assert_eq!(read_to_mark(&mut r, b"\x1f__m__S", 1024).ok().unwrap(), b"noise\n");
+        assert_eq!(rest_of_line(&mut r).ok().unwrap(), "");
+        assert_eq!(read_to_mark(&mut r, mark, usize::MAX).ok().unwrap(), b"bin\0ary");
+        assert_eq!(rest_of_line(&mut r).ok().unwrap(), "0");
+        let mut rest = String::new();
+        r.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "rest");
+        // The stream ending before the mark is a lost shell.
+        let mut r = BufReader::new(&b"no mark here"[..]);
+        assert!(read_to_mark(&mut r, mark, usize::MAX).is_err());
     }
 
     #[test]
     fn a_request_keeps_the_command_away_from_the_shell() {
         let r = request("cd /tmp && exit 5", "__m__");
-        // Its own sh, no input, output to files.
-        assert!(r.contains("sh -c 'cd /tmp && exit 5' </dev/null >\"$o\" 2>\"$e\""));
-        assert!(r.contains("printf '%s %s %s %s\\n' __m__"));
-        assert!(r.ends_with("rm -f \"$o\" \"$e\"\n"));
+        // Its own sh, no input, errors to the shell's file.
+        assert!(r.contains("sh -c 'cd /tmp && exit 5' </dev/null 2>\"$e\"; c=$?"));
+        assert!(r.starts_with("printf '\\037%sS\\n' __m__\n"));
+        assert!(r.ends_with("printf '\\037%sZ\\n' __m__\n"));
     }
 
     #[test]
@@ -307,15 +402,13 @@ mod tests {
     #[test]
     fn talks_to_a_real_shell() {
         let mut child = std::process::Command::new("sh").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        let mut shell = Shell {
-            stdin: child.stdin.take().unwrap(),
-            stdout: BufReader::new(child.stdout.take().unwrap()),
-            child: Arc::new(Mutex::new(child)),
-            stderr: Arc::new(Mutex::new(Vec::new())),
-            used: Instant::now(),
-        };
+        let (stdin, stdout) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
+        let mut shell = Shell::start(Arc::new(Mutex::new(child)), stdin, stdout, Arc::new(Mutex::new(Vec::new())));
         let r = exchange(&mut shell, "printf 'a\\0b\\n'; echo oops >&2; exit 3", &next_mark()).ok().unwrap();
         assert_eq!((r.code, r.out.as_slice(), r.err.as_slice()), (3, &b"a\0b\n"[..], &b"oops\n"[..]));
+        // The errors of one command don't stay for the next.
+        let r = exchange(&mut shell, "printf 'no newline'", &next_mark()).ok().unwrap();
+        assert_eq!((r.code, r.out.as_slice(), r.err.as_slice()), (0, &b"no newline"[..], &b""[..]));
         // The shell is still there, and the last command's `cd` and `exit` didn't touch it.
         let r = exchange(&mut shell, "cd / && exit 0", &next_mark()).ok().unwrap();
         assert_eq!(r.code, 0);
@@ -324,6 +417,32 @@ mod tests {
         // A command can't eat the next request.
         let r = exchange(&mut shell, "cat; echo done", &next_mark()).ok().unwrap();
         assert_eq!(r.out, b"done\n");
+        // Big output streams through whole.
+        let r = exchange(&mut shell, "i=0; while [ $i -lt 20000 ]; do echo \"line $i\"; i=$((i+1)); done", &next_mark()).ok().unwrap();
+        assert_eq!(r.out.iter().filter(|&&b| b == b'\n').count(), 20000);
         assert!(shell.alive());
+    }
+
+    #[test]
+    fn polls_leave_the_last_shell_for_you() {
+        let key = "test-polls";
+        let shell = || {
+            let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let (stdin, stdout) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
+            Shell::start(Arc::new(Mutex::new(child)), stdin, stdout, Arc::new(Mutex::new(Vec::new())))
+        };
+        give_back(key.into(), shell());
+        assert!(take_idle(key, true).is_none());
+        give_back(key.into(), shell());
+        let first = take_idle(key, true).expect("a poll may take one of two");
+        assert!(take_idle(key, true).is_none());
+        assert!(take_idle(key, false).is_some());
+        drop(first);
+        assert!(take_idle(key, false).is_none());
     }
 }

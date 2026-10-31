@@ -49,6 +49,8 @@ SSHeesh checks for updates by itself and installs them in the background. When o
 
 Change this in **Settings → Updates** (⌘,): install automatically, ask first, or never check.
 
+**Saved server passwords** live in your Mac's Keychain. The first time a new SSHeesh reads them, macOS asks whether to allow it: click **Always Allow**. From 0.6.0 every version is signed with the same certificate, so macOS knows an update is the same app and doesn't ask again. (Versions before 0.6.0 looked like a new app to macOS after every update, so it asked each time.)
+
 ## Your servers
 
 SSHeesh uses the `ssh` that comes with macOS, so everything in `~/.ssh/config` shows up in the sidebar and your keys just work.

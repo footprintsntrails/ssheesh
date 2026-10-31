@@ -34,7 +34,7 @@ import {
 import { targetKey, toOpError, type Forward, type TargetRef, type TunnelState, type WebApp, type WebAppScan } from "../lib/types";
 import { Modal } from "./Overlays";
 import { Header, Note, Section, useRun, Waiting } from "./ServerTools";
-import { Segmented, Switch } from "./SettingsDialog";
+import { Segmented, Switch } from "./controls";
 import { Button, IconButton, Spinner } from "./ui";
 
 export { useActiveTunnels } from "../lib/tunnels";

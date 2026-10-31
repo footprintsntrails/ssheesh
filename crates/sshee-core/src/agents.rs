@@ -2,7 +2,7 @@
 //! oh-my-pi), so a terminal can offer to start one in the folder you're in.
 
 use crate::error::{ErrorCode, OpError};
-use crate::ssh::{remote_command, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
+use crate::ssh::{remote_command, run_remote_poll, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
 use serde::Serialize;
 use std::io::Read;
 use std::process::Stdio;
@@ -81,6 +81,36 @@ pub fn pane_info(target: &Target, env: &SshEnv, session_key: &str) -> Result<Pan
     parse_pane(&String::from_utf8_lossy(&out)).ok_or_else(|| OpError::new(ErrorCode::NotFound, "Couldn't read the terminal's state."))
 }
 
+/// The program in front in one of SSHeesh's terminals, by its session key.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Foreground {
+    pub session_key: String,
+    /// "zsh", "claude", "vim"…
+    pub command: String,
+}
+
+/// What every SSHeesh terminal on the server is running, in one round trip,
+/// so the sidebar can name a tab after the agent working in it.
+pub fn foreground(target: &Target, env: &SshEnv) -> Result<Vec<Foreground>, OpError> {
+    let Target::Ssh(t) = target else {
+        return Ok(Vec::new());
+    };
+    let out = run_remote_poll(t, env, "tmux list-panes -a -F '#{session_name}\t#{pane_active}\t#{pane_current_command}' 2>/dev/null; true")?;
+    Ok(parse_foreground(&String::from_utf8_lossy(&out)))
+}
+
+fn parse_foreground(out: &str) -> Vec<Foreground> {
+    out.lines()
+        .filter_map(|line| {
+            let mut fields = line.trim_end_matches('\r').split('\t');
+            let (name, active, command) = (fields.next()?, fields.next()?, fields.next()?);
+            let key = name.strip_prefix("sshee-")?;
+            (active == "1" && !command.is_empty()).then(|| Foreground { session_key: key.to_string(), command: command.to_string() })
+        })
+        .collect()
+}
+
 fn parse_pane(out: &str) -> Option<PaneInfo> {
     let (command, cwd) = out.trim_end_matches(['\r', '\n']).split_once('\t')?;
     let shell = command.trim_start_matches('-');
@@ -106,5 +136,17 @@ mod tests {
         let busy = parse_pane("node\t/home/me\n").unwrap();
         assert!(!busy.idle);
         assert!(parse_pane("").is_none());
+    }
+
+    #[test]
+    fn reads_every_terminal_at_once() {
+        let out = "sshee-k1\t1\tclaude\nsshee-k1\t0\tzsh\nsshee-k2\t1\tzsh\r\nwork\t1\tvim\nsshee-k3\t1\t\n";
+        assert_eq!(
+            parse_foreground(out),
+            vec![
+                Foreground { session_key: "k1".into(), command: "claude".into() },
+                Foreground { session_key: "k2".into(), command: "zsh".into() },
+            ]
+        );
     }
 }

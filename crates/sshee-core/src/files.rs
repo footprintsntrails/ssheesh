@@ -81,8 +81,11 @@ fn cd_script(path: &str) -> String {
 }
 
 fn list_remote(t: &SshTarget, env: &SshEnv, path: &str) -> Result<DirListing, OpError> {
+    // One `find` lists and describes everything. Only when it fails (it
+    // also does over an entry it can't read) does a second one check that
+    // it's GNU find, which `-printf` needs.
     let script = format!(
-        "{}\nfind . -maxdepth 0 -printf '' 2>/dev/null || {{ echo 'Browsing files needs GNU find on the server (most Linux servers have it).' >&2; exit 4; }}\npwd\nLC_ALL=C find . -mindepth 1 -maxdepth 1 -printf '%y\\t%Y\\t%s\\t%T@\\t%M\\t%f\\0' 2>/dev/null\nexit 0",
+        "{}\npwd\nLC_ALL=C find . -mindepth 1 -maxdepth 1 -printf '%y\\t%Y\\t%s\\t%T@\\t%M\\t%f\\0' 2>/dev/null || find . -maxdepth 0 -printf '' 2>/dev/null || {{ echo 'Browsing files needs GNU find on the server (most Linux servers have it).' >&2; exit 4; }}\nexit 0",
         cd_script(path)
     );
     let out = run_remote_read(t, env, &script)?;
@@ -121,11 +124,7 @@ fn parse_find(out: &[u8]) -> (String, Vec<FileEntry>) {
 }
 
 fn sort_entries(entries: &mut [FileEntry]) {
-    entries.sort_by(|a, b| {
-        let ad = a.kind == FileKind::Dir;
-        let bd = b.kind == FileKind::Dir;
-        bd.cmp(&ad).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    entries.sort_by_cached_key(|e| (e.kind != FileKind::Dir, e.name.to_lowercase()));
 }
 
 fn resolve_local(path: &str) -> PathBuf {
@@ -214,7 +213,7 @@ pub fn read_text(target: &Target, env: &SshEnv, path: &str) -> Result<TextFile, 
     let (size, bytes) = match ssh_only(target) {
         Some(t) => {
             let script = format!(
-                r#"F={}; [ -f "$F" ] || {{ echo "This isn't a regular file." >&2; exit 4; }}; S=$(wc -c < "$F" | tr -d ' '); echo "$S"; [ "$S" -gt {MAX_TEXT} ] || cat -- "$F""#,
+                r#"F={}; [ -f "$F" ] || {{ echo "This isn't a regular file." >&2; exit 4; }}; S=$(wc -c < "$F"); S=${{S##* }}; echo "$S"; [ "$S" -gt {MAX_TEXT} ] || cat -- "$F""#,
                 shell_quote(path)
             );
             let out = run_remote_read(t, env, &script)?;

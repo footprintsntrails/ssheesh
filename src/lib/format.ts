@@ -67,3 +67,12 @@ export function shellQuote(s: string): string {
 export function cn(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
 }
+
+/** How long ago a moment (in ms) was: "just now", "12 min ago", "3 h ago", "2 d ago". */
+export function ago(at: number): string {
+  const min = Math.floor((Date.now() - at) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `${h} h ago` : `${Math.floor(h / 24)} d ago`;
+}

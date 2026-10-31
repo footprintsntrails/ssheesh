@@ -1,10 +1,10 @@
-import { Activity, BellRing, Box, Check, Columns2, Ellipsis, FolderOpen, Maximize2, Minimize2, RotateCw, Rows2, ShieldCheck, SquareTerminal, X } from "lucide-react";
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Activity, BellRing, Box, Check, Columns2, Ellipsis, FolderOpen, Maximize2, Minimize2, PictureInPicture2, RotateCw, Rows2, SquareTerminal, X } from "lucide-react";
+import { memo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ContextMenu, type Menu } from "./ContextMenu";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { useStore, type PaneState } from "../lib/store";
+import { useSplit, useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
 import { backend } from "../lib/backend";
@@ -17,7 +17,8 @@ import { EmptyPane } from "./EmptyPane";
 import { FilesPane } from "./FilesPane";
 import { StatsPane } from "./StatsPane";
 import { TerminalPane } from "./TerminalPane";
-import { closeTab } from "./Tabs";
+import { dragPane, tabLabel } from "./Tabs";
+import { closeTab, toOwnTab } from "../lib/tabs";
 import { EnvChip, Face, IconButton, moodOf } from "./ui";
 
 /** "Needs you" when a program is waiting, "Went quiet" when a long run stopped. */
@@ -30,7 +31,7 @@ function AttentionPill({ id }: { id: string }) {
       title={a.message ?? (input ? "A program in this terminal is waiting for you" : "Output stopped after a long run. It may be done.")}
       className={cn(
         "inline-flex h-[20px] shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-semibold",
-        input ? "bg-accent text-white" : "bg-ink/[0.08] text-fg-2",
+        input ? "bg-warn/15 text-warn" : "bg-ink/[0.08] text-fg-2",
       )}
     >
       {input ? <BellRing size={11} strokeWidth={2.2} /> : <Check size={11} strokeWidth={2.4} />}
@@ -54,8 +55,17 @@ function ProgressLine({ id }: { id: string }) {
   );
 }
 
+/** Only when something's off: connecting, dropped, failed, or a server session tmux can't keep. */
 function SessionPill({ state, local }: { state: SessionState | undefined; local: boolean }) {
   if (!state) return null;
+  if (state.kind === "connected") {
+    if (state.durable || local) return null;
+    return (
+      <span title="Install tmux on the server to keep sessions alive through disconnects" className="shrink-0 text-[11px] text-fg-3">
+        not kept
+      </span>
+    );
+  }
   const label = {
     connecting: state.kind === "connecting" && state.attempt > 1 ? "Reconnecting" : "Connecting",
     connected: "Connected",
@@ -64,21 +74,13 @@ function SessionPill({ state, local }: { state: SessionState | undefined; local:
     ended: "Ended",
     failed: "Failed",
   }[state.kind];
-  const durable = state.kind === "connected" && state.durable;
-  const tip = durable
-    ? "Durable session: it keeps running on the server if the connection drops"
-    : state.kind === "connected" && !local
-      ? "Install tmux on the server to keep sessions alive through disconnects"
-      : undefined;
   return (
     <span
-      title={tip}
       aria-label={label}
       className="inline-flex h-[20px] shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-fg-2"
     >
       <Face mood={moodOf(state)} />
       <span className="hidden @xs:inline">{label}</span>
-      {durable && <ShieldCheck size={11.5} className="-mr-0.5 hidden text-ok/80 @xs:inline" />}
     </span>
   );
 }
@@ -96,43 +98,13 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const toggleZoom = useStore((s) => s.toggleZoom);
   const [menu, setMenu] = useState<Menu | null>(null);
   const zoomed = useStore((s) => s.zoomed === pane.id);
-  const tabs = useSettings((s) => s.viewMode === "tabs");
+  const command = useStore((s) => s.foreground[pane.id]);
+  const tabs = !useSplit(pane.target);
 
   // Drag a pane by its title bar onto another pane: a side to dock there,
   // the middle to swap places.
   const startDrag = (e: ReactPointerEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest("button,input")) return;
-    const sx = e.clientX;
-    const sy = e.clientY;
-    let dragging = false;
-    const move = (ev: PointerEvent) => {
-      const st = useStore.getState();
-      if (!dragging) {
-        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
-        dragging = true;
-        st.setDrag(pane.id);
-        document.body.style.cursor = "grabbing";
-      }
-      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-pane-id]");
-      const id = el?.dataset.paneId;
-      if (!el || !id || id === pane.id) return st.setDropTarget(null);
-      const r = el.getBoundingClientRect();
-      const x = (ev.clientX - r.left) / r.width;
-      const y = (ev.clientY - r.top) / r.height;
-      const zone: DropZone = x < 0.25 ? "left" : x > 0.75 ? "right" : y < 0.3 ? "top" : y > 0.7 ? "bottom" : "center";
-      st.setDropTarget({ paneId: id, zone });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-      if (!dragging) return;
-      const st = useStore.getState();
-      if (st.dropTarget) st.movePane(pane.id, st.dropTarget.paneId, st.dropTarget.zone);
-      st.setDrag(null);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    if (!(e.target as HTMLElement).closest("button,input")) dragPane(e, pane.id);
   };
 
   const openFilesHere = async () => {
@@ -151,7 +123,8 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
     <div
       onPointerDown={startDrag}
       onDoubleClick={(e) => !(e.target as HTMLElement).closest("button") && toggleZoom(pane.id)}
-      title="Drag to move, double-click to fill the window"
+      data-hint={pane.kind === "terminal" ? "terminal" : undefined}
+      title="Drag to move, onto the tab list to make it a tab again; double-click to fill the window"
       className={cn(
         "@container relative flex h-9 shrink-0 items-center gap-2 border-b pr-1 pl-2 @2xs:pr-1.5 @2xs:pl-3",
         pane.kind === "terminal" ? "border-ink/[0.06]" : "border-line",
@@ -160,7 +133,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
       {pane.kind !== "terminal" && <Icon size={13.5} strokeWidth={1.9} className={cn("shrink-0 @max-[9rem]:hidden", focused ? "text-fg-2" : "text-fg-3")} />}
       {pane.container && <Box size={13.5} strokeWidth={1.9} className="shrink-0 text-accent" />}
       <span className={cn("min-w-0 shrink truncate text-[12.5px] font-medium", focused ? "text-fg" : "text-fg-2")}>
-        {pane.kind === "empty" ? "New pane" : pane.container ? pane.container.name : names.target(pane.target)}
+        {pane.kind === "empty" ? "New pane" : tabLabel(pane, command)}
       </span>
       {pane.container && (
         <span className="hidden min-w-0 truncate text-[11.5px] text-fg-3 @sm:inline">
@@ -185,7 +158,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
           type="button"
           onClick={() => getTerminal(pane).reconnectNow()}
           title="Reconnect"
-          className="flex h-6 shrink-0 items-center gap-1 rounded-[6px] bg-accent px-2 text-[11.5px] font-medium text-white hover:brightness-110"
+          className="flex h-6 shrink-0 items-center gap-1 rounded-[6px] bg-accent px-2 text-[11.5px] font-medium text-on-accent hover:brightness-110"
         >
           <RotateCw size={11.5} /> <span className="hidden @xs:inline">Reconnect</span>
         </button>
@@ -210,6 +183,9 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
               </IconButton>
               <IconButton label="Split down" onClick={() => split(pane.id, "col")} className="size-6">
                 <Rows2 size={13.5} />
+              </IconButton>
+              <IconButton label="Back to its own tab" onClick={() => toOwnTab(pane.id)} className="size-6">
+                <PictureInPicture2 size={13} />
               </IconButton>
               <IconButton
                 label={`${zoomed ? "Show all panes" : "Fill the window"} (${shortcutLabel("zoomPane")})`}
@@ -249,6 +225,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
                   { label: "Split right", icon: Columns2, run: () => split(pane.id, "row") },
                   { label: "Split down", icon: Rows2, run: () => split(pane.id, "col") },
                   { label: zoomed ? "Show all panes" : "Fill the window", icon: zoomed ? Minimize2 : Maximize2, hint: shortcutLabel("zoomPane"), run: () => toggleZoom(pane.id) },
+                  { label: "Back to its own tab", icon: PictureInPicture2, run: () => toOwnTab(pane.id) },
                 ]),
           ]}
         />
@@ -257,7 +234,8 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   );
 }
 
-export function PaneView({ id }: { id: string }) {
+/** Draws one pane; it only redraws when something about this pane changes. */
+export const PaneView = memo(function PaneView({ id }: { id: string }) {
   const pane = useStore((s) => s.panes[id]);
   const focused = useStore((s) => s.focused === id);
   const many = useStore((s) => Object.keys(s.panes).length > 1);
@@ -311,7 +289,7 @@ export function PaneView({ id }: { id: string }) {
       {drop && <DropOverlay zone={drop} />}
     </section>
   );
-}
+});
 
 const ZONES: Record<DropZone, string> = {
   left: "inset-y-1.5 left-1.5 w-[calc(50%-6px)]",

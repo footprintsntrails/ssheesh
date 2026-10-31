@@ -8,14 +8,14 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type IBufferLine } from "@xterm/xterm";
 import { backend } from "./backend";
-import { isMac, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
+import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
 import { findLinks } from "./paths";
 import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
 import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { OutputPipeline } from "./output";
 import { maskText, streamerOn, targetName } from "./privacy";
-import { useSettings } from "./settings";
+import { markHintSeen, useSettings } from "./settings";
 import { fontStack, ICON_FONT, resolveScheme } from "./themes";
 import { useStore, type Attention, type PaneState, type Progress } from "./store";
 import type { ContainerRef, HostKeyCheck, SessionEvent, SessionState, TargetRef, TmuxScroll } from "./types";
@@ -146,6 +146,14 @@ class TerminalHandle {
           e.preventDefault();
           const v = this.scrollView();
           this.scrollTo(v.top + (e.key === "PageUp" ? -1 : 1) * Math.max(1, v.rows - 1));
+        }
+        return false;
+      }
+      if (isMacClear(e)) {
+        if (e.type === "keydown") {
+          e.preventDefault();
+          this.term.clear();
+          noteMacClear();
         }
         return false;
       }
@@ -595,6 +603,13 @@ export function getTerminal(pane: PaneState): TerminalHandle {
 
 export function findTerminal(paneId: string): TerminalHandle | undefined {
   return handles.get(paneId);
+}
+
+/** The first ⌘K: say where the command bar went, once. */
+function noteMacClear() {
+  if (useSettings.getState().hintsSeen.includes("mac-clear")) return;
+  markHintSeen("mac-clear");
+  useStore.getState().toast({ tone: "info", title: "⌘K clears the terminal now", body: "As in other Mac terminals. The command bar moved to ⌘L." });
 }
 
 export function disposeTerminal(paneId: string, endRemote: boolean) {

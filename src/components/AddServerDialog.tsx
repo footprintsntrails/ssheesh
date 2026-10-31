@@ -11,6 +11,7 @@ import { cn } from "../lib/format";
 import { ENV_LABELS, ENV_ORDER, HOST_COLORS, HOST_ICONS, useLabels, type EnvLabel } from "../lib/labels";
 import { useStore } from "../lib/store";
 import { toOpError, type ConnectionTest, type LocalAuth, type NewHost } from "../lib/types";
+import { LookIcon } from "./HostIcon";
 import { LookGrid } from "./LookPicker";
 import { Modal } from "./Overlays";
 import { Button } from "./ui";
@@ -161,8 +162,12 @@ export function AddHostDialog() {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState("server");
   const [color, setColor] = useState(HOST_COLORS[0]);
+  // A picture of your own, already made small (hostImageFrom). Never the file.
+  const [image, setImage] = useState<string | null>(null);
   const [env, setEnv] = useState<EnvLabel | null>(null);
   const [iconsOpen, setIconsOpen] = useState(false);
+  // Untouched, the server gets the icon it's detected to need and a color of its own.
+  const [lookPicked, setLookPicked] = useState(false);
   const [local, setLocal] = useState<LocalAuth | null>(null);
   const [test, setTest] = useState<ConnectionTest | null>(null);
   const [testing, setTesting] = useState(false);
@@ -186,8 +191,10 @@ export function AddHostDialog() {
     setName("");
     setIcon("server");
     setColor(HOST_COLORS[0]);
+    setImage(null);
     setEnv(null);
     setIconsOpen(false);
+    setLookPicked(false);
     setTest(null);
     setError(null);
     setFilled(null);
@@ -269,7 +276,7 @@ export function AddHostDialog() {
     try {
       const { host: added, warning } = await backend.addHost(input());
       const labels = useLabels.getState();
-      labels.setLook(added.id, { icon, color });
+      if (lookPicked) labels.setLook(added.id, { icon, color, ...(image && { image }) });
       if (env) labels.setEnv(added.id, env);
       setPassword("");
       await loadHosts();
@@ -476,7 +483,7 @@ export function AddHostDialog() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label={`Icon: ${HOST_ICONS[icon]?.name}. Change`}
+                aria-label={`Icon: ${image ? "your picture" : HOST_ICONS[icon]?.name}. Change`}
                 aria-expanded={iconsOpen}
                 onClick={() => setIconsOpen((v) => !v)}
                 className={cn(
@@ -484,7 +491,7 @@ export function AddHostDialog() {
                   iconsOpen ? "bg-ink/[0.08] ring-accent/60" : "bg-ink/[0.05] ring-ink/[0.08] hover:bg-ink/[0.08]",
                 )}
               >
-                <Icon size={17} strokeWidth={1.9} style={{ color }} />
+                <LookIcon look={{ icon: Icon, color, image }} size={17} />
               </button>
               <input
                 value={name}
@@ -502,10 +509,12 @@ export function AddHostDialog() {
                 className="animate-fade-in rounded-[10px] bg-ink/[0.035] p-1.5 ring-1 ring-inset ring-ink/[0.06]"
               >
                 <LookGrid
-                  look={{ icon, color }}
+                  look={{ icon, color, image: image ?? undefined }}
                   colors={false}
                   onChange={(l) => {
                     setIcon(l.icon);
+                    setImage(l.image ?? null);
+                    setLookPicked(true);
                     setIconsOpen(false);
                   }}
                 />
@@ -518,10 +527,15 @@ export function AddHostDialog() {
                     key={c}
                     type="button"
                     role="radio"
-                    aria-checked={color === c}
+                    aria-checked={!image && color === c}
                     aria-label={`Color ${c}`}
-                    onClick={() => setColor(c)}
-                    className={cn("size-[18px] rounded-full", color === c ? "ring-2 ring-fg/80 ring-offset-2 ring-offset-[var(--ui-raised)]" : "")}
+                    onClick={() => {
+                      // A picture has no color: picking one goes back to the icon.
+                      setColor(c);
+                      setImage(null);
+                      setLookPicked(true);
+                    }}
+                    className={cn("size-[18px] rounded-full", !image && color === c ? "ring-2 ring-fg/80 ring-offset-2 ring-offset-[var(--ui-raised)]" : "")}
                     style={{ background: c }}
                   />
                 ))}

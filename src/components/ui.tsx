@@ -17,7 +17,7 @@ export function Button({ variant = "secondary", size = "md", className, ...rest 
         "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap transition-[background,color,box-shadow,opacity] disabled:opacity-40",
         size === "sm" ? "h-7 px-2.5 text-[12.5px]" : "h-8 px-3.5 text-[13px]",
         variant === "primary" &&
-          "bg-accent text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25),0_1px_2px_rgb(0_0_0/0.4)] hover:brightness-110 active:brightness-95",
+          "bg-accent text-on-accent shadow-[inset_0_1px_0_rgb(255_255_255/0.25),0_1px_2px_rgb(0_0_0/0.4)] hover:brightness-110 active:brightness-95",
         variant === "secondary" &&
           "bg-ink/[0.07] text-fg shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] ring-1 ring-ink/[0.06] hover:bg-ink/[0.1]",
         variant === "ghost" && "text-fg-2 hover:bg-ink/[0.06] hover:text-fg",

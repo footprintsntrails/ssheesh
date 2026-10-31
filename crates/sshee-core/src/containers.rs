@@ -2,7 +2,7 @@
 //! and build the commands that open a shell or follow logs inside one.
 
 use crate::error::OpError;
-use crate::ssh::{run_local, run_remote, run_remote_read, shell_quote, SshEnv, Target};
+use crate::ssh::{run_local, run_remote, run_remote_poll, shell_quote, SshEnv, Target};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,7 +75,8 @@ fn script() -> String {
 
 pub fn list(target: &Target, env: &SshEnv) -> Result<ContainerList, OpError> {
     let out = match target {
-        Target::Ssh(t) => run_remote_read(t, env, &script())?,
+        // The sidebar asks every few seconds: a poll, which never holds up Files.
+        Target::Ssh(t) => run_remote_poll(t, env, &script())?,
         Target::Local => run_local(&script())?,
     };
     Ok(parse(&String::from_utf8_lossy(&out)))
