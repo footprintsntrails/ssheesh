@@ -5,10 +5,10 @@ import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
 import { useSettings } from "../lib/settings";
-import { activePane, isSplit, useStore } from "../lib/store";
+import { activePane, sideBySide, useStore } from "../lib/store";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { showCurrentNotes } from "./WhatsNew";
-import { closeTab, toggleSplit } from "../lib/tabs";
+import { closeTab, showFiles, showTab, splitPane, toggleSplit } from "../lib/tabs";
 import { useTour } from "../lib/tour";
 import { useUpdates } from "../lib/updates";
 import { targetKey, type TargetRef } from "../lib/types";
@@ -57,8 +57,6 @@ export function CommandPalette() {
   const hosts = useVisibleHosts();
   // On the main menu nothing is on screen to split, close or run commands in.
   const focused = useStore(activePane) ?? undefined;
-  const openIn = useStore((s) => s.openIn);
-  const split = useStore((s) => s.split);
   const setAddHostOpen = useStore((s) => s.setAddHostOpen);
   const openSettings = useStore((s) => s.openSettings);
   const openWorkspace = useStore((s) => s.openWorkspace);
@@ -185,7 +183,7 @@ export function CommandPalette() {
                 icon={Star}
                 label={`${folderName(path)} on ${name}`}
                 hint={path}
-                onSelect={run(() => openIn("files", target, { path, split: true }))}
+                onSelect={run(() => showFiles(target, path))}
               />
             )),
           )}
@@ -200,7 +198,7 @@ export function CommandPalette() {
                   icon={FolderOpen}
                   label={`${folderName(path)} on ${name}`}
                   hint={path}
-                  onSelect={run(() => openIn("files", target, { path, split: true }))}
+                  onSelect={run(() => showFiles(target, path))}
                 />
               )),
           )}
@@ -224,10 +222,10 @@ export function CommandPalette() {
 
         <Command.Group heading="Files and stats">
           {targets.map(({ target, name }) => (
-            <Item key={`f-${name}`} value={`files browse ${name}`} icon={FolderOpen} label={`Browse files on ${name}`} onSelect={run(() => openIn("files", target))} />
+            <Item key={`f-${name}`} value={`files browse ${name}`} icon={FolderOpen} label={`Browse files on ${name}`} onSelect={run(() => showFiles(target))} />
           ))}
           {targets.map(({ target, name }) => (
-            <Item key={`s-${name}`} value={`stats metrics cpu memory traffic ${name}`} icon={Activity} label={`Stats for ${name}`} onSelect={run(() => openIn("stats", target))} />
+            <Item key={`s-${name}`} value={`stats metrics cpu memory traffic ${name}`} icon={Activity} label={`Stats for ${name}`} onSelect={run(() => showTab("stats", target))} />
           ))}
         </Command.Group>
         </>
@@ -237,13 +235,13 @@ export function CommandPalette() {
         <Command.Group heading="Workspace">
           {focused && (
             <>
-              <Item icon={Columns2} label="Split right" hint={shortcutLabel("splitRight")} onSelect={run(() => split(focused.id, "row"))} />
-              <Item icon={Rows2} label="Split down" hint={shortcutLabel("splitDown")} onSelect={run(() => split(focused.id, "col"))} />
+              <Item icon={Columns2} label="Split right" hint={shortcutLabel("splitRight")} onSelect={run(() => splitPane(focused.id, "row"))} />
+              <Item icon={Rows2} label="Split down" hint={shortcutLabel("splitDown")} onSelect={run(() => splitPane(focused.id, "col"))} />
               <Item icon={X} label="Close tab" hint={shortcutLabel("closePane")} onSelect={run(() => closeTab(focused.id))} />
               <Item
                 icon={Columns2}
                 value="tabs side by side split one at a time toggle"
-                label={isSplit(useStore.getState(), focused.target) ? "One tab at a time" : "Tabs side by side"}
+                label={sideBySide(useStore.getState(), focused.target) ? "One tab at a time" : "Tabs side by side"}
                 hint={shortcutLabel("toggleSplit")}
                 onSelect={run(toggleSplit)}
               />

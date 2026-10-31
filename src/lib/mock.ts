@@ -588,6 +588,11 @@ export const mockBackend: Backend = {
   async sessionCwd() {
     return "/var/www/app";
   },
+  // The demo's agent works in /var/www/app.
+  async findPath(_target, path) {
+    await wait(150);
+    return `/var/www/app/${path.replace(/^\.\//, "")}`;
+  },
   async detectAgents() {
     await wait(300);
     return ["claude", "codex", "opencode", "omp"];

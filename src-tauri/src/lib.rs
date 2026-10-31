@@ -509,6 +509,12 @@ async fn session_cwd(state: State<'_, AppState>, target: TargetSpec, session_key
     blocking(move || files::session_cwd(&t, &env, &session_key)).await
 }
 
+#[tauri::command]
+async fn find_path(state: State<'_, AppState>, target: TargetSpec, path: String, cwd: String) -> Result<String, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || files::find_path(&t, &env, &path, &cwd)).await
+}
+
 // ---------------------------------------------------------------- containers
 
 #[tauri::command]
@@ -675,6 +681,7 @@ pub fn run() {
             disk_report,
             disk_biggest,
             session_cwd,
+            find_path,
             fetch_metrics,
             local_identity,
             is_portable,

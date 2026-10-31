@@ -426,7 +426,15 @@ function HomeButton({ narrow }: { narrow: boolean }) {
       className={cn(
         "flex shrink-0 items-center gap-2.5 rounded-[10px] text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
         narrow ? "size-11 justify-center" : "h-12 min-w-0 flex-1 pr-2 pl-1",
-        home ? "bg-ink/[0.1]" : "hover:bg-ink/[0.05]",
+        // In the list it sits on a card of its own, so it reads as a button.
+        narrow
+          ? home
+            ? "bg-ink/[0.1]"
+            : "hover:bg-ink/[0.05]"
+          : cn(
+              "ring-1 ring-inset shadow-[0_1px_2px_rgb(0_0_0/0.18)]",
+              home ? "bg-ink/[0.1] ring-ink/[0.12]" : "bg-ink/[0.045] ring-ink/[0.08] hover:bg-ink/[0.08] active:bg-ink/[0.1]",
+            ),
       )}
     >
       {logo ? <AppLogo size={narrow ? 36 : 40} /> : <House size={narrow ? 18 : 20} strokeWidth={1.8} className="mx-2.5 shrink-0 text-fg-2" />}

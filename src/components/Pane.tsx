@@ -4,7 +4,7 @@ import { ContextMenu, type Menu } from "./ContextMenu";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { useSplit, useStore, type PaneState } from "../lib/store";
+import { useSideBySide, useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
 import { backend } from "../lib/backend";
@@ -18,7 +18,7 @@ import { FilesPane } from "./FilesPane";
 import { StatsPane } from "./StatsPane";
 import { TerminalPane } from "./TerminalPane";
 import { dragPane, tabLabel } from "./Tabs";
-import { closeTab, toOwnTab } from "../lib/tabs";
+import { closeTab, showFiles, splitPane, toOwnTab } from "../lib/tabs";
 import { EnvChip, Face, IconButton, moodOf } from "./ui";
 
 /** "Needs you" when a program is waiting, "Went quiet" when a long run stopped. */
@@ -91,15 +91,17 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const env = useEnv(pane.target);
   const names = useNames();
   const state = useStore((s) => s.sessions[pane.id]);
-  const split = useStore((s) => s.split);
-  const openIn = useStore((s) => s.openIn);
   const toast = useStore((s) => s.toast);
   const Icon = ICONS[pane.kind];
   const toggleZoom = useStore((s) => s.toggleZoom);
   const [menu, setMenu] = useState<Menu | null>(null);
   const zoomed = useStore((s) => s.zoomed === pane.id);
   const command = useStore((s) => s.foreground[pane.id]);
-  const tabs = !useSplit(pane.target);
+  const tabs = !useSideBySide(pane.target);
+  // As tabs, side by side is only for a moment: × takes the pane out of it,
+  // and the tab keeps running. Closing the tab itself is in ⋯ and the tab list.
+  const asTabs = useSettings((s) => s.viewMode === "tabs");
+  const leave = !tabs && asTabs;
 
   // Drag a pane by its title bar onto another pane: a side to dock there,
   // the middle to swap places.
@@ -113,7 +115,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
     if (pane.target.kind === "host" && pane.sessionKey) {
       path = await backend.sessionCwd(pane.target, pane.sessionKey).catch(() => "~");
     }
-    openIn("files", pane.target, { from: pane.id, split: true, path });
+    showFiles(pane.target, path);
     if (path === "~" && pane.target.kind === "host") {
       toast({ tone: "info", title: "Opened your home folder", body: "Following the terminal's folder needs tmux on the server." });
     }
@@ -122,9 +124,9 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   return (
     <div
       onPointerDown={startDrag}
-      onDoubleClick={(e) => !(e.target as HTMLElement).closest("button") && toggleZoom(pane.id)}
+      onDoubleClick={(e) => !tabs && !(e.target as HTMLElement).closest("button") && toggleZoom(pane.id)}
       data-hint={pane.kind === "terminal" ? "terminal" : undefined}
-      title="Drag to move, onto the tab list to make it a tab again; double-click to fill the window"
+      title={tabs ? "Drag onto the page to show it beside another tab" : "Drag to move, onto the tab list to make it a tab again; double-click to fill the window"}
       className={cn(
         "@container relative flex h-9 shrink-0 items-center gap-2 border-b pr-1 pl-2 @2xs:pr-1.5 @2xs:pl-3",
         pane.kind === "terminal" ? "border-ink/[0.06]" : "border-line",
@@ -178,15 +180,17 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
           {/* As tabs, every pane fills the window already. */}
           {!tabs && (
             <>
-              <IconButton label="Split right" onClick={() => split(pane.id, "row")} className="size-6">
+              <IconButton label="Split right" onClick={() => splitPane(pane.id, "row")} className="size-6">
                 <Columns2 size={13.5} />
               </IconButton>
-              <IconButton label="Split down" onClick={() => split(pane.id, "col")} className="size-6">
+              <IconButton label="Split down" onClick={() => splitPane(pane.id, "col")} className="size-6">
                 <Rows2 size={13.5} />
               </IconButton>
-              <IconButton label="Back to its own tab" onClick={() => toOwnTab(pane.id)} className="size-6">
-                <PictureInPicture2 size={13} />
-              </IconButton>
+              {!leave && (
+                <IconButton label="Back to its own tab" onClick={() => toOwnTab(pane.id)} className="size-6">
+                  <PictureInPicture2 size={13} />
+                </IconButton>
+              )}
               <IconButton
                 label={`${zoomed ? "Show all panes" : "Fill the window"} (${shortcutLabel("zoomPane")})`}
                 onClick={() => toggleZoom(pane.id)}
@@ -209,7 +213,11 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
             <Ellipsis size={14} />
           </IconButton>
         </span>
-        <IconButton label="Close pane" onClick={() => closeTab(pane.id)} className="size-6">
+        <IconButton
+          label={leave ? "Stop showing side by side (the tab stays open)" : "Close pane"}
+          onClick={() => (leave ? toOwnTab(pane.id) : closeTab(pane.id))}
+          className="size-6"
+        >
           <X size={14} />
         </IconButton>
       </div>
@@ -222,10 +230,11 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
             ...(tabs
               ? []
               : [
-                  { label: "Split right", icon: Columns2, run: () => split(pane.id, "row") },
-                  { label: "Split down", icon: Rows2, run: () => split(pane.id, "col") },
+                  { label: "Split right", icon: Columns2, run: () => splitPane(pane.id, "row") },
+                  { label: "Split down", icon: Rows2, run: () => splitPane(pane.id, "col") },
                   { label: zoomed ? "Show all panes" : "Fill the window", icon: zoomed ? Minimize2 : Maximize2, hint: shortcutLabel("zoomPane"), run: () => toggleZoom(pane.id) },
                   { label: "Back to its own tab", icon: PictureInPicture2, run: () => toOwnTab(pane.id) },
+                  ...(leave ? [{ label: "Close tab", icon: X, hint: shortcutLabel("closePane"), run: () => closeTab(pane.id) }] : []),
                 ]),
           ]}
         />

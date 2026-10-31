@@ -6,7 +6,7 @@ import { backend } from "./backend";
 import { joinPath, parentPath } from "./format";
 import { resolvePath, type TextLink } from "./paths";
 import { markHintSeen } from "./settings";
-import { isSplit, panesOn, useStore } from "./store";
+import { panesOn, sideBySide, useStore } from "./store";
 import { placeBeside } from "./tabs";
 import { toOpError, type TargetRef } from "./types";
 
@@ -28,28 +28,44 @@ export async function openTerminalLink(from: LinkSource, link: TextLink) {
     backend.openExternal(link.target).catch((e) => st.toast({ tone: "error", title: "Couldn't open the link", body: toOpError(e).message }));
     return;
   }
+  const relative = !/^[/~]/.test(link.target);
   let cwd = from.cwd ?? "~";
-  if (!/^[/~]/.test(link.target) && from.target.kind === "host" && from.durable) {
+  if (relative && from.target.kind === "host" && from.durable) {
     cwd = await backend.sessionCwd(from.target, from.sessionKey).catch(() => cwd);
   }
   const path = resolvePath(link.target, cwd);
   if (path === "~" || path === "/") return showInFiles(from.paneId, from.target, path);
+  let found = await look(from.target, path);
+  // Not in the terminal's folder: a program (an agent, say) may have printed
+  // it from its own folder, so the server looks around for it.
+  if (!found && relative && from.target.kind === "host") {
+    const there = await backend.findPath(from.target, link.target, cwd).catch(() => null);
+    if (there) found = await look(from.target, there);
+  }
+  if (!found) {
+    st.toast({
+      tone: "info",
+      title: `Couldn't find ${link.target}`,
+      body: relative ? "Not in the terminal's folder, the folders your programs run in, or your home folder." : "It isn't there, or you can't open that folder.",
+    });
+    return;
+  }
+  const { dir, name, isDir } = found;
+  if (isDir) showInFiles(from.paneId, from.target, joinPath(dir, name));
+  else showInFiles(from.paneId, from.target, dir, name);
+}
+
+/** The folder a path is in and whether it's a folder itself, or null if it isn't there. */
+async function look(target: TargetRef, path: string): Promise<{ dir: string; name: string; isDir: boolean } | null> {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const parent = /^~\/[^/]+$/.test(path) ? "~" : parentPath(path);
-  let listing;
   try {
-    listing = await backend.listDir(from.target, parent);
-  } catch (e) {
-    st.toast({ tone: "error", title: `Can't open ${link.target}`, body: toOpError(e).message });
-    return;
+    const listing = await backend.listDir(target, parent);
+    const entry = listing.entries.find((e) => e.name === name);
+    return entry ? { dir: listing.path, name, isDir: entry.kind === "dir" } : null;
+  } catch {
+    return null;
   }
-  const entry = listing.entries.find((e) => e.name === name);
-  if (!entry) {
-    st.toast({ tone: "info", title: `There's no ${name} there`, body: `Looked in ${listing.path}.` });
-    return;
-  }
-  if (entry.kind === "dir") showInFiles(from.paneId, from.target, joinPath(listing.path, name));
-  else showInFiles(from.paneId, from.target, listing.path, name);
 }
 
 /**
@@ -71,6 +87,6 @@ export function showInFiles(from: string, target: TargetRef, path: string, revea
   }
   // Already beside it on screen: just look there. Otherwise put it there.
   const s = useStore.getState();
-  if (existing && isSplit(s, target) && !s.hidden.includes(id)) s.focus(id);
+  if (existing && sideBySide(s, target) && !s.hidden.includes(id)) s.focus(id);
   else placeBeside(id, "right", from);
 }

@@ -13,7 +13,7 @@ import { Sidebar } from "./components/Sidebar";
 import { EnvStripe, Workspace } from "./components/Workspace";
 import { backend } from "./lib/backend";
 import { matchShortcut, tabStep } from "./lib/keys";
-import { closeTab, newTab, nextTab, toggleSplit } from "./lib/tabs";
+import { closeTab, newTab, nextTab, splitPane, toggleSplit } from "./lib/tabs";
 import { cn } from "./lib/format";
 import { applyAppearance, ONBOARDING_VERSION, useSettings } from "./lib/settings";
 import { useTour } from "./lib/tour";
@@ -49,8 +49,8 @@ function useShortcuts() {
       const pane = activePane(s);
       if (id === "palette") s.setPaletteOpen(!s.paletteOpen);
       else if (id === "addHost") s.setAddHostOpen(true);
-      else if (id === "splitRight") pane && s.split(pane.id, "row");
-      else if (id === "splitDown") pane && s.split(pane.id, "col");
+      else if (id === "splitRight") pane && splitPane(pane.id, "row");
+      else if (id === "splitDown") pane && splitPane(pane.id, "col");
       else if (id === "closePane") pane && closeTab(pane.id);
       // On the main menu, a new terminal goes to the server you were on last.
       else if (id === "newTerminal") newTab("terminal", pane?.target ?? s.panes[s.focused]?.target ?? { kind: "local" });

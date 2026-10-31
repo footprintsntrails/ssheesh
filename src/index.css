@@ -288,6 +288,13 @@
   background: color-mix(in srgb, var(--ui-accent) 70%, transparent);
 }
 
+/* A path or link in a terminal: faintly underlined, so you can tell it opens with Ctrl+click. */
+.term-link-mark {
+  pointer-events: none;
+  box-sizing: border-box;
+  border-bottom: 1px dotted color-mix(in srgb, var(--ui-accent) 60%, transparent);
+}
+
 /* xterm: let our padding and background show. */
 .term-host {
   width: 100%;

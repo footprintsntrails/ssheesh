@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { paneIds, type LayoutNode } from "./layout";
-import { activePane, currentTarget, panesOn, splitByMachine, tabsOn, useStore, type PaneState } from "./store";
+import { activePane, currentTarget, panesOn, sideBySide, splitByMachine, tabsOn, useStore, type PaneState } from "./store";
+import { useSettings } from "./settings";
+import { placeBeside, toggleSplit, toOwnTab } from "./tabs";
 import type { TargetRef } from "./types";
 
 const web: TargetRef = { kind: "host", hostId: "cfg:web" };
@@ -62,9 +64,22 @@ describe("one layout per machine", () => {
   });
 
   it("a pane filling the window stays with its machine", () => {
+    useStore.getState().setSplit(web, true);
     useStore.getState().toggleZoom("w1");
     expect(useStore.getState().zoomed).toBe("w1");
     useStore.getState().goTo(db);
+    expect(useStore.getState().zoomed).toBeNull();
+  });
+
+  it("going to another pane stops one filling the window, so it's on screen", () => {
+    useStore.getState().setSplit(web, true);
+    useStore.getState().toggleZoom("w1");
+    useStore.getState().focus("w2");
+    expect(useStore.getState().zoomed).toBeNull();
+  });
+
+  it("one tab at a time, nothing can fill the window: every tab does already", () => {
+    useStore.getState().toggleZoom("w1");
     expect(useStore.getState().zoomed).toBeNull();
   });
 
@@ -79,6 +94,59 @@ describe("one layout per machine", () => {
   it("tabs keep the order you dragged them to", () => {
     useStore.getState().setTabOrder(["w2"]);
     expect(tabsOn(useStore.getState(), web).map((p) => p.id)).toEqual(["w2", "w1"]);
+  });
+});
+
+describe("side by side, one tab at a time", () => {
+  const onScreen = () => {
+    const s = useStore.getState();
+    return sideBySide(s, web) ? panesOn(s, web).filter((p) => !s.hidden.includes(p.id)).map((p) => p.id) : [s.focused];
+  };
+  beforeEach(() => {
+    start([pane("w1", web, "terminal", 1), pane("w2", web, "files", 1), pane("w3", web, "terminal", 2)], { "host:cfg:web": row("w1", "w2", "w3") }, "w1");
+    placeBeside("w2", "right", "w1");
+  });
+
+  it("a tab dropped beside makes a pair", () => {
+    expect(onScreen().sort()).toEqual(["w1", "w2"]);
+  });
+
+  it("a new tab opens on its own, and the pair comes back from one of its tabs", () => {
+    const id = useStore.getState().openIn("terminal", web);
+    expect(onScreen()).toEqual([id]);
+    useStore.getState().focus("w1");
+    expect(onScreen().sort()).toEqual(["w1", "w2"]);
+  });
+
+  it("another tab shows on its own instead of joining the pair", () => {
+    useStore.getState().focus("w3");
+    expect(onScreen()).toEqual(["w3"]);
+    useStore.getState().focus("w2");
+    expect(onScreen().sort()).toEqual(["w1", "w2"]);
+  });
+
+  it("closing the split keeps both tabs", () => {
+    toOwnTab("w2");
+    const s = useStore.getState();
+    expect(Object.keys(s.panes).sort()).toEqual(["w1", "w2", "w3"]);
+    expect(onScreen()).toEqual(["w1"]);
+  });
+
+  it("with side by side as the layout, a tab you go to joins the others on screen", () => {
+    useSettings.setState({ viewMode: "split" });
+    try {
+      useStore.getState().focus("w3");
+      expect(onScreen().sort()).toEqual(["w1", "w2", "w3"]);
+    } finally {
+      useSettings.setState({ viewMode: "tabs" });
+    }
+  });
+
+  it("the shortcut goes back to one tab at a time, and again to the pair", () => {
+    toggleSplit();
+    expect(onScreen()).toEqual([useStore.getState().focused]);
+    toggleSplit();
+    expect(onScreen().sort()).toEqual(["w1", "w2"]);
   });
 });
 

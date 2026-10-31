@@ -2,8 +2,9 @@
 // showing two side by side and back. The sidebar's tab list, the strip
 // along the top, the keyboard and the command bar all go through here.
 
-import type { DropZone } from "./layout";
-import { currentTarget, isSplit, panesOn, tabsOn, useStore, type PaneKind } from "./store";
+import type { Dir, DropZone } from "./layout";
+import { currentTarget, panesOn, sideBySide, tabsOn, useStore, type PaneKind } from "./store";
+import { useSettings } from "./settings";
 import { sameTarget, type TargetRef } from "./types";
 
 /** A new tab on a machine, next to the tab you were on there. */
@@ -21,7 +22,7 @@ export function nextTab(step: 1 | -1) {
   const s = useStore.getState();
   const target = currentTarget(s);
   if (!target) return;
-  const ids = isSplit(s, target)
+  const ids = sideBySide(s, target)
     ? panesOn(s, target)
         .filter((p) => !s.hidden.includes(p.id))
         .map((p) => p.id)
@@ -33,15 +34,15 @@ export function nextTab(step: 1 | -1) {
 
 /**
  * Shows tab `id` beside `nextTo` (the tab on screen, by default). One at a
- * time, the machine switches to side by side with just these two on screen;
- * its other tabs keep running and come back with a click.
+ * time, these two become the pair on screen, as in a browser; the other tabs
+ * keep running and come back with a click.
  */
 export function placeBeside(id: string, zone: DropZone = "right", nextTo?: string) {
   const s = useStore.getState();
   const other = nextTo ?? s.focused;
   const target = s.panes[id]?.target;
   if (!target || id === other || !sameTarget(target, s.panes[other]?.target)) return;
-  if (!isSplit(s, target)) {
+  if (useSettings.getState().viewMode === "tabs" || !sideBySide(s, target)) {
     const rest = tabsOn(s, target)
       .map((t) => t.id)
       .filter((t) => t !== id && t !== other);
@@ -52,14 +53,26 @@ export function placeBeside(id: string, zone: DropZone = "right", nextTo?: strin
 }
 
 /**
+ * Split right or down: a new terminal on the same server beside this pane,
+ * also when you work with one tab at a time (the two become a pair).
+ */
+export function splitPane(id: string, dir: Dir) {
+  const s = useStore.getState();
+  const target = s.panes[id]?.target ?? null;
+  const nid = s.split(id, dir);
+  if (nid !== id && !sideBySide(useStore.getState(), target)) placeBeside(nid, dir === "row" ? "right" : "bottom", id);
+}
+
+/**
  * Takes a pane out of side by side: it goes back to being a tab of its own,
  * still running. With one pane left on screen, the machine is back to one
- * tab at a time.
+ * tab at a time. As tabs, a pane's × does this: closing the split never
+ * closes the tab.
  */
 export function toOwnTab(id: string) {
   const s = useStore.getState();
   const target = s.panes[id]?.target;
-  if (!target || !isSplit(s, target)) return;
+  if (!target || !sideBySide(s, target)) return;
   const rest = panesOn(s, target).filter((p) => p.id !== id && !s.hidden.includes(p.id));
   if (rest.length > 1) return s.setHidden([id], true);
   s.setSplit(target, false);
@@ -71,15 +84,27 @@ export function toggleSplit() {
   const s = useStore.getState();
   const target = currentTarget(s);
   if (!target) return;
-  s.setSplit(target, !isSplit(s, target));
+  const on = sideBySide(s, target);
+  s.setSplit(target, !on);
   // The tab you're on is always among the ones on screen.
-  if (s.hidden.includes(s.focused)) s.setHidden([s.focused], false);
+  if (!on && s.hidden.includes(s.focused)) s.setHidden([s.focused], false);
 }
 
-/** Files of this machine: the tab you have, or a new one. */
-export function showFiles(target: TargetRef) {
+/**
+ * A machine's Files (or Stats) tab: the one it has, else a new one, so every
+ * way of opening files lands in the same place. Files go to `path` when
+ * given. One tab at a time, it fills the window; it never joins tabs you
+ * put side by side, unless it's one of them.
+ */
+export function showTab(kind: "files" | "stats", target: TargetRef, path?: string) {
   const s = useStore.getState();
-  const files = panesOn(s, target).find((p) => p.kind === "files");
-  if (files) s.focus(files.id);
-  else newTab("files", target);
+  const existing = panesOn(s, target).find((p) => p.kind === kind);
+  if (!existing) return void s.openIn(kind, target, { path });
+  if (path) s.setPane(existing.id, { path });
+  s.focus(existing.id);
+}
+
+/** Files of this machine, at `path` if given: the Files tab you have, or a new one. */
+export function showFiles(target: TargetRef, path?: string) {
+  showTab("files", target, path);
 }

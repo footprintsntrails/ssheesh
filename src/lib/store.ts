@@ -243,6 +243,32 @@ export function useSplit(target: TargetRef | null): boolean {
   return own ?? fallback;
 }
 
+type SplitView = Pick<AppState, "splitOn" | "hidden" | "lastFocusedFor">;
+
+/**
+ * Panes side by side on screen for this machine right now. With side by side
+ * as your layout (Settings), whenever the machine is split. With one tab at a
+ * time, the tabs you put side by side are a pair, as in a browser: another
+ * tab shows on its own, and going back to one of the pair shows both again.
+ */
+export function sideBySide(s: SplitView, target: TargetRef | null): boolean {
+  if (!isSplit(s, target)) return false;
+  if (useSettings.getState().viewMode === "split" || !target) return true;
+  const front = s.lastFocusedFor[targetKey(target)];
+  return !front || !s.hidden.includes(front);
+}
+
+/** The same, as a hook. */
+export function useSideBySide(target: TargetRef | null): boolean {
+  const split = useSplit(target);
+  const asTabs = useSettings((s) => s.viewMode === "tabs");
+  const alone = useStore((s) => {
+    const front = target ? s.lastFocusedFor[targetKey(target)] : undefined;
+    return !!front && s.hidden.includes(front);
+  });
+  return split && !(asTabs && alone);
+}
+
 /** The tab you were last on there, if it's still there; else that machine's first tab. */
 function anchorOn(s: AppState, key: string): string | undefined {
   const layout = s.layouts[key];
@@ -260,11 +286,13 @@ function focusing(s: AppState, panes: Record<string, PaneState>, id: string): Pa
   const p = panes[id];
   const key = machine(p);
   const patch: Partial<AppState> = { focused: id, home: false };
-  if (s.hidden.includes(id)) patch.hidden = s.hidden.filter((h) => h !== id);
+  // With side by side as the layout, going to a tab puts it back on screen.
+  // As tabs, a tab outside the pair side by side shows on its own instead.
+  if (s.hidden.includes(id) && useSettings.getState().viewMode === "split") patch.hidden = s.hidden.filter((h) => h !== id);
   if (key) patch.lastFocusedFor = { ...s.lastFocusedFor, [key]: id };
   if (key && p?.kind === "terminal") patch.lastTerminal = { ...s.lastTerminal, [key]: id };
-  // A pane filling the window belongs to its machine; another machine shows all of its own.
-  if (s.zoomed && machine(panes[s.zoomed]) !== key) patch.zoomed = null;
+  // Going to another pane stops one filling the window: the pane you go to is always on screen.
+  if (s.zoomed && s.zoomed !== id) patch.zoomed = null;
   if (s.attention[id]) {
     const { [id]: _seen, ...rest } = s.attention;
     patch.attention = rest;
@@ -428,7 +456,10 @@ export const useStore = create<AppState>()(
           const before = opts.before ?? (kind === "terminal" && !!source && source.kind !== "terminal");
           layouts[key] = layouts[key] && from ? splitAt(layouts[key], from, opts.dir ?? "row", id, before) : { kind: "pane", id };
         }
-        set({ panes, layouts, ...focusing(s, panes, id), zoomed: null });
+        // As tabs, a new tab opens on its own, leaving a pair side by side as it
+        // was; what should show beside calls placeBeside after.
+        const alone = isSplit(s, target) && useSettings.getState().viewMode === "tabs";
+        set({ panes, layouts, ...focusing(s, panes, id), ...(alone ? { hidden: [...s.hidden, id] } : {}), zoomed: null });
         return id;
       },
 
@@ -478,7 +509,7 @@ export const useStore = create<AppState>()(
         // tab goes to the main menu rather than to another machine.
         const at = tabs.indexOf(id);
         const others = tabs.filter((t) => t !== id);
-        const shown = pane.target && isSplit(s, pane.target) ? others.filter((t) => !s.hidden.includes(t)) : others;
+        const shown = pane.target && sideBySide(s, pane.target) ? others.filter((t) => !s.hidden.includes(t)) : others;
         const pick = (list: string[]) => list.find((t) => tabs.indexOf(t) > at) ?? [...list].reverse().find((t) => tabs.indexOf(t) < at);
         const next = pick(shown) ?? pick(others) ?? (key && layouts[key] ? paneIds(layouts[key])[0] : undefined);
         const after = { ...s, ...base } as AppState;
@@ -537,7 +568,8 @@ export const useStore = create<AppState>()(
       toggleZoom(id) {
         const s = get();
         const pane = id ?? activePane(s)?.id;
-        if (!pane) return;
+        // One tab at a time, every pane fills the window already.
+        if (!pane || !sideBySide(s, s.panes[pane]?.target ?? null)) return set({ zoomed: null });
         set({ ...focusing(s, s.panes, pane), zoomed: s.zoomed ? null : pane });
       },
       openSettings: (section) => set((s) => ({ settingsOpen: true, settingsSection: section ?? s.settingsSection })),

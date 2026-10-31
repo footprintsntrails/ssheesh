@@ -101,6 +101,8 @@ export interface Backend {
   /** Stops an upload or download; its call then fails with code "cancelled". */
   cancelTransfer(id: string): void;
   sessionCwd(target: TargetRef, sessionKey: string): Promise<string>;
+  /** Where a relative path a program printed is on the server, searching from `cwd`. */
+  findPath(target: TargetRef, path: string, cwd: string): Promise<string>;
   /** AI coding agents installed on the server, by command ("claude", "codex"…). */
   detectAgents(target: TargetRef): Promise<string[]>;
   /** What a terminal runs in the foreground and its folder; fails without tmux. */
@@ -248,6 +250,7 @@ async function tauriBackend(): Promise<Backend> {
       call("upload_paths", { target, paths, remoteDir, overwrite, ...progress(hooks) }),
     cancelTransfer: (id) => fire("cancel_transfer", { id }),
     sessionCwd: (target, sessionKey) => call("session_cwd", { target, sessionKey }),
+    findPath: (target, path, cwd) => call("find_path", { target, path, cwd }),
     detectAgents: (target) => call("detect_agents", { target }),
     paneInfo: (target, sessionKey) => call("pane_info", { target, sessionKey }),
     foreground: (target) => call("foreground", { target }),

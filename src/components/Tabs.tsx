@@ -13,7 +13,7 @@ import { shortcutLabel } from "../lib/keys";
 import type { DropZone } from "../lib/layout";
 import { useNames } from "../lib/privacy";
 import { closeTab, newTab, placeBeside, showFiles, toOwnTab } from "../lib/tabs";
-import { isSplit, tabsOn, useSplit, useStore, type PaneKind, type PaneState } from "../lib/store";
+import { sideBySide, tabsOn, useSideBySide, useStore, type PaneKind, type PaneState } from "../lib/store";
 import { sameTarget, type TargetRef } from "../lib/types";
 import { AgentIcon } from "./AgentIcons";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -91,12 +91,13 @@ function dropAt(x: number, y: number, dragId: string): { paneId: string; zone: D
  * Drags a pane from its title bar or its tab. Over the screen it shows where
  * it would go and lands there on release; anywhere else `onMove` gets the
  * pointer (to reorder tabs). A title bar dropped on the tab list goes back to
- * being a tab of its own. `onClick` runs when it was a click after all.
+ * being a tab of its own. `onClick` runs when it was a click after all;
+ * `onCancel` when it landed on the screen instead of the list.
  */
 export function dragPane(
   e: ReactPointerEvent,
   paneId: string,
-  opts: { onMove?: (x: number, y: number) => void; onDrop?: () => void; onClick?: () => void } = {},
+  opts: { onMove?: (x: number, y: number) => void; onDrop?: () => void; onClick?: () => void; onCancel?: () => void } = {},
 ) {
   if (e.button !== 0) return;
   const sx = e.clientX;
@@ -123,8 +124,9 @@ export function dragPane(
     const at = st.dropTarget;
     st.setDrag(null);
     if (at) {
+      opts.onCancel?.();
       const target = st.panes[paneId]?.target ?? null;
-      if (at.zone === "center" && isSplit(st, target)) st.movePane(paneId, at.paneId, "center");
+      if (at.zone === "center" && sideBySide(st, target)) st.movePane(paneId, at.paneId, "center");
       else placeBeside(paneId, at.zone === "center" ? "right" : at.zone, at.paneId);
     } else if (opts.onDrop) opts.onDrop();
     else if (document.elementFromPoint(ev.clientX, ev.clientY)?.closest("[data-tab-list]")) toOwnTab(paneId);
@@ -150,7 +152,7 @@ function tabMenu(id: string, target: TargetRef): (MenuItem | "sep")[] {
         ] as (MenuItem | "sep")[])
       : []),
     { label: "New terminal", icon: SquareTerminal, hint: shortcutLabel("newTerminal"), run: () => newTab("terminal", target) },
-    { label: "Files", icon: FolderOpen, run: () => newTab("files", target) },
+    { label: "Files", icon: FolderOpen, run: () => showFiles(target) },
     "sep",
     { label: "Close tab", icon: X, hint: shortcutLabel("closePane"), run: () => closeTab(id) },
     { label: "Close other tabs", icon: X, disabled: !others.length, run: () => others.forEach((t) => closeTab(t.id)) },
@@ -204,7 +206,8 @@ function useTabList(target: TargetRef, axis: "x" | "y") {
   const [order, setOrder] = useState<string[] | null>(null);
   const els = useRef(new Map<string, HTMLElement>());
   const [menu, setMenu] = useState<{ x: number; y: number; items: (MenuItem | "sep")[] } | null>(null);
-  const shown = order ? order.filter((id) => ids.includes(id)) : ids;
+  // While dragging, the order you're dragging to; tabs opened meanwhile go last.
+  const shown = order ? [...order.filter((id) => ids.includes(id)), ...ids.filter((id) => !order.includes(id))] : ids;
 
   // Along the list reorders; onto the screen shows it beside.
   const reorder = (id: string) => (x: number, y: number) => {
@@ -238,6 +241,7 @@ function useTabList(target: TargetRef, axis: "x" | "y") {
             if (o) useStore.getState().setTabOrder(o);
             return null;
           }),
+        onCancel: () => setOrder(null),
       }),
     onKeyDown: (e: React.KeyboardEvent) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), useStore.getState().focus(id)),
     onMouseDown: (e: React.MouseEvent) => e.button === 1 && e.preventDefault(),
@@ -326,7 +330,7 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
  */
 export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boolean }) {
   const names = useNames();
-  const split = useSplit(target);
+  const split = useSideBySide(target);
   const { shown, tabProps, menuEl } = useTabList(target, "y");
   if (!shown.length) return null;
   return (

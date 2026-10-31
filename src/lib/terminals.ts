@@ -6,7 +6,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal, type IBufferLine } from "@xterm/xterm";
+import { Terminal, type IBufferLine, type IDecoration, type IMarker } from "@xterm/xterm";
 import { backend } from "./backend";
 import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
 import { findLinks } from "./paths";
@@ -62,6 +62,10 @@ function rowText(line: IBufferLine, cols: number): { text: string; cells: number
   return { text, cells };
 }
 
+/** At most this many paths stay underlined; the oldest marks go first. */
+const MAX_LINK_MARKS = 400;
+const OPEN_HINT = `${isMac ? "⌘" : "Ctrl"}+click to open`;
+
 /** Keys and mouse reports that aren't typing: they don't end scrolling back. */
 const NOT_TYPING = /^\x1b\[(?:<|M|I$|O$)/;
 /**
@@ -106,6 +110,9 @@ class TerminalHandle {
   /** A tmux scroll to send once the one in flight is answered; null asks where it is. */
   private scrollWant: number | null | undefined;
   private scrollBusy = false;
+  /** Paths and links on screen, faintly underlined so you can tell they open. */
+  private linkMarks: { marker: IMarker; deco: IDecoration; x: number; text: string }[] = [];
+  private markTimer = 0;
 
   constructor(
     readonly paneId: string,
@@ -226,10 +233,20 @@ class TerminalHandle {
             if (!(isMac ? e.metaKey : e.ctrlKey)) return;
             void openTerminalLink({ paneId, target, sessionKey, durable: this.durable, cwd: this.cwd }, link);
           },
+          hover: () => {
+            this.el.title = OPEN_HINT;
+          },
+          leave: () => {
+            this.el.title = "";
+          },
         }));
         callback(links.length ? links : undefined);
       },
     });
+    // Paths stay faintly underlined, not only under the mouse.
+    this.term.onWriteParsed(() => this.markLinksSoon());
+    this.term.onScroll(() => this.markLinksSoon());
+    this.term.onResize(() => this.markLinksSoon());
     this.term.onResize(({ cols, rows }) => backend.resizeSession(paneId, cols, rows));
     // Programs that want you: AI agents and long jobs ring the bell or send
     // a notification (OSC 9 for iTerm2 and Windows Terminal, OSC 777 for others).
@@ -526,6 +543,53 @@ class TerminalHandle {
     this.open();
   }
 
+  private markLinksSoon() {
+    window.clearTimeout(this.markTimer);
+    this.markTimer = window.setTimeout(() => this.markLinks(), 250);
+  }
+
+  /**
+   * Underlines the paths and links on screen. Full-screen programs (vim,
+   * htop) redraw all the time, so their screen gets none; a line a program
+   * redraws with something else loses its mark when it's next drawn.
+   */
+  private markLinks() {
+    if (this.disposed) return;
+    const buf = this.term.buffer.active;
+    if (buf.type === "alternate") return;
+    this.linkMarks = this.linkMarks.filter((m) => !m.marker.isDisposed);
+    const have = new Set(this.linkMarks.map((m) => `${m.marker.line}:${m.x}:${m.text}`));
+    const cursor = buf.baseY + buf.cursorY;
+    for (let y = buf.viewportY; y < buf.viewportY + this.term.rows; y++) {
+      const line = buf.getLine(y);
+      if (!line) continue;
+      const { text, cells } = rowText(line, this.term.cols);
+      for (const link of findLinks(text)) {
+        const x = cells[link.start];
+        const label = text.slice(link.start, link.end);
+        if (have.has(`${y}:${x}:${label}`)) continue;
+        const marker = this.term.registerMarker(y - cursor);
+        if (!marker) continue;
+        const deco = this.term.registerDecoration({ marker, x, width: cells[link.end - 1] + 1 - x, layer: "top" });
+        if (!deco) {
+          marker.dispose();
+          continue;
+        }
+        deco.onRender((el) => {
+          el.classList.add("term-link-mark");
+          const now = buf.getLine(marker.line);
+          const row = now && rowText(now, this.term.cols);
+          const at = row ? row.cells.indexOf(x) : -1;
+          // Not while xterm is drawing its marks: right after.
+          if (!row || at < 0 || row.text.slice(at, at + label.length) !== label) queueMicrotask(() => deco.dispose());
+        });
+        deco.onDispose(() => marker.dispose());
+        this.linkMarks.push({ marker, deco, x, text: label });
+      }
+    }
+    while (this.linkMarks.length > MAX_LINK_MARKS) this.linkMarks.shift()?.deco.dispose();
+  }
+
   private open() {
     const { cols, rows } = this.term;
     backend
@@ -592,6 +656,7 @@ class TerminalHandle {
   dispose(endRemote: boolean) {
     if (this.disposed) return;
     this.disposed = true;
+    window.clearTimeout(this.markTimer);
     backend.closeSession(this.paneId, this.target, this.sessionKey, endRemote);
     this.term.dispose();
     this.el.remove();

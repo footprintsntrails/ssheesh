@@ -8,7 +8,7 @@ import { useUpdates } from "../lib/updates";
 import { visibleTree, type LayoutNode } from "../lib/layout";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
-import { currentTarget, hostAddress, panesOn, showingHome, useMachine, useSplit, useStore } from "../lib/store";
+import { currentTarget, hostAddress, panesOn, showingHome, useMachine, useSideBySide, useStore } from "../lib/store";
 import { showFiles, toggleSplit } from "../lib/tabs";
 import { targetKey, type TargetRef } from "../lib/types";
 import { ContextMenu, type Menu } from "./ContextMenu";
@@ -43,7 +43,7 @@ function Tree({ node }: { node: LayoutNode }) {
 
 /** While one pane fills the window, a way back to the whole machine. */
 function ZoomBadge({ target }: { target: TargetRef | null }) {
-  const split = useSplit(target);
+  const split = useSideBySide(target);
   const zoomed = useStore((s) => (split ? s.zoomed : null));
   const { open: count } = useMachine(target);
   const toggleZoom = useStore((s) => s.toggleZoom);
@@ -139,7 +139,7 @@ function Toolbar({ target }: { target: TargetRef | null }) {
   const sidebarSide = useSettings((s) => s.sidebarSide);
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const updateSettings = useSettings((s) => s.update);
-  const split = useSplit(target);
+  const split = useSideBySide(target);
   const tabsOnTop = useSettings((s) => s.tabsPlacement === "top");
   const [tools, setTools] = useState<Menu | null>(null);
   // macOS draws the window buttons at the top left, over whatever is there.
@@ -236,7 +236,7 @@ export function Workspace() {
   const layout = useStore((s) => (key ? s.layouts[key] : undefined));
   const hidden = useStore((s) => s.hidden);
   const focused = useStore((s) => s.focused);
-  const split = useSplit(target);
+  const split = useSideBySide(target);
   const zoomed = useStore((s) => (s.zoomed && s.panes[s.zoomed] && s.panes[s.zoomed].target && targetKey(s.panes[s.zoomed].target!) === key ? s.zoomed : null));
   // One machine on screen at a time, with its own layout: as tabs, the
   // focused pane fills the window; side by side, the panes you switched on share it.

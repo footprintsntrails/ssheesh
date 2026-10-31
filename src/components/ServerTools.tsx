@@ -14,6 +14,7 @@ import { findTerminal } from "../lib/terminals";
 import { targetKey, toOpError, type Check, type Cleanup, type OpError, type TargetRef } from "../lib/types";
 import { Modal } from "./Overlays";
 import { openRecipes } from "./Recipes";
+import { showFiles } from "../lib/tabs";
 import { Segmented } from "./controls";
 import { Button, IconButton, Spinner } from "./ui";
 
@@ -272,7 +273,6 @@ function CleanupCard({ cleanup: c, target }: { cleanup: Cleanup; target: TargetR
 
 function DiskDialog({ target }: { target: TargetRef }) {
   const names = useNames();
-  const openIn = useStore((s) => s.openIn);
   const [path, setPath] = useState("/");
   const report = useRun(useCallback(() => backend.diskReport(target), [target]));
   const list = useRun(useCallback(() => backend.diskBiggest(target, path), [target, path]));
@@ -339,7 +339,7 @@ function DiskDialog({ target }: { target: TargetRef }) {
         <Section
           title="Biggest here"
           aside={
-            <button onClick={() => openIn("files", target, { path })} className="inline-flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg">
+            <button onClick={() => showFiles(target, path)} className="inline-flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg">
               <FolderOpen size={12} /> Open in Files
             </button>
           }

@@ -775,6 +775,38 @@ pub fn session_cwd(target: &Target, env: &SshEnv, session_key: &str) -> Result<S
     }
 }
 
+/// Where a relative path a program printed (`src/main.rs`, `docs/notes.md`)
+/// is: in `cwd` or a folder above it, in a folder one of your programs runs
+/// in (an agent prints paths from its project's folder, whatever the shell's
+/// is), in home, or a few levels down from home. The script for `find_path`.
+fn find_path_script(rel: &str, cwd: &str) -> String {
+    format!(
+        r#"p={rel}; d={cwd}; case "$d" in "~") d=$HOME ;; "~/"*) d="$HOME/${{d#\~/}}" ;; esac
+hit() {{ [ -e "$1/$p" ] && {{ printf '%s\n' "$1/$p"; exit 0; }}; }}
+while [ -n "$d" ]; do hit "$d"; [ "$d" = / ] && break; d=$(dirname -- "$d"); done
+u=$(id -u); ws=$(find /proc -mindepth 2 -maxdepth 2 -name cwd -user "$u" -printf '%l\n' 2>/dev/null | sort -u)
+[ -n "$ws" ] || ws=$(for pid in $(pgrep -u "$u" 2>/dev/null); do readlink "/proc/$pid/cwd"; done 2>/dev/null | sort -u)
+IFS='
+'; for w in $ws; do hit "$w"; done; unset IFS
+hit "$HOME"
+t=; command -v timeout >/dev/null 2>&1 && t="timeout 3"
+$t find "$HOME" -maxdepth 6 \( -name node_modules -o -name .git -o -name .cache \) -prune -o -path "*/$p" -print 2>/dev/null | head -n 1"#,
+        rel = shell_quote(rel.trim_start_matches("./")),
+        cwd = shell_quote(cwd),
+    )
+}
+
+pub fn find_path(target: &Target, env: &SshEnv, rel: &str, cwd: &str) -> Result<String, OpError> {
+    let t = ssh_only(target).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "Not a server."))?;
+    let out = run_remote_read(t, env, &find_path_script(rel, cwd))?;
+    let path = String::from_utf8_lossy(&out).lines().next().unwrap_or("").trim().to_string();
+    if path.is_empty() {
+        Err(OpError::new(ErrorCode::NotFound, "Couldn't find it on the server."))
+    } else {
+        Ok(path)
+    }
+}
+
 // ---------------------------------------------------------------- path helpers
 
 pub fn base_name(path: &str) -> String {
@@ -816,6 +848,31 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runs the `find_path` script with `sh`, home set to `home`.
+    #[cfg(unix)]
+    fn find_with_sh(home: &Path, rel: &str, cwd: &str) -> String {
+        let out = Command::new("sh").arg("-c").arg(find_path_script(rel, cwd)).env("HOME", home).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_path_finds_what_an_agent_printed_from_its_project() {
+        let home = std::env::temp_dir().join(format!("sshee-find-{}", std::process::id()));
+        let file = home.join("proj/out/reports/NOTES.txt");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "x").unwrap();
+        let want = file.to_string_lossy().to_string();
+        // From a folder inside the project: found by going up.
+        assert_eq!(find_with_sh(&home, "out/reports/NOTES.txt", &home.join("proj/src").to_string_lossy()), want);
+        // From home, as a shell without tmux reports: found by looking under home.
+        assert_eq!(find_with_sh(&home, "out/reports/NOTES.txt", "~"), want);
+        assert_eq!(find_with_sh(&home, "./out/reports/NOTES.txt", "~/proj"), want);
+        // Not there at all: nothing.
+        assert_eq!(find_with_sh(&home, "out/reports/MISSING.txt", "~"), "");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 
     #[test]
     fn copies_into_a_folder_on_this_computer() {

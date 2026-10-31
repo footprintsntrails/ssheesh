@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.3 — one tab at a time, for real
+
+- **Side by side is a pair, as in a browser.** With one tab at a time, a tab you drop onto the page (or Ctrl+Shift+D) makes a pair with the one you're on. A new tab, or a click on a tab outside the pair, shows that tab on its own; a click on either tab of the pair brings both back.
+- **Closing side by side never closes a tab.** A pane's × takes it out of the pair and the tab keeps running. Closing a tab is in ⋯, the tab list and Ctrl+W.
+- **Files always opens, in one place.** The Files button, the server's menu, a tab's menu, "Browse files in this folder", bookmarks and the command bar all go to the server's one Files tab, at the folder you asked for, instead of opening a second one or squeezing it in beside the others.
+- **Fixed: Files not showing although its tab was picked.** Double-clicking a pane's title bar quietly made it fill the window, and later that pane covered everything else. With one tab at a time, double-click does nothing, and going to another tab always shows it.
+- **New tabs show up in the list** after you drag a tab onto the page; before, they stayed missing until a restart.
+- **Ctrl+click finds paths an agent prints from its own folder**, like `out/reports/summary.txt`: SSHeesh looks in the terminal's folder and the ones above it, in the folders your programs run in, and in your home folder.
+- **Paths and links in a terminal are faintly underlined**, so you can tell they open with Ctrl+click (⌘-click on a Mac); pointing at one says so.
+- **The Main menu button looks like a button** in the sidebar: it sits on a card of its own.
+
 ## 0.6.2 — no more stray numbers on Windows
 
 - **No more "61;6;7;21;22;23;24;28;32;42c" or "32;29;29M" at the prompt on Windows.** Windows passes a terminal's replies and mouse reports on to ssh in pieces, and tmux on the server waited only 10 ms for the rest, so over Wi-Fi it sometimes gave up halfway and the rest showed up as text. With SSHeesh on Windows it now waits 100 ms; Esc still feels instant.
