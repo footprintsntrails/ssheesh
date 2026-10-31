@@ -64,6 +64,13 @@ function rowText(line: IBufferLine, cols: number): { text: string; cells: number
 
 /** Keys and mouse reports that aren't typing: they don't end scrolling back. */
 const NOT_TYPING = /^\x1b\[(?:<|M|I$|O$)/;
+/**
+ * Turns off mouse, focus and paste reports. Whatever asked for them (tmux,
+ * an agent, vim) is gone with the connection; left on, every click and drag
+ * meanwhile reached the next shell as text ("32;29;29M"). tmux asks again
+ * once it's back.
+ */
+const STOP_REPORTS = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l";
 /** tmux leaves scrolling back on this key (bound in `durable_command`). */
 const LEAVE_SCROLL = "\x1b[9006~";
 
@@ -546,6 +553,10 @@ class TerminalHandle {
       if (!e.state.durable) this.setTmux(null);
     }
     useStore.getState().setSession(this.paneId, e.state);
+    if (prev?.kind === "connected" && e.state.kind !== "connected") {
+      this.output.flush();
+      this.term.write(STOP_REPORTS);
+    }
     const down = e.state.kind === "reconnecting" || e.state.kind === "disconnected";
     if (down && !this.away && this.target.kind === "host") this.away = { since: Date.now(), anchor: anchorLines(this.term), current: cursorLine(this.term) };
     if (e.state.kind === "connected" && this.away) {

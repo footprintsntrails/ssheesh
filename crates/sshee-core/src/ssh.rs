@@ -132,6 +132,13 @@ const MOTD: &str = r#"if [ ! -e "$HOME/.hushlogin" ]; then seen=; for f in /run/
 /// lines of history, pane height and the history limit.
 pub const SCROLL_TITLE: &str = "sshee-scroll #{pane_in_mode} #{scroll_position} #{history_size} #{pane_height} #{history_limit}";
 
+/// How long tmux waits for the rest of a key sequence, in ms. Short, so Esc
+/// in vim or an agent doesn't lag. On Windows the console between SSHeesh
+/// and ssh (ConPTY) passes a terminal reply or a mouse report on in pieces,
+/// and over Wi-Fi the pieces can arrive more than 10 ms apart: tmux gave up
+/// halfway, and the rest landed in the shell as text ("61;6;7;…c", "32;29;29M").
+const ESCAPE_TIME_MS: u32 = if cfg!(windows) { 100 } else { 10 };
+
 /// The remote command for an interactive session. If tmux exists on the
 /// server, the shell lives inside a named tmux session that outlives the
 /// connection, and reconnecting attaches to it again. tmux's status bar is
@@ -140,7 +147,7 @@ pub const SCROLL_TITLE: &str = "sshee-scroll #{pane_in_mode} #{scroll_position} 
 ///
 /// Tuned for programs like Claude Code, OpenCode and vim: full 24-bit color
 /// (ssh doesn't pass COLORTERM on, and tmux 3.2+ needs telling the terminal
-/// has it), Esc without tmux waiting for more keys, focus reports, screen
+/// has it), Esc without tmux waiting long for more keys, focus reports, screen
 /// updates drawn in one go, and copying (a mouse selection, or a program's
 /// own copy) reaching your clipboard. With tmux 3.2+ it also reports where
 /// you've scrolled to, and binds a key (ESC [ 9006 ~, which no keyboard
@@ -162,7 +169,7 @@ pub fn durable_command(key: &str, run: Option<&[String]>) -> String {
         }
     };
     let script = format!(
-        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; set-option -s escape-time 10 \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
+        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; set-option -s escape-time {ESCAPE_TIME_MS} \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
     );
     format!("sh -c {}", shell_quote(&script))
 }

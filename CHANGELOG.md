@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2 — no more stray numbers on Windows
+
+- **No more "61;6;7;21;22;23;24;28;32;42c" or "32;29;29M" at the prompt on Windows.** Windows passes a terminal's replies and mouse reports on to ssh in pieces, and tmux on the server waited only 10 ms for the rest, so over Wi-Fi it sometimes gave up halfway and the rest showed up as text. With SSHeesh on Windows it now waits 100 ms; Esc still feels instant.
+- **Clicks and drags during a reconnect no longer turn into text** in the next shell. When the connection drops, the terminal stops sending mouse and focus reports until tmux (or the program) asks for them again.
+
 ## 0.6.1 — tabs that belong to their server
 
 - **Tabs look like they belong to their server.** Each server's tabs sit under a quiet "Tabs" heading and hang from a line that starts at the server's icon; the tab you're on is marked on that line. Servers are a little bigger and tabs a little smaller, so the list reads at a glance.
