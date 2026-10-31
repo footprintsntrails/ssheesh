@@ -26,8 +26,8 @@ pub struct Welcome {
 /// draws SSHeesh's welcome with the server's facts: a few quick reads of
 /// /proc, df and docker, nothing that waits on the network.
 const SCRIPT: &str = r#"E=$(printf '\033'); R="$E[0m"; w_mode=@MODE@; w_parts=@PARTS@; w_note=@NOTE@
-m=; if [ ! -e "$HOME/.hushlogin" ]; then m=$(seen=; for f in /run/motd.dynamic /etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*; do [ -f "$f" ] && [ -r "$f" ] || continue; r=$(readlink -f "$f" 2>/dev/null || echo "$f"); case " $seen " in *" $r "*) continue ;; esac; seen="$seen $r"; cat "$f"; done 2>/dev/null); elif [ "$w_mode" != ssheesh ]; then w_mode=off; fi
-w_notice='updates? can be applied|security updates?|apt list --upgradable|ESM|restart required|Learn more about enabling'
+w_dyn=/run/motd.dynamic; w_static='/etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*'; w_scripts=/etc/update-motd.d
+w_notice='updates? can be applied|security updates?|apt list --upgradable|ESM|ubuntu\.com/esm|pro status|restart required|New release .* available|do-release-upgrade|Learn more about enabling'
 w_boiler='^[[:space:]]*\* (Documentation|Management|Support):|^Welcome to (Ubuntu|Debian|Alpine|Fedora|CentOS|Rocky|AlmaLinux|Arch|Void)|System information as of|System load:|Usage of /|Memory usage:|Swap usage:|Processes:|Users logged in:|IPv[46] address for|Expanded Security Maintenance for Applications is not enabled|Strictly confined Kubernetes|ubuntu\.com/engage|just raised the bar|programs included with the Debian|exact distribution terms|/usr/share/doc/\*/copyright|ABSOLUTELY NO WARRANTY|permitted by applicable law|This system has been minimized|unminimize|Alpine Wiki|setup-alpine|You may change this message|Web console:|Activate the web console|cockpit\.socket|^[[:space:]]*Last login:'
 w_has() { case " $w_parts " in *" $1 "*) return 0 ;; esac; return 1; }
 w_bar() { n=$(( $1 * $2 / 100 )); c=$grn; [ "$1" -ge 80 ] && c=$amb; [ "$1" -ge 90 ] && c=$red; s="$c"; i=0; while [ $i -lt "$2" ]; do [ $i -eq $n ] && s="$s$trk"; s="$s━"; i=$((i+1)); done; printf '%s%s' "$s" "$R"; }
@@ -59,11 +59,22 @@ w_banner() {
   else
     for n in 1 2 3 4 5 6 7 8; do eval "info=\${i$n}"; [ -n "$info" ] && printf '  %s\n' "$info"; done
   fi
-  w_notes=$(printf '%s\n' "$m" | grep -E "$w_notice"); if [ -n "$w_notes" ]; then printf '\n'; printf '%s\n' "$w_notes" | while IFS= read -r l; do printf '  %s%s%s\n' "$dim" "$l" "$R"; done; fi
+  # The server's notices, in their paragraphs.
+  w_notes=$(printf '%s\n' "$m" | W_NOTICE="$w_notice" awk '$0 ~ ENVIRON["W_NOTICE"] { if (gap && n) print ""; print; n = 1; gap = 0; next } /^[[:space:]]*$/ { gap = 1 }')
+  if [ -n "$w_notes" ]; then printf '\n'; printf '%s\n' "$w_notes" | while IFS= read -r l; do if [ -n "$l" ]; then printf '  %s%s%s\n' "$dim" "$l" "$R"; else printf '\n'; fi; done; fi
   [ -n "$w_note" ] && printf '\n  %s\n' "$w_note"
   printf '\n'
 }
-w_own=$(printf '%s\n' "$m" | grep -Ev "$w_boiler" | grep -Ev "$w_notice" | grep -v '^[[:space:]]*$')
+# The server's welcome, as a login shows it: each file once.
+m=; w_own=; if [ ! -e "$HOME/.hushlogin" ]; then
+  m=$(seen=; for f in $w_dyn $w_static; do [ -f "$f" ] && [ -r "$f" ] || continue; r=$(readlink -f "$f" 2>/dev/null || echo "$f"); case " $seen " in *" $r "*) continue ;; esac; seen="$seen $r"; cat "$f"; done 2>/dev/null)
+  # Its own, told by where it comes from rather than what it says (Ubuntu's
+  # news changes every week): text in /etc/motd and friends that isn't the
+  # distribution's, or a script someone added to Ubuntu's generated message.
+  dyn=$(readlink -f "$w_dyn" 2>/dev/null || echo "$w_dyn")
+  for f in $w_static; do [ -f "$f" ] && [ -r "$f" ] || continue; [ "$(readlink -f "$f" 2>/dev/null || echo "$f")" = "$dyn" ] && continue; cat "$f"; done 2>/dev/null | grep -Ev "$w_boiler" | grep -Ev "$w_notice" | grep -q '[^[:space:]]' && w_own=1
+  for f in "$w_scripts"/*; do [ -f "$f" ] && [ -x "$f" ] || continue; case "${f##*/}" in 00-header|10-help-text|50-motd-news|50-landscape-sysinfo|80-esm|80-livepatch|85-fwupd|88-esm-announce|90-updates-available|91-contract-ua-esm-status|91-release-upgrade|92-unattended-upgrades|95-hwe-eol|97-overlayroot|98-fsck-at-reboot|98-reboot-required) ;; *) w_own=1 ;; esac; done
+elif [ "$w_mode" != ssheesh ]; then w_mode=off; fi
 case "$w_mode" in off) ;; server) [ -n "$m" ] && printf '%s\n' "$m" ;; ssheesh) w_banner ;; *) if [ -n "$w_own" ]; then printf '%s\n' "$m"; else w_banner; fi ;; esac"#;
 
 /// The script for this choice. Unknown or empty modes mean "auto"; no
@@ -112,6 +123,110 @@ mod tests {
     #[test]
     fn off_shows_nothing() {
         assert_eq!(run(&Welcome { mode: "off".into(), ..Default::default() }).trim(), "");
+    }
+
+    const UBUNTU: &str = "Welcome to Ubuntu 24.04.4 LTS (GNU/Linux 6.8.0-147-generic x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/pro
+
+ System information as of Sun Nov  1 05:00:54 AM UTC 2026
+
+  System load:  0.21               Processes:             158
+  Usage of /:   19.9% of 24.52GB   Users logged in:       0
+  Memory usage: 23%                IPv4 address for ens3: 203.0.113.7
+  Swap usage:   6%
+
+ * Canonical Workshop gives developers fast, composable, reproducible, and
+   secure developer environments that are perfect for agentic workflows.
+
+   https://ubuntu.com/workshop
+
+Expanded Security Maintenance for Applications is not enabled.
+
+78 updates can be applied immediately.
+1 of these updates is a standard security update.
+To see these additional updates run: apt list --upgradable
+
+Enable ESM Apps to receive additional future security updates.
+See https://ubuntu.com/esm or run: sudo pro status
+
+New release '26.04.1 LTS' available.
+Run 'do-release-upgrade' to upgrade to it.
+";
+    const DEBIAN: &str = "
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+";
+
+    /// Runs the auto welcome against a made-up server: its generated
+    /// message, an /etc/motd, and the scripts in update-motd.d.
+    #[cfg(unix)]
+    fn auto_on(tag: &str, generated: &str, motd: &str, scripts: &[&str]) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("sshee-motd-{}-{tag}", std::process::id()));
+        let scripts_dir = root.join("update-motd.d");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        std::fs::write(root.join("motd.dynamic"), generated).unwrap();
+        std::fs::write(root.join("motd"), motd).unwrap();
+        for name in scripts {
+            let f = scripts_dir.join(name);
+            std::fs::write(&f, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let s = script(&Welcome::default())
+            .replace("w_dyn=/run/motd.dynamic", &format!("w_dyn={}", root.join("motd.dynamic").display()))
+            .replace("w_static='/etc/motd /run/motd.d/* /etc/motd.d/* /usr/lib/motd.d/*'", &format!("w_static='{}'", root.join("motd").display()))
+            .replace("w_scripts=/etc/update-motd.d", &format!("w_scripts={}", scripts_dir.display()));
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let out = std::process::Command::new("sh").arg("-c").arg(s).env("HOME", &home).env("COLUMNS", "120").output().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    const UBUNTU_SCRIPTS: [&str; 6] = ["00-header", "10-help-text", "50-motd-news", "50-landscape-sysinfo", "90-updates-available", "91-release-upgrade"];
+    const LOGO: &str = "\x1b[48;2;61;214;140m";
+
+    #[cfg(unix)]
+    #[test]
+    fn ubuntus_own_message_gets_ssheesh_welcome_and_keeps_its_notices() {
+        let out = auto_on("ubuntu", UBUNTU, "", &UBUNTU_SCRIPTS);
+        assert!(out.contains(LOGO), "SSHeesh's welcome: {out}");
+        for kept in ["78 updates can be applied immediately.", "1 of these updates is a standard security update.", "See https://ubuntu.com/esm", "New release '26.04.1 LTS' available.", "do-release-upgrade"] {
+            assert!(out.contains(kept), "{kept}");
+        }
+        for gone in ["Canonical Workshop", "Documentation:", "System load:"] {
+            assert!(!out.contains(gone), "{gone}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_motd_of_your_own_is_shown_as_it_is() {
+        let out = auto_on("own", UBUNTU, "Bot box. Be gentle.\n", &UBUNTU_SCRIPTS);
+        assert!(out.contains("Bot box. Be gentle."));
+        assert!(out.contains("Welcome to Ubuntu"));
+        assert!(!out.contains(LOGO));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_script_you_added_counts_as_your_own() {
+        let out = auto_on("script", UBUNTU, "", &[&UBUNTU_SCRIPTS[..], &["99-mine"]].concat());
+        assert!(out.contains("Welcome to Ubuntu"));
+        assert!(!out.contains(LOGO));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn debians_boilerplate_is_not_its_own() {
+        assert!(auto_on("debian", "", DEBIAN, &[]).contains(LOGO));
     }
 
     #[test]

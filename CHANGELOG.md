@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.6 — the welcome on Ubuntu
+
+- **SSHeesh's welcome shows on Ubuntu servers too.** Ubuntu's own message (its news, help links and system summary) is the distribution's, not the server's, so SSHeesh's welcome takes its place; before, Ubuntu's news made it look like the server had a welcome of its own. A server has its own when there's text in /etc/motd or a script someone added to /etc/update-motd.d. The notices stay, in their paragraphs: updates, a security update, a new release, ESM.
+
 ## 0.6.5 — tabs on top, a welcome, your own colors
 
 - **A welcome for your servers.** A new terminal shows the server's own welcome if it has one, and SSHeesh's if it doesn't: the logo beside the system, uptime, load, memory and disk, containers and updates waiting. The server's notices (updates, a restart needed) always stay. Settings → Terminal → Welcome: SSHeesh's every time, only the first time, the server's own, or nothing; pick what it shows and add a line of your own, with a live preview.
