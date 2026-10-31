@@ -8,9 +8,9 @@ import { useUpdates } from "../lib/updates";
 import { visibleTree, type LayoutNode } from "../lib/layout";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
-import { currentTarget, hostAddress, panesOn, showingHome, useMachine, useSideBySide, useStore } from "../lib/store";
+import { currentScreen, currentTarget, hostAddress, panesOn, screenOf, showingHome, useMachine, useSideBySide, useStore } from "../lib/store";
 import { showFiles, toggleSplit } from "../lib/tabs";
-import { targetKey, type TargetRef } from "../lib/types";
+import type { TargetRef } from "../lib/types";
 import { ContextMenu, type Menu } from "./ContextMenu";
 import { Home } from "./Home";
 import { HostIcon } from "./HostIcon";
@@ -43,7 +43,7 @@ function Tree({ node }: { node: LayoutNode }) {
 
 /** While one pane fills the window, a way back to the whole machine. */
 function ZoomBadge({ target }: { target: TargetRef | null }) {
-  const split = useSideBySide(target);
+  const split = useSideBySide(useStore(currentScreen));
   const zoomed = useStore((s) => (split ? s.zoomed : null));
   const { open: count } = useMachine(target);
   const toggleZoom = useStore((s) => s.toggleZoom);
@@ -122,7 +122,7 @@ function AddressChip({ target }: { target: TargetRef }) {
           const r = e.currentTarget.getBoundingClientRect();
           setMenu({ x: r.left, y: r.bottom + 4 });
         }}
-        className="flex h-7 min-w-0 items-center gap-2 rounded-[7px] px-2 hover:bg-ink/[0.06]"
+        className="flex h-7 max-w-[40%] min-w-0 shrink-0 items-center gap-2 rounded-[7px] px-2 hover:bg-ink/[0.06]"
       >
         <HostIcon hostId={host?.id} local={target.kind === "local"} size={14} strokeWidth={1.9} className="shrink-0" />
         <span className="truncate text-[13px] font-semibold text-fg">{names.target(target)}</span>
@@ -139,7 +139,7 @@ function Toolbar({ target }: { target: TargetRef | null }) {
   const sidebarSide = useSettings((s) => s.sidebarSide);
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const updateSettings = useSettings((s) => s.update);
-  const split = useSideBySide(target);
+  const split = useSideBySide(useStore(currentScreen));
   const tabsOnTop = useSettings((s) => s.tabsPlacement === "top");
   const [tools, setTools] = useState<Menu | null>(null);
   // macOS draws the window buttons at the top left, over whatever is there.
@@ -174,7 +174,7 @@ function Toolbar({ target }: { target: TargetRef | null }) {
 
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2">
         {target ? <AddressChip target={target} /> : <span className="px-2 text-[13px] font-semibold text-fg">Main menu</span>}
-        {target && tabsOnTop && <TabStrip target={target} />}
+        {tabsOnTop && <TabStrip target={target} />}
       </div>
 
       <div className="flex items-center gap-0.5">
@@ -232,14 +232,15 @@ export function Workspace() {
   const custom = useCustomTitleBar();
   const home = useStore(showingHome);
   const target = useStore(currentTarget);
-  const key = target ? targetKey(target) : "";
+  const key = useStore(currentScreen) ?? "";
   const layout = useStore((s) => (key ? s.layouts[key] : undefined));
   const hidden = useStore((s) => s.hidden);
   const focused = useStore((s) => s.focused);
-  const split = useSideBySide(target);
-  const zoomed = useStore((s) => (s.zoomed && s.panes[s.zoomed] && s.panes[s.zoomed].target && targetKey(s.panes[s.zoomed].target!) === key ? s.zoomed : null));
-  // One machine on screen at a time, with its own layout: as tabs, the
-  // focused pane fills the window; side by side, the panes you switched on share it.
+  const split = useSideBySide(key);
+  const zoomed = useStore((s) => (s.zoomed && screenOf(s, s.zoomed) === key ? s.zoomed : null));
+  // One screen at a time, with its own layout: as tabs, the focused pane
+  // fills the window; side by side, the panes you switched on share it,
+  // another server's among them if you put one there.
   const tree = useMemo(() => (split && layout ? visibleTree(layout, hidden) : null), [split, layout, hidden]);
   const showVitals = useSettings((s) => s.showVitals && !s.compactMode) && !!target;
   const compact = useSettings((s) => s.compactMode);

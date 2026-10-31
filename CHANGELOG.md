@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.8 — every server's tabs, side by side
+
+- **One row of tabs for every server.** The tabs along the top are all your servers' tabs, as in a browser, and each says whose it is once more than one server has tabs open: “Files (web-1)”, “Terminal 2 (Claude Code, web-1)”. A thin line stands between one server's tabs and the next. Clicking a tab goes to its server, Ctrl+Tab goes through all of them, you can drag any of them anywhere, and the row stays on the main menu. Closing a server's last tab goes to the tab beside it instead of the main menu.
+- **Two servers side by side.** Drag a tab of another server onto the page and it shows beside the one you're on: its Files beside this one's, its terminal beside this one's. Each half says whose it is, and the toolbar follows the half you're in. As with any pair, another tab shows on its own and either of the pair brings both back; × sends it back to its own server, still open.
+- **Copy files from one server to another.** Drag files from one server's Files onto another's beside it, into the folder open there or onto a folder, or right-click them and pick the server and the folder (Copy to another server…). Folders too. They go straight through SSHeesh, so the servers don't need to reach each other and nothing waits on your disk; progress and Stop are on a card in the corner, nothing is replaced without asking, and a stopped copy leaves nothing behind. From This computer's files it's an upload.
+- **A download's note opens its folder** with the file picked out: click “Downloaded …”.
+
+### Fixed
+- **No more grey blocks and smeared colors in Mac terminals.** Macs now draw terminals with the GPU, as Windows does; the other way left stray color blocks behind in the Mac's WebKit. It's switched on once for Macs that had it off by default (Settings → Terminal → Draw with the GPU).
+- The server's name at the top left keeps its room when there are many tabs.
+
 ## 0.6.7 — the welcome, with any hosting
 
 - **SSHeesh's welcome shows even when your hosting adds a script of its own** to the server's message. A script that adds nothing to what you see no longer makes the server look like it has a welcome of its own; one that does still counts. Backup copies of scripts (`.dpkg-old` and the like) are left out, as the server leaves them out too, and the standard scripts of Azure, minimal Ubuntu and Debian are known.

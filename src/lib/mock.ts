@@ -384,6 +384,7 @@ export const mockBackend: Backend = {
   async openExternal(url) {
     window.open(url, "_blank");
   },
+  async revealFiles() {},
   listHosts: async () => hosts.slice(),
   async addHost(input) {
     const [userPart, hostPart] = input.address.includes("@") ? input.address.split("@") : [null, input.address];
@@ -601,6 +602,14 @@ export const mockBackend: Backend = {
   },
   async uploadPaths(_t, _paths, _dir, _overwrite, hooks) {
     await fakeTransfer(hooks, 23 * 1024 * 1024);
+  },
+  async copyToServer(_from, _to, paths, destDir, overwrite, hooks) {
+    const names = paths.map((p) => p.split("/").pop() ?? p);
+    const there = listing(destDir).entries;
+    const taken = names.filter((n) => there.some((e) => e.name === n));
+    if (taken.length && !overwrite) throw { code: "exists", message: `${taken.map((n) => `"${n}"`).join(", ")} already ${taken.length === 1 ? "exists" : "exist"} in this folder.` };
+    await fakeTransfer(hooks, 31 * 1024 * 1024);
+    tree[destDir] = [...(tree[destDir] ?? there).filter((e) => !names.includes(e.name)), ...names.map((n) => file(n, 4096, 0))];
   },
   async writeClipboard(text) {
     await navigator.clipboard.writeText(text);

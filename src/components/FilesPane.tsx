@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronLeft, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
@@ -15,6 +15,8 @@ import { useNames } from "../lib/privacy";
 import { findTerminal } from "../lib/terminals";
 import { pathCrumbs } from "../lib/paths";
 import { uploadTo } from "../lib/upload";
+import { openCopyToServer } from "./CopyToServer";
+import { dragFiles, useFileDrag } from "../lib/fileDrag";
 import { track } from "../lib/transfers";
 
 type SortKey = "name" | "size" | "modified";
@@ -248,7 +250,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const confirm = useStore((s) => s.confirm);
   const openIn = useStore((s) => s.openIn);
   const dropActive = useStore((s) => s.dropPane === pane.id);
+  const fileDrop = useFileDrag((s) => (s.over?.pane === pane.id ? s.over : null));
+  const names = useNames();
   const remote = target.kind === "host";
+  // Files go from here to any other server you have.
+  const canCopyOut = useStore((s) => s.hosts.some((h) => !(target.kind === "host" && h.id === target.hostId)));
   const path = pane.path ?? "~";
 
   const [listing, setListing] = useState<DirListing | null>(null);
@@ -521,12 +527,14 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   };
 
   // Progress for both shows on a card in the corner, with a Stop button.
+  // The note that it's done opens its folder, with the file picked out.
   const download = async (items: { name: string; path: string; isDir: boolean }[]) => {
     if (!remote || items.length === 0) return;
     for (const e of items) {
       try {
-        const saved = await track("download", e.name, (hooks) => backend.downloadPath(target, e.path, e.isDir, hooks));
-        toast({ tone: "success", title: `Downloaded ${e.name}`, body: saved });
+        const at = await track("download", e.name, (hooks) => backend.downloadPath(target, e.path, e.isDir, hooks));
+        const show = () => void backend.revealFiles([at]).catch((err) => fail("Couldn't open the folder", err));
+        toast({ tone: "success", title: `Downloaded ${e.name}`, body: at, action: { label: "Show in folder", run: show } });
       } catch (err) {
         if (toOpError(err).code === "cancelled") toast({ tone: "info", title: "Download stopped", body: e.name });
         else fail(`Couldn't download ${e.name}`, err);
@@ -763,6 +771,15 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     return [
       ...(!many ? [{ label: entry.kind === "dir" ? "Open" : "Open preview", icon: entry.kind === "dir" ? Folder : FileText, run: () => open(entry), hint: "↵" }] : []),
       ...(remote ? [{ label: many ? `Download ${targets.length} items` : "Download", icon: Download, run: () => download(targets.map((t) => ({ name: t.name, path: joinPath(dir, t.name), isDir: t.kind === "dir" }))) }] : []),
+      ...(canCopyOut
+        ? [
+            {
+              label: `Copy ${many ? `${targets.length} items ` : ""}to ${remote ? "another server" : "a server"}…`,
+              icon: Send,
+              run: () => openCopyToServer(target, targets.map((t) => joinPath(dir, t.name))),
+            },
+          ]
+        : []),
       ...(!many
         ? [
             { label: "Rename", icon: Pencil, run: () => setRenaming(entry.name), hint: "F2" },
@@ -807,6 +824,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         if (e.button === 3) goBack();
         else goForward();
       }}
+      data-files-pane={pane.id}
+      data-files-dir={dir}
       className="@container absolute inset-0 flex flex-col"
     >
       {/* toolbar */}
@@ -982,6 +1001,13 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                     <div
                       key={entry.name}
                       data-name={entry.name}
+                      data-folder={entry.kind === "dir" ? joinPath(dir, entry.name) : undefined}
+                      // Dragged onto another server's Files beside this one, it's copied there.
+                      onPointerDown={(e) => {
+                        if (renaming === entry.name || e.shiftKey || e.metaKey || e.ctrlKey) return;
+                        const names = selectedSet.has(entry.name) ? selectedEntries.map((x) => x.name) : [entry.name];
+                        dragFiles(e, target, names.map((n) => joinPath(dir, n)));
+                      }}
                       onPointerEnter={entry.kind === "dir" ? () => hoverFolder(entry.name) : undefined}
                       onPointerLeave={entry.kind === "dir" ? () => window.clearTimeout(hoverTimer.current) : undefined}
                       onClick={(e) => click(e, entry)}
@@ -1059,6 +1085,15 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             )}
           </div>
 
+          {fileDrop && (
+            <div className="pointer-events-none absolute inset-1.5 z-20 flex items-center justify-center rounded-[10px] border-2 border-dashed border-accent/60 bg-accent/[0.07]">
+              <div className="glass rounded-xl px-4 py-3 text-center">
+                <Send size={18} className="mx-auto text-accent" />
+                <p className="mt-1.5 text-[13px] font-medium text-fg">Drop to copy to {names.target(target)}</p>
+                <p className="mt-0.5 max-w-[260px] truncate font-mono text-[11px] text-fg-3">{names.text(fileDrop.dir)}</p>
+              </div>
+            </div>
+          )}
           {dropActive && (
             <div className="pointer-events-none absolute inset-1.5 z-20 flex items-center justify-center rounded-[10px] border-2 border-dashed border-accent/60 bg-accent/[0.07]">
               <div className="glass rounded-xl px-4 py-3 text-center">

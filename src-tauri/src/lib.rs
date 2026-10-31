@@ -384,6 +384,24 @@ async fn upload_paths(
     .await
 }
 
+/// Copies files from one folder on a machine into a folder on a server:
+/// from another server straight through, from this computer as an upload.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn copy_to_server(
+    state: State<'_, AppState>,
+    from: TargetSpec,
+    to: TargetSpec,
+    paths: Vec<String>,
+    dest_dir: String,
+    overwrite: bool,
+    transfer_id: String,
+    on_progress: Channel<TransferProgress>,
+) -> Result<(), OpError> {
+    let (a, b, env) = (resolve(&state, &from)?, resolve(&state, &to)?, state.env.clone());
+    run_transfer(&state, transfer_id, on_progress, move |xfer| files::copy_between(&a, &b, &env, &paths, &dest_dir, overwrite, &xfer)).await
+}
+
 /// The portable Windows .exe: run straight from a download, not installed.
 /// It updates itself with `install_portable_update`.
 #[tauri::command]
@@ -682,6 +700,7 @@ pub fn run() {
             delete_path,
             download_path,
             upload_paths,
+            copy_to_server,
             cancel_transfer,
             detect_agents,
             foreground,

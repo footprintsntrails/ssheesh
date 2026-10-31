@@ -5,7 +5,7 @@ import { persist } from "zustand/middleware";
 import { contrast, parseHex } from "./color";
 import { quietStorage } from "./persist";
 import type { HighlightRule } from "./highlight";
-import { isWindows, setShortcutSource, type ShortcutOverrides } from "./keys";
+import { isMac, isWindows, setShortcutSource, type ShortcutOverrides } from "./keys";
 import { ACCENTS, customThemeVars, setCustomThemeSource, setTerminalColorsSource, type AppThemeId, type CustomTheme, type TerminalColors } from "./themes";
 
 export type UpdateMode = "auto" | "notify" | "manual";
@@ -61,7 +61,7 @@ export interface Settings {
   terminalLineHeight: number;
   cursorStyle: "bar" | "block" | "underline";
   cursorBlink: boolean;
-  /** Terminals draw with WebGL. On by default on Windows, whose WebView2 is Chromium. */
+  /** Terminals draw with WebGL. On by default on Windows and macOS; off on Linux, where WebKitGTK may have no GPU. */
   gpuRendering: boolean;
   /** Selecting text in a terminal copies it. */
   copyOnSelect: boolean;
@@ -134,7 +134,9 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalLineHeight: 1.22,
   cursorStyle: "bar",
   cursorBlink: true,
-  gpuRendering: isWindows,
+  // The Mac's WebKit draws terminals without the GPU with stray color
+  // blocks; Linux's WebKitGTK may have no GPU at all.
+  gpuRendering: isWindows || isMac,
   copyOnSelect: true,
   terminalPadding: 12,
   reconnectMode: "ask",
@@ -178,7 +180,13 @@ export const useSettings = create<SettingsStore>()(
       reset: (keys) =>
         set(keys ? Object.fromEntries(keys.map((k) => [k, DEFAULT_SETTINGS[k]])) : { ...DEFAULT_SETTINGS }),
     }),
-    { name: "sshee-settings", version: 1, storage: quietStorage() },
+    {
+      name: "sshee-settings",
+      version: 2,
+      storage: quietStorage(),
+      // 2: Macs draw with the GPU, also where it was off by default before.
+      migrate: (saved, version) => (version < 2 && isMac ? { ...(saved as Settings), gpuRendering: true } : saved) as SettingsStore,
+    },
   ),
 );
 

@@ -16,7 +16,7 @@
 
 <p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a server's terminal with the log it printed opened beside it, its tabs along the top, and an AI agent that needs you"></p>
 
-SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own.
+SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each saying whose it is: “Files (web-1)”.
 
 ## The idea
 
@@ -34,10 +34,11 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 
 <p align="center"><img src="docs/media/peek.gif" alt="Ctrl+clicking a path in an agent's output opens the file beside the terminal"></p>
 
-- **Drag a tab onto the page** to see two at once; its × (or dragging it back to the tabs) makes it a tab again, still running. Ctrl+Shift+S switches between one tab at a time and side by side.
+- **Drag a tab onto the page** to see two at once, also two servers' tabs side by side; its × (or dragging it back to the tabs) makes it a tab again, still running. Ctrl+Shift+S switches between one tab at a time and side by side.
 
 <p align="center"><img src="docs/media/split.gif" alt="Dragging the Files tab onto the page splits it beside the terminal"></p>
 
+- **Copy files from one server to another.** Drag them from one server's Files onto another's beside it, or right-click them and pick the server and the folder there. They go straight through SSHeesh, so the servers don't need to reach each other, and nothing is replaced without asking.
 - **Agents on every server, at a glance.** Claude Code, Codex, OpenCode and OMP show up by name on their tab, like “Terminal 2 (Claude Code)”, and the server says “needs you” when one waits for an answer, with a notification if SSHeesh is in the background.
 - **A welcome that says where you are.** A new terminal shows the server's own welcome, or SSHeesh's: the system, uptime, memory and disk, containers and updates, beside the logo. The server's notices about updates always stay.
 
@@ -47,7 +48,7 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 - **One bar for everything.** Ctrl+Shift+L (⌘L) finds servers, folders, commands and settings, and says which server a command runs on.
 - **Your keys.** Every shortcut is listed in Settings → Keyboard, and you can change any of them.
 - **Server icons that mean something.** SSHeesh sees what a server runs (a website, a database, Docker) and picks its icon; each server gets a color of its own.
-- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads, its Docker containers, stats, a read-only security check-up, what's using the disk, web apps opened through your SSH login, and step-by-step recipes for the usual jobs.
+- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads (a download opens its folder with the file picked out), its Docker containers, stats, a read-only security check-up, what's using the disk, web apps opened through your SSH login, and step-by-step recipes for the usual jobs.
 
 <p align="center"><img src="docs/media/streamer.gif" alt="Streamer mode hides server names and addresses across the app and the terminal"></p>
 

@@ -47,6 +47,8 @@ export interface Backend {
   relaunch(): Promise<void>;
   /** Opens a web link in the system browser. */
   openExternal(url: string): Promise<void>;
+  /** Opens the folder these files are in, with them selected, in the system's file manager. */
+  revealFiles(paths: string[]): Promise<void>;
   /**
    * Puts text on the system clipboard. Works without a click, for terminal
    * selections and programs' own copies, which webviews often refuse.
@@ -107,6 +109,8 @@ export interface Backend {
   deletePath(target: TargetRef, path: string): Promise<void>;
   downloadPath(target: TargetRef, path: string, isDir: boolean, hooks: TransferHooks): Promise<string>;
   uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, hooks: TransferHooks): Promise<void>;
+  /** Copies `paths`, all in one folder on `from`, into `destDir` on the server `to`. */
+  copyToServer(from: TargetRef, to: TargetRef, paths: string[], destDir: string, overwrite: boolean, hooks: TransferHooks): Promise<void>;
   /** Stops an upload or download; its call then fails with code "cancelled". */
   cancelTransfer(id: string): void;
   sessionCwd(target: TargetRef, sessionKey: string): Promise<string>;
@@ -202,6 +206,7 @@ async function tauriBackend(): Promise<Backend> {
     },
     relaunch: () => proc.relaunch(),
     openExternal: (url) => opener.openUrl(url),
+    revealFiles: (paths) => opener.revealItemInDir(paths),
     listHosts: () => call("list_hosts"),
     addHost: (input) => call("add_host", { input }),
     removeHost: (id) => call("remove_host", { id }),
@@ -257,6 +262,7 @@ async function tauriBackend(): Promise<Backend> {
     downloadPath: (target, path, isDir, hooks) => call("download_path", { target, path, isDir, ...progress(hooks) }),
     uploadPaths: (target, paths, remoteDir, overwrite, hooks) =>
       call("upload_paths", { target, paths, remoteDir, overwrite, ...progress(hooks) }),
+    copyToServer: (from, to, paths, destDir, overwrite, hooks) => call("copy_to_server", { from, to, paths, destDir, overwrite, ...progress(hooks) }),
     cancelTransfer: (id) => fire("cancel_transfer", { id }),
     sessionCwd: (target, sessionKey) => call("session_cwd", { target, sessionKey }),
     findPath: (target, path, cwd) => call("find_path", { target, path, cwd }),

@@ -3,9 +3,9 @@
 // along the top, the keyboard and the command bar all go through here.
 
 import type { Dir, DropZone } from "./layout";
-import { currentTarget, panesOn, sideBySide, tabsOn, useStore, type PaneKind } from "./store";
+import { allTabs, currentScreen, currentTarget, panesIn, panesOn, screenOf, sideBySide, tabsOn, useStore, type PaneKind } from "./store";
 import { useSettings } from "./settings";
-import { sameTarget, type TargetRef } from "./types";
+import { targetKey, type TargetRef } from "./types";
 
 /** A new tab on a machine, next to the tab you were on there. */
 export function newTab(kind: Exclude<PaneKind, "empty">, target: TargetRef) {
@@ -22,33 +22,34 @@ export function nextTab(step: 1 | -1) {
   const s = useStore.getState();
   const target = currentTarget(s);
   if (!target) return;
-  // One tab at a time it goes through all of them, as a browser does; side by
-  // side as the layout, through the panes on screen.
-  const ids = sideBySide(s, target) && useSettings.getState().viewMode === "split"
-    ? panesOn(s, target)
+  // One tab at a time it goes through all of them, as a browser does: along
+  // the top, every server's. Side by side as the layout, through the panes on screen.
+  const screen = currentScreen(s);
+  const ids = sideBySide(s, screen) && useSettings.getState().viewMode === "split"
+    ? panesIn(s, screen)
         .filter((p) => !s.hidden.includes(p.id))
         .map((p) => p.id)
-    : tabsOn(s, target).map((p) => p.id);
+    : (useSettings.getState().tabsPlacement === "top" ? allTabs(s) : tabsOn(s, target)).map((p) => p.id);
   if (ids.length < 2) return;
   const i = ids.indexOf(s.focused);
   s.focus(ids[(i + step + ids.length) % ids.length]);
 }
 
 /**
- * Shows tab `id` beside `nextTo` (the tab on screen, by default). One at a
- * time, these two become the pair on screen, as in a browser; the other tabs
- * keep running and come back with a click.
+ * Shows tab `id` beside `nextTo` (the tab on screen, by default), whichever
+ * servers they're on. One at a time, these two become the pair on screen, as
+ * in a browser; the other tabs keep running and come back with a click.
  */
 export function placeBeside(id: string, zone: DropZone = "right", nextTo?: string) {
   const s = useStore.getState();
   const other = nextTo ?? s.focused;
-  const target = s.panes[id]?.target;
-  if (!target || id === other || !sameTarget(target, s.panes[other]?.target)) return;
-  if (useSettings.getState().viewMode === "tabs" || !sideBySide(s, target)) {
-    const rest = tabsOn(s, target)
+  const screen = screenOf(s, other);
+  if (!s.panes[id] || !screen || id === other) return;
+  if (useSettings.getState().viewMode === "tabs" || !sideBySide(s, screen)) {
+    const rest = panesIn(s, screen)
       .map((t) => t.id)
       .filter((t) => t !== id && t !== other);
-    s.setSplit(target, true);
+    s.setSplit(screen, true);
     useStore.setState({ hidden: [...new Set([...s.hidden.filter((h) => h !== id && h !== other), ...rest])] });
   }
   useStore.getState().movePane(id, other, zone);
@@ -60,38 +61,38 @@ export function placeBeside(id: string, zone: DropZone = "right", nextTo?: strin
  */
 export function splitPane(id: string, dir: Dir) {
   const s = useStore.getState();
-  const target = s.panes[id]?.target ?? null;
   // Already side by side: one more pane on screen. Otherwise these two pair up.
-  const beside = sideBySide(s, target);
-  const nid = s.split(id, dir);
+  const beside = sideBySide(s, screenOf(s, id));
+  const nid = s.split(id, dir, beside);
   if (nid === id) return;
-  if (beside) useStore.getState().setHidden([nid], false);
-  else placeBeside(nid, dir === "row" ? "right" : "bottom", id);
+  if (!beside) placeBeside(nid, dir === "row" ? "right" : "bottom", id);
 }
 
 /**
  * Takes a pane out of side by side: it goes back to being a tab of its own,
- * still running. With one pane left on screen, the machine is back to one
- * tab at a time. As tabs, a pane's × does this: closing the split never
- * closes the tab.
+ * still running (another server's, back to its own server). With one pane
+ * left on screen, the screen is back to one tab at a time. As tabs, a pane's
+ * × does this: closing the split never closes the tab.
  */
 export function toOwnTab(id: string) {
   const s = useStore.getState();
-  const target = s.panes[id]?.target;
-  if (!target || !sideBySide(s, target)) return;
-  const rest = panesOn(s, target).filter((p) => p.id !== id && !s.hidden.includes(p.id));
-  if (rest.length > 1) return s.setHidden([id], true);
-  s.setSplit(target, false);
-  if (rest[0]) s.focus(rest[0].id);
+  const screen = screenOf(s, id);
+  if (!screen || !sideBySide(s, screen)) return;
+  const rest = panesIn(s, screen).filter((p) => p.id !== id && !s.hidden.includes(p.id));
+  const guest = !!s.panes[id]?.target && targetKey(s.panes[id].target!) !== screen;
+  if (rest.length > 1 || guest) s.setHidden([id], true);
+  if (rest.length > 1) return;
+  useStore.getState().setSplit(screen, false);
+  if (rest[0]) useStore.getState().focus(rest[0].id);
 }
 
 /** One tab at a time, or the tabs you switched on side by side, on the machine on screen. */
 export function toggleSplit() {
   const s = useStore.getState();
-  const target = currentTarget(s);
-  if (!target) return;
-  const on = sideBySide(s, target);
-  s.setSplit(target, !on);
+  const screen = currentScreen(s);
+  if (!screen) return;
+  const on = sideBySide(s, screen);
+  s.setSplit(screen, !on);
   // The tab you're on is always among the ones on screen.
   if (!on && s.hidden.includes(s.focused)) s.setHidden([s.focused], false);
 }

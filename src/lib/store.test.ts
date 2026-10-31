@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { paneIds, type LayoutNode } from "./layout";
-import { activePane, currentTarget, panesOn, sideBySide, splitByMachine, tabsOn, useStore, type PaneState } from "./store";
+import { activePane, allTabs, currentScreen, currentTarget, panesIn, panesOn, screenOf, sideBySide, splitByMachine, tabsOn, useStore, type PaneState } from "./store";
 import { useSettings } from "./settings";
 import { nextTab, placeBeside, splitPane, toggleSplit, toOwnTab } from "./tabs";
 import type { TargetRef } from "./types";
@@ -22,6 +22,7 @@ function start(panes: PaneState[], layouts: Record<string, LayoutNode>, focused:
     zoomed: null,
     closedTabs: [],
     lastFocusedFor: {},
+    frontOf: {},
     sessions: {},
   });
 }
@@ -39,6 +40,7 @@ describe("one layout per machine", () => {
   });
 
   it("closing a tab brings up the next one on the same machine, then the main menu", () => {
+    useSettings.setState({ tabsPlacement: "sidebar" });
     useStore.getState().closePane("w1");
     expect(useStore.getState().focused).toBe("w2");
     useStore.getState().closePane("w2");
@@ -46,6 +48,19 @@ describe("one layout per machine", () => {
     expect(s.home).toBe(true);
     expect(s.layouts["host:cfg:web"]).toBeUndefined();
     expect(s.closedTabs.map((c) => c.kind)).toEqual(["files", "terminal"]);
+    useSettings.setState({ tabsPlacement: "top" });
+  });
+
+  it("along the top, every machine's tabs are one strip, and a machine's last tab goes to its neighbor there", () => {
+    expect(allTabs(useStore.getState()).map((p) => p.id)).toEqual(["w1", "w2", "d1"]);
+    useStore.getState().setTabOrder(["d1", "w2"]);
+    expect(allTabs(useStore.getState()).map((p) => p.id)).toEqual(["d1", "w2", "w1"]);
+    useStore.getState().closePane("w1");
+    useStore.getState().closePane("w2");
+    const s = useStore.getState();
+    expect(s.home).toBe(false);
+    expect(s.focused).toBe("d1");
+    expect(currentTarget(s)).toEqual(db);
   });
 
   it("a split is a new terminal on the same machine, beside the one you split", () => {
@@ -192,6 +207,81 @@ describe("side by side, one tab at a time", () => {
     expect(onScreen()).toEqual([useStore.getState().focused]);
     toggleSplit();
     expect(onScreen().sort()).toEqual(["w1", "w2"]);
+  });
+});
+
+describe("two servers side by side", () => {
+  // What's on screen: the pair, or the tab on its own.
+  const onScreen = () => {
+    const s = useStore.getState();
+    const screen = currentScreen(s);
+    return sideBySide(s, screen) ? panesIn(s, screen).filter((p) => !s.hidden.includes(p.id)).map((p) => p.id) : [s.focused];
+  };
+  beforeEach(() => {
+    start(
+      [pane("w1", web, "terminal", 1), pane("w2", web, "files", 1), pane("d1", db, "files", 1), pane("d2", db, "terminal", 1)],
+      { "host:cfg:web": row("w1", "w2"), "host:cfg:db": row("d1", "d2") },
+      "w1",
+    );
+    placeBeside("d1", "right", "w1");
+  });
+
+  it("another server's tab dropped beside makes a pair, and stays that server's tab", () => {
+    const s = useStore.getState();
+    expect(onScreen()).toEqual(["w1", "d1"]);
+    expect(screenOf(s, "d1")).toBe("host:cfg:web");
+    expect(currentTarget(s)).toEqual(db);
+    expect(tabsOn(s, db).map((p) => p.id)).toEqual(["d2", "d1"]);
+    expect(allTabs(s).map((p) => p.id)).toEqual(["w1", "w2", "d2", "d1"]);
+  });
+
+  it("the pair comes back from either of its tabs, after another tab of either server", () => {
+    useStore.getState().focus("d2");
+    expect(onScreen()).toEqual(["d2"]);
+    useStore.getState().focus("d1");
+    expect(onScreen()).toEqual(["w1", "d1"]);
+    useStore.getState().focus("w2");
+    expect(onScreen()).toEqual(["w2"]);
+    useStore.getState().focus("w1");
+    expect(onScreen()).toEqual(["w1", "d1"]);
+  });
+
+  it("× takes it out of the pair, back to its own server, still open", () => {
+    toOwnTab("d1");
+    const s = useStore.getState();
+    expect(screenOf(s, "d1")).toBe("host:cfg:db");
+    expect(s.panes.d1).toBeDefined();
+    expect(onScreen()).toEqual(["w1"]);
+    s.focus("d1");
+    expect(onScreen()).toEqual(["d1"]);
+  });
+
+  it("closing one of the pair shows the other; a guest whose host has no tabs left goes home", () => {
+    useStore.getState().closePane("w1");
+    expect(useStore.getState().focused).toBe("d1");
+    useStore.getState().closePane("w2");
+    const s = useStore.getState();
+    expect(s.layouts["host:cfg:web"]).toBeUndefined();
+    expect(screenOf(s, "d1")).toBe("host:cfg:db");
+  });
+
+  it("a split of it opens beside it, and a new tab of its server opens on that server", () => {
+    splitPane("d1", "col");
+    const s = useStore.getState();
+    const split = s.focused;
+    expect(s.panes[split].target).toEqual(db);
+    expect(screenOf(s, split)).toBe("host:cfg:web");
+    expect(onScreen().sort()).toEqual(["d1", split, "w1"].sort());
+    const id = s.openIn("terminal", db);
+    expect(screenOf(useStore.getState(), id)).toBe("host:cfg:db");
+    expect(onScreen()).toEqual([id]);
+  });
+
+  it("swapping in the middle puts the other server's tab in its place", () => {
+    placeBeside("d2", "right", "w2");
+    expect(onScreen()).toEqual(["w2", "d2"]);
+    // d1 left the pair it was in when w1's screen paired w2 and d2 instead.
+    expect(screenOf(useStore.getState(), "d1")).toBe("host:cfg:db");
   });
 });
 

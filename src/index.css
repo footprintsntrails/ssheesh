@@ -301,6 +301,32 @@
   border-bottom: 1px dotted color-mix(in srgb, var(--ui-accent) 60%, transparent);
 }
 
+/* Files dragged from one server's Files to another's. */
+.file-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 90;
+  pointer-events: none;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.3);
+  background: var(--ui-window);
+  color: var(--ui-fg-2);
+  outline: 1px solid color-mix(in srgb, var(--ui-fg) 14%, transparent);
+}
+.file-drag-ghost[data-ok="yes"] {
+  background: var(--ui-accent);
+  color: white;
+  outline: none;
+}
+
 /* xterm: let our padding and background show. */
 .term-host {
   width: 100%;

@@ -10,7 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { agentRunning } from "../lib/agents";
 import { isMac, shortcutLabel } from "../lib/keys";
 import { markHintSeen, ONBOARDING_VERSION, useSettings } from "../lib/settings";
-import { currentTarget, isSplit, machineSummary, useStore } from "../lib/store";
+import { currentScreen, currentTarget, isSplit, machineSummary, useStore } from "../lib/store";
 import { toggleSplit } from "../lib/tabs";
 import { Button } from "./ui";
 
@@ -63,7 +63,7 @@ export const HINTS: Hint[] = [
     anchor: "split",
     title: "Two tabs at once",
     body: () => `${shortcutLabel("toggleSplit")} shows this server's tabs side by side; again goes back to one at a time.`,
-    when: (s) => tabsOnScreenServer(s) >= 2 && !isSplit(s, currentTarget(s)),
+    when: (s) => tabsOnScreenServer(s) >= 2 && !isSplit(s, currentScreen(s)),
     used: anySplit,
     action: { label: "Try it", run: toggleSplit },
   },

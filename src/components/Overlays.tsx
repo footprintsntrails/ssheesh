@@ -6,7 +6,7 @@ import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
 import { useSettings } from "../lib/settings";
-import { activePane, sideBySide, useStore } from "../lib/store";
+import { activePane, screenOf, sideBySide, useStore } from "../lib/store";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { showCurrentNotes } from "./WhatsNew";
 import { closeTab, showFiles, showTab, splitPane, toggleSplit } from "../lib/tabs";
@@ -243,7 +243,7 @@ export function CommandPalette() {
               <Item
                 icon={Columns2}
                 value="tabs side by side split one at a time toggle"
-                label={sideBySide(useStore.getState(), focused.target) ? "One tab at a time" : "Tabs side by side"}
+                label={sideBySide(useStore.getState(), screenOf(useStore.getState(), focused.id)) ? "One tab at a time" : "Tabs side by side"}
                 hint={shortcutLabel("toggleSplit")}
                 onSelect={run(toggleSplit)}
               />
@@ -419,13 +419,37 @@ export function Toasts() {
       {toasts.map((t) => {
         const Icon = t.tone === "success" ? CircleCheck : t.tone === "error" ? CircleAlert : Info;
         return (
-          <div key={t.id} role="status" className="glass pointer-events-auto flex animate-slide-up items-start gap-2.5 rounded-[13px] px-3.5 py-3">
+          <div
+            key={t.id}
+            role="status"
+            // A note with an action is one big button: click anywhere on it.
+            onClick={
+              t.action &&
+              (() => {
+                t.action?.run();
+                dismiss(t.id);
+              })
+            }
+            title={t.action?.label}
+            className={cn(
+              "glass pointer-events-auto flex animate-slide-up items-start gap-2.5 rounded-[13px] px-3.5 py-3",
+              t.action && "cursor-pointer transition-[filter] hover:brightness-125",
+            )}
+          >
             <Icon size={15} className={cn("mt-px shrink-0", t.tone === "success" && "text-ok", t.tone === "error" && "text-bad", t.tone === "info" && "text-accent")} />
             <div className="min-w-0 flex-1">
               <p className="text-[12.5px] font-medium text-fg">{names.text(t.title)}</p>
-              {t.body && <p className="selectable mt-0.5 break-words text-[11.5px] leading-snug text-fg-3">{names.text(t.body)}</p>}
+              {t.body && <p className={cn("mt-0.5 break-words text-[11.5px] leading-snug text-fg-3", !t.action && "selectable")}>{names.text(t.body)}</p>}
+              {t.action && <p className="mt-1 text-[11.5px] font-medium text-accent">{t.action.label}</p>}
             </div>
-            <button onClick={() => dismiss(t.id)} className="-mr-1 shrink-0 rounded p-0.5 text-fg-3 hover:text-fg" aria-label="Dismiss">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                dismiss(t.id);
+              }}
+              className="-mr-1 shrink-0 rounded p-0.5 text-fg-3 hover:text-fg"
+              aria-label="Dismiss"
+            >
               <X size={13} />
             </button>
           </div>

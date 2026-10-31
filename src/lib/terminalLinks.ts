@@ -6,7 +6,7 @@ import { backend } from "./backend";
 import { joinPath, parentPath } from "./format";
 import { resolvePath, type TextLink } from "./paths";
 import { markHintSeen } from "./settings";
-import { panesOn, sideBySide, useStore } from "./store";
+import { panesOn, screenOf, sideBySide, useStore } from "./store";
 import { placeBeside } from "./tabs";
 import { toOpError, type TargetRef } from "./types";
 
@@ -112,6 +112,7 @@ export function showInFiles(from: string, target: TargetRef, path: string, revea
   }
   // Already beside it on screen: just look there. Otherwise put it there.
   const s = useStore.getState();
-  if (existing && sideBySide(s, target) && !s.hidden.includes(id)) s.focus(id);
+  const screen = screenOf(s, id);
+  if (existing && screen === screenOf(s, from) && sideBySide(s, screen) && !s.hidden.includes(id)) s.focus(id);
   else placeBeside(id, "right", from);
 }

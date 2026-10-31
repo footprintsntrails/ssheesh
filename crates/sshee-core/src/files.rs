@@ -683,19 +683,27 @@ fn exists_message(names: &[String]) -> String {
 /// all of it, so one question covers the whole batch before anything moves.
 pub fn check_upload(target: &Target, env: &SshEnv, local_paths: &[PathBuf], dir: &str) -> Result<(), OpError> {
     let names: Vec<String> = local_paths.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
-    let mut taken = Vec::new();
     match ssh_only(target) {
-        Some(t) => {
-            // In batches, to stay well inside the longest command a server takes.
-            for batch in names.chunks(200) {
-                let out = run_remote_read(t, env, &taken_script(dir, batch))?;
-                taken.extend(taken_in(&out, batch));
-            }
-        }
+        Some(t) => check_free(t, env, &names, dir),
         None => {
             let dir = resolve_local(dir);
-            taken.extend(names.into_iter().filter(|n| dir.join(n).symlink_metadata().is_ok()));
+            let taken: Vec<String> = names.into_iter().filter(|n| dir.join(n).symlink_metadata().is_ok()).collect();
+            if taken.is_empty() {
+                Ok(())
+            } else {
+                Err(OpError::new(ErrorCode::Exists, exists_message(&taken)))
+            }
         }
+    }
+}
+
+/// `check_upload` on a server, for names.
+fn check_free(t: &SshTarget, env: &SshEnv, names: &[String], dir: &str) -> Result<(), OpError> {
+    let mut taken = Vec::new();
+    // In batches, to stay well inside the longest command a server takes.
+    for batch in names.chunks(200) {
+        let out = run_remote_read(t, env, &taken_script(dir, batch))?;
+        taken.extend(taken_in(&out, batch));
     }
     if taken.is_empty() {
         Ok(())
@@ -940,6 +948,123 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     }
 }
 
+/// The scripts `copy_between` runs: what to pack on the first server (the
+/// `names` in `parent`, quoted), how big that is, and how to unpack on the
+/// second: into the hidden folder `staging`, or over `dest` when replacing.
+fn copy_scripts(parent: &str, names: &str, dest: &str, staging: &str, overwrite: bool) -> (String, String, String) {
+    let (p, d, s) = (shell_quote(parent), shell_quote(dest), shell_quote(staging));
+    let pack = format!("cd -- {p} || exit 1; {}; tar -cf - -- \"$@\"", tar_items(names));
+    let size = format!("cd -- {p} || exit 1; {}; du -sk -- \"$@\"", tar_items(names));
+    let unpack = if overwrite { format!("cd -- {d} && tar -xf -") } else { format!("mkdir -- {s} && cd -- {s} && tar -xf -") };
+    (pack, size, unpack)
+}
+
+/// Once all of it arrived in `staging`, moves each of `names` into `dest`,
+/// still never over anything that turned up meanwhile.
+fn copy_finish_script(names: &str, dest: &str, staging: &str) -> String {
+    let (d, s) = (shell_quote(dest), shell_quote(staging));
+    format!(
+        r#"for n in {names}; do if [ -e {d}/"$n" ] || [ -L {d}/"$n" ]; then echo EXISTS >&2; exit 5; fi; done; for n in {names}; do mv -- {s}/"$n" {d}/"$n" || exit 1; done; rmdir -- {s}"#
+    )
+}
+
+/// Copies files and folders from one folder on a machine into `dest_dir`
+/// on a server. Between two servers it goes straight through: tar on one
+/// streams into tar on the other by way of this computer, so the servers
+/// needn't reach each other, and nothing waits on this computer's disk.
+/// From this computer it's an upload. As with an upload, nothing is
+/// replaced unless `overwrite` (one check names everything first), and
+/// what arrives stays under a hidden name until all of it is there.
+pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], dest_dir: &str, overwrite: bool, xfer: &Arc<Transfer>) -> Result<(), OpError> {
+    let b = ssh_only(to).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "Copies go to a server; use Download for this computer."))?;
+    let Some(a) = ssh_only(from) else {
+        let local: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        if !overwrite {
+            check_upload(to, env, &local, dest_dir)?;
+        }
+        xfer.add_total(local.iter().map(|p| upload_size(p)).sum());
+        for p in &local {
+            upload(to, env, p, dest_dir, overwrite, xfer)?;
+        }
+        return Ok(());
+    };
+    let Some(first) = paths.first() else { return Ok(()) };
+    let parent = parent_dir(first);
+    if paths.iter().any(|p| parent_dir(p) != parent) {
+        return Err(OpError::failed("Pick files from one folder to copy together."));
+    }
+    let names: Vec<String> = paths.iter().map(|p| base_name(p)).collect();
+    if !overwrite {
+        check_free(b, env, &names, dest_dir)?;
+    }
+    xfer.check()?;
+    let quoted = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
+    let staging = join_remote(dest_dir, &scratch_name("copy"));
+    let (pack, size, unpack) = copy_scripts(&parent, &quoted, dest_dir, &staging, overwrite);
+    let total = run_remote(a, env, &size, None)
+        .map(|out| String::from_utf8_lossy(&out).lines().filter_map(|l| l.split_whitespace().next()?.parse::<u64>().ok()).sum::<u64>() * 1024)
+        .unwrap_or(0);
+    xfer.add_total(total);
+    xfer.check()?;
+    let base = xfer.done();
+
+    let mut src = remote_command(a, env, &pack);
+    src.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut src = src.spawn().map_err(spawn_error)?;
+    let mut dst = remote_command(b, env, &unpack);
+    dst.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut dst = match dst.spawn() {
+        Ok(dst) => dst,
+        Err(e) => {
+            let _ = src.kill();
+            let _ = src.wait();
+            return Err(spawn_error(e));
+        }
+    };
+    let (src_errors, dst_errors) = (drain(src.stderr.take()), drain(dst.stderr.take()));
+    let stream = src.stdout.take().expect("piped stdout");
+    let input = dst.stdin.take().expect("piped stdin");
+    // The tar stream is a little bigger than what du counts; the bar stops at the total.
+    let cap = if total == 0 { u64::MAX } else { total };
+    let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + n.min(cap)));
+    let result = (|| {
+        let copied = wait_copy(xfer, copy, &mut [&mut src, &mut dst])?;
+        let (packed, unpacked) = (src.wait()?, dst.wait()?);
+        match copied {
+            Err(e) if e.kind() != io::ErrorKind::BrokenPipe => return Err(e.into()),
+            _ => {}
+        }
+        if !packed.success() {
+            return Err(OpError::from_ssh(packed.code(), &joined(src_errors)));
+        }
+        if !unpacked.success() {
+            return Err(OpError::from_ssh(unpacked.code(), &joined(dst_errors)));
+        }
+        if !overwrite {
+            run_remote(b, env, &copy_finish_script(&quoted, dest_dir, &staging), None).map_err(|e| {
+                if e.message == "EXISTS" {
+                    OpError::new(ErrorCode::Exists, exists_message(&names))
+                } else {
+                    e
+                }
+            })?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            xfer.settle(base + total);
+            Ok(())
+        }
+        Err(e) => {
+            if !overwrite {
+                discard_remote(b, env, &staging);
+            }
+            Err(e)
+        }
+    }
+}
+
 /// Current directory of a pane's terminal (when it runs in tmux on the server).
 pub fn session_cwd(target: &Target, env: &SshEnv, session_key: &str) -> Result<String, OpError> {
     let t = ssh_only(target).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "Not a server session."))?;
@@ -1140,6 +1265,42 @@ mod tests {
         let du = Command::new("sh").arg("-c").arg(size_script(&base.join("link").to_string_lossy(), true)).output().unwrap();
         let kb: u64 = String::from_utf8_lossy(&du.stdout).split_whitespace().next().unwrap().parse().unwrap();
         assert!(kb > 0);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_between_servers_lands_whole_and_replaces_nothing() {
+        let base = std::env::temp_dir().join(format!("sshee-between-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        linked_folder(&base);
+        std::fs::write(base.join("notes.txt"), "n").unwrap();
+        let dest = base.join("there");
+        std::fs::create_dir_all(&dest).unwrap();
+        let (dest_s, staging) = (dest.to_string_lossy().to_string(), dest.join(".copy.part").to_string_lossy().to_string());
+        let names = "'notes.txt' 'link'";
+        let sh = |script: &str| Command::new("sh").arg("-c").arg(script).output().unwrap();
+        // One server packs, the other unpacks under the hidden name, then it moves into place.
+        let (pack, size, unpack) = copy_scripts(&base.to_string_lossy(), names, &dest_s, &staging, false);
+        assert!(sh(&format!("({pack}) | ({unpack})")).status.success());
+        assert!(!dest.join("notes.txt").exists(), "nothing in place before it's all there");
+        assert!(sh(&copy_finish_script(names, &dest_s, &staging)).status.success());
+        assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "n");
+        assert_eq!(std::fs::read_to_string(dest.join("link/sub/b.txt")).unwrap(), "x");
+        assert!(!Path::new(&staging).exists());
+        let kb: u64 = String::from_utf8_lossy(&sh(&size).stdout).lines().filter_map(|l| l.split_whitespace().next()?.parse::<u64>().ok()).sum();
+        assert!(kb > 0);
+        // Something that turned up meanwhile is never replaced.
+        let (pack, _, unpack) = copy_scripts(&base.to_string_lossy(), names, &dest_s, &staging, false);
+        assert!(sh(&format!("({pack}) | ({unpack})")).status.success());
+        let finish = sh(&copy_finish_script(names, &dest_s, &staging));
+        assert_eq!(finish.status.code(), Some(5));
+        assert_eq!(String::from_utf8_lossy(&finish.stderr).trim(), "EXISTS");
+        // Replacing unpacks over what's there.
+        std::fs::write(base.join("notes.txt"), "new").unwrap();
+        let (pack, _, unpack) = copy_scripts(&base.to_string_lossy(), "'notes.txt'", &dest_s, &staging, true);
+        assert!(sh(&format!("({pack}) | ({unpack})")).status.success());
+        assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "new");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

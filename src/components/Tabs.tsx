@@ -1,11 +1,12 @@
 // Tabs: every terminal, file manager and stats page of a machine is a tab.
-// They sit under their server in the sidebar (or, if you prefer, in a strip
-// at the top). Drag one to move it, or onto the screen to show it beside the
-// one you're on; middle-click or its × closes it, right-click for more.
-// Ctrl+Tab goes to the next. What tabs do lives in lib/tabs.ts.
+// They sit in a strip at the top, every server's in one row (or, if you
+// prefer, under their server in the sidebar). Drag one to move it, or onto
+// the screen to show it beside the one you're on; middle-click or its ×
+// closes it, right-click for more. Ctrl+Tab goes to the next. What tabs do
+// lives in lib/tabs.ts.
 
 import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, HardDrive, Plus, Rows2, ShieldCheck, SquareTerminal, X, type LucideIcon } from "lucide-react";
-import { memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { agentRunning, agentShort } from "../lib/agents";
 import { cn } from "../lib/format";
@@ -14,8 +15,8 @@ import { useSettings } from "../lib/settings";
 import type { DropZone } from "../lib/layout";
 import { useNames } from "../lib/privacy";
 import { closeTab, newTab, placeBeside, showFiles, toOwnTab } from "../lib/tabs";
-import { sideBySide, tabsOn, useSideBySide, useStore, type PaneKind, type PaneState } from "../lib/store";
-import { sameTarget, type TargetRef } from "../lib/types";
+import { allTabs, currentScreen, screenOf, sideBySide, tabsOn, useSideBySide, useStore, type PaneKind, type PaneState } from "../lib/store";
+import { targetKey, type TargetRef } from "../lib/types";
 import { AgentIcon } from "./AgentIcons";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { openRecipes } from "./Recipes";
@@ -32,14 +33,16 @@ const KIND: Record<PaneKind, { label: string; icon: LucideIcon }> = {
 /**
  * "Terminal", "Terminal 2"…: each tab keeps the number it got when it
  * opened, so moving or closing tabs never renames the others. A terminal
- * with an AI agent in front says so in brackets: "Terminal 2 (Claude Code)".
+ * with an AI agent in front says so in brackets: "Terminal 2 (Claude Code)",
+ * and so does the server, `where`, when tabs of several are side by side:
+ * "Files (web-1)", "Terminal 2 (Claude Code, web-1)".
  */
-export function tabLabel(p: Pick<PaneState, "kind" | "container" | "n">, command?: string): string {
-  if (p.container) return p.container.name;
+export function tabLabel(p: Pick<PaneState, "kind" | "container" | "n">, command?: string, where?: string): string {
   const n = p.n ?? 1;
-  const name = n > 1 ? `${KIND[p.kind].label} ${n}` : KIND[p.kind].label;
-  const agent = p.kind === "terminal" ? agentRunning(command) : null;
-  return agent ? `${name} (${agentShort(agent)})` : name;
+  const name = p.container ? p.container.name : n > 1 ? `${KIND[p.kind].label} ${n}` : KIND[p.kind].label;
+  const agent = p.kind === "terminal" && !p.container ? agentRunning(command) : null;
+  const notes = [agent && agentShort(agent), where].filter(Boolean);
+  return notes.length ? `${name} (${notes.join(", ")})` : name;
 }
 
 export function TabIcon({ pane, command, size = 13.5, className }: { pane: Pick<PaneState, "kind" | "container">; command?: string; size?: number; className?: string }) {
@@ -76,12 +79,12 @@ export function toolItems(target: TargetRef, address?: string): (MenuItem | "sep
   ];
 }
 
-/** Where a pane being dragged would land: a side of a pane of the same machine, or nowhere. */
+/** Where a pane being dragged would land: a side of a pane on screen, any server's, or nowhere. */
 function dropAt(x: number, y: number, dragId: string): { paneId: string; zone: DropZone } | null {
   const s = useStore.getState();
   const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-pane-id]");
   const id = el?.dataset.paneId;
-  if (!el || !id || id === dragId || !sameTarget(s.panes[id]?.target, s.panes[dragId]?.target)) return null;
+  if (!el || !id || id === dragId || !s.panes[id] || !s.panes[dragId]) return null;
   const r = el.getBoundingClientRect();
   const fx = (x - r.left) / r.width;
   const fy = (y - r.top) / r.height;
@@ -126,8 +129,7 @@ export function dragPane(
     st.setDrag(null);
     if (at) {
       opts.onCancel?.();
-      const target = st.panes[paneId]?.target ?? null;
-      if (at.zone === "center" && sideBySide(st, target)) {
+      if (at.zone === "center" && sideBySide(st, screenOf(st, at.paneId))) {
         st.movePane(paneId, at.paneId, "center");
         // One tab at a time, it takes the other's place in the pair.
         if (useSettings.getState().viewMode === "tabs") {
@@ -144,14 +146,14 @@ export function dragPane(
   window.addEventListener("pointerup", up);
 }
 
-/** What you can do with a tab, for its right-click menu. */
-function tabMenu(id: string, target: TargetRef): (MenuItem | "sep")[] {
+/** What you can do with a tab, for its right-click menu; `ids` is the list it's in. */
+function tabMenu(id: string, ids: string[], axis: "x" | "y"): (MenuItem | "sep")[] {
   const s = useStore.getState();
-  const tabs = tabsOn(s, target);
-  const i = tabs.findIndex((t) => t.id === id);
-  const others = tabs.filter((t) => t.id !== id);
-  const below = tabs.slice(i + 1);
-  const canBeside = id !== s.focused && sameTarget(s.panes[s.focused]?.target, target);
+  const target = s.panes[id]?.target;
+  if (!target) return [];
+  const others = ids.filter((t) => t !== id);
+  const after = ids.slice(ids.indexOf(id) + 1);
+  const canBeside = id !== s.focused && !s.home && !!s.panes[s.focused];
   return [
     ...(canBeside
       ? ([
@@ -164,8 +166,8 @@ function tabMenu(id: string, target: TargetRef): (MenuItem | "sep")[] {
     { label: "Files", icon: FolderOpen, run: () => showFiles(target) },
     "sep",
     { label: "Close tab", icon: X, hint: shortcutLabel("closePane"), run: () => closeTab(id) },
-    { label: "Close other tabs", icon: X, disabled: !others.length, run: () => others.forEach((t) => closeTab(t.id)) },
-    { label: "Close tabs below", icon: X, disabled: !below.length, run: () => below.forEach((t) => closeTab(t.id)) },
+    { label: "Close other tabs", icon: X, disabled: !others.length, run: () => others.forEach(closeTab) },
+    { label: axis === "x" ? "Close tabs to the right" : "Close tabs below", icon: X, disabled: !after.length, run: () => after.forEach(closeTab) },
   ];
 }
 
@@ -208,11 +210,11 @@ function NarrowState({ id }: { id: string }) {
 type TabProps = ReturnType<ReturnType<typeof useTabList>["tabProps"]>;
 
 /**
- * A machine's tab list, shared by the sidebar and the strip on top: the
- * tabs in order, dragging to reorder along `axis`, and a right-click menu.
+ * A tab list, shared by the sidebar and the strip on top: the tabs `select`
+ * picks, in order, dragging to reorder along `axis`, and a right-click menu.
  */
-function useTabList(target: TargetRef, axis: "x" | "y") {
-  const ids = useStore(useShallow((s) => tabsOn(s, target).map((p) => p.id)));
+function useTabList(select: (s: ReturnType<typeof useStore.getState>) => string[], axis: "x" | "y") {
+  const ids = useStore(useShallow(select));
   const [order, setOrder] = useState<string[] | null>(null);
   const els = useRef(new Map<string, HTMLElement>());
   const [menu, setMenu] = useState<{ x: number; y: number; items: (MenuItem | "sep")[] } | null>(null);
@@ -258,7 +260,7 @@ function useTabList(target: TargetRef, axis: "x" | "y") {
     onAuxClick: (e: React.MouseEvent) => e.button === 1 && closeTab(id),
     onContextMenu: (e: React.MouseEvent) => {
       e.preventDefault();
-      setMenu({ x: e.clientX, y: e.clientY, items: tabMenu(id, target) });
+      setMenu({ x: e.clientX, y: e.clientY, items: tabMenu(id, shown, axis) });
     },
   });
 
@@ -287,7 +289,7 @@ function CloseButton({ id, label, className }: { id: string; label: string; clas
 const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: string; narrow: boolean; split: boolean; props: TabProps }) {
   const pane = useStore((s) => s.panes[id]);
   const active = useStore((s) => !s.home && s.focused === id);
-  const onScreen = useStore((s) => split && !s.home && !s.hidden.includes(id) && sameTarget(s.panes[s.focused]?.target, s.panes[id]?.target));
+  const onScreen = useStore((s) => split && !s.home && !s.hidden.includes(id) && screenOf(s, id) === screenOf(s, s.focused));
   const command = useStore((s) => s.foreground[id]);
   const names = useNames();
   const waiting = useStore((s) => (s.attention[id]?.kind === "input" ? (s.attention[id]?.message ?? "Waiting for you") : null));
@@ -341,10 +343,10 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
  */
 export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boolean }) {
   const names = useNames();
-  const split = useSideBySide(target);
+  const split = useSideBySide(useStore(currentScreen));
   // Tabs are in one place: along the top, or here, never both.
   const here = useSettings((s) => s.tabsPlacement === "sidebar");
-  const { shown, tabProps, menuEl } = useTabList(target, "y");
+  const { shown, tabProps, menuEl } = useTabList((s) => tabsOn(s, target).map((p) => p.id), "y");
   if (!here || !shown.length) return null;
   return (
     <div
@@ -368,12 +370,14 @@ export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boo
   );
 }
 
-const StripTab = memo(function StripTab({ id, props }: { id: string; props: TabProps }) {
+const StripTab = memo(function StripTab({ id, split, several, props }: { id: string; split: boolean; several: boolean; props: TabProps }) {
   const pane = useStore((s) => s.panes[id]);
-  const active = useStore((s) => s.focused === id);
+  const active = useStore((s) => !s.home && s.focused === id);
+  const onScreen = useStore((s) => split && !s.home && !s.hidden.includes(id) && screenOf(s, id) === screenOf(s, s.focused));
   const command = useStore((s) => s.foreground[id]);
+  const names = useNames();
   if (!pane) return null;
-  const label = tabLabel(pane, command);
+  const label = tabLabel(pane, command, several ? names.target(pane.target) : undefined);
   return (
     <div
       {...props}
@@ -383,7 +387,7 @@ const StripTab = memo(function StripTab({ id, props }: { id: string; props: TabP
       title={`${label}. Drag onto the screen to show it beside, middle-click to close`}
       className={cn(
         "group flex h-7 max-w-[280px] min-w-[96px] shrink-0 cursor-default items-center gap-1.5 rounded-[7px] pr-1 pl-2.5 text-[12px] font-medium transition-colors select-none",
-        active ? "bg-ink/[0.1] text-fg" : "text-fg-3 hover:bg-ink/[0.05] hover:text-fg-2",
+        active ? "bg-ink/[0.1] text-fg" : onScreen ? "bg-ink/[0.045] text-fg-2" : "text-fg-3 hover:bg-ink/[0.05] hover:text-fg-2",
       )}
     >
       <TabIcon pane={pane} command={command} size={12.5} />
@@ -401,9 +405,17 @@ const StripTab = memo(function StripTab({ id, props }: { id: string; props: TabP
   );
 });
 
-/** Tabs in a strip at the top, for those who move them there in Settings. */
-export function TabStrip({ target }: { target: TargetRef }) {
-  const { shown, tabProps, setMenu, menuEl } = useTabList(target, "x");
+/**
+ * Tabs in a strip at the top: every server's, in one row, as in a browser.
+ * `target` is the machine on screen, null on the main menu.
+ */
+export function TabStrip({ target }: { target: TargetRef | null }) {
+  const { shown, tabProps, setMenu, menuEl } = useTabList((s) => allTabs(s).map((p) => p.id), "x");
+  const split = useSideBySide(useStore(currentScreen));
+  // With tabs of more than one machine, each says whose it is, and a line
+  // stands between one machine's and the next.
+  const machines = useStore(useShallow((s) => shown.map((id) => s.panes[id]?.target).map((t) => (t ? targetKey(t) : ""))));
+  const several = new Set(machines).size > 1;
   return (
     <div className="flex min-w-0 items-center gap-1">
       <div
@@ -416,11 +428,14 @@ export function TabStrip({ target }: { target: TargetRef }) {
         }}
         className="flex h-7 min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {shown.map((id) => (
-          <StripTab key={id} id={id} props={tabProps(id)} />
+        {shown.map((id, i) => (
+          <Fragment key={id}>
+            {i > 0 && machines[i] !== machines[i - 1] && <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-ink/[0.14]" />}
+            <StripTab id={id} split={split} several={several} props={tabProps(id)} />
+          </Fragment>
         ))}
       </div>
-      <button
+      {target && <button
         type="button"
         aria-label="New tab"
         title={`New tab (${shortcutLabel("newTerminal")} for a terminal)`}
@@ -431,7 +446,7 @@ export function TabStrip({ target }: { target: TargetRef }) {
         className="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-fg-3 hover:bg-ink/[0.06] hover:text-fg"
       >
         <Plus size={14} />
-      </button>
+      </button>}
       {menuEl}
     </div>
   );

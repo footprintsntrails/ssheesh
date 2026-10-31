@@ -28,6 +28,7 @@ import { ServerTools } from "./components/ServerTools";
 import { Recipes } from "./components/Recipes";
 import { Snippets } from "./components/Snippets";
 import { Tunnels } from "./components/Tunnels";
+import { CopyToServer } from "./components/CopyToServer";
 import { restoreTunnels } from "./lib/tunnels";
 
 function useShortcuts() {
@@ -225,6 +226,7 @@ export function App() {
       <ConfigImportDialog />
       <WhatsNew />
       <UploadDialog />
+      <CopyToServer />
       <ServerTools />
       <Recipes />
       <Snippets />

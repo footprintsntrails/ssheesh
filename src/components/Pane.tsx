@@ -4,14 +4,14 @@ import { ContextMenu, type Menu } from "./ContextMenu";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { panesOn, useSideBySide, useStore, type PaneState } from "../lib/store";
+import { panesIn, screenOf, useSideBySide, useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
 import { backend } from "../lib/backend";
 import { useSettings } from "../lib/settings";
 import { getTerminal } from "../lib/terminals";
 import { resolveScheme } from "../lib/themes";
-import type { SessionState } from "../lib/types";
+import { targetKey, type SessionState } from "../lib/types";
 import { AgentButtons } from "./AgentIcons";
 import { EmptyPane } from "./EmptyPane";
 import { FilesPane } from "./FilesPane";
@@ -98,11 +98,14 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const [menu, setMenu] = useState<Menu | null>(null);
   const zoomed = useStore((s) => s.zoomed === pane.id);
   const command = useStore((s) => s.foreground[pane.id]);
-  const tabs = !useSideBySide(pane.target);
+  const screen = useStore((s) => screenOf(s, pane.id));
+  const tabs = !useSideBySide(screen);
   // With others beside it, × only takes the pane off the screen: it goes back
   // to being a tab, still running. Closing the tab is in ⋯ and the tab list;
   // a pane on its own closes with ×.
-  const beside = useStore((s) => (pane.target ? panesOn(s, pane.target).filter((p) => !s.hidden.includes(p.id)).length > 1 : false));
+  const beside = useStore((s) => panesIn(s, screen).filter((p) => !s.hidden.includes(p.id)).length > 1);
+  // Beside another server's tab, each says whose it is.
+  const mixed = useStore((s) => !tabs && new Set(panesIn(s, screen).filter((p) => !s.hidden.includes(p.id)).map((p) => (p.target ? targetKey(p.target) : ""))).size > 1);
   const leave = !tabs && beside;
 
   // Drag a pane by its title bar onto another pane: a side to dock there,
@@ -137,7 +140,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
       {pane.kind !== "terminal" && <Icon size={13.5} strokeWidth={1.9} className={cn("shrink-0 @max-[9rem]:hidden", focused ? "text-fg-2" : "text-fg-3")} />}
       {pane.container && <Box size={13.5} strokeWidth={1.9} className="shrink-0 text-accent" />}
       <span className={cn("min-w-0 shrink truncate text-[12.5px] font-medium", focused ? "text-fg" : "text-fg-2")}>
-        {pane.kind === "empty" ? "New pane" : tabLabel(pane, command)}
+        {pane.kind === "empty" ? "New pane" : tabLabel(pane, command, mixed && !pane.container ? names.target(pane.target) : undefined)}
       </span>
       {pane.container && (
         <span className="hidden min-w-0 truncate text-[11.5px] text-fg-3 @sm:inline">

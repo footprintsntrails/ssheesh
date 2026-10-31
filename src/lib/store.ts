@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
 import { backend } from "./backend";
-import { arrange, movePane, newId, paneIds, removePane, splitAt, visibleTree, type Arrangement, type Dir, type DropZone, type LayoutNode } from "./layout";
+import { arrange, insertAt, movePane, newId, paneIds, removePane, splitAt, visibleTree, type Arrangement, type Dir, type DropZone, type LayoutNode } from "./layout";
 import { quietStorage } from "./persist";
 import { useSettings } from "./settings";
 import type { ContainerRef, Host, HostKeyCheck, SessionState, TargetRef } from "./types";
@@ -42,6 +42,8 @@ export interface Toast {
   tone: "info" | "success" | "error";
   title: string;
   body?: string;
+  /** What clicking the note does ("Show in folder"); it stays longer to give you time. */
+  action?: { label: string; run: () => void };
 }
 
 export interface ConfirmRequest {
@@ -96,6 +98,8 @@ interface OpenOptions {
   split?: boolean;
   /** Put the new pane left of (or above) the source instead of after it. */
   before?: boolean;
+  /** On screen beside the source right away, even one tab at a time. */
+  shown?: boolean;
   container?: ContainerRef;
 }
 
@@ -156,7 +160,8 @@ interface AppState {
   setPane(id: string, patch: Partial<PaneState>): void;
   setSession(id: string, state: SessionState): void;
   openIn(kind: Exclude<PaneKind, "empty">, target: TargetRef, opts?: OpenOptions): string;
-  split(id: string, dir: Dir): string;
+  /** A new terminal on that pane's server beside it; `shown` puts it on screen right away. */
+  split(id: string, dir: Dir, shown?: boolean): string;
   closePane(id: string): void;
   setPaletteOpen(open: boolean): void;
   setAddHostOpen(open: boolean): void;
@@ -174,13 +179,15 @@ interface AppState {
   arrangePanes(how: Arrangement): void;
   /** Terminal + files for one machine, side by side. */
   openWorkspace(target: TargetRef): void;
-  /** One tab at a time or side by side, for one machine. */
-  setSplit(target: TargetRef, split: boolean): void;
+  /** One tab at a time or side by side, for one screen (by its key or its machine). */
+  setSplit(screen: TargetRef | string, split: boolean): void;
   /** The main menu is showing instead of a server's tabs. */
   home: boolean;
   showHome(): void;
   /** The tab you were on last on each machine, by target key. */
   lastFocusedFor: Record<string, string>;
+  /** The tab you were on last on each screen, guests included: whether its pair shows. */
+  frontOf: Record<string, string>;
   /** Goes to a machine: the tab you were on there, or a new terminal. */
   goTo(target: TargetRef): void;
   /** Newest first. */
@@ -212,65 +219,144 @@ const machine = (p: PaneState | undefined): string | null => (p?.target ? target
 
 const NO_IDS: string[] = [];
 
-/** A machine's panes, in their layout's order. */
-export function panesOn(s: Pick<AppState, "layouts" | "panes">, target: TargetRef): PaneState[] {
-  const layout = s.layouts[targetKey(target)];
+/*
+ * Screens. Each machine has a screen of its own, a layout of its tabs, and
+ * one screen shows at a time. A tab put beside another machine's tab is a
+ * guest on that machine's screen: still its own machine's tab (in the tab
+ * list, in the sidebar, for the toolbar), shown there for as long as it's
+ * beside it. A screen goes by its machine's key.
+ */
+
+const screens = new WeakMap<object, Map<string, string>>();
+
+/** The screen each pane is on, worked out once per change of layouts. */
+function screenMap(layouts: Record<string, LayoutNode>): Map<string, string> {
+  let map = screens.get(layouts);
+  if (!map) {
+    map = new Map();
+    for (const [key, layout] of Object.entries(layouts)) for (const id of paneIds(layout)) map.set(id, key);
+    screens.set(layouts, map);
+  }
+  return map;
+}
+
+/** The screen a pane is on, by its key. */
+export function screenOf(s: Pick<AppState, "layouts">, id: string): string | null {
+  return screenMap(s.layouts).get(id) ?? null;
+}
+
+/** The screen showing, or null on the main menu. */
+export function currentScreen(s: View & Pick<AppState, "layouts">): string | null {
+  return showingHome(s) ? null : screenOf(s, s.focused);
+}
+
+/** What's on a screen, guests included, in its layout's order. */
+export function panesIn(s: Pick<AppState, "layouts" | "panes">, screen: string | null): PaneState[] {
+  const layout = screen ? s.layouts[screen] : undefined;
   return (layout ? paneIds(layout) : NO_IDS).map((id) => s.panes[id]).filter((p): p is PaneState => !!p);
 }
 
+/** A machine's panes: on its own screen in its layout's order, then any beside another machine's. */
+export function panesOn(s: Pick<AppState, "layouts" | "panes">, target: TargetRef): PaneState[] {
+  return panesOfKey(s, targetKey(target));
+}
+
+function panesOfKey(s: Pick<AppState, "layouts" | "panes">, key: string): PaneState[] {
+  const own = s.layouts[key] ? paneIds(s.layouts[key]) : NO_IDS;
+  const away = Object.entries(s.layouts).flatMap(([k, layout]) => (k === key ? NO_IDS : paneIds(layout)));
+  return [...own, ...away].map((id) => s.panes[id]).filter((p): p is PaneState => !!p && machine(p) === key);
+}
+
+type TabView = Pick<AppState, "layouts" | "panes" | "tabOrder">;
+
+/** Where a tab is in the order you dragged tabs to; the rest come after. */
+function tabRank(s: TabView, id: string): number {
+  const i = s.tabOrder.indexOf(id);
+  return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+}
+
 /** A machine's tabs: in the order you dragged them to, the rest as they were opened. */
-export function tabsOn(s: Pick<AppState, "layouts" | "panes" | "tabOrder">, target: TargetRef): PaneState[] {
-  const rank = (id: string) => {
-    const i = s.tabOrder.indexOf(id);
-    return i < 0 ? Number.MAX_SAFE_INTEGER : i;
-  };
-  return panesOn(s, target)
+export function tabsOn(s: TabView, target: TargetRef): PaneState[] {
+  return tabsOfKey(s, targetKey(target));
+}
+
+function tabsOfKey(s: TabView, key: string): PaneState[] {
+  return panesOfKey(s, key)
     .filter((p) => p.kind !== "empty")
     .map((p, i) => ({ p, i }))
-    .sort((a, b) => rank(a.p.id) - rank(b.p.id) || a.i - b.i)
+    .sort((a, b) => tabRank(s, a.p.id) - tabRank(s, b.p.id) || a.i - b.i)
     .map((x) => x.p);
 }
 
-/** Side by side on this machine: your choice for it, or the one in Settings. */
-export function isSplit(s: Pick<AppState, "splitOn">, target: TargetRef | null): boolean {
-  const own = target ? s.splitOn[targetKey(target)] : undefined;
+/**
+ * Every machine's tabs, as the strip along the top shows them: each
+ * machine's together, machines in the order you first opened them, unless
+ * you dragged tabs elsewhere.
+ */
+export function allTabs(s: TabView): PaneState[] {
+  // Machines in the order of their screens; one with only guests elsewhere, after.
+  const keys = new Set(Object.keys(s.layouts));
+  for (const id of screenMap(s.layouts).keys()) {
+    const key = machine(s.panes[id]);
+    if (key) keys.add(key);
+  }
+  return [...keys]
+    .flatMap((key, m) => tabsOfKey(s, key).map((p, i) => ({ p, m, i })))
+    .sort((a, b) => tabRank(s, a.p.id) - tabRank(s, b.p.id) || a.m - b.m || a.i - b.i)
+    .map((x) => x.p);
+}
+
+/** A screen, by its key or its machine. */
+type ScreenRef = TargetRef | string | null | undefined;
+const keyOf = (r: ScreenRef): string | null => (r == null ? null : typeof r === "string" ? r : targetKey(r));
+
+/** Side by side on this screen: your choice for it, or the one in Settings. */
+export function isSplit(s: Pick<AppState, "splitOn">, screen: ScreenRef): boolean {
+  const key = keyOf(screen);
+  const own = key ? s.splitOn[key] : undefined;
   return own ?? useSettings.getState().viewMode === "split";
 }
 
 /** The same, as a hook that follows both your choice and Settings. */
-export function useSplit(target: TargetRef | null): boolean {
-  const own = useStore((s) => (target ? s.splitOn[targetKey(target)] : undefined));
+export function useSplit(screen: ScreenRef): boolean {
+  const key = keyOf(screen);
+  const own = useStore((s) => (key ? s.splitOn[key] : undefined));
   const fallback = useSettings((s) => s.viewMode === "split");
   return own ?? fallback;
 }
 
-type SplitView = Pick<AppState, "splitOn" | "hidden" | "lastFocusedFor">;
+type SplitView = Pick<AppState, "splitOn" | "hidden" | "lastFocusedFor" | "frontOf">;
+
+/** The tab you were on last on a screen. */
+const frontOn = (s: Pick<AppState, "lastFocusedFor" | "frontOf">, key: string): string | undefined => s.frontOf[key] ?? s.lastFocusedFor[key];
 
 /**
- * Panes side by side on screen for this machine right now. With side by side
- * as your layout (Settings), whenever the machine is split. With one tab at a
- * time, the tabs you put side by side are a pair, as in a browser: another
- * tab shows on its own, and going back to one of the pair shows both again.
+ * Panes side by side on this screen right now. With side by side as your
+ * layout (Settings), whenever the screen is split. With one tab at a time,
+ * the tabs you put side by side are a pair, as in a browser: another tab
+ * shows on its own, and going back to one of the pair shows both again.
  */
-export function sideBySide(s: SplitView, target: TargetRef | null): boolean {
-  if (!isSplit(s, target)) return false;
-  if (useSettings.getState().viewMode === "split" || !target) return true;
-  const front = s.lastFocusedFor[targetKey(target)];
+export function sideBySide(s: SplitView, screen: ScreenRef): boolean {
+  if (!isSplit(s, screen)) return false;
+  const key = keyOf(screen);
+  if (useSettings.getState().viewMode === "split" || !key) return true;
+  const front = frontOn(s, key);
   return !front || !s.hidden.includes(front);
 }
 
 /** The same, as a hook. */
-export function useSideBySide(target: TargetRef | null): boolean {
-  const split = useSplit(target);
+export function useSideBySide(screen: ScreenRef): boolean {
+  const key = keyOf(screen);
+  const split = useSplit(key);
   const asTabs = useSettings((s) => s.viewMode === "tabs");
   const alone = useStore((s) => {
-    const front = target ? s.lastFocusedFor[targetKey(target)] : undefined;
+    const front = key ? frontOn(s, key) : undefined;
     return !!front && s.hidden.includes(front);
   });
   return split && !(asTabs && alone);
 }
 
-/** The tab you were last on there, if it's still there; else that machine's first tab. */
+/** The tab you were last on there, if it's on its own screen; else the screen's first tab. */
 function anchorOn(s: AppState, key: string): string | undefined {
   const layout = s.layouts[key];
   if (!layout) return undefined;
@@ -280,13 +366,42 @@ function anchorOn(s: AppState, key: string): string | undefined {
 }
 
 /**
+ * Sends guests home: a tab beside another machine's goes back to its own
+ * machine's screen once it's taken out of side by side (hidden), or once
+ * that screen has none of its own tabs left. One tab at a time, it comes
+ * back as a tab of its own rather than joining a pair there.
+ */
+export function guestsHome(s: Pick<AppState, "layouts" | "panes" | "hidden" | "splitOn">): Pick<AppState, "layouts" | "hidden"> | null {
+  let layouts = s.layouts;
+  let hidden = s.hidden;
+  for (const [key, layout] of Object.entries(s.layouts)) {
+    const ids = paneIds(layout);
+    const own = ids.some((id) => machine(s.panes[id]) === key);
+    for (const id of ids) {
+      const home = machine(s.panes[id]);
+      if (!home || home === key || (own && !hidden.includes(id))) continue;
+      if (layouts === s.layouts) layouts = { ...s.layouts };
+      const left = removePane(layouts[key], id);
+      if (left) layouts[key] = left;
+      else delete layouts[key];
+      const there = layouts[home];
+      layouts[home] = there ? insertAt(there, paneIds(there).at(-1)!, "row", id) : { kind: "pane", id };
+      if (there && isSplit(s, home) && useSettings.getState().viewMode === "tabs" && !hidden.includes(id)) hidden = [...hidden, id];
+    }
+  }
+  return layouts === s.layouts ? null : { layouts, hidden };
+}
+
+/**
  * What every way of landing on a pane shares: it's on screen, it's the one
  * you'd come back to on its machine, and what it asked you for is seen.
  */
 function focusing(s: AppState, panes: Record<string, PaneState>, id: string): Partial<AppState> {
   const p = panes[id];
   const key = machine(p);
+  const screen = screenOf(s, id);
   const patch: Partial<AppState> = { focused: id, home: false };
+  if (screen) patch.frontOf = { ...s.frontOf, [screen]: id };
   // With side by side as the layout, going to a tab puts it back on screen.
   // As tabs, a tab outside the pair side by side shows on its own instead.
   if (s.hidden.includes(id) && useSettings.getState().viewMode === "split") patch.hidden = s.hidden.filter((h) => h !== id);
@@ -341,6 +456,7 @@ export const useStore = create<AppState>()(
       showHome: () => set({ home: true, zoomed: null }),
 
       lastFocusedFor: {},
+      frontOf: {},
       goTo(target) {
         const there = anchorOn(get(), targetKey(target));
         if (there) get().focus(there);
@@ -425,6 +541,8 @@ export const useStore = create<AppState>()(
         const key = targetKey(target);
         // It opens next to a tab of the same machine: the one you named, else the one you were on there.
         const from = opts.from && machine(s.panes[opts.from]) === key ? opts.from : anchorOn(s, key);
+        // On the screen of the tab it opens next to: beside another machine's tab, there.
+        const screen = (from && screenOf(s, from)) || key;
         const source = from ? s.panes[from] : undefined;
         const reuse = !!from && source?.kind === "empty" && !opts.split;
         const fresh: Omit<PaneState, "id"> = {
@@ -441,7 +559,7 @@ export const useStore = create<AppState>()(
         // An empty pane of another machine you picked this one from has done its job.
         const stray = opts.from && opts.from !== from && s.panes[opts.from]?.kind === "empty" ? opts.from : null;
         if (stray) {
-          const k = machine(s.panes[stray]);
+          const k = screenOf(s, stray);
           const left = k && layouts[k] ? removePane(layouts[k], stray) : null;
           if (k && left) layouts[k] = left;
           else if (k) delete layouts[k];
@@ -456,21 +574,21 @@ export const useStore = create<AppState>()(
           panes[id] = { id, ...fresh };
           // A terminal opened next to files or stats goes on the left, where you read first.
           const before = opts.before ?? (kind === "terminal" && !!source && source.kind !== "terminal");
-          layouts[key] = layouts[key] && from ? splitAt(layouts[key], from, opts.dir ?? "row", id, before) : { kind: "pane", id };
+          layouts[screen] = layouts[screen] && from ? splitAt(layouts[screen], from, opts.dir ?? "row", id, before) : { kind: "pane", id };
         }
         // As tabs, a new tab opens on its own, leaving a pair side by side as it
         // was; what should show beside calls placeBeside after.
-        const alone = isSplit(s, target) && useSettings.getState().viewMode === "tabs";
-        set({ panes, layouts, ...focusing(s, panes, id), ...(alone ? { hidden: [...s.hidden, id] } : {}), zoomed: null });
+        const alone = isSplit(s, screen) && useSettings.getState().viewMode === "tabs" && !opts.shown;
+        set({ panes, layouts, ...focusing({ ...s, layouts }, panes, id), ...(alone ? { hidden: [...s.hidden, id] } : {}), zoomed: null });
         return id;
       },
 
       // A split is a new terminal on the server you're on, right away: no
       // asking where to, and never another server.
-      split(id, dir) {
+      split(id, dir, shown) {
         const target = get().panes[id]?.target;
         if (!target) return id;
-        return get().openIn("terminal", target, { from: id, dir, split: true, before: false });
+        return get().openIn("terminal", target, { from: id, dir, split: true, before: false, shown });
       },
 
       closePane(id) {
@@ -480,7 +598,7 @@ export const useStore = create<AppState>()(
         if (pane.kind === "terminal") {
           void import("./terminals").then((t) => t.disposeTerminal(id, true, pane));
         }
-        const key = machine(pane);
+        const key = screenOf(s, id);
         const tabs = pane.target ? tabsOn(s, pane.target).map((p) => p.id) : [];
         const { [id]: _gone, ...panes } = s.panes;
         const { [id]: _status, ...sessions } = s.sessions;
@@ -507,13 +625,22 @@ export const useStore = create<AppState>()(
         };
         if (s.focused !== id) return set(base);
         // The next tab comes up, as in a browser: the one after it, else the one
-        // before; side by side, one that's on screen. Closing a machine's last
-        // tab goes to the main menu rather than to another machine.
+        // before; side by side, one that's on screen. A machine's last tab goes
+        // to its neighbor in the strip along the top, where every machine's
+        // tabs are one row; with tabs under each server, to the main menu.
+        // Side by side, the one beside it, also another machine's.
         const at = tabs.indexOf(id);
         const others = tabs.filter((t) => t !== id);
-        const shown = pane.target && sideBySide(s, pane.target) ? others.filter((t) => !s.hidden.includes(t)) : others;
+        const onScreen = key && sideBySide(s, key) && !s.hidden.includes(id) ? paneIds(s.layouts[key]).filter((t) => t !== id && !s.hidden.includes(t)) : [];
         const pick = (list: string[]) => list.find((t) => tabs.indexOf(t) > at) ?? [...list].reverse().find((t) => tabs.indexOf(t) < at);
-        const next = pick(shown) ?? pick(others) ?? (key && layouts[key] ? paneIds(layouts[key])[0] : undefined);
+        const strip = useSettings.getState().tabsPlacement === "top" ? allTabs(s).map((p) => p.id) : [];
+        const beside = strip.indexOf(id);
+        const next =
+          pick(others.filter((t) => onScreen.includes(t))) ??
+          onScreen[0] ??
+          pick(others) ??
+          (key && layouts[key] ? paneIds(layouts[key])[0] : undefined) ??
+          (beside < 0 ? undefined : (strip[beside + 1] ?? strip[beside - 1]));
         const after = { ...s, ...base } as AppState;
         set({ ...base, ...(next ? focusing(after, panes, next) : { home: true, zoomed: null }) });
       },
@@ -528,10 +655,10 @@ export const useStore = create<AppState>()(
       setHidden(ids, hide) {
         const s = get();
         const hidden = hide ? [...new Set([...s.hidden, ...ids])] : s.hidden.filter((h) => !ids.includes(h));
-        // Something of the machine always stays on screen.
-        const target = s.panes[ids[0]]?.target;
-        const shown = target ? panesOn(s, target).filter((p) => !hidden.includes(p.id)) : [];
-        if (target && !shown.length) return;
+        // Something always stays on the screen.
+        const screen = screenOf(s, ids[0]);
+        const shown = panesIn(s, screen).filter((p) => !hidden.includes(p.id));
+        if (screen && !shown.length) return;
         const focused = hidden.includes(s.focused) && shown.length ? shown[0].id : s.focused;
         // Focus moves the way every other move does, so the machine knows its front tab.
         const moved = focused !== s.focused ? focusing({ ...s, hidden }, s.panes, focused) : { focused };
@@ -544,7 +671,7 @@ export const useStore = create<AppState>()(
       toast(t) {
         const id = newId("t");
         set((s) => ({ toasts: [...s.toasts.slice(-3), { id, ...t }] }));
-        setTimeout(() => get().dismissToast(id), t.tone === "error" ? 7000 : 3800);
+        setTimeout(() => get().dismissToast(id), t.tone === "error" ? 7000 : t.action ? 9000 : 3800);
         return id;
       },
       dismissToast(id) {
@@ -574,7 +701,7 @@ export const useStore = create<AppState>()(
         const s = get();
         const pane = id ?? activePane(s)?.id;
         // One tab at a time, every pane fills the window already.
-        if (!pane || !sideBySide(s, s.panes[pane]?.target ?? null)) return set({ zoomed: null });
+        if (!pane || !sideBySide(s, screenOf(s, pane))) return set({ zoomed: null });
         set({ ...focusing(s, s.panes, pane), zoomed: s.zoomed ? null : pane });
       },
       openSettings: (section) => set((s) => ({ settingsOpen: true, settingsSection: section ?? s.settingsSection })),
@@ -589,14 +716,25 @@ export const useStore = create<AppState>()(
         ),
       movePane(dragId, targetId, zone) {
         const s = get();
-        const key = machine(s.panes[dragId]);
-        if (!key || key !== machine(s.panes[targetId]) || !s.layouts[key]) return;
-        set({ layouts: { ...s.layouts, [key]: movePane(s.layouts[key], dragId, targetId, zone) }, ...focusing(s, s.panes, dragId) });
+        const from = screenOf(s, dragId);
+        const to = screenOf(s, targetId);
+        if (!from || !to || dragId === targetId) return;
+        const layouts = { ...s.layouts };
+        if (from === to) layouts[to] = movePane(s.layouts[to], dragId, targetId, zone);
+        else {
+          // Onto another machine's screen: a guest there, beside that tab.
+          const left = removePane(layouts[from], dragId);
+          if (left) layouts[from] = left;
+          else delete layouts[from];
+          const before = zone === "left" || zone === "top";
+          layouts[to] = insertAt(layouts[to], targetId, zone === "top" || zone === "bottom" ? "col" : "row", dragId, before);
+        }
+        set({ layouts, ...focusing({ ...s, layouts }, s.panes, dragId) });
       },
       arrangePanes(how) {
         const s = get();
         const pane = activePane(s);
-        const key = machine(pane ?? undefined);
+        const key = currentScreen(s);
         if (!pane || !key || !s.layouts[key]) return;
         // Keep the focused pane first: it becomes the big one in "main".
         const ids = paneIds(s.layouts[key]);
@@ -608,6 +746,15 @@ export const useStore = create<AppState>()(
         const key = targetKey(target);
         const panes = { ...s.panes };
         const mine = panesOn(s, target);
+        // Its tabs beside other machines' come back to its own screen.
+        const layouts = { ...s.layouts };
+        for (const p of mine) {
+          const at = screenOf(s, p.id);
+          if (!at || at === key) continue;
+          const left = removePane(layouts[at], p.id);
+          if (left) layouts[at] = left;
+          else delete layouts[at];
+        }
         const ensure = (kind: Exclude<PaneKind, "empty">) => {
           const existing = mine.find((p) => p.kind === kind);
           if (existing) return existing.id;
@@ -619,17 +766,19 @@ export const useStore = create<AppState>()(
         // Stats are in the vitals bar; the full view opens from there.
         const main = [ensure("terminal"), ensure("files")];
         const rest = mine.map((p) => p.id).filter((id) => !main.includes(id));
+        layouts[key] = arrange([...main, ...rest], "main");
         set({
           panes,
-          layouts: { ...s.layouts, [key]: arrange([...main, ...rest], "main") },
+          layouts,
           splitOn: { ...s.splitOn, [key]: true },
           hidden: s.hidden.filter((h) => !main.includes(h)),
-          ...focusing(s, panes, main[0]),
+          ...focusing({ ...s, layouts }, panes, main[0]),
           zoomed: null,
         });
       },
-      setSplit(target, split) {
-        set((s) => ({ splitOn: { ...s.splitOn, [targetKey(target)]: split } }));
+      setSplit(screen, split) {
+        const key = keyOf(screen);
+        if (key) set((s) => ({ splitOn: { ...s.splitOn, [key]: split } }));
       },
     }),
     {
@@ -646,6 +795,7 @@ export const useStore = create<AppState>()(
         tabOrder: s.tabOrder,
         home: s.home,
         lastFocusedFor: s.lastFocusedFor,
+        frontOf: s.frontOf,
         closedTabs: s.closedTabs,
       }),
       migrate: (saved, version) => (version < 2 ? splitByMachine(saved as Saved1) : saved) as AppState,
@@ -694,12 +844,19 @@ export function splitByMachine(saved: Saved1): Record<string, unknown> {
   return { ...rest, layouts, splitOn: {}, panes, focused, home: !focused };
 }
 
+// Guests go home whenever what's on screen changes, whoever changed it.
+useStore.subscribe((s, prev) => {
+  if (s.layouts === prev.layouts && s.hidden === prev.hidden) return;
+  const tidy = guestsHome(s);
+  if (tidy) useStore.setState(tidy);
+});
+
 /** Changing the default in Settings applies to every machine, also ones you'd switched by hand. */
 useSettings.subscribe((s, prev) => {
   if (s.viewMode === prev.viewMode) return;
   // Every machine follows the new default, and the tab you were on shows.
   const st = useStore.getState();
-  const fronts = new Set([st.focused, ...Object.values(st.lastFocusedFor)]);
+  const fronts = new Set([st.focused, ...Object.values(st.lastFocusedFor), ...Object.values(st.frontOf)]);
   useStore.setState({ splitOn: {}, hidden: st.hidden.filter((h) => !fronts.has(h)) });
 });
 
