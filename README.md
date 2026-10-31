@@ -122,7 +122,9 @@ All files are on the [Releases page](https://github.com/footprintsntrails/sshees
 | --- | --- | --- |
 | Jump to anything (`srv:` `cmd:` `file:` `set:` narrow it down) | ⌘K | Ctrl+Shift+K |
 | Split right / down | ⌘D / ⇧⌘D | Ctrl+Shift+D / Ctrl+Shift+E |
-| Close pane | ⌘W | Ctrl+Shift+W |
+| Close pane or tab | ⌘W | Ctrl+Shift+W |
+| New terminal | ⌘T | Ctrl+Shift+T |
+| Next / previous tab | ⌃Tab / ⌃⇧Tab | Ctrl+Tab / Ctrl+Shift+Tab |
 | Show / hide sidebar | ⌘B | Ctrl+Shift+B |
 | Show / hide server vitals | ⌘J | Ctrl+Shift+J |
 | One pane fills the window, and back | ⇧⌘↩ | Ctrl+Shift+Enter |

@@ -278,14 +278,14 @@ export function Welcome() {
               <>
                 <h2 className="text-[20px] font-semibold tracking-tight text-fg">Layout</h2>
                 <Field
-                  label="Terminal, Files and Stats"
+                  label="Terminal and Files"
                   hint={
                     s.viewMode === "tabs"
                       ? "One at a time, as tabs at the top. Each keeps running while you look at another."
-                      : "Switch each on or off at the top. The ones you switch on share the window."
+                      : "Switch each on or off at the top. With both on, they share the window."
                   }
                 >
-                  <div className="flex gap-2" role="radiogroup" aria-label="Terminal, Files and Stats">
+                  <div className="flex gap-2" role="radiogroup" aria-label="Terminal and Files">
                     <Card selected={s.viewMode === "split"} onClick={() => set({ viewMode: "split" })} title="Side by side">
                       <rect x="4" y="4" width="34" height="32" rx="2" {...strong} />
                       <rect x="41" y="4" width="19" height="15" rx="2" {...fill} />

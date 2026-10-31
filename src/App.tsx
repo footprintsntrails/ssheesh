@@ -12,7 +12,8 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
 import { backend } from "./lib/backend";
-import { matchShortcut } from "./lib/keys";
+import { matchShortcut, tabStep } from "./lib/keys";
+import { closeTab, nextTab } from "./components/Tabs";
 import { cn } from "./lib/format";
 import { applyAppearance, useSettings } from "./lib/settings";
 import { useStore } from "./lib/store";
@@ -27,6 +28,13 @@ import { restoreTunnels } from "./lib/tunnels";
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const step = tabStep(e);
+      if (step) {
+        e.preventDefault();
+        e.stopPropagation();
+        nextTab(step);
+        return;
+      }
       const id = matchShortcut(e);
       if (!id) return;
       e.preventDefault();
@@ -36,7 +44,11 @@ function useShortcuts() {
       else if (id === "addHost") s.setAddHostOpen(true);
       else if (id === "splitRight") s.split(s.focused, "row");
       else if (id === "splitDown") s.split(s.focused, "col");
-      else if (id === "closePane") s.closePane(s.focused);
+      else if (id === "closePane") closeTab(s.focused);
+      else if (id === "newTerminal") {
+        const target = s.panes[s.focused]?.target;
+        if (target) s.openIn("terminal", target, { split: true });
+      }
       else if (id === "settings") s.settingsOpen ? s.closeSettings() : s.openSettings();
       else if (id === "zoomPane") s.toggleZoom();
       else if (id === "streamer") toggleStreamer();

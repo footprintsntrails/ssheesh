@@ -21,6 +21,16 @@ export interface PaneState {
   initialCommand?: string;
   /** Terminal pane: opened inside this container. */
   container?: ContainerRef;
+  /** "Terminal 2": the lowest number free among the machine's panes of this kind when it opened. It never changes. */
+  n?: number;
+}
+
+/** The lowest number no other pane of this kind on this machine has. */
+function freeNumber(panes: Record<string, PaneState>, kind: PaneKind, target: TargetRef | null, except?: string): number {
+  const taken = new Set(Object.values(panes).filter((p) => p.id !== except && p.kind === kind && sameTarget(p.target, target)).map((p) => p.n ?? 1));
+  let n = 1;
+  while (taken.has(n)) n++;
+  return n;
 }
 
 export interface Toast {
@@ -98,6 +108,10 @@ interface AppState {
   hidden: string[];
   /** Switches panes off (or back on) without closing them. */
   setHidden(ids: string[], hidden: boolean): void;
+  /** Tabs in the order you dragged them to; panes not in it follow in layout order. */
+  tabOrder: string[];
+  /** Puts these tabs in this order, ahead of the rest. */
+  setTabOrder(ids: string[]): void;
   /** Pane being dragged by its header, and where it would land. */
   dragPane: string | null;
   dropTarget: { paneId: string; zone: DropZone } | null;
@@ -252,6 +266,7 @@ export const useStore = create<AppState>()(
           path: opts.path,
           initialCommand: opts.initialCommand,
           container: opts.container,
+          n: freeNumber(s.panes, kind, target, source?.kind === "empty" && !opts.split ? from : undefined),
         };
         if (source && source.kind === "empty" && !opts.split) {
           set({ panes: { ...s.panes, [from]: { id: from, ...fresh } }, focused: from });
@@ -300,6 +315,12 @@ export const useStore = create<AppState>()(
         const idx = order.filter((r) => remaining.includes(r) || r === id).indexOf(id);
         const focused = s.focused === id ? (remaining[Math.max(0, idx - 1)] ?? remaining[0]) : s.focused;
         set({ root, panes, sessions, focused, zoomed: s.zoomed === id ? null : s.zoomed, hidden: s.hidden.filter((h) => h !== id) });
+      },
+
+      tabOrder: [],
+      setTabOrder(ids) {
+        const s = get();
+        set({ tabOrder: [...ids, ...s.tabOrder.filter((id) => !ids.includes(id))].filter((id) => s.panes[id]) });
       },
 
       hidden: [],
@@ -382,10 +403,11 @@ export const useStore = create<AppState>()(
             return s.focused;
           }
           const id = newId("p");
-          panes[id] = { id, kind, target, sessionKey: kind === "terminal" ? sessionKey() : undefined };
+          panes[id] = { id, kind, target, sessionKey: kind === "terminal" ? sessionKey() : undefined, n: freeNumber(panes, kind, target) };
           return id;
         };
-        const main = [ensure("terminal"), ensure("files"), ensure("stats")];
+        // Stats are in the vitals bar; the full view opens from there.
+        const main = [ensure("terminal"), ensure("files")];
         const rest = paneIds(s.root).filter((id) => !main.includes(id) && panes[id]);
         const root = arrange([...main, ...rest], "main");
         set({ panes, root, focused: main[0], zoomed: null });
@@ -394,7 +416,7 @@ export const useStore = create<AppState>()(
     {
       name: "sshee-workspace",
       version: 1,
-      partialize: (s) => ({ root: s.root, panes: s.panes, focused: s.focused, hidden: s.hidden }),
+      partialize: (s) => ({ root: s.root, panes: s.panes, focused: s.focused, hidden: s.hidden, tabOrder: s.tabOrder }),
     },
   ),
 );

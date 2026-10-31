@@ -27,7 +27,7 @@ export interface Settings {
   /** Hides the sidebar, toolbar and vitals; they slide in at the window's edges. */
   compactMode: boolean;
   /**
-   * "split": Terminal, Files and Stats switch on and off, and the ones on
+   * "split": Terminal and Files switch on and off, and the ones on
    * share the window. "tabs": one fills the window at a time.
    */
   viewMode: "split" | "tabs";

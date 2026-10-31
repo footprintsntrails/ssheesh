@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 — real tabs
+
+- **Tabs you can move and close.** In the Tabs layout every terminal and file manager of the server is a tab: drag one to move it, close it with its × or a middle click, or right-click for "Close other tabs" and "Close tabs to the right". The + next to them opens a new terminal or file manager.
+- **Ctrl+Tab and Ctrl+Shift+Tab** go to the next and previous tab (side by side: the next pane). **⌘T / Ctrl+Shift+T** opens a new terminal.
+- **A tab keeps its name.** Closing "Terminal 2" no longer renames "Terminal 3"; the next new terminal takes the free number.
+- **Stats stay at the bottom.** They're no longer a tab or a button at the top, and a server's workspace no longer opens a Stats pane: the vitals bar shows them, and clicking it opens the full view (click again to go back, in the Tabs layout).
+- In the Tabs layout, a pane's title bar no longer offers to split or fill the window.
+
 ## 0.5.0 — commands and tunnels
 
 ### Snippets and a sharper command palette

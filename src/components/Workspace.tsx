@@ -1,4 +1,4 @@
-import { Activity, ArrowDownToLine, Minimize2, Columns2, EyeOff, FolderOpen, PanelLeft, PanelRight, RotateCw, Rows2, Settings, SquareTerminal } from "lucide-react";
+import { ArrowDownToLine, Minimize2, Columns2, EyeOff, FolderOpen, PanelLeft, PanelRight, RotateCw, Rows2, Settings, SquareTerminal } from "lucide-react";
 import { Fragment } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn } from "../lib/format";
@@ -11,6 +11,7 @@ import { useEnv } from "../lib/labels";
 import { useStore, type PaneKind, type PaneState } from "../lib/store";
 import { sameTarget } from "../lib/types";
 import { PaneView } from "./Pane";
+import { TabStrip } from "./Tabs";
 import { VitalsBar } from "./StatsPane";
 import { EdgeReveal } from "./EdgeReveal";
 import { EnvChip, IconButton } from "./ui";
@@ -35,10 +36,10 @@ function Tree({ node }: { node: LayoutNode }) {
   );
 }
 
+// Stats live in the vitals bar at the bottom; its details open the full view.
 const VIEWS: { kind: Exclude<PaneKind, "empty">; label: string; icon: typeof SquareTerminal }[] = [
   { kind: "terminal", label: "Terminal", icon: SquareTerminal },
   { kind: "files", label: "Files", icon: FolderOpen },
-  { kind: "stats", label: "Stats", icon: Activity },
 ];
 
 
@@ -149,7 +150,7 @@ function Toolbar() {
       openIn(kind, target, { split: pane?.kind !== "empty" });
       return;
     }
-    if (viewMode === "split") setHidden(list.map((p) => p.id), false);
+    setHidden(list.map((p) => p.id), false);
     focus(list.find((p) => p.id === pane?.id)?.id ?? list[0].id);
   };
   /** Side by side: each view switches on and off; the ones on share the window. */
@@ -158,8 +159,6 @@ function Toolbar() {
     if (list.some((p) => !hidden.includes(p.id))) setHidden(list.map((p) => p.id), true);
     else show(kind);
   };
-  // As tabs, a second terminal (or one in a container) gets its own tab.
-  const extras = viewMode === "tabs" ? mine.filter((p) => ofKind(p.kind)[0]?.id !== p.id) : [];
 
   return (
     <header data-tauri-drag-region className={cn("@container flex h-[46px] shrink-0 items-center gap-3 pr-3", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}>
@@ -176,62 +175,41 @@ function Toolbar() {
         {host && !names.on && <span className="hidden truncate text-[12px] text-fg-3 @2xl:inline">{names.address(host)}</span>}
       </div>
 
-      <div
-        role="tablist"
-        aria-label="Views of this machine"
-        className={cn(
-          "flex h-7 items-center rounded-[9px] bg-ink/[0.045] p-[3px] ring-1 ring-inset ring-ink/[0.06] transition-opacity",
-          !target && "pointer-events-none opacity-40",
-        )}
-      >
-        {VIEWS.map(({ kind, label, icon: Icon }) => {
-          const list = ofKind(kind);
-          const active =
-            viewMode === "tabs" ? !!pane && list[0]?.id === pane.id || (!list.length && pane?.kind === kind) : list.some((p) => !hidden.includes(p.id));
-          return (
-            <button
-              key={kind}
-              role="tab"
-              aria-selected={active}
-              aria-label={label}
-              title={viewMode === "tabs" ? label : active ? `${label} is on. Click to hide it` : `Show ${label}`}
-              onClick={() => (viewMode === "tabs" ? show(kind) : toggle(kind))}
-              className={cn(
-                "flex h-[22px] items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium transition-all",
-                active
-                  ? "bg-ink/[0.11] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.35),inset_0_1px_0_rgb(255_255_255/0.07)]"
-                  : "text-fg-3 hover:text-fg-2",
-              )}
-            >
-              <Icon size={12.5} strokeWidth={2} />
-              <span className="hidden @xl:inline">{label}</span>
-            </button>
-          );
-        })}
-        {extras.map((p) => {
-          const view = VIEWS.find((v) => v.kind === p.kind) ?? VIEWS[0];
-          const label = p.container ? p.container.name : `${view.label} ${ofKind(p.kind).indexOf(p) + 1}`;
-          const active = pane?.id === p.id;
-          return (
-            <button
-              key={p.id}
-              role="tab"
-              aria-selected={active}
-              title={label}
-              onClick={() => focus(p.id)}
-              className={cn(
-                "flex h-[22px] max-w-[140px] items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium transition-all",
-                active
-                  ? "bg-ink/[0.11] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.35),inset_0_1px_0_rgb(255_255_255/0.07)]"
-                  : "text-fg-3 hover:text-fg-2",
-              )}
-            >
-              <view.icon size={12.5} strokeWidth={2} className="shrink-0" />
-              <span className="hidden truncate @xl:inline">{label}</span>
-            </button>
-          );
-        })}
-      </div>
+      {viewMode === "tabs" && target ? (
+        <TabStrip target={target} />
+      ) : (
+        <div
+          role="tablist"
+          aria-label="Views of this machine"
+          className={cn(
+            "flex h-7 items-center rounded-[9px] bg-ink/[0.045] p-[3px] ring-1 ring-inset ring-ink/[0.06] transition-opacity",
+            !target && "pointer-events-none opacity-40",
+          )}
+        >
+          {VIEWS.map(({ kind, label, icon: Icon }) => {
+            const active = ofKind(kind).some((p) => !hidden.includes(p.id));
+            return (
+              <button
+                key={kind}
+                role="tab"
+                aria-selected={active}
+                aria-label={label}
+                title={active ? `${label} is on. Click to hide it` : `Show ${label}`}
+                onClick={() => toggle(kind)}
+                className={cn(
+                  "flex h-[22px] items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium transition-all",
+                  active
+                    ? "bg-ink/[0.11] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.35),inset_0_1px_0_rgb(255_255_255/0.07)]"
+                    : "text-fg-3 hover:text-fg-2",
+                )}
+              >
+                <Icon size={12.5} strokeWidth={2} />
+                <span className="hidden @xl:inline">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex items-center gap-0.5">
         <StreamerBadge />
@@ -272,7 +250,10 @@ export function Workspace() {
     if (!target) return;
     const st = useStore.getState();
     const existing = Object.values(st.panes).find((p) => p.kind === "stats" && sameTarget(p.target, target));
-    if (existing) st.focus(existing.id);
+    // As tabs the details fill the window, so a second click goes back to the terminal.
+    const back = tabs && existing && st.focused === existing.id ? st.mainTerminalFor(target) : null;
+    if (back) st.focus(back);
+    else if (existing) st.focus(existing.id);
     else st.openIn("stats", target, { split: true, dir: "col" });
   };
   return (

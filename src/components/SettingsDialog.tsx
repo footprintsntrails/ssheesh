@@ -587,11 +587,11 @@ function Layout({ s, set, reset }: SectionProps) {
     <>
       <SectionTitle onReset={() => reset(["viewMode", "sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "placesMode", "placesSide", "paneGap", "paneRadius"])}>Layout</SectionTitle>
       <Row
-        label="Terminal, Files and Stats"
+        label="Terminal and Files"
         hint={
           s.viewMode === "tabs"
             ? "One at a time, as tabs at the top. Each keeps running while you look at another."
-            : "Switch each on or off at the top. The ones you switch on share the window."
+            : "Switch each on or off at the top. With both on, they share the window."
         }
       >
         <Segmented

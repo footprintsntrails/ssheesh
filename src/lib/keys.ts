@@ -33,7 +33,7 @@ export function isTerminalNewline(e: KeyboardEvent): boolean {
   return e.key === "Enter" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
 }
 
-export type ShortcutId = "palette" | "splitRight" | "splitDown" | "closePane" | "addHost" | "settings" | "sidebar" | "vitals" | "zoomPane" | "streamer" | "compact";
+export type ShortcutId = "palette" | "splitRight" | "splitDown" | "closePane" | "newTerminal" | "addHost" | "settings" | "sidebar" | "vitals" | "zoomPane" | "streamer" | "compact";
 
 interface Combo {
   key: string;
@@ -46,6 +46,7 @@ const MAC: Record<ShortcutId, Combo> = {
   splitRight: { key: "d" },
   splitDown: { key: "d", shift: true },
   closePane: { key: "w" },
+  newTerminal: { key: "t" },
   addHost: { key: "n", shift: true },
   settings: { key: "," },
   sidebar: { key: "b" },
@@ -60,6 +61,7 @@ const OTHER: Record<ShortcutId, Combo> = {
   splitRight: { key: "d" },
   splitDown: { key: "e" },
   closePane: { key: "w" },
+  newTerminal: { key: "t" },
   addHost: { key: "n" },
   settings: { key: ",", shift: false },
   sidebar: { key: "b" },
@@ -91,3 +93,9 @@ export function shortcutLabel(id: ShortcutId): string {
 }
 
 export const modKey = isMac ? "⌘" : "Ctrl";
+
+/** Ctrl+Tab and Ctrl+Shift+Tab, as in a browser (on a Mac too): +1 or -1. */
+export function tabStep(e: KeyboardEvent): 1 | -1 | null {
+  if (e.key !== "Tab" || !e.ctrlKey || e.altKey || e.metaKey) return null;
+  return e.shiftKey ? -1 : 1;
+}

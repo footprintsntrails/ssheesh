@@ -214,7 +214,7 @@ export function CommandPalette() {
               value={`workspace layout ${name}`}
               icon={LayoutDashboard}
               label={`Workspace for ${name}`}
-              hint="terminal · files · stats"
+              hint="terminal · files"
               onSelect={run(() => openWorkspace(target))}
             />
           ))}

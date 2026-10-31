@@ -17,6 +17,7 @@ import { EmptyPane } from "./EmptyPane";
 import { FilesPane } from "./FilesPane";
 import { StatsPane } from "./StatsPane";
 import { TerminalPane } from "./TerminalPane";
+import { closeTab } from "./Tabs";
 import { EnvChip, Face, IconButton, moodOf } from "./ui";
 
 /** "Needs you" when a program is waiting, "Went quiet" when a long run stopped. */
@@ -89,13 +90,13 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const names = useNames();
   const state = useStore((s) => s.sessions[pane.id]);
   const split = useStore((s) => s.split);
-  const closePane = useStore((s) => s.closePane);
   const openIn = useStore((s) => s.openIn);
   const toast = useStore((s) => s.toast);
   const Icon = ICONS[pane.kind];
   const toggleZoom = useStore((s) => s.toggleZoom);
   const [menu, setMenu] = useState<Menu | null>(null);
   const zoomed = useStore((s) => s.zoomed === pane.id);
+  const tabs = useSettings((s) => s.viewMode === "tabs");
 
   // Drag a pane by its title bar onto another pane: a side to dock there,
   // the middle to swap places.
@@ -201,21 +202,26 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
               <FolderOpen size={13.5} />
             </IconButton>
           )}
-          <IconButton label="Split right" onClick={() => split(pane.id, "row")} className="size-6">
-            <Columns2 size={13.5} />
-          </IconButton>
-          <IconButton label="Split down" onClick={() => split(pane.id, "col")} className="size-6">
-            <Rows2 size={13.5} />
-          </IconButton>
-          <IconButton
-            label={`${zoomed ? "Show all panes" : "Fill the window"} (${shortcutLabel("zoomPane")})`}
-            onClick={() => toggleZoom(pane.id)}
-            className="size-6"
-          >
-            {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-          </IconButton>
+          {/* As tabs, every pane fills the window already. */}
+          {!tabs && (
+            <>
+              <IconButton label="Split right" onClick={() => split(pane.id, "row")} className="size-6">
+                <Columns2 size={13.5} />
+              </IconButton>
+              <IconButton label="Split down" onClick={() => split(pane.id, "col")} className="size-6">
+                <Rows2 size={13.5} />
+              </IconButton>
+              <IconButton
+                label={`${zoomed ? "Show all panes" : "Fill the window"} (${shortcutLabel("zoomPane")})`}
+                onClick={() => toggleZoom(pane.id)}
+                className="size-6"
+              >
+                {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              </IconButton>
+            </>
+          )}
         </div>
-        <span className="@sm:hidden">
+        <span className={cn("@sm:hidden", tabs && pane.kind !== "terminal" && "hidden")}>
           <IconButton
             label="More"
             onClick={(e) => {
@@ -227,7 +233,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
             <Ellipsis size={14} />
           </IconButton>
         </span>
-        <IconButton label="Close pane" onClick={() => closePane(pane.id)} className="size-6">
+        <IconButton label="Close pane" onClick={() => closeTab(pane.id)} className="size-6">
           <X size={14} />
         </IconButton>
       </div>
@@ -237,9 +243,13 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
           onClose={() => setMenu(null)}
           items={[
             ...(pane.kind === "terminal" ? [{ label: "Browse files in this folder", icon: FolderOpen, run: () => void openFilesHere() }] : []),
-            { label: "Split right", icon: Columns2, run: () => split(pane.id, "row") },
-            { label: "Split down", icon: Rows2, run: () => split(pane.id, "col") },
-            { label: zoomed ? "Show all panes" : "Fill the window", icon: zoomed ? Minimize2 : Maximize2, hint: shortcutLabel("zoomPane"), run: () => toggleZoom(pane.id) },
+            ...(tabs
+              ? []
+              : [
+                  { label: "Split right", icon: Columns2, run: () => split(pane.id, "row") },
+                  { label: "Split down", icon: Rows2, run: () => split(pane.id, "col") },
+                  { label: zoomed ? "Show all panes" : "Fill the window", icon: zoomed ? Minimize2 : Maximize2, hint: shortcutLabel("zoomPane"), run: () => toggleZoom(pane.id) },
+                ]),
           ]}
         />
       )}
