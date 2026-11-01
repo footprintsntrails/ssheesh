@@ -112,7 +112,7 @@
   color-scheme: dark;
 }
 
-/* SSHeesh Default: Claude Code's colors on Claude's warm dark, with the logo's green. */
+/* SSHeesh Default: a warm dark with the logo's green. */
 [data-theme="ssheesh"] {
   --ui-window: #1f1e1d;
   --ui-canvas: #191817;
@@ -182,7 +182,7 @@
   --ui-radius: 11px;
 }
 
-/* Claude Code's own success, warning and error colors. */
+/* SSHeesh Default's success, warning and error colors. */
 [data-theme="ssheesh"] {
   --ui-ok: #4eba65;
   --ui-warn: #ffc107;

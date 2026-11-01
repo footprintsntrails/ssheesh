@@ -252,7 +252,6 @@ export const ACCENTS: { name: string; value: string }[] = [
   { name: "Violet", value: "#b07cff" },
   { name: "Mint", value: "#2bc4b4" },
   { name: "Silver", value: "#9aa3ad" },
-  // Claude Code's orange.
   { name: "Terracotta", value: "#d77757" },
 ];
 
