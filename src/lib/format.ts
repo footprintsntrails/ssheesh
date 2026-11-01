@@ -30,6 +30,14 @@ export function uptime(secs: number): string {
   return `${m}m`;
 }
 
+// Made once: a folder of a thousand files formats a thousand dates, and
+// toLocaleTimeString with options builds a new formatter every call.
+const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+const DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+const DAY_IN_YEAR = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+const sameDay = (a: Date, b: Date) => a.getDate() === b.getDate() && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
+
 /** Finder-style dates: "Just now", "12 min ago", "Today 14:02", "Oct 12", "Oct 12, 2023". */
 export function modified(unixSecs: number): string {
   if (!unixSecs) return "—";
@@ -38,13 +46,11 @@ export function modified(unixSecs: number): string {
   if (diff < 60) return "Just now";
   if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
   const today = new Date();
-  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  if (d.toDateString() === today.toDateString()) return `Today ${time}`;
+  if (sameDay(d, today)) return `Today ${TIME.format(d)}`;
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
-  const sameYear = d.getFullYear() === today.getFullYear();
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+  if (sameDay(d, yesterday)) return `Yesterday ${TIME.format(d)}`;
+  return (d.getFullYear() === today.getFullYear() ? DAY : DAY_IN_YEAR).format(d);
 }
 
 export function monthName(yyyyMm: string): string {

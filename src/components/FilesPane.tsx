@@ -238,8 +238,10 @@ const upRowFor = (dir: string) => dir !== "/" && !/^[A-Za-z]:\/?$/.test(dir);
 
 /** Height of a row in the list, in CSS pixels (`h-7`). */
 const ROW = 28;
-/** Past this many items only the rows in view (and a few around them) are drawn. */
+/** Past this many items only the rows in view (and 20 around them) are drawn. */
 const WINDOW_FROM = 250;
+/** The scroll position the drawn rows follow, rounded to this: at most 4 rows off, of the 20 drawn past each edge. */
+const VIEW_STEP = 8 * ROW;
 
 /**
  * A listing this young is shown without asking the server again: the
@@ -410,7 +412,9 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const selectedEntries = visible.filter((e) => selectedSet.has(e.name));
 
-  // Big folders draw only the rows in view.
+  // Big folders draw only the rows in view. The place scrolled to is noted
+  // in steps of a few rows, well inside the rows drawn beyond the edges, so
+  // scrolling draws the list again every few rows instead of every frame.
   const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   const [view, setView] = useState({ top: 0, height: 800 });
   useEffect(() => {
@@ -418,7 +422,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setView({ top: listEl.scrollTop, height: listEl.clientHeight }));
+      frame = requestAnimationFrame(() => {
+        const top = Math.round(listEl.scrollTop / VIEW_STEP) * VIEW_STEP;
+        const height = listEl.clientHeight;
+        setView((v) => (v.top === top && v.height === height ? v : { top, height }));
+      });
     };
     update();
     listEl.addEventListener("scroll", update, { passive: true });
@@ -435,7 +443,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   useEffect(() => {
     if (!listEl) return;
     listEl.scrollTop = 0;
-    setView((v) => ({ ...v, top: 0 }));
+    setView((v) => (v.top === 0 ? v : { ...v, top: 0 }));
   }, [filter, listEl]);
   /** Every folder but the top of the disk starts with "..", the folder above. */
   const upRow = !!listing && upRowFor(dir);
