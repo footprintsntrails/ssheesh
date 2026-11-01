@@ -58,11 +58,17 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
     const s = get().status;
     if (s.kind !== "available") return;
     const portable = get().portable;
-    set({ status: { kind: "downloading", version: s.version, progress: 0 } });
-    const onProgress = (progress: number | null) => set({ status: { kind: "downloading", version: s.version, progress } });
+    let version = s.version;
+    const onProgress = (progress: number | null) => set({ status: { kind: "downloading", version, progress } });
+    onProgress(null);
     try {
+      // A newer version may be out since this one was found: the latest is installed.
+      const latest = await backend.checkUpdate();
+      if (!latest) return set({ status: { kind: "upToDate" } });
+      version = latest.version;
+      onProgress(0);
       await (portable ? backend.installPortableUpdate(onProgress) : backend.installUpdate(onProgress));
-      set({ status: { kind: "ready", version: s.version } });
+      set({ status: { kind: "ready", version } });
     } catch (e) {
       const message = toOpError(e).message;
       // The new version saved beside this one is there to open; else the download page always works.
