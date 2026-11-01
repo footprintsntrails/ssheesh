@@ -1,11 +1,11 @@
-import { Activity, FolderOpen, Laptop, Plus, SquareTerminal } from "lucide-react";
+import { Activity, FolderOpen, Plus, SquareTerminal } from "lucide-react";
 import { useEffect } from "react";
 import { shortcutLabel } from "../lib/keys";
 import { useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import type { TargetRef } from "../lib/types";
 import { AppLogo, Button, IconButton, Kbd } from "./ui";
-import { useVisibleHosts } from "../lib/labels";
+import { LOCAL_GLYPH, useVisibleHosts } from "../lib/labels";
 import { HostIcon } from "./HostIcon";
 
 /** A server's own icon, in its color, or its picture, on a small tile. */
@@ -61,7 +61,7 @@ export function EmptyPane({ pane, focused }: { pane: PaneState; focused: boolean
             >
               {target.kind === "local" ? (
                 <span className="inline-flex size-[26px] items-center justify-center rounded-[7px] bg-ink/[0.06] text-fg-2 ring-1 ring-inset ring-ink/[0.07]">
-                  <Laptop size={14} strokeWidth={1.75} />
+                  <LOCAL_GLYPH size={14} />
                 </span>
               ) : (
                 <HostTile hostId={target.kind === "host" ? target.hostId : ""} />

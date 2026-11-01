@@ -12,7 +12,7 @@ import { ENV_LABELS, ENV_ORDER, HOST_COLORS, HOST_ICONS, useLabels, type EnvLabe
 import { useStore } from "../lib/store";
 import { toOpError, type ConnectionTest, type LocalAuth, type NewHost } from "../lib/types";
 import { LookIcon } from "./HostIcon";
-import { LookGrid } from "./LookPicker";
+import { LookGrid, OwnHostColor } from "./LookPicker";
 import { Modal } from "./Overlays";
 import { Button } from "./ui";
 
@@ -548,6 +548,16 @@ export function AddHostDialog() {
                     style={{ background: c }}
                   />
                 ))}
+                <OwnHostColor
+                  color={color}
+                  picked={!image}
+                  size="size-[18px]"
+                  onChange={(c) => {
+                    setColor(c);
+                    setImage(null);
+                    setLookPicked(true);
+                  }}
+                />
               </div>
               <div className="flex gap-1" role="radiogroup" aria-label="Label">
                 {[null, ...ENV_ORDER].map((e) => (

@@ -47,7 +47,7 @@ import {
   type RecipeContext,
   type Step,
 } from "../lib/recipes";
-import { useSettings } from "../lib/settings";
+import { compactTabbar, useSettings } from "../lib/settings";
 import { useStore } from "../lib/store";
 import { targetKey, type Host, type TargetRef } from "../lib/types";
 import { Modal } from "./Overlays";
@@ -647,7 +647,7 @@ function AsideBar({ target, recipe }: { target: TargetRef; recipe: Recipe }) {
   const { os } = useOs(target);
   const done = useRecipes((s) => s.done[recipeKey(target, recipe.id)]) ?? NO_STEPS;
   const steps = stepsFor(recipe, os);
-  const compact = useSettings((s) => s.compactMode);
+  const compact = useSettings((s) => compactTabbar(s.compactMode));
   const Icon = ICONS[recipe.id] ?? BookOpen;
   return (
     <div

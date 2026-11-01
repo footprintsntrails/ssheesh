@@ -285,6 +285,8 @@ export interface PaneInfo {
 export interface TransferProgress {
   done: number;
   total: number;
+  /** The connection dropped; it goes on by itself once the server's back. */
+  waiting: boolean;
 }
 
 export interface OpError {

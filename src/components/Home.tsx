@@ -3,12 +3,12 @@
 // It shows on launch, when nothing is open, and from the logo at the top of
 // the sidebar.
 
-import { FileUp, FolderOpen, Laptop, Plus, RotateCcw, Search, SquareTerminal } from "lucide-react";
+import { FileUp, FolderOpen, Plus, RotateCcw, Search, SquareTerminal } from "lucide-react";
 import { useState, type MouseEvent } from "react";
 import { agentRunning } from "../lib/agents";
 import { ago } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { useEnv, useHostLook, useUndecidedConfig, useVisibleHosts } from "../lib/labels";
+import { LOCAL_GLYPH, useEnv, useHostLook, useUndecidedConfig, useVisibleHosts } from "../lib/labels";
 import { useNames } from "../lib/privacy";
 import { hostAddress, useMachine, useStore, type PaneState } from "../lib/store";
 import type { TargetRef } from "../lib/types";
@@ -58,7 +58,8 @@ function Tile({ target, name, address, hostId }: { target: TargetRef; name: stri
           className="relative flex size-12 items-center justify-center rounded-[13px] ring-1 ring-inset ring-ink/[0.08]"
           style={{ background: tint ? `color-mix(in srgb, ${tint} 16%, transparent)` : "rgb(var(--ui-ink) / 0.06)" }}
         >
-          {target.kind === "local" ? <Laptop size={22} strokeWidth={1.8} className="text-fg-2" /> : <HostIcon hostId={hostId} size={22} strokeWidth={1.8} />}
+          {/* This computer's laptop is in the icon style you picked, as servers are. */}
+          {target.kind === "local" ? <LOCAL_GLYPH size={22} className="text-fg-2" /> : <HostIcon hostId={hostId} size={22} strokeWidth={1.8} />}
           <TileState target={target} />
         </span>
         <span className="flex max-w-full items-center gap-1">

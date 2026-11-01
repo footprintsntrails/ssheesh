@@ -301,6 +301,27 @@
   border-bottom: 1px dotted color-mix(in srgb, var(--ui-accent) 60%, transparent);
 }
 
+/* Secrets in terminal output, covered with a dot per character (secrets.ts). */
+.term-secret-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+.term-secret {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 3px;
+  background-color: var(--secret-bg);
+  background-image: radial-gradient(circle, var(--secret-dot) 0 1.4px, transparent 1.9px);
+  background-size: var(--secret-cell) 100%;
+  background-repeat: repeat-x;
+}
+.term-secret:hover {
+  --secret-dot: var(--ui-accent);
+}
+
 /* Files dragged from one server's Files to another's. */
 .file-drag-ghost {
   position: fixed;

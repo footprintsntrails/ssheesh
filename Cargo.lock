@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "sshee-core"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "dirs 6.0.0",
  "keyring",
@@ -4092,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "ssheesh"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "dirs 6.0.0",
  "serde",

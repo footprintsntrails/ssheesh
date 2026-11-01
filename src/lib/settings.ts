@@ -33,8 +33,13 @@ export interface Settings {
   animations: boolean;
   /** The >_< mark in the sidebar and empty panes. */
   logo: "winking" | "still" | "hidden";
-  /** Hides the sidebar, toolbar and vitals; they slide in at the window's edges. */
-  compactMode: boolean;
+  /**
+   * What hides until you point at the window's edge: the sidebar, the top
+   * bar (with the tabs), or both, which also hides the vitals.
+   */
+  compactMode: CompactMode;
+  /** What the compact shortcut turns back on: the mode you had last. */
+  compactLast: Exclude<CompactMode, "off">;
   /**
    * "split": Terminal and Files switch on and off, and the ones on
    * share the window. "tabs": one fills the window at a time.
@@ -72,6 +77,8 @@ export interface Settings {
   sidebarWidth: number;
   /** Full list, or a rail of server icons. */
   sidebarMode: "wide" | "narrow";
+  /** How server icons are drawn: clean lines, or pixels like the >_< logo. */
+  iconPack: "line" | "pixel";
   /** How the sidebar shows a connected server's load: meters in the list, this style on rail icons. */
   railStatus: "off" | "frame" | "bars" | "pulse" | "count";
   /** Machines whose container list is open in the sidebar. */
@@ -85,6 +92,8 @@ export interface Settings {
   updateMode: UpdateMode;
   /** Hides server names, addresses and users everywhere, for streams and screen shares. */
   streamerMode: boolean;
+  /** Tokens, keys and passwords in terminal output show as dots until clicked. Always on while streaming. */
+  hideSecrets: boolean;
   /** Color errors, warnings and addresses in terminal output, plus your own rules. */
   highlightErrors: boolean;
   highlightWarnings: boolean;
@@ -108,6 +117,14 @@ export interface Settings {
   nativeTitleBar: boolean;
 }
 
+/** What compact mode hides. */
+export type CompactMode = "off" | "sidebar" | "tabbar" | "both";
+
+/** The sidebar slides in at the window's edge instead of standing there. */
+export const compactSidebar = (m: CompactMode) => m === "sidebar" || m === "both";
+/** The top bar slides in at the window's top edge instead of standing there. */
+export const compactTabbar = (m: CompactMode) => m === "tabbar" || m === "both";
+
 export const DEFAULT_SETTINGS: Settings = {
   theme: "midnight",
   themeFollowsSystem: false,
@@ -119,7 +136,8 @@ export const DEFAULT_SETTINGS: Settings = {
   dimInactive: 0,
   animations: true,
   logo: "winking",
-  compactMode: false,
+  compactMode: "off",
+  compactLast: "both",
   onboarded: false,
   onboardingVersion: 0,
   hintsSeen: [],
@@ -144,6 +162,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarVisible: true,
   sidebarWidth: 232,
   sidebarMode: "narrow",
+  iconPack: "line",
   railStatus: "off",
   expanded: [],
   // One page at a time; the hello offers side by side.
@@ -155,6 +174,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showVitals: true,
   updateMode: "auto",
   streamerMode: false,
+  hideSecrets: true,
   highlightErrors: true,
   highlightWarnings: true,
   highlightAddresses: false,
@@ -172,6 +192,19 @@ interface SettingsStore extends Settings {
   reset(section?: (keyof Settings)[]): void;
 }
 
+/** Settings saved by an older version, brought up to this one. */
+export function migrateSettings(saved: unknown, version: number, mac: boolean): Record<string, unknown> {
+  const s = { ...(saved as Record<string, unknown>) };
+  // 2: Macs draw with the GPU, also where it was off by default before.
+  if (version < 2 && mac) s.gpuRendering = true;
+  // 3: compact mode picks what hides; load beside server icons is off for everybody.
+  if (version < 3) {
+    s.compactMode = s.compactMode === true ? "both" : "off";
+    s.railStatus = "off";
+  }
+  return s;
+}
+
 export const useSettings = create<SettingsStore>()(
   persist(
     (set) => ({
@@ -182,10 +215,9 @@ export const useSettings = create<SettingsStore>()(
     }),
     {
       name: "sshee-settings",
-      version: 2,
+      version: 3,
       storage: quietStorage(),
-      // 2: Macs draw with the GPU, also where it was off by default before.
-      migrate: (saved, version) => (version < 2 && isMac ? { ...(saved as Settings), gpuRendering: true } : saved) as SettingsStore,
+      migrate: (saved, version) => migrateSettings(saved, version, isMac) as unknown as SettingsStore,
     },
   ),
 );
@@ -193,6 +225,12 @@ export const useSettings = create<SettingsStore>()(
 setCustomThemeSource(() => useSettings.getState().customThemes);
 setTerminalColorsSource(() => useSettings.getState().terminalColors);
 setShortcutSource(() => useSettings.getState().shortcuts);
+
+/** Turns compact mode on, as you last had it, or off: the shortcut and the palette. */
+export function toggleCompact() {
+  const s = useSettings.getState();
+  s.update(s.compactMode === "off" ? { compactMode: s.compactLast } : { compactMode: "off", compactLast: s.compactMode });
+}
 
 /** Bump to show a new hello once to everybody, existing users too. */
 export const ONBOARDING_VERSION = 2;

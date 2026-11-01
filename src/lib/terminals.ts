@@ -15,6 +15,7 @@ import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { OutputPipeline } from "./output";
 import { maskText, streamerOn, targetName } from "./privacy";
+import { findSecrets, keyLines, keyOpenAfter, looksLikeKeyBody, secretsHidden } from "./secrets";
 import { markHintSeen, useSettings } from "./settings";
 import { fontStack, ICON_FONT, resolveScheme } from "./themes";
 import { useStore, type Attention, type PaneState, type Progress } from "./store";
@@ -81,6 +82,14 @@ function copyText(text: string): Promise<void> {
   return backend.writeClipboard(text).catch(() => {});
 }
 
+/** A covered secret on screen: where, and what it is. */
+interface SecretMark {
+  row: number;
+  x: number;
+  width: number;
+  text: string;
+}
+
 class TerminalHandle {
   readonly term: Terminal;
   readonly el: HTMLDivElement;
@@ -111,6 +120,11 @@ class TerminalHandle {
   /** Paths and links on screen, faintly underlined so you can tell they open. */
   private linkLayer: HTMLDivElement | null = null;
   private markTimer = 0;
+  /** Secrets on screen, covered with dots, and the ones you chose to see. */
+  private secretLayer: HTMLDivElement | null = null;
+  private secrets: SecretMark[] = [];
+  private secretsDrawn = "";
+  private revealed = new Set<string>();
 
   constructor(
     readonly paneId: string,
@@ -241,6 +255,8 @@ class TerminalHandle {
         callback(links.length ? links : undefined);
       },
     });
+    // Secrets are covered as the text is drawn, never a frame later.
+    this.term.onRender(() => this.markSecrets());
     // Paths stay faintly underlined, not only under the mouse.
     this.term.onWriteParsed(() => this.markLinksSoon());
     this.term.onScroll(() => this.markLinksSoon());
@@ -595,6 +611,117 @@ class TerminalHandle {
     this.linkLayer.replaceChildren(marks);
   }
 
+  /**
+   * Covers tokens, keys and passwords on screen with dots, on a layer over
+   * the text as the link marks are. It's drawn again whenever the terminal
+   * draws (onRender), in that same frame, so a secret never shows for a
+   * moment first. A click shows that secret, except while streaming.
+   */
+  markSecrets() {
+    if (this.disposed) return;
+    const screen = this.term.element?.querySelector<HTMLElement>(".xterm-screen");
+    if (!screen) return;
+    const found = secretsHidden() ? this.secretsOnScreen() : [];
+    const { cols, rows } = this.term;
+    const w = screen.clientWidth / cols;
+    const h = screen.clientHeight / rows;
+    const theme = this.term.options.theme ?? {};
+    const drawn = `${w}|${h}|${theme.background}|${theme.foreground}|${found.map((f) => `${f.row},${f.x},${f.width}`).join(";")}`;
+    if (drawn === this.secretsDrawn && this.secretLayer?.parentElement === screen) return;
+    this.secretsDrawn = drawn;
+    this.secrets = found;
+    if (this.secretLayer?.parentElement !== screen) {
+      const layer = document.createElement("div");
+      layer.className = "term-secret-layer";
+      // Clicks on a covered secret are its own, not the start of a selection.
+      layer.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      layer.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const i = Number((e.target as HTMLElement).dataset.secret);
+        const mark = this.secrets[i];
+        if (!mark || streamerOn()) return;
+        this.revealed.add(mark.text);
+        this.secretsDrawn = "";
+        this.markSecrets();
+      });
+      this.secretLayer = layer;
+      screen.appendChild(layer);
+    }
+    // The cover is the terminal's own background, so nothing shows through.
+    const bg = (theme.background ?? "#000000").slice(0, 7);
+    this.secretLayer.style.setProperty("--secret-bg", bg);
+    this.secretLayer.style.setProperty("--secret-dot", `color-mix(in srgb, ${theme.foreground ?? "#ffffff"} 55%, ${bg})`);
+    this.secretLayer.style.setProperty("--secret-cell", `${w}px`);
+    const title = streamerOn() ? "Hidden while streaming" : "Hidden secret. Click to show it";
+    const marks = document.createDocumentFragment();
+    found.forEach((f, i) => {
+      const mark = document.createElement("span");
+      mark.className = "term-secret";
+      mark.dataset.secret = String(i);
+      mark.title = title;
+      mark.style.cssText = `left:${f.x * w}px;top:${f.row * h}px;width:${f.width * w}px;height:${h}px`;
+      marks.appendChild(mark);
+    });
+    this.secretLayer.replaceChildren(marks);
+  }
+
+  /** Where the secrets on screen are: a mark per row each one covers. */
+  private secretsOnScreen(): SecretMark[] {
+    const buf = this.term.buffer.active;
+    const { cols, rows } = this.term;
+    const top = buf.viewportY;
+    const plain = (y: number) => buf.getLine(y)?.translateToString(true) ?? "";
+    const texts = Array.from({ length: rows }, (_, r) => plain(top + r));
+    // A key's body on screen may have its BEGIN line above it.
+    const lookBack = texts.some(looksLikeKeyBody);
+    const above = lookBack ? Array.from({ length: Math.min(top, 80) }, (_, i) => plain(top - Math.min(top, 80) + i)) : [];
+    const keys = keyLines(texts, keyOpenAfter(above));
+    // A row that runs to the last column may go on in the next (a long token wraps).
+    const runsOn = (y: number) => !!buf.getLine(y + 1)?.isWrapped || (buf.getLine(y)?.getCell(cols - 1)?.getChars() ?? "").trim() !== "";
+    const found: SecretMark[] = [];
+    let r = 0;
+    while (r < rows) {
+      if (keys[r]) {
+        const line = buf.getLine(top + r);
+        const { text, cells } = line ? rowText(line, cols) : { text: "", cells: [] };
+        const first = text.search(/\S/);
+        const last = text.trimEnd().length - 1;
+        if (first >= 0) found.push({ row: r, x: cells[first], width: cells[last] + 1 - cells[first], text: `key:${top + r}` });
+        r++;
+        continue;
+      }
+      let end = r;
+      while (end + 1 < rows && !keys[end + 1] && runsOn(top + end)) end++;
+      // Most lines have nothing: the quick look skips the exact one.
+      if (findSecrets(texts.slice(r, end + 1).join("")).length) {
+        let text = "";
+        const at: { row: number; col: number }[] = [];
+        for (let k = r; k <= end; k++) {
+          const line = buf.getLine(top + k);
+          if (!line) continue;
+          const t = rowText(line, cols);
+          text += t.text;
+          for (const col of t.cells) at.push({ row: k, col });
+        }
+        for (const s of findSecrets(text)) {
+          const secret = text.slice(s.start, s.end);
+          if (this.revealed.has(secret)) continue;
+          for (let i = s.start; i < s.end; ) {
+            let j = i;
+            while (j + 1 < s.end && at[j + 1].row === at[i].row) j++;
+            found.push({ row: at[i].row, x: at[i].col, width: at[j].col + 1 - at[i].col, text: secret });
+            i = j + 1;
+          }
+        }
+      }
+      r = end + 1;
+    }
+    return found;
+  }
+
   private open() {
     const { cols, rows } = this.term;
     backend
@@ -724,6 +851,10 @@ if (typeof window !== "undefined") {
 useSettings.subscribe((s, prev) => {
   if (s.gpuRendering === prev.gpuRendering) return;
   for (const h of handles.values()) h.setGpu(s.gpuRendering);
+});
+useSettings.subscribe((s, prev) => {
+  if (s.hideSecrets === prev.hideSecrets) return;
+  for (const h of handles.values()) h.markSecrets();
 });
 useSettings.subscribe((s, prev) => {
   if (s.streamerMode === prev.streamerMode) return;

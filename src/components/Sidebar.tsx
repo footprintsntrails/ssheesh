@@ -1,9 +1,9 @@
-import { Box, ChevronRight, Circle, Copy, EyeOff, House, KeyRound, Palette, Layers, LayoutDashboard, Play, Plus, RotateCw, ScrollText, Search, Square, SquareTerminal, Trash } from "lucide-react";
+import { Box, ChevronRight, Circle, Copy, EyeOff, House, KeyRound, Palette, Layers, LayoutDashboard, Play, Plus, RotateCw, ScrollText, Search, Settings, Square, SquareTerminal, Trash } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
-import { useSettings } from "../lib/settings";
+import { compactSidebar, useSettings } from "../lib/settings";
 import { currentTarget, hostAddress, machineSummary, showingHome, useMachine, useStore } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import { ENV_LABELS, ENV_ORDER, useEnv, useLabels, useVisibleHosts } from "../lib/labels";
@@ -216,6 +216,8 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
   const active = useStore((s) => sameTarget(currentTarget(s), target));
   const health = useHealth(target);
   const railStatus = useSettings((s) => s.railStatus);
+  // Pixels are drawn for 24 and stay sharp edged smaller.
+  const pixel = useSettings((s) => s.iconPack === "pixel");
   const side = useSettings((s) => s.sidebarSide);
   const tabsHere = useSettings((s) => s.tabsPlacement === "sidebar");
   const [hover, setHover] = useState<DOMRect | null>(null);
@@ -330,11 +332,11 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
             active ? "bg-ink/[0.08]" : "hover:bg-ink/[0.06]",
           )}
         >
+          {/* Bigger with nothing beside it; a little smaller to make room for the load. */}
           <HostIcon
             hostId={host?.id}
             local={target.kind === "local"}
-            size={bars ? 18 : 19}
-            strokeWidth={1.9}
+            size={railStatus === "off" ? 24 : pixel ? 20 : bars ? 19 : 21}
             className={cn("shrink-0", bars && "-translate-x-[7px]", pulse && "-translate-y-[6px]")}
           />
           {showLoad && <RailLoad target={target} style={railStatus} panes={panes} waiting={waiting} />}
@@ -389,7 +391,7 @@ function Row({ target, label, address, host, narrow }: { target: TargetRef; labe
           )}
         >
           <span className="flex h-8 items-center gap-2">
-            <HostIcon hostId={host?.id} local={target.kind === "local"} size={16.5} strokeWidth={1.8} className="shrink-0" />
+            <HostIcon hostId={host?.id} local={target.kind === "local"} size={railStatus === "off" || pixel ? 18 : 17} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">{label}</span>
             {/* With tabs along the top, the list still says where an agent waits for you. */}
             {waiting && !tabsHere && <span className="shrink-0 text-[11px] font-medium text-warn">Needs you</span>}
@@ -451,6 +453,18 @@ function HomeButton({ narrow }: { narrow: boolean }) {
   );
 }
 
+/** Settings, at the foot of the sidebar like most apps keep them. Also a shortcut away, and in search. */
+function SettingsButton({ narrow }: { narrow: boolean }) {
+  const openSettings = useStore((s) => s.openSettings);
+  return (
+    <div className={cn("flex shrink-0 pt-1 pb-2.5", narrow ? "justify-center" : "px-2.5")}>
+      <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => openSettings()} className="size-10 rounded-[10px]">
+        <Settings size={20} strokeWidth={1.8} />
+      </IconButton>
+    </div>
+  );
+}
+
 /** Narrower than this while dragging, the list folds into a rail of icons. */
 const FOLD_AT = 120;
 const RAIL_WIDTH = 60;
@@ -465,7 +479,7 @@ export function Sidebar() {
   const wideWidth = useSettings((s) => s.sidebarWidth);
   const narrow = useSettings((s) => s.sidebarMode === "narrow");
   const custom = useCustomTitleBar();
-  const compact = useSettings((s) => s.compactMode);
+  const compact = useSettings((s) => compactSidebar(s.compactMode));
   const update = useSettings((s) => s.update);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const live = useRef<number | null>(null);
@@ -529,7 +543,7 @@ export function Sidebar() {
       </div>
 
       {narrow ? (
-        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pb-3">
+        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pb-2">
           <HomeButton narrow />
           <IconButton label={`Search (${shortcutLabel("palette")})`} onClick={() => setPaletteOpen(true)} className="size-10 rounded-[10px]">
             <Search size={17} strokeWidth={1.9} />
@@ -550,7 +564,7 @@ export function Sidebar() {
           </div>
 
           <ConfigNotice />
-          <nav className="flex-1 overflow-y-auto px-2.5 pb-3">
+          <nav className="flex-1 overflow-y-auto px-2.5 pb-2">
             <div className="mt-1 flex h-6 items-center justify-between pr-0.5 pl-2">
               <h2 className="text-[11px] font-semibold text-fg-2">Servers</h2>
               <IconButton label="Add server" onClick={() => setAddHostOpen(true)} className="size-5 rounded-[5px]">
@@ -566,6 +580,7 @@ export function Sidebar() {
           </nav>
         </>
       )}
+      <SettingsButton narrow={narrow} />
     </aside>
   );
 }

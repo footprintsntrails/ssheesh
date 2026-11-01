@@ -5,29 +5,43 @@
 // in a color of its own. Saved on this computer, per server.
 
 import {
-  Bot,
-  Box,
-  Camera,
+  Archive,
+  Brain,
+  ChartLineUp,
+  ChatsCircle,
   Cloud,
   Cpu,
+  Cube,
   Database,
-  Film,
-  FlaskConical,
-  Gamepad2,
-  Globe,
+  Desktop,
+  Envelope,
+  FilmSlate,
+  Flask,
+  GameController,
+  GitBranch,
+  GlobeHemisphereWest,
   HardDrive,
+  HardDrives,
   House,
+  Key,
   Laptop,
-  Music,
-  Rocket,
-  Router,
-  Server,
-  Shield,
-  type LucideIcon,
-} from "lucide-react";
+  LockKey,
+  MusicNotes,
+  Network,
+  Robot,
+  RocketLaunch,
+  SecurityCamera,
+  ShieldCheck,
+  Storefront,
+  TerminalWindow,
+  WifiHigh,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import { createElement, type CSSProperties, type ReactElement } from "react";
 import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { PIXEL_ICONS } from "./pixelIcons";
 import { quietStorage } from "./persist";
 import { useSettings } from "./settings";
 import { useStore } from "./store";
@@ -44,26 +58,62 @@ export const ENV_LABELS: Record<EnvLabel, { name: string; short: string; text: s
 
 export const ENV_ORDER: EnvLabel[] = ["prod", "staging", "dev"];
 
+/** A server's icon: drawn at `size` pixels in the color of `style` (or the text's). */
+export type ServerGlyph = (props: { size?: number; strokeWidth?: number; className?: string; style?: CSSProperties }) => ReactElement;
+
+/**
+ * A server icon in the pack you picked: Phosphor's bold lines, or pixels
+ * on a 24-pixel grid like the >_< logo (`pixel`, a PIXEL_ICONS key).
+ * Pixels stay sharp edged at any size.
+ */
+function glyph(icon: PhosphorIcon, pixel: string): ServerGlyph {
+  return function Glyph({ size, className, style }) {
+    const pack = useSettings((s) => s.iconPack);
+    if (pack === "pixel")
+      return createElement(
+        "svg",
+        { viewBox: "0 0 24 24", width: size, height: size, shapeRendering: "crispEdges", "aria-hidden": true, className, style },
+        createElement("path", { fill: "currentColor", d: PIXEL_ICONS[pixel] }),
+      );
+    return createElement(icon, { size, weight: "bold", className, style });
+  };
+}
+
+/** This computer, in the sidebar and wherever servers are listed. */
+export const LOCAL_GLYPH = glyph(Laptop, "laptop");
+
 /** Icons you can give a server, so it's easy to spot, also in the narrow sidebar. */
-export const HOST_ICONS: Record<string, { icon: LucideIcon; name: string }> = {
-  server: { icon: Server, name: "Server" },
-  cloud: { icon: Cloud, name: "Cloud" },
-  globe: { icon: Globe, name: "Website" },
-  database: { icon: Database, name: "Database" },
-  box: { icon: Box, name: "Containers" },
-  home: { icon: House, name: "Home" },
-  router: { icon: Router, name: "Network" },
-  drive: { icon: HardDrive, name: "Storage" },
-  cpu: { icon: Cpu, name: "Compute" },
-  shield: { icon: Shield, name: "Security" },
-  rocket: { icon: Rocket, name: "Launch" },
-  flask: { icon: FlaskConical, name: "Lab" },
-  bot: { icon: Bot, name: "Bot" },
-  game: { icon: Gamepad2, name: "Game server" },
-  film: { icon: Film, name: "Media" },
-  music: { icon: Music, name: "Music" },
-  camera: { icon: Camera, name: "Cameras" },
-  laptop: { icon: Laptop, name: "Computer" },
+export const HOST_ICONS: Record<string, { icon: ServerGlyph; name: string }> = {
+  server: { icon: glyph(HardDrives, "server"), name: "Server" },
+  cloud: { icon: glyph(Cloud, "cloud"), name: "Cloud" },
+  globe: { icon: glyph(GlobeHemisphereWest, "globe"), name: "Website" },
+  database: { icon: glyph(Database, "database"), name: "Database" },
+  box: { icon: glyph(Cube, "box"), name: "Containers" },
+  home: { icon: glyph(House, "home"), name: "Home" },
+  router: { icon: glyph(Network, "router"), name: "Network" },
+  drive: { icon: glyph(HardDrive, "drive"), name: "Storage" },
+  cpu: { icon: glyph(Cpu, "cpu"), name: "Compute" },
+  shield: { icon: glyph(ShieldCheck, "shield"), name: "Security" },
+  vpn: { icon: glyph(LockKey, "vpn"), name: "VPN" },
+  rocket: { icon: glyph(RocketLaunch, "rocket"), name: "Launch" },
+  flask: { icon: glyph(Flask, "flask"), name: "Lab" },
+  bot: { icon: glyph(Robot, "bot"), name: "Bot" },
+  ai: { icon: glyph(Brain, "ai"), name: "AI" },
+  terminal: { icon: glyph(TerminalWindow, "terminal"), name: "Dev box" },
+  git: { icon: glyph(GitBranch, "git"), name: "Git" },
+  mail: { icon: glyph(Envelope, "mail"), name: "Mail" },
+  chat: { icon: glyph(ChatsCircle, "chat"), name: "Chat" },
+  shop: { icon: glyph(Storefront, "shop"), name: "Shop" },
+  vault: { icon: glyph(Key, "vault"), name: "Passwords" },
+  chart: { icon: glyph(ChartLineUp, "chart"), name: "Monitoring" },
+  backup: { icon: glyph(Archive, "backup"), name: "Backups" },
+  game: { icon: glyph(GameController, "game"), name: "Game server" },
+  film: { icon: glyph(FilmSlate, "film"), name: "Media" },
+  music: { icon: glyph(MusicNotes, "music"), name: "Music" },
+  camera: { icon: glyph(SecurityCamera, "camera"), name: "Cameras" },
+  iot: { icon: glyph(WifiHigh, "iot"), name: "Smart home" },
+  desktop: { icon: glyph(Desktop, "desktop"), name: "Workstation" },
+  laptop: { icon: LOCAL_GLYPH, name: "Computer" },
 };
 
 /**
@@ -257,14 +307,14 @@ export function lookOf(
  * when you haven't picked. No color without a server. `image` is your own
  * picture, if any; streamer mode leaves it out, as it could give the server away.
  */
-export function useHostLook(hostId: string | undefined): { icon: LucideIcon; color: string | null; id: string; auto: boolean; image: string | null } {
+export function useHostLook(hostId: string | undefined): { icon: ServerGlyph; color: string | null; id: string; auto: boolean; image: string | null } {
   const mine = useLabels((s) => (hostId ? s.looks[hostId] : undefined));
   const guessed = useLabels((s) => (hostId ? s.autoLooks[hostId] : undefined));
   const streamer = useSettings((s) => s.streamerMode);
-  if (!hostId) return { icon: Server, color: null, id: "server", auto: true, image: null };
+  if (!hostId) return { icon: HOST_ICONS.server.icon, color: null, id: "server", auto: true, image: null };
   const look = lookOf(hostId, mine, guessed);
   const image = !streamer && isHostImage(look.image) ? look.image : null;
-  return { icon: HOST_ICONS[look.icon]?.icon ?? Server, color: look.color, id: look.icon, auto: look.auto, image };
+  return { icon: HOST_ICONS[look.icon]?.icon ?? HOST_ICONS.server.icon, color: look.color, id: look.icon, auto: look.auto, image };
 }
 
 /**

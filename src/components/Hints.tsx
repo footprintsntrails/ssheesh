@@ -60,7 +60,7 @@ export const HINTS: Hint[] = [
   },
   {
     id: "split",
-    anchor: "split",
+    anchor: "tabs",
     title: "Two tabs at once",
     body: () => `${shortcutLabel("toggleSplit")} shows this server's tabs side by side; again goes back to one at a time.`,
     when: (s) => tabsOnScreenServer(s) >= 2 && !isSplit(s, currentScreen(s)),

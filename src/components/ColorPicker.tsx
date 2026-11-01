@@ -275,7 +275,7 @@ export function ColorButton({
       </button>
       {at &&
         createPortal(
-          <div ref={pop} role="dialog" aria-label={label} className="fixed z-[80] w-[460px] rounded-[12px] bg-raised p-1.5 shadow-2xl ring-1 ring-ink/[0.12]" style={at}>
+          <div ref={pop} role="dialog" aria-label={label} data-color-picker="" className="fixed z-[80] w-[460px] rounded-[12px] bg-raised p-1.5 shadow-2xl ring-1 ring-ink/[0.12]" style={at}>
             <ColorPicker value={value} onChange={onChange} palette={palette} label={label} />
           </div>,
           document.body,

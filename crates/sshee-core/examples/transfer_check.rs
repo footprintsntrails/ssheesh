@@ -118,15 +118,15 @@ type Reports = Arc<Mutex<Vec<(u64, u64)>>>;
 fn recorded() -> (Arc<Transfer>, Reports) {
     let reports: Reports = Arc::default();
     let r = reports.clone();
-    (Transfer::new(move |done, total| r.lock().unwrap().push((done, total))), reports)
+    (Transfer::new(move |p| r.lock().unwrap().push((p.done, p.total))), reports)
 }
 
 /// A transfer that cancels itself once the first bytes have moved.
 fn cancelled_early() -> Arc<Transfer> {
     let slot: Arc<OnceLock<Weak<Transfer>>> = Arc::default();
     let s = slot.clone();
-    let xfer = Transfer::new(move |done, _| {
-        if done > 0 {
+    let xfer = Transfer::new(move |p| {
+        if p.done > 0 {
             if let Some(x) = s.get().and_then(Weak::upgrade) {
                 x.cancel();
             }

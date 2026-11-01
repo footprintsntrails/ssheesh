@@ -15,7 +15,7 @@ import { backend } from "./lib/backend";
 import { matchShortcut, tabStep } from "./lib/keys";
 import { closeTab, newTab, nextTab, splitPane, toggleSplit } from "./lib/tabs";
 import { cn } from "./lib/format";
-import { applyAppearance, ONBOARDING_VERSION, useSettings } from "./lib/settings";
+import { applyAppearance, compactSidebar, ONBOARDING_VERSION, toggleCompact, useSettings } from "./lib/settings";
 import { useTour } from "./lib/tour";
 import { activePane, useStore } from "./lib/store";
 import { startForegroundWatch } from "./lib/agents";
@@ -63,10 +63,7 @@ function useShortcuts() {
       else if (id === "settings") s.settingsOpen ? s.closeSettings() : s.openSettings();
       else if (id === "zoomPane") s.toggleZoom();
       else if (id === "streamer") toggleStreamer();
-      else if (id === "compact") {
-        const st = useSettings.getState();
-        st.update({ compactMode: !st.compactMode });
-      }
+      else if (id === "compact") toggleCompact();
       else if (id === "vitals") {
         const st = useSettings.getState();
         st.update({ showVitals: !st.showVitals });
@@ -197,7 +194,7 @@ export function App() {
   useFollowSystemTheme();
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const sidebarSide = useSettings((s) => s.sidebarSide);
-  const compact = useSettings((s) => s.compactMode);
+  const compact = useSettings((s) => compactSidebar(s.compactMode));
   const settingsOpen = useStore((s) => s.settingsOpen);
   const hello = useSettings((s) => s.onboardingVersion < ONBOARDING_VERSION);
   const tourOpen = useTour((s) => s.open);

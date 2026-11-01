@@ -35,7 +35,7 @@ fn main() {
     let recorded = || {
         let reports = Arc::new(Mutex::new(Vec::new()));
         let r = reports.clone();
-        (Transfer::new(move |done, total| r.lock().unwrap().push((done, total))), reports)
+        (Transfer::new(move |p| r.lock().unwrap().push((p.done, p.total))), reports)
     };
 
     // ---- arrives whole, progress reaches the total
@@ -58,7 +58,7 @@ fn main() {
 
     // ---- Stop midway leaves nothing behind
     run(&sa, &format!("head -c {} /dev/urandom > {from}/huge.bin", 768 * MIB));
-    let xfer = Transfer::new(|_, _| {});
+    let xfer = Transfer::new(|_| {});
     let stop = xfer.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(400));

@@ -20,11 +20,11 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 
 ## The idea
 
-**Your servers stay yours.** No account and no cloud: hosts, keys and passwords stay on your computer, and passwords live in your system's keychain. SSHeesh talks to your servers, and to GitHub to check for updates. **Streamer mode** hides server names, addresses and users everywhere, terminal output included, so you can share your screen or stream without a second thought.
+**Your servers stay yours.** No account and no cloud: hosts, keys and passwords stay on your computer, and passwords live in your system's keychain. SSHeesh talks to your servers, and to GitHub to check for updates. Tokens, keys and passwords in a terminal's output show as dots until you click them, and **streamer mode** hides server names, addresses and users everywhere, terminal output included, so you can share your screen or stream without a second thought.
 
-**It's convenient from the first minute.** Paste a whole `ssh` command and every field fills in; your `~/.ssh/config`, keys and agent just work. Errors come in plain words, and every command SSHeesh suggests says what it does. A dropped Wi-Fi doesn't end your work: with `tmux` on the server, your session keeps running and SSHeesh tells you what you missed.
+**It's convenient from the first minute.** Paste a whole `ssh` command and every field fills in; your `~/.ssh/config`, keys and agent just work. Errors come in plain words, and every command SSHeesh suggests says what it does. A dropped Wi-Fi doesn't end your work: with `tmux` on the server, your session keeps running and SSHeesh tells you what you missed, and uploads and downloads pick up where they stopped.
 
-**You make it yours.** Themes you can edit down to every color, any accent color and your own terminal colors, your own keyboard shortcuts, tabs along the top or under each server, one tab at a time or side by side, an icon or your own picture for every server, and the welcome a server greets you with. Change it all in the first minute, with a live preview, or later in Settings.
+**You make it yours.** Themes you can edit down to every color, any accent color and your own terminal colors, your own keyboard shortcuts, tabs along the top or under each server, one tab at a time or side by side, a compact mode that hides the sidebar, the tab bar or both, icons in lines or pixels (in any color) or your own picture for every server, and the welcome a server greets you with. Change it all in the first minute, with a live preview, or later in Settings.
 
 <p align="center"><img src="docs/media/onboarding.gif" alt="The first-run setup: picking servers from ~/.ssh/config, then a theme, terminal colors and a layout with a live preview of the app"></p>
 
@@ -47,7 +47,7 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 - **The main menu** (the logo at the top left) is a start page with all your servers, what's running and the tabs you closed. Ctrl+Shift+Z brings back the last one.
 - **One bar for everything.** Ctrl+Shift+L (⌘L) finds servers, folders, commands and settings, and says which server a command runs on.
 - **Your keys.** Every shortcut is listed in Settings → Keyboard, and you can change any of them.
-- **Server icons that mean something.** SSHeesh sees what a server runs (a website, a database, Docker) and picks its icon; each server gets a color of its own.
+- **Server icons that mean something.** SSHeesh sees what a server runs (a website, a database, Docker) and picks its icon; each server gets a color of its own. Right-click a server for 30 more, in lines or pixels, in any color.
 - **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads (a download opens its folder with the file picked out), its Docker containers, stats, a read-only security check-up, what's using the disk, web apps opened through your SSH login, and step-by-step recipes for the usual jobs.
 
 <p align="center"><img src="docs/media/streamer.gif" alt="Streamer mode hides server names and addresses across the app and the terminal"></p>
@@ -97,9 +97,9 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 What's planned next. The order may still change.
 
-- **0.7: Docker, files and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services. File transfers that pick up where they stopped after a dropped connection, and version history for config files.
-- **0.8: workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
-- **0.9: sync.** Encrypted sync through a folder you pick, with no account.
+- **0.8: Docker and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services, and version history for config files.
+- **0.9: workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
+- **0.10: sync.** Encrypted sync through a folder you pick, with no account.
 - **Along the way:** signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
 
 See what changed in each version in the [changelog](CHANGELOG.md).
@@ -110,7 +110,7 @@ Made by [@footprintsntrails](https://github.com/footprintsntrails), built togeth
 
 Terminal color schemes come from their open-source authors: Tokyo Night, Catppuccin, Dracula, Nord, One Dark, Gruvbox and Solarized.
 
-Icons in prompts like oh-my-posh and Starship come from the [Nerd Fonts](https://www.nerdfonts.com) symbols font (MIT; each icon set under its own open license).
+Icons in prompts like oh-my-posh and Starship come from the [Nerd Fonts](https://www.nerdfonts.com) symbols font (MIT; each icon set under its own open license). Server icons are [Phosphor](https://phosphoricons.com) (MIT) and [pixelarticons](https://github.com/halfmage/pixelarticons) by Gerrit Halfmann (MIT).
 
 ## License
 

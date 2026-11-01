@@ -1,9 +1,8 @@
 // A server's icon, the same everywhere it's drawn: your own picture if you
 // gave it one, else its icon in its color.
 
-import { Laptop, type LucideIcon } from "lucide-react";
 import { cn } from "../lib/format";
-import { isHostImage, useHostLook } from "../lib/labels";
+import { isHostImage, LOCAL_GLYPH, useHostLook, type ServerGlyph } from "../lib/labels";
 import { useSettings } from "../lib/settings";
 
 /**
@@ -17,7 +16,7 @@ export function LookIcon({
   strokeWidth = 1.9,
   className,
 }: {
-  look: { icon: LucideIcon; color: string | null; image?: string | null };
+  look: { icon: ServerGlyph; color: string | null; image?: string | null };
   size: number;
   strokeWidth?: number;
   className?: string;
@@ -54,5 +53,5 @@ export function HostIcon({
   className?: string;
 }) {
   const look = useHostLook(local ? undefined : hostId);
-  return <LookIcon look={local ? { icon: Laptop, color: null } : look} size={size} strokeWidth={strokeWidth} className={className} />;
+  return <LookIcon look={local ? { icon: LOCAL_GLYPH, color: null } : look} size={size} strokeWidth={strokeWidth} className={className} />;
 }

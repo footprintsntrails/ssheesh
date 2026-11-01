@@ -100,14 +100,16 @@ const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
   { section: "terminal", label: "Blinking cursor", words: "blink caret" },
   { section: "terminal", label: "When the connection drops", words: "reconnect disconnect auto ask network" },
   { section: "terminal", label: "Tell me when a terminal needs me", words: "notification bell alert agent claude codex done attention" },
+  { section: "terminal", label: "Hide secrets", words: "tokens keys passwords api redact mask privacy streamer env" },
   { section: "terminal", label: "Errors", words: "highlight red error output logs" },
   { section: "terminal", label: "Warnings", words: "highlight yellow warn output logs" },
   { section: "terminal", label: "Addresses", words: "highlight ip links urls" },
   { section: "terminal", label: "Your own words", words: "highlight custom rules regex keywords" },
   { section: "layout", label: "Arrange open panes", words: "layout grid columns rows split" },
   { section: "layout", label: "Sidebar", words: "left right hide show server list" },
-  { section: "layout", label: "Compact mode", words: "zen focus hide toolbar minimal" },
+  { section: "layout", label: "Compact mode", words: "zen focus hide toolbar tab bar sidebar minimal" },
   { section: "layout", label: "Server list", words: "sidebar narrow icons names rail" },
+  { section: "layout", label: "Server icons", words: "icon pack pixel line style look" },
   { section: "layout", label: "Places and bookmarks", words: "files narrow wide hidden favorites" },
   { section: "layout", label: "Server vitals", words: "stats cpu memory bar metrics" },
   { section: "layout", label: "Space between panes", words: "gap spacing" },
@@ -471,6 +473,7 @@ function Terminal({ s, set, reset }: SectionProps) {
             "copyOnSelect",
             "terminalPadding",
             "reconnectMode",
+            "hideSecrets",
             "highlightErrors",
             "highlightWarnings",
             "highlightAddresses",
@@ -667,6 +670,13 @@ function Terminal({ s, set, reset }: SectionProps) {
         </>
       )}
 
+      <Row
+        label="Hide secrets"
+        hint="Tokens, keys and passwords in the output show as dots: GitHub and API tokens, private keys, PASSWORD=… and the like. Click one to see it. Always on in streamer mode."
+      >
+        <Switch label="Hide secrets" checked={s.hideSecrets} onChange={(v) => set({ hideSecrets: v })} />
+      </Row>
+
       <SubHeading title="Highlighting" hint="Colors words in terminal output so problems jump out, in your color scheme's own colors." />
       <Row label="Errors" hint="ERROR, FATAL, failed:, Permission denied, command not found…">
         <Switch label="Highlight errors" checked={s.highlightErrors} onChange={(v) => set({ highlightErrors: v })} />
@@ -772,7 +782,7 @@ function Layout({ s, set, reset }: SectionProps) {
     <>
       <SectionTitle
         onReset={() =>
-          reset(["tabsPlacement", "viewMode", "sidebarSide", "sidebarVisible", "sidebarMode", "railStatus", "compactMode", "showVitals", "envStripe", "paneGap", "paneRadius", "nativeTitleBar"])
+          reset(["tabsPlacement", "viewMode", "sidebarSide", "sidebarVisible", "sidebarMode", "iconPack", "railStatus", "compactMode", "showVitals", "envStripe", "paneGap", "paneRadius", "nativeTitleBar"])
         }
       >
         Layout
@@ -831,8 +841,20 @@ function Layout({ s, set, reset }: SectionProps) {
           <Switch label="Show sidebar" checked={s.sidebarVisible} onChange={(v) => set({ sidebarVisible: v })} />
         </div>
       </Row>
-      <Row label="Compact mode" hint={`Hides the sidebar, toolbar and vitals. Point at the window's edge to bring them back. ${shortcutLabel("compact")} turns it on and off.`}>
-        <Switch label="Compact mode" checked={s.compactMode} onChange={(v) => set({ compactMode: v })} />
+      <Row
+        label="Compact mode"
+        hint={`What slides away until you point at the window's edge. Both also hides the vitals. ${shortcutLabel("compact")} turns it on and off.`}
+      >
+        <Segmented
+          value={s.compactMode}
+          onChange={(v) => set({ compactMode: v })}
+          options={[
+            { value: "off", label: "Off" },
+            { value: "sidebar", label: "Sidebar" },
+            { value: "tabbar", label: s.tabsPlacement === "top" ? "Tab bar" : "Top bar" },
+            { value: "both", label: "Both" },
+          ]}
+        />
       </Row>
       <Row label="Server list" hint="Names, or just icons to save room. Dragging the sidebar's edge switches too. Right-click a server to pick its icon.">
         <Segmented
@@ -841,6 +863,16 @@ function Layout({ s, set, reset }: SectionProps) {
           options={[
             { value: "wide", label: "Names" },
             { value: "narrow", label: "Icons" },
+          ]}
+        />
+      </Row>
+      <Row label="Server icons" hint="Clean lines, or pixels like the >_< logo. Right-click a server to pick its icon and color.">
+        <Segmented
+          value={s.iconPack}
+          onChange={(v) => set({ iconPack: v })}
+          options={[
+            { value: "line", label: "Lines" },
+            { value: "pixel", label: "Pixels" },
           ]}
         />
       </Row>

@@ -5,7 +5,7 @@ use crate::error::{ErrorCode, OpError};
 use crate::ssh::{remote_command, run_remote, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
 use serde::Serialize;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -456,22 +456,34 @@ pub fn delete(target: &Target, env: &SshEnv, path: &str) -> Result<(), OpError> 
 
 // ---------------------------------------------------------------- transfers
 
+/// Where a transfer stands, for the app to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Progress {
+    pub done: u64,
+    /// 0 while the size isn't known.
+    pub total: u64,
+    /// The connection dropped; it carries on once the server answers again.
+    pub waiting: bool,
+}
+
 /// An upload or download the app shows while it runs: bytes moved out of the
 /// total, and a way to stop it from another thread.
 pub struct Transfer {
     cancelled: AtomicBool,
+    waiting: AtomicBool,
     total: AtomicU64,
     done: AtomicU64,
     last_report: Mutex<Option<Instant>>,
-    report: Box<dyn Fn(u64, u64) + Send + Sync>,
+    report: Box<dyn Fn(Progress) + Send + Sync>,
 }
 
 impl Transfer {
-    /// `report(done, total)` hears about progress a few times a second. A
-    /// total of 0 means the size isn't known.
-    pub fn new(report: impl Fn(u64, u64) + Send + Sync + 'static) -> Arc<Self> {
+    /// `report` hears about progress a few times a second, and at once when
+    /// the connection drops or comes back.
+    pub fn new(report: impl Fn(Progress) + Send + Sync + 'static) -> Arc<Self> {
         Arc::new(Self {
             cancelled: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
             total: AtomicU64::new(0),
             done: AtomicU64::new(0),
             last_report: Mutex::new(None),
@@ -481,7 +493,7 @@ impl Transfer {
 
     /// A transfer nobody watches.
     pub fn quiet() -> Arc<Self> {
-        Self::new(|_, _| {})
+        Self::new(|_| {})
     }
 
     pub fn cancel(&self) {
@@ -529,8 +541,87 @@ impl Transfer {
         self.report_now();
     }
 
+    fn set_waiting(&self, waiting: bool) {
+        if self.waiting.swap(waiting, Ordering::Relaxed) != waiting {
+            self.report_now();
+        }
+    }
+
     fn report_now(&self) {
-        (self.report)(self.done(), self.total.load(Ordering::Relaxed));
+        (self.report)(Progress {
+            done: self.done(),
+            total: self.total.load(Ordering::Relaxed),
+            waiting: self.waiting.load(Ordering::Relaxed),
+        });
+    }
+}
+
+/// How long a transfer waits for a dropped connection to come back, counted
+/// from the last time it got anywhere.
+const RECONNECT_FOR: Duration = Duration::from_secs(10 * 60);
+
+/// Runs `attempt`, and runs it again whenever the connection drops midway,
+/// once every server in `on` answers again. Each attempt picks up where the
+/// last one left off (or starts over, for what can't be picked up). Gives up
+/// after `RECONNECT_FOR` without getting any further, or when stopped.
+fn resuming<T>(on: &[&SshTarget], env: &SshEnv, xfer: &Transfer, mut attempt: impl FnMut() -> Result<T, OpError>) -> Result<T, OpError> {
+    let mut lost: Option<(Instant, u64)> = None;
+    loop {
+        let dropped = match attempt() {
+            Err(e) if e.code == ErrorCode::Network && !xfer.is_cancelled() => e,
+            other => return other,
+        };
+        // A drop after real progress gets the whole wait again.
+        let since = match lost {
+            Some((at, done)) if done == xfer.done() => at,
+            _ => Instant::now(),
+        };
+        lost = Some((since, xfer.done()));
+        xfer.set_waiting(true);
+        let back = wait_for(on, env, xfer, since);
+        xfer.set_waiting(false);
+        back.map_err(|e| if e.code == ErrorCode::Cancelled { e } else { dropped })?;
+    }
+}
+
+/// Waits until every one of `servers` answers again, asking more slowly as
+/// time goes on. Err when stopped or once `RECONNECT_FOR` has passed `since`.
+fn wait_for(servers: &[&SshTarget], env: &SshEnv, xfer: &Transfer, since: Instant) -> Result<(), OpError> {
+    let mut pause = Duration::from_secs(1);
+    loop {
+        let until = Instant::now() + pause;
+        while Instant::now() < until {
+            xfer.check()?;
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if servers.iter().all(|t| answers(t, env, xfer)) {
+            return Ok(());
+        }
+        xfer.check()?;
+        if since.elapsed() > RECONNECT_FOR {
+            return Err(OpError::new(ErrorCode::Network, "The server didn't come back."));
+        }
+        pause = (pause * 2).min(Duration::from_secs(5));
+    }
+}
+
+/// Whether the server takes a command now. A connection that hangs instead
+/// of failing counts as no after 20 seconds; Stop ends the wait at once.
+fn answers(t: &SshTarget, env: &SshEnv, xfer: &Transfer) -> bool {
+    let mut cmd = remote_command(t, env, "true");
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let Ok(mut ssh) = cmd.spawn() else { return false };
+    let start = Instant::now();
+    loop {
+        match ssh.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if !xfer.is_cancelled() && start.elapsed() < Duration::from_secs(20) => std::thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = ssh.kill();
+                let _ = ssh.wait();
+                return false;
+            }
+        }
     }
 }
 
@@ -729,19 +820,36 @@ fn taken_in(out: &[u8], names: &[String]) -> Vec<String> {
 
 /// The script `upload` runs on a server for one file; the file comes on
 /// stdin, and `s` and `d` (quoted) are where it's staged and where it goes.
-/// If ssh goes away midway, cat on the server just sees the end of its
-/// input, so the size check is what tells a whole file from a cut one.
-/// A file that's there is then written over in place, which keeps its owner
-/// and permissions (and a link that points to it). When that can't be done
-/// (no write permission, a program running from it) or nothing's there yet,
+/// It arrives from byte `from` on: after a dropped connection the rest is
+/// added to what's staged, as long as that's still `from` bytes (else it
+/// says CHANGED and exits 6). If ssh goes away midway, cat on the server just
+/// sees the end of its input, so the size check is what tells a whole file
+/// from a cut one; a cut one stays staged to be picked up. A file that's
+/// there is then written over in place, which keeps its owner and
+/// permissions (and a link that points to it). When that can't be done (no
+/// write permission, a program running from it) or nothing's there yet,
 /// the staged file takes its place.
-fn upload_file_script(guard: &str, s: &str, d: &str, size: u64) -> String {
+fn upload_file_script(guard: &str, s: &str, d: &str, size: u64, from: u64) -> String {
+    let receive = if from == 0 {
+        format!("cat > {s} || exit 1")
+    } else {
+        format!("{{ [ -f {s} ] && [ $(($(wc -c < {s}))) -eq {from} ]; }} || {{ echo CHANGED >&2; exit 6; }}\ncat >> {s} || exit 1")
+    };
     format!(
         "{guard}[ -d {d} ] && {{ echo 'A folder with this name is already here.' >&2; exit 1; }}
-cat > {s} || {{ rm -f -- {s}; exit 1; }}
-[ $(($(wc -c < {s}))) -eq {size} ] || {{ rm -f -- {s}; echo 'The upload stopped before the end.' >&2; exit 7; }}
+{receive}
+[ $(($(wc -c < {s}))) -eq {size} ] || {{ echo 'The upload stopped before the end.' >&2; exit 7; }}
 if [ -f {d} ] && cat -- {s} 2>/dev/null > {d}; then rm -f -- {s}; else mv -f -- {s} {d} || {{ rm -f -- {s}; exit 1; }}; fi"
     )
+}
+
+/// How much of a file upload is already staged on the server, once it
+/// stops growing: the server may still be writing what arrived just before
+/// the connection dropped. None when there's nothing to pick up.
+fn staged_size(t: &SshTarget, env: &SshEnv, staging: &str) -> Option<u64> {
+    let s = shell_quote(staging);
+    let script = format!("[ -f {s} ] || exit 0; a=$(($(wc -c < {s}))); sleep 1; b=$(($(wc -c < {s}))); [ \"$a\" = \"$b\" ] && echo \"$b\"");
+    String::from_utf8_lossy(&run_remote(t, env, &script, None).ok()?).trim().parse().ok()
 }
 
 /// Removes the hidden folder of an upload that didn't finish, in the
@@ -755,46 +863,104 @@ fn discard_remote(t: &SshTarget, env: &SshEnv, path: &str) {
     });
 }
 
+/// A server file's size, and a stamp that changes when the file does (its
+/// size and modification time), so a download only picks up where it left
+/// off on the very same file.
+fn file_ident(t: &SshTarget, env: &SshEnv, path: &str) -> Option<(u64, String)> {
+    let out = run_remote(t, env, &ident_script(path), None).ok()?;
+    let id = String::from_utf8_lossy(&out).trim().to_string();
+    let size = id.split(':').next()?.parse().ok()?;
+    Some((size, id))
+}
+
+/// The script for `file_ident`: GNU and BusyBox stat, then BSD stat.
+fn ident_script(path: &str) -> String {
+    let p = shell_quote(path);
+    format!("stat -L -c %s:%Y -- {p} 2>/dev/null || stat -L -f %z:%m -- {p}")
+}
+
+/// Sends the rest of a file from byte `from` on, if it's still the file
+/// stamped `id`; otherwise says CHANGED and exits 6.
+fn resume_script(path: &str, id: &str, from: u64) -> String {
+    format!(
+        "[ \"$({})\" = {} ] || {{ echo CHANGED >&2; exit 6; }}; tail -c +{} -- {}",
+        ident_script(path),
+        shell_quote(id),
+        from + 1,
+        shell_quote(path)
+    )
+}
+
 /// Copies a remote file or folder into `dest_dir` (usually Downloads) and
-/// returns where it landed. Never overwrites: picks "name (1)" instead.
+/// returns where it landed. Never overwrites: picks "name (1)" instead. If
+/// the connection drops, it waits for the server and goes on: a file from
+/// where it stopped, a folder from the start.
 pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, dest_dir: &Path, xfer: &Arc<Transfer>) -> Result<String, OpError> {
     let t = ssh_only(target).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "This file is already on your computer."))?;
     let name = base_name(remote_path);
     std::fs::create_dir_all(dest_dir)?;
-    xfer.add_total(remote_size(t, env, remote_path, is_dir));
-    xfer.check()?;
-    let base = xfer.done();
     let scratch = dest_dir.join(scratch_name(&name));
 
     if !is_dir {
-        let file = File::create(&scratch)?;
-        let result = (|| {
-            let mut cmd = remote_command(t, env, &format!("cat -- {}", shell_quote(remote_path)));
+        let mut ident = file_ident(t, env, remote_path);
+        xfer.add_total(ident.as_ref().map_or(0, |i| i.0));
+        xfer.check()?;
+        let base = xfer.done();
+        File::create(&scratch)?;
+        let result = resuming(&[t], env, xfer, || loop {
+            let mut have = std::fs::metadata(&scratch)?.len();
+            let script = match &ident {
+                Some((_, id)) if have > 0 => resume_script(remote_path, id, have),
+                _ => {
+                    have = 0;
+                    File::create(&scratch)?;
+                    format!("cat -- {}", shell_quote(remote_path))
+                }
+            };
+            xfer.settle(base + have);
+            let file = std::fs::OpenOptions::new().append(true).open(&scratch)?;
+            let mut cmd = remote_command(t, env, &script);
             cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
             let mut ssh = cmd.spawn().map_err(spawn_error)?;
             let errors = drain(ssh.stderr.take());
             let stream = ssh.stdout.take().expect("piped stdout");
-            let copy = spawn_copy(stream, file, xfer.clone(), move |x, n| x.set_done(base + n));
+            let copy = spawn_copy(stream, file, xfer.clone(), move |x, n| x.set_done(base + have + n));
             let copied = wait_copy(xfer, copy, &mut [&mut ssh])?;
             let status = ssh.wait()?;
             if !status.success() {
-                return Err(OpError::from_ssh(status.code(), &joined(errors)));
+                let e = OpError::from_ssh(status.code(), &joined(errors));
+                if e.message == "CHANGED" {
+                    // Changed on the server meanwhile: start over with the new one.
+                    ident = file_ident(t, env, remote_path);
+                    File::create(&scratch)?;
+                    continue;
+                }
+                return Err(e);
             }
             copied?;
+            return Ok(());
+        })
+        .and_then(|()| {
             let final_path = unique_path(dest_dir, &name);
             std::fs::rename(&scratch, &final_path)?;
             xfer.settle(xfer.done());
             Ok(final_path.display().to_string())
-        })();
+        });
         if result.is_err() {
             let _ = std::fs::remove_file(&scratch);
         }
         return result;
     }
 
-    // Folders travel as a tar stream: remote tar -> local tar.
-    std::fs::create_dir_all(&scratch)?;
-    let result = (|| {
+    // Folders travel as a tar stream: remote tar -> local tar. A tar stream
+    // can't be picked up midway, so after a drop the folder starts over.
+    xfer.add_total(remote_size(t, env, remote_path, true));
+    xfer.check()?;
+    let base = xfer.done();
+    let result = resuming(&[t], env, xfer, || {
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch)?;
+        xfer.settle(base);
         let mut untar = Command::new("tar");
         untar.args(["-xf", "-", "-C"]).arg(&scratch).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut untar);
@@ -822,11 +988,14 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
             return Err(OpError::failed(format!("Unpacking failed: {}", joined(unpack_errors).trim())));
         }
         copied?;
+        Ok(())
+    })
+    .and_then(|()| {
         let final_path = unique_path(dest_dir, &name);
         std::fs::rename(scratch.join(&name), &final_path)?;
         xfer.settle(xfer.done());
         Ok(final_path.display().to_string())
-    })();
+    });
     let _ = std::fs::remove_dir_all(&scratch);
     result
 }
@@ -866,56 +1035,83 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     };
 
     if local_path.is_file() {
-        let source = File::open(local_path)?;
-        let mut cmd = remote_command(t, env, &upload_file_script(&guard, &s, &d, size));
-        cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-        let mut ssh = cmd.spawn().map_err(spawn_error)?;
-        let errors = drain(ssh.stderr.take());
-        let input = ssh.stdin.take().expect("piped stdin");
-        let copy = spawn_copy(source, input, xfer.clone(), move |x, n| x.set_done(base + n.min(size)));
-        let copied = wait_copy(xfer, copy, &mut [&mut ssh])?;
-        let status = ssh.wait()?;
-        match copied {
-            // The server hanging up early is explained by its exit status.
-            Err(e) if e.kind() != io::ErrorKind::BrokenPipe => return Err(e.into()),
-            _ => {}
-        }
-        if !status.success() {
-            return Err(exists(OpError::from_ssh(status.code(), &joined(errors))));
-        }
-        xfer.settle(base + size);
-        return Ok(());
+        let mut first = true;
+        let result = resuming(&[t], env, xfer, || {
+            // After a drop, the rest goes on from what's staged.
+            let mut from = if first { 0 } else { staged_size(t, env, &staging).filter(|&n| n <= size).unwrap_or(0) };
+            first = false;
+            loop {
+                xfer.settle(base + from);
+                let mut source = File::open(local_path)?;
+                source.seek(SeekFrom::Start(from))?;
+                let mut cmd = remote_command(t, env, &upload_file_script(&guard, &s, &d, size, from));
+                cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+                let mut ssh = cmd.spawn().map_err(spawn_error)?;
+                let errors = drain(ssh.stderr.take());
+                let input = ssh.stdin.take().expect("piped stdin");
+                let start = base + from;
+                let copy = spawn_copy(source, input, xfer.clone(), move |x, n| x.set_done((start + n).min(base + size)));
+                let copied = wait_copy(xfer, copy, &mut [&mut ssh])?;
+                let status = ssh.wait()?;
+                match copied {
+                    // The server hanging up early is explained by its exit status.
+                    Err(e) if e.kind() != io::ErrorKind::BrokenPipe => return Err(e.into()),
+                    _ => {}
+                }
+                if !status.success() {
+                    let e = exists(OpError::from_ssh(status.code(), &joined(errors)));
+                    if e.message == "CHANGED" && from > 0 {
+                        from = 0;
+                        continue;
+                    }
+                    return Err(e);
+                }
+                return Ok(());
+            }
+        });
+        return match result {
+            Ok(()) => {
+                xfer.settle(base + size);
+                Ok(())
+            }
+            Err(e) => {
+                discard_remote(t, env, &staging);
+                Err(e)
+            }
+        };
     }
 
     // A new folder unpacks into the hidden one and moves into place once
     // everything arrived. Replacing unpacks over the folder that's there.
+    // A tar stream can't be picked up midway, so after a drop it starts over.
     let script = if overwrite {
         format!("cd -- {} && tar -xf -", shell_quote(remote_dir))
     } else {
         format!("{guard}rm -rf -- {s} && mkdir -- {s} && cd -- {s} && tar -xf -")
     };
     let parent = local_path.parent().unwrap_or(Path::new("."));
-    let mut pack = Command::new("tar");
-    pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(local_tar_item(local_path, &name)).stdout(Stdio::piped()).stderr(Stdio::piped());
-    crate::ssh::hide_console(&mut pack);
-    let mut pack = pack.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
-    let mut cmd = remote_command(t, env, &script);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut ssh = match cmd.spawn() {
-        Ok(ssh) => ssh,
-        Err(e) => {
-            let _ = pack.kill();
-            let _ = pack.wait();
-            return Err(spawn_error(e));
-        }
-    };
-    let (errors, pack_errors) = (drain(ssh.stderr.take()), drain(pack.stderr.take()));
-    let stream = pack.stdout.take().expect("piped stdout");
-    let input = ssh.stdin.take().expect("piped stdin");
     // The tar stream is a little bigger than the files in it; count in file bytes.
     let scaled = move |n: u64| if tar_size == 0 { 0 } else { (n as u128 * size as u128 / tar_size as u128).min(size as u128) as u64 };
-    let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + scaled(n)));
-    let result = (|| {
+    let result = resuming(&[t], env, xfer, || {
+        xfer.settle(base);
+        let mut pack = Command::new("tar");
+        pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(local_tar_item(local_path, &name)).stdout(Stdio::piped()).stderr(Stdio::piped());
+        crate::ssh::hide_console(&mut pack);
+        let mut pack = pack.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
+        let mut cmd = remote_command(t, env, &script);
+        cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut ssh = match cmd.spawn() {
+            Ok(ssh) => ssh,
+            Err(e) => {
+                let _ = pack.kill();
+                let _ = pack.wait();
+                return Err(spawn_error(e));
+            }
+        };
+        let (errors, pack_errors) = (drain(ssh.stderr.take()), drain(pack.stderr.take()));
+        let stream = pack.stdout.take().expect("piped stdout");
+        let input = ssh.stdin.take().expect("piped stdin");
+        let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + scaled(n)));
         let copied = wait_copy(xfer, copy, &mut [&mut pack, &mut ssh])?;
         let (status, packed) = (ssh.wait()?, pack.wait()?);
         match copied {
@@ -933,7 +1129,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
             run_remote(t, env, &finish, None).map_err(exists)?;
         }
         Ok(())
-    })();
+    });
     match result {
         Ok(()) => {
             xfer.settle(base + size);
@@ -955,7 +1151,8 @@ fn copy_scripts(parent: &str, names: &str, dest: &str, staging: &str, overwrite:
     let (p, d, s) = (shell_quote(parent), shell_quote(dest), shell_quote(staging));
     let pack = format!("cd -- {p} || exit 1; {}; tar -cf - -- \"$@\"", tar_items(names));
     let size = format!("cd -- {p} || exit 1; {}; du -sk -- \"$@\"", tar_items(names));
-    let unpack = if overwrite { format!("cd -- {d} && tar -xf -") } else { format!("mkdir -- {s} && cd -- {s} && tar -xf -") };
+    // After a dropped connection it starts over, so a hidden folder from before goes first.
+    let unpack = if overwrite { format!("cd -- {d} && tar -xf -") } else { format!("rm -rf -- {s}; mkdir -- {s} && cd -- {s} && tar -xf -") };
     (pack, size, unpack)
 }
 
@@ -1007,27 +1204,30 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
     xfer.add_total(total);
     xfer.check()?;
     let base = xfer.done();
-
-    let mut src = remote_command(a, env, &pack);
-    src.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut src = src.spawn().map_err(spawn_error)?;
-    let mut dst = remote_command(b, env, &unpack);
-    dst.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut dst = match dst.spawn() {
-        Ok(dst) => dst,
-        Err(e) => {
-            let _ = src.kill();
-            let _ = src.wait();
-            return Err(spawn_error(e));
-        }
-    };
-    let (src_errors, dst_errors) = (drain(src.stderr.take()), drain(dst.stderr.take()));
-    let stream = src.stdout.take().expect("piped stdout");
-    let input = dst.stdin.take().expect("piped stdin");
     // The tar stream is a little bigger than what du counts; the bar stops at the total.
     let cap = if total == 0 { u64::MAX } else { total };
-    let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + n.min(cap)));
-    let result = (|| {
+
+    // A tar stream can't be picked up midway: after a drop, once both
+    // servers answer again, it starts over.
+    let result = resuming(&[a, b], env, xfer, || {
+        xfer.settle(base);
+        let mut src = remote_command(a, env, &pack);
+        src.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut src = src.spawn().map_err(spawn_error)?;
+        let mut dst = remote_command(b, env, &unpack);
+        dst.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut dst = match dst.spawn() {
+            Ok(dst) => dst,
+            Err(e) => {
+                let _ = src.kill();
+                let _ = src.wait();
+                return Err(spawn_error(e));
+            }
+        };
+        let (src_errors, dst_errors) = (drain(src.stderr.take()), drain(dst.stderr.take()));
+        let stream = src.stdout.take().expect("piped stdout");
+        let input = dst.stdin.take().expect("piped stdin");
+        let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + n.min(cap)));
         let copied = wait_copy(xfer, copy, &mut [&mut src, &mut dst])?;
         let (packed, unpacked) = (src.wait()?, dst.wait()?);
         match copied {
@@ -1050,7 +1250,7 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
             })?;
         }
         Ok(())
-    })();
+    });
     match result {
         Ok(()) => {
             xfer.settle(base + total);
@@ -1347,17 +1547,27 @@ mod tests {
         std::fs::write(&d, "old").unwrap();
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o600)).unwrap();
         let (dq, sq) = (shell_quote(&d.to_string_lossy()), shell_quote(&s.to_string_lossy()));
-        assert!(sh_with_input(&upload_file_script("", &sq, &dq, 3), b"new").success());
+        assert!(sh_with_input(&upload_file_script("", &sq, &dq, 3, 0), b"new").success());
         assert_eq!(std::fs::read_to_string(&d).unwrap(), "new");
         assert_eq!(mode_of(&d), 0o600);
         assert!(!s.exists());
-        // Cut off on the way: the old file stays, and nothing's left behind.
-        assert!(!sh_with_input(&upload_file_script("", &sq, &dq, 10), b"cut").success());
+        // Cut off on the way: the old file stays, and what arrived waits to be picked up.
+        assert!(!sh_with_input(&upload_file_script("", &sq, &dq, 10, 0), b"cut").success());
         assert_eq!(std::fs::read_to_string(&d).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(&s).unwrap(), "cut");
+        // The rest comes after the connection's back, and then it's whole.
+        assert!(sh_with_input(&upload_file_script("", &sq, &dq, 10, 3), b" it out").success());
+        assert_eq!(std::fs::read_to_string(&d).unwrap(), "cut it out");
         assert!(!s.exists());
+        // If what's staged isn't what was there before, it says so instead of adding on.
+        std::fs::write(&s, "xy").unwrap();
+        let out = Command::new("sh").arg("-c").arg(upload_file_script("", &sq, &dq, 10, 3)).stdin(Stdio::null()).output().unwrap();
+        assert_eq!(out.status.code(), Some(6));
+        assert_eq!(std::fs::read_to_string(&d).unwrap(), "cut it out");
+        std::fs::remove_file(&s).unwrap();
         // A new file just moves into place.
         let (n, nq) = (dir.join("fresh.txt"), shell_quote(&dir.join("fresh.txt").to_string_lossy()));
-        assert!(sh_with_input(&upload_file_script("", &sq, &nq, 2), b"hi").success());
+        assert!(sh_with_input(&upload_file_script("", &sq, &nq, 2, 0), b"hi").success());
         assert_eq!(std::fs::read_to_string(&n).unwrap(), "hi");
         std::fs::remove_dir_all(&dir).unwrap();
     }

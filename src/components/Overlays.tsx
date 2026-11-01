@@ -1,11 +1,11 @@
 import { Command } from "cmdk";
-import { Activity, BookOpen, Braces, Cable, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, GraduationCap, HardDrive, House, Info, Laptop, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Play, Plus, RefreshCw, RotateCcw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
+import { Activity, BookOpen, Braces, Cable, CircleAlert, CircleCheck, Columns2, Columns3, Eye, EyeOff, FolderOpen, GraduationCap, HardDrive, House, Info, LayoutDashboard, LayoutGrid, Minimize2, PanelLeft, Play, Plus, RefreshCw, RotateCcw, Rows2, Rows3, Search, Settings, ShieldCheck, Sparkles, SquareTerminal, Star, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../lib/format";
 import { shortcutLabel } from "../lib/keys";
 import { folderName, useBookmarks } from "../lib/bookmarks";
-import { useSettings } from "../lib/settings";
+import { toggleCompact, useSettings } from "../lib/settings";
 import { activePane, screenOf, sideBySide, useStore } from "../lib/store";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { showCurrentNotes } from "./WhatsNew";
@@ -21,7 +21,7 @@ import { openRecipes } from "./Recipes";
 import { openTunnels } from "./Tunnels";
 import { useSnippets } from "../lib/snippets";
 import { RECIPES } from "../lib/recipes";
-import { useVisibleHosts } from "../lib/labels";
+import { LOCAL_GLYPH, useVisibleHosts, type ServerGlyph } from "../lib/labels";
 
 // ---------------------------------------------------------------- command palette
 
@@ -38,7 +38,7 @@ const SETTINGS_SECTIONS: [string, string, string][] = [
   ["about", "About", "version license credits"],
 ];
 
-function Item({ onSelect, icon: Icon, label, hint, value }: { onSelect: () => void; icon: typeof Search; label: string; hint?: string; value?: string }) {
+function Item({ onSelect, icon: Icon, label, hint, value }: { onSelect: () => void; icon: typeof Search | ServerGlyph; label: string; hint?: string; value?: string }) {
   return (
     <Command.Item
       value={value ?? label}
@@ -141,7 +141,7 @@ export function CommandPalette() {
             <Item
               key={`t-${keyOf(target)}`}
               value={`connect ${name} ${hint} ${keyOf(target)}`}
-              icon={target.kind === "local" ? Laptop : SquareTerminal}
+              icon={target.kind === "local" ? LOCAL_GLYPH : SquareTerminal}
               label={name}
               hint={hint}
               onSelect={run(() => useStore.getState().goTo(target))}
@@ -298,9 +298,9 @@ export function CommandPalette() {
           <Item
             icon={Minimize2}
             value="compact mode focus hide sidebar toolbar zen"
-            label={compactMode ? "Turn off compact mode" : "Turn on compact mode"}
+            label={compactMode !== "off" ? "Turn off compact mode" : "Turn on compact mode"}
             hint={shortcutLabel("compact")}
-            onSelect={run(() => useSettings.getState().update({ compactMode: !compactMode }))}
+            onSelect={run(toggleCompact)}
           />
           <Item
             icon={names.on ? Eye : EyeOff}
@@ -412,7 +412,7 @@ export function Toasts() {
   // Errors quote addresses and paths: streamer mode hides them here too.
   const names = useNames();
   // Above the vitals bar, so a long upload's card doesn't hide it.
-  const overVitals = useSettings((s) => s.showVitals && !s.compactMode);
+  const overVitals = useSettings((s) => s.showVitals && s.compactMode !== "both");
   return (
     <div className={cn("pointer-events-none fixed right-4 z-[60] flex w-[340px] max-w-[calc(100vw-32px)] flex-col gap-2", overVitals ? "bottom-12" : "bottom-4")}>
       <TransferCards />

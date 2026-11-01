@@ -25,7 +25,7 @@ function fakeTransfer(hooks: TransferHooks, total: number): Promise<void> {
     let done = 0;
     const timer = setInterval(() => {
       done = Math.min(total, done + (total / 30) * (0.5 + Math.random()));
-      hooks.onProgress({ done, total });
+      hooks.onProgress({ done, total, waiting: false });
       if (done < total) return;
       clearInterval(timer);
       fakeCancels.delete(hooks.id);

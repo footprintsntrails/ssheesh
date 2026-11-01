@@ -312,11 +312,13 @@ async fn delete_path(state: State<'_, AppState>, target: TargetSpec, path: Strin
     blocking(move || files::delete(&t, &env, &path)).await
 }
 
-/// Bytes moved so far and the total (0 when unknown), for the transfers panel.
+/// Bytes moved so far and the total (0 when unknown), for the transfers
+/// panel, and whether it's waiting for a dropped connection to come back.
 #[derive(Clone, Serialize)]
 struct TransferProgress {
     done: u64,
     total: u64,
+    waiting: bool,
 }
 
 /// Runs an upload or download that the UI can follow and cancel by `id`.
@@ -326,8 +328,8 @@ async fn run_transfer<T: Send + 'static>(
     on_progress: Channel<TransferProgress>,
     work: impl FnOnce(Arc<Transfer>) -> Result<T, OpError> + Send + 'static,
 ) -> Result<T, OpError> {
-    let xfer = Transfer::new(move |done, total| {
-        let _ = on_progress.send(TransferProgress { done, total });
+    let xfer = Transfer::new(move |p| {
+        let _ = on_progress.send(TransferProgress { done: p.done, total: p.total, waiting: p.waiting });
     });
     state.transfers.lock().unwrap().insert(id.clone(), xfer.clone());
     let result = blocking(move || work(xfer)).await;
@@ -435,7 +437,7 @@ async fn install_portable_update(app: tauri::AppHandle, on_progress: Channel<Tra
         .download(
             |chunk, total| {
                 done += chunk as u64;
-                let _ = on_progress.send(TransferProgress { done, total: total.unwrap_or(0) });
+                let _ = on_progress.send(TransferProgress { done, total: total.unwrap_or(0), waiting: false });
             },
             || {},
         )

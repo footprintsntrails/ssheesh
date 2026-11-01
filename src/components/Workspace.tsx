@@ -1,15 +1,14 @@
-import { ArrowDownToLine, Columns2, EyeOff, FolderOpen, House, Minimize2, PanelLeft, PanelRight, RotateCw, Settings, Wrench } from "lucide-react";
+import { ArrowDownToLine, EyeOff, House, Minimize2, PanelLeft, PanelRight, RotateCw, Settings } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn } from "../lib/format";
 import { isMac, shortcutLabel } from "../lib/keys";
-import { useSettings } from "../lib/settings";
+import { compactSidebar, compactTabbar, useSettings } from "../lib/settings";
 import { useUpdates } from "../lib/updates";
 import { visibleTree, type LayoutNode } from "../lib/layout";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { ENV_LABELS, useEnv } from "../lib/labels";
 import { currentScreen, currentTarget, hostAddress, panesOn, screenOf, showingHome, useMachine, useSideBySide, useStore } from "../lib/store";
-import { showFiles, toggleSplit } from "../lib/tabs";
 import type { TargetRef } from "../lib/types";
 import { ContextMenu, type Menu } from "./ContextMenu";
 import { Home } from "./Home";
@@ -139,20 +138,20 @@ function Toolbar({ target }: { target: TargetRef | null }) {
   const sidebarSide = useSettings((s) => s.sidebarSide);
   const sidebarVisible = useSettings((s) => s.sidebarVisible);
   const updateSettings = useSettings((s) => s.update);
-  const split = useSideBySide(useStore(currentScreen));
   const tabsOnTop = useSettings((s) => s.tabsPlacement === "top");
-  const [tools, setTools] = useState<Menu | null>(null);
   // macOS draws the window buttons at the top left, over whatever is there.
   const narrowRail = useSettings((s) => s.sidebarMode === "narrow");
-  const compactMode = useSettings((s) => s.compactMode);
-  const clearTrafficLights = isMac && (!sidebarVisible || sidebarSide === "right" || compactMode);
+  // The sidebar is away: hidden, or sliding in at the window's edge.
+  const sideAway = useSettings((s) => !s.sidebarVisible || compactSidebar(s.compactMode));
+  const topAway = useSettings((s) => compactTabbar(s.compactMode));
+  const clearTrafficLights = isMac && (sideAway || sidebarSide === "right");
   // A narrow rail is too thin for the window buttons; they spill over the toolbar.
-  const nudgeForRail = isMac && sidebarVisible && sidebarSide === "left" && narrowRail && !compactMode;
+  const nudgeForRail = isMac && !sideAway && sidebarSide === "left" && narrowRail;
   const SidebarIcon = sidebarSide === "left" ? PanelLeft : PanelRight;
   // Windows' window buttons sit at the window's top right: here, unless the
-  // sidebar is on the right (it has them then) or compact mode keeps them up top.
+  // sidebar is on the right (it has them then) or this bar slides in.
   const custom = useCustomTitleBar();
-  const controls = custom && !compactMode && (!sidebarVisible || sidebarSide === "left");
+  const controls = custom && !topAway && (sideAway || sidebarSide === "left");
 
   return (
     <header
@@ -166,14 +165,14 @@ function Toolbar({ target }: { target: TargetRef | null }) {
       >
         <SidebarIcon size={15} />
       </IconButton>
-      {(!sidebarVisible || compactMode) && (
+      {sideAway && (
         <IconButton label="Main menu" onClick={() => useStore.getState().showHome()} active={!target}>
           <House size={15} />
         </IconButton>
       )}
 
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2">
-        {target ? <AddressChip target={target} /> : <span className="px-2 text-[13px] font-semibold text-fg">Main menu</span>}
+        {target ? <AddressChip target={target} /> : <span className="shrink-0 px-2 text-[13px] font-semibold whitespace-nowrap text-fg">Main menu</span>}
         {tabsOnTop && <TabStrip target={target} />}
       </div>
 
@@ -181,40 +180,18 @@ function Toolbar({ target }: { target: TargetRef | null }) {
         <StreamerBadge />
         <ZoomBadge target={target} />
         <UpdateButton />
-        {target && (
-          <>
-            <IconButton label="Files" onClick={() => showFiles(target)}>
-              <FolderOpen size={15} />
-            </IconButton>
-            <IconButton
-              label="Tools"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                setTools({ x: r.right - 220, y: r.bottom + 4 });
-              }}
-            >
-              <Wrench size={15} />
-            </IconButton>
-            <IconButton
-              label={`${split ? "One tab at a time" : "Tabs side by side"} (${shortcutLabel("toggleSplit")})`}
-              active={split}
-              onClick={toggleSplit}
-              data-hint="split"
-            >
-              <Columns2 size={15} />
-            </IconButton>
-          </>
+        {/* Settings live at the foot of the sidebar; up here only while it's away. */}
+        {sideAway && (
+          <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => useStore.getState().openSettings()}>
+            <Settings size={15} />
+          </IconButton>
         )}
-        <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => useStore.getState().openSettings()}>
-          <Settings size={15} />
-        </IconButton>
       </div>
       {controls && (
         <div className="order-last ml-1">
           <WindowControls />
         </div>
       )}
-      {tools && target && <ContextMenu menu={tools} items={toolItems(target)} onClose={() => setTools(null)} />}
     </header>
   );
 }
@@ -242,8 +219,11 @@ export function Workspace() {
   // fills the window; side by side, the panes you switched on share it,
   // another server's among them if you put one there.
   const tree = useMemo(() => (split && layout ? visibleTree(layout, hidden) : null), [split, layout, hidden]);
-  const showVitals = useSettings((s) => s.showVitals && !s.compactMode) && !!target;
-  const compact = useSettings((s) => s.compactMode);
+  const showVitals = useSettings((s) => s.showVitals && s.compactMode !== "both") && !!target;
+  const compact = useSettings((s) => compactTabbar(s.compactMode));
+  // The window buttons go where the sidebar on the right doesn't have them.
+  const sideAway = useSettings((s) => !s.sidebarVisible || compactSidebar(s.compactMode));
+  const rightSidebar = useSettings((s) => s.sidebarSide === "right");
   const updateSettings = useSettings((s) => s.update);
   const openStats = () => {
     if (!target) return;
@@ -256,12 +236,12 @@ export function Workspace() {
     else st.openIn("stats", target, { split: true, dir: "col" });
   };
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
+    <main className="relative flex min-w-0 flex-1 flex-col">
       {compact ? (
         <>
           {/* Room to drag the window, and for the window buttons. */}
           <div data-tauri-drag-region className={cn("flex shrink-0 justify-end", isMac ? "h-[30px]" : custom ? "h-8" : "h-[var(--ui-gap)]")}>
-            {custom && <WindowControls height={32} />}
+            {custom && (sideAway || !rightSidebar) && <WindowControls height={32} />}
           </div>
           <EdgeReveal side="top" label="Toolbar">
             <div className="w-full">

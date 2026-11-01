@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0 — files that don't fall over, secrets that stay hidden
+
+- **Uploads and downloads go on after a dropped connection.** When the Wi-Fi drops or the laptop sleeps, the card in the corner says it's waiting, and once the server answers again it carries on by itself: a file from the very byte it stopped at, a folder (and a copy between two servers) from the start. It waits up to ten minutes without getting anywhere, and Stop works all the while. A file that changed on the server meanwhile is fetched again from the start, so nothing comes out mixed.
+- **Secrets in the terminal show as dots.** GitHub, GitLab, OpenAI, Anthropic, Stripe, Slack, AWS, Google and Telegram bot tokens, JWTs, private keys, and whatever follows `PASSWORD=`, `api_key:` and the like, or sits as a password in a link. The name stays readable, ordinary words like `max_tokens: 4096` stay as they are, and the dots are there from the first moment the text is, never a flash later. Click one to see it; in streamer mode they stay hidden, clicked or not. The "While you were away" card hides them too. Settings → Terminal → Hide secrets.
+- **Two styles for server icons: Lines and Pixels.** Clean bold lines, or pixels like the >_< logo, for all your servers at once: switch in the icon picker (right-click a server → Icon and color) or in Settings → Layout → Server icons. There are 30 icons now, among them AI, Git, mail, monitoring, backups, VPN, chat, a shop and smart home, and any color of your own beside the six ready ones. This computer is drawn in the same style.
+- **Bigger icons in the slim sidebar** when it shows no load, a little smaller when it does. The load beside the icons is now off for everybody; Settings → Layout → Server load brings it back.
+- **Compact mode hides what you pick:** the sidebar, the tab bar, or both (both also hides the vitals, as before). The shortcut brings back the one you used last, and the tab bar slides in over your work, not over the sidebar.
+- **A calmer top bar.** The Files, Tools and side-by-side buttons are gone from it: Files and a server's tools are in the menu under its name and on right-click, side by side is Ctrl+Shift+S or dragging a tab onto the page. Settings is a bigger gear at the bottom of the sidebar, and in the top bar only while the sidebar is hidden.
+
+### Fixed
+- "Main menu" in the top bar stays on one line beside many tabs.
+
 ## 0.6.8 — every server's tabs, side by side
 
 - **One row of tabs for every server.** The tabs along the top are all your servers' tabs, as in a browser, and each says whose it is once more than one server has tabs open: “Files (web-1)”, “Terminal 2 (Claude Code, web-1)”. A thin line stands between one server's tabs and the next. Clicking a tab goes to its server, Ctrl+Tab goes through all of them, you can drag any of them anywhere, and the row stays on the main menu. Closing a server's last tab goes to the tab beside it instead of the main menu.

@@ -52,7 +52,7 @@ export function TabIcon({ pane, command, size = 13.5, className }: { pane: Pick<
   return <Icon size={size} strokeWidth={1.9} className={cn("shrink-0", className)} />;
 }
 
-/** The tools for a machine, as one menu: from the address chip, the Tools button and right-clicks. */
+/** The tools for a machine, as one menu: from the address chip and right-clicks. */
 export function toolItems(target: TargetRef, address?: string): (MenuItem | "sep")[] {
   return [
     { label: "New terminal", icon: SquareTerminal, hint: shortcutLabel("newTerminal"), run: () => newTab("terminal", target) },

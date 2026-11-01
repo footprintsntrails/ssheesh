@@ -561,12 +561,21 @@ export function Welcome() {
                         ))}
                       </div>
                     </Field>
-                    <Toggle
+                    <Field
                       label="Compact mode"
-                      hint={`Just your work. The sidebar and top row slide in at the window's edge. ${shortcutLabel("compact")} toggles it.`}
-                      checked={s.compactMode}
-                      onChange={(v) => set({ compactMode: v })}
-                    />
+                      hint={`Just your work: what you pick slides in at the window's edge. ${shortcutLabel("compact")} toggles it.`}
+                    >
+                      <Segmented
+                        value={s.compactMode}
+                        onChange={(v) => set({ compactMode: v })}
+                        options={[
+                          { value: "off", label: "Off" },
+                          { value: "sidebar", label: "Sidebar" },
+                          { value: "tabbar", label: s.tabsPlacement === "top" ? "Tab bar" : "Top bar" },
+                          { value: "both", label: "Both" },
+                        ]}
+                      />
+                    </Field>
                     <Field
                       label="When the connection drops"
                       hint={

@@ -4,6 +4,7 @@ import { cn } from "../lib/format";
 import { useStore, type PaneState, type Recap } from "../lib/store";
 import { lineTone } from "../lib/highlight";
 import { useNames } from "../lib/privacy";
+import { maskSecrets } from "../lib/secrets";
 import { useSettings } from "../lib/settings";
 import { getTerminal } from "../lib/terminals";
 import { thumb, topForOffset, type ScrollView } from "../lib/scroll";
@@ -92,6 +93,9 @@ function RecapCard({ recap, onShow, onClose }: { recap: Recap; onShow: () => voi
 
 function RecapPanel({ recap, onClose }: { recap: Recap; onClose: () => void }) {
   const names = useNames();
+  // The away card shows output too, so its secrets are covered the same way.
+  const hide = useSettings((st) => st.hideSecrets || st.streamerMode);
+  const lines = hide ? maskSecrets(recap.lines.join("\n")).split("\n") : recap.lines;
   const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return (
     <div className="absolute inset-x-2 bottom-2 z-10 flex max-h-[60%] animate-slide-up flex-col overflow-hidden rounded-[12px] glass">
@@ -112,7 +116,7 @@ function RecapPanel({ recap, onClose }: { recap: Recap; onClose: () => void }) {
         </button>
       </div>
       <pre className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-[11.5px] leading-[1.55] text-fg-2 select-text">
-        {recap.lines.map((l, i) => (
+        {lines.map((l, i) => (
           <div key={i} className={cn(lineTone(l) === "error" && "text-bad", lineTone(l) === "warning" && "text-warn")}>
             {names.text(l) || " "}
           </div>

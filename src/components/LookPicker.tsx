@@ -1,12 +1,14 @@
 // Icon and color for a server: "Automatic" (what SSHeesh guessed it's for),
 // a grid of icons, a row of colors, or a picture of your own.
 
-import { Check, ImageIcon, ImagePlus, RefreshCw, Server, X } from "lucide-react";
+import { Check, ImageIcon, ImagePlus, Plus, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../lib/format";
 import { HOST_COLORS, HOST_ICONS, hostImageFrom, isHostImage, lookOf, useLabels, type HostLook } from "../lib/labels";
 import { detectRole } from "../lib/roles";
 import { useSettings } from "../lib/settings";
+import { ColorButton, RAINBOW } from "./ColorPicker";
+import { Segmented } from "./controls";
 import { IconButton } from "./ui";
 
 /** Picture files a server's icon can be made from. */
@@ -83,9 +85,31 @@ function ImageChoice({ look, onChange }: { look: HostLook; onChange: (look: Host
   );
 }
 
+const COLOR_NAMES = ["Blue", "Indigo", "Violet", "Magenta", "Cyan", "Gray"];
+
 /**
- * Icons, and unless `colors` is off, a row of colors under them, then
- * "Upload image…". With `auto` or a picture the icons wear `look`'s color but
+ * Any color you like for a server, beside the ready ones: a rainbow until
+ * you pick one, then that color. `picked` rings it when it's the one in use.
+ */
+export function OwnHostColor({ color, picked, onChange, size }: { color: string | null; picked: boolean; onChange: (hex: string) => void; size: string }) {
+  const own = !!color && !HOST_COLORS.some((c) => c.toLowerCase() === color.toLowerCase());
+  return (
+    <ColorButton
+      label="Your own color"
+      value={own ? color : HOST_COLORS[0]}
+      onChange={onChange}
+      palette={HOST_COLORS.map((c, i) => ({ name: COLOR_NAMES[i] ?? c, color: c }))}
+      className={cn("flex shrink-0 items-center justify-center rounded-full", size, own && picked && "ring-2 ring-fg/80 ring-offset-2 ring-offset-[var(--ui-raised)]")}
+      style={{ background: own ? color : RAINBOW }}
+    >
+      {!own && <Plus size={10} strokeWidth={3} className="text-white drop-shadow" />}
+    </ColorButton>
+  );
+}
+
+/**
+ * The icon pack, for every server at once, then icons, and unless `colors`
+ * is off, a row of colors under them, then "Upload image…". With `auto` or a picture the icons wear `look`'s color but
  * none is marked as picked. Picking an icon or a color drops the picture.
  */
 export function LookGrid({
@@ -100,8 +124,20 @@ export function LookGrid({
   auto?: boolean;
 }) {
   const picked = !auto && !look.image;
+  const pack = useSettings((s) => s.iconPack);
   return (
     <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between pl-1" title="The style is the same for every server">
+        <span className="text-[11.5px] text-fg-3">Icon style</span>
+        <Segmented
+          value={pack}
+          onChange={(iconPack) => useSettings.getState().update({ iconPack })}
+          options={[
+            { value: "line", label: "Lines" },
+            { value: "pixel", label: "Pixels" },
+          ]}
+        />
+      </div>
       <div className={colors ? "grid grid-cols-6 gap-1" : "flex flex-wrap gap-1"}>
         {Object.entries(HOST_ICONS).map(([id, { icon: I, name }]) => (
           <button
@@ -113,7 +149,7 @@ export function LookGrid({
             onClick={() => onChange({ icon: id, color: look.color })}
             className={cn("flex size-8 items-center justify-center rounded-[7px] hover:bg-ink/[0.08]", picked && look.icon === id && "bg-ink/[0.12]")}
           >
-            <I size={16} strokeWidth={1.9} style={{ color: look.color }} />
+            <I size={18} style={{ color: look.color }} />
           </button>
         ))}
       </div>
@@ -131,6 +167,7 @@ export function LookGrid({
               style={{ background: c }}
             />
           ))}
+          <OwnHostColor color={look.color} picked={picked} size="size-[16px]" onChange={(c) => onChange({ icon: look.icon, color: c })} />
         </div>
       )}
       <div className="mx-1 h-px bg-ink/[0.07]" />
@@ -146,7 +183,7 @@ function AutoChoice({ hostId }: { hostId: string }) {
   const [checking, setChecking] = useState(false);
   const [failed, setFailed] = useState(false);
   const look = lookOf(hostId, undefined, guessed);
-  const Icon = HOST_ICONS[look.icon]?.icon ?? Server;
+  const Icon = HOST_ICONS[look.icon]?.icon ?? HOST_ICONS.server.icon;
   const what = checking
     ? "checking…"
     : failed
@@ -195,8 +232,10 @@ export function LookPopover({ at, hostId, onClose }: { at: { x: number; y: numbe
   const mine = useLabels((s) => s.looks[hostId]);
   const guessed = useLabels((s) => s.autoLooks[hostId]);
   useEffect(() => {
-    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // The own-color picker floats outside it; working in it, or closing it with Esc, keeps this open.
+    const inPicker = (e: Event) => !!(e.target as Element | null)?.closest?.("[data-color-picker]");
+    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && !inPicker(e) && onClose();
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && !document.querySelector("[data-color-picker]") && onClose();
     window.addEventListener("mousedown", away, true);
     window.addEventListener("keydown", esc, true);
     return () => {

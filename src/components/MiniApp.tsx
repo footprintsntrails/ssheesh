@@ -5,7 +5,7 @@
 
 import { cn } from "../lib/format";
 import { HOST_COLORS } from "../lib/labels";
-import { useSettings } from "../lib/settings";
+import { compactSidebar, compactTabbar, useSettings } from "../lib/settings";
 import { fontStack, resolveScheme } from "../lib/themes";
 
 const SERVERS = [HOST_COLORS[0], HOST_COLORS[2], HOST_COLORS[4], HOST_COLORS[3]];
@@ -47,7 +47,7 @@ function MiniLoad() {
 export function MiniApp() {
   const s = useSettings();
   const t = resolveScheme(s.terminalScheme, s.theme, s.accent);
-  const showSidebar = s.sidebarVisible && !s.compactMode;
+  const showSidebar = s.sidebarVisible && !compactSidebar(s.compactMode);
   const narrow = s.sidebarMode === "narrow";
   // Streamer mode hides names here too, so you see what it does.
   const user = s.streamerMode ? "you@server-1" : "deploy@prod";
@@ -112,7 +112,7 @@ export function MiniApp() {
       className="relative flex h-[230px] w-full flex-col overflow-hidden rounded-[12px] bg-window shadow-[0_10px_30px_rgb(0_0_0/0.35)] ring-1 ring-ink/[0.1]"
     >
       {s.envStripe && <span className={cn("absolute inset-x-0 top-0 h-[2px] bg-bad")} />}
-      {!s.compactMode && (
+      {!compactTabbar(s.compactMode) && (
         <div className={cn("flex h-5 shrink-0 items-center gap-1 px-2")}>
           <span className="size-1.5 rounded-[2px]" style={{ background: SERVERS[0] }} />
           <span className="h-1.5 w-9 rounded-full bg-ink/[0.14]" />
@@ -166,7 +166,7 @@ export function MiniApp() {
           </div>
         </div>
       </div>
-      {s.showVitals && !s.compactMode && (
+      {s.showVitals && s.compactMode !== "both" && (
         <div className={cn("flex h-4 shrink-0 items-center gap-2 px-2")}>
           {[16, 20, 26].map((w, i) => (
             <span key={i} className="h-1 rounded-full bg-ink/[0.14]" style={{ width: w }} />
