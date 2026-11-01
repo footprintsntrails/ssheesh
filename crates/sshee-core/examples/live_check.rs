@@ -86,7 +86,8 @@ fn main() {
         let _ = tx.send(e);
     });
     let key = format!("livecheck{}", std::process::id());
-    manager.open("p1", SessionSpec { target: target.clone(), key: key.clone(), cols: 100, rows: 30, env: env.clone(), run: None, welcome: Default::default() }, sink);
+    let spec = SessionSpec { target: target.clone(), key: key.clone(), env: env.clone(), run: None, welcome: Default::default() };
+    manager.open("p1", 100, 30, move || Ok(spec), sink);
     let mut log = Log { rx, output: String::new() };
 
     log.wait("connected (durable)", 20, |s| matches!(s, SessionState::Connected { durable: true }));
@@ -142,7 +143,8 @@ fn main() {
         });
         let key2 = format!("{key}c");
         let run = Some(containers::argv(c.engine, &c.id, containers::Run::Shell));
-        manager.open("p2", SessionSpec { target: target.clone(), key: key2.clone(), cols: 100, rows: 30, env: env.clone(), run, welcome: Default::default() }, sink2);
+        let spec = SessionSpec { target: target.clone(), key: key2.clone(), env: env.clone(), run, welcome: Default::default() };
+        manager.open("p2", 100, 30, move || Ok(spec), sink2);
         let mut log2 = Log { rx: rx2, output: String::new() };
         log2.wait("container shell (durable)", 20, |s| matches!(s, SessionState::Connected { durable: true }));
         manager.write("p2", b"echo inside-container=$((6*7))\r");

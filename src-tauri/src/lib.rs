@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 struct AppState {
     sessions: SessionManager,
@@ -79,13 +79,21 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, OpError> + Se
 
 // ---------------------------------------------------------------- servers
 
+// The commands below read files or the keychain, which can take a while
+// (or wait for the keychain to be unlocked): they run off the UI thread.
+// Their errors stay plain text, as the UI has always had them.
+
 #[tauri::command]
-fn list_hosts(state: State<AppState>) -> Vec<Host> {
-    state.hosts.lock().unwrap().list()
+async fn list_hosts(app: AppHandle) -> Result<Vec<Host>, OpError> {
+    blocking(move || Ok(app.state::<AppState>().hosts.lock().unwrap().list())).await
 }
 
 #[tauri::command]
-fn add_host(state: State<AppState>, input: NewHost) -> Result<AddedHost, String> {
+async fn add_host(app: AppHandle, input: NewHost) -> Result<AddedHost, String> {
+    blocking(move || Ok(add_host_now(&app.state::<AppState>(), input))).await.map_err(|e| e.message)?
+}
+
+fn add_host_now(state: &AppState, input: NewHost) -> Result<AddedHost, String> {
     // The form keeps its password while the server is saved: that's how the
     // list notes the password is in the keychain.
     let password = input.password.clone().filter(|p| !p.expose().is_empty());
@@ -110,22 +118,39 @@ struct AddedHost {
 }
 
 #[tauri::command]
-fn remove_host(state: State<AppState>, id: String) -> Result<(), String> {
-    state.passwords.forget(&id);
-    state.hosts.lock().unwrap().remove(&id)
+async fn remove_host(app: AppHandle, id: String) -> Result<(), String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.passwords.forget(&id);
+        let removed = state.hosts.lock().unwrap().remove(&id);
+        Ok(removed)
+    })
+    .await
+    .map_err(|e| e.message)?
 }
 
 /// Drops a host's password from memory and the keychain.
 #[tauri::command]
-fn forget_password(state: State<AppState>, id: String) -> Result<(), String> {
-    state.passwords.forget(&id);
-    state.hosts.lock().unwrap().set_remembered_password(&id, false)
+async fn forget_password(app: AppHandle, id: String) -> Result<(), String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.passwords.forget(&id);
+        let noted = state.hosts.lock().unwrap().set_remembered_password(&id, false);
+        Ok(noted)
+    })
+    .await
+    .map_err(|e| e.message)?
 }
 
 // ---------------------------------------------------------------- terminals
 
+/// Stays a quick command on the UI thread, so it keeps its place before the
+/// keys, resizes and Close that follow it; the server's password is looked
+/// up on the session's own thread. A server that's gone ends it as Failed.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn open_session(
+    app: AppHandle,
     state: State<AppState>,
     pane_id: String,
     target: TargetSpec,
@@ -135,15 +160,17 @@ fn open_session(
     container: Option<ContainerRef>,
     welcome: Option<sshee_core::welcome::Welcome>,
     on_event: Channel<SessionEvent>,
-) -> Result<(), OpError> {
-    let target = resolve(&state, &target)?;
+) {
     let run = container.map(|c| containers::argv(c.engine, &c.id, c.run));
-    let spec = SessionSpec { target, key: session_key, cols, rows, env: state.env.clone(), run, welcome: welcome.unwrap_or_default() };
+    let prepare = move || {
+        let state = app.state::<AppState>();
+        let target = resolve(&state, &target).map_err(|e| e.message)?;
+        Ok(SessionSpec { target, key: session_key, env: state.env.clone(), run, welcome: welcome.unwrap_or_default() })
+    };
     let sink: EventSink = Arc::new(move |event| {
         let _ = on_event.send(event);
     });
-    state.sessions.open(&pane_id, spec, sink);
-    Ok(())
+    state.sessions.open(&pane_id, cols, rows, prepare, sink);
 }
 
 #[tauri::command]
@@ -168,17 +195,19 @@ fn reconnect_session(state: State<AppState>, pane_id: String) {
 }
 
 /// Closes a pane's session. With `end_remote`, also ends its tmux session on
-/// the server (the user closed the pane on purpose).
+/// the server (the user closed the pane on purpose). The close itself stays
+/// on the UI thread, in order with `open_session` for the same pane; the
+/// keychain and the server are dealt with on a thread of their own.
 #[tauri::command]
-fn close_session(state: State<AppState>, pane_id: String, target: Option<TargetSpec>, session_key: Option<String>, end_remote: bool) {
+fn close_session(app: AppHandle, state: State<AppState>, pane_id: String, target: Option<TargetSpec>, session_key: Option<String>, end_remote: bool) {
     state.sessions.close(&pane_id);
     if let (true, Some(target), Some(key)) = (end_remote, target, session_key) {
-        if let Ok(target) = resolve(&state, &target) {
-            let env = state.env.clone();
-            std::thread::spawn(move || {
-                let _ = session::end_remote(&target, &env, &key);
-            });
-        }
+        std::thread::spawn(move || {
+            let state = app.state::<AppState>();
+            if let Ok(target) = resolve(&state, &target) {
+                let _ = session::end_remote(&target, &state.env, &key);
+            }
+        });
     }
 }
 
@@ -199,9 +228,13 @@ async fn check_host_key(state: State<'_, AppState>, host_id: String, changed: bo
 
 /// Saves the key you were just shown to ~/.ssh/known_hosts.
 #[tauri::command]
-fn trust_host_key(state: State<AppState>, host_id: String) -> Result<(), OpError> {
-    let t = ssh_target(&state, &host_id)?;
-    state.host_keys.trust(&host_id, &t)
+async fn trust_host_key(app: AppHandle, host_id: String) -> Result<(), OpError> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let t = ssh_target(&state, &host_id)?;
+        state.host_keys.trust(&host_id, &t)
+    })
+    .await
 }
 
 /// Keys in ~/.ssh and key agents running on this computer.
@@ -249,9 +282,10 @@ async fn test_connection(state: State<'_, AppState>, input: NewHost) -> Result<C
 
 /// Trusts the identity a connection test showed.
 #[tauri::command]
-fn trust_test_host_key(state: State<AppState>, input: NewHost) -> Result<(), OpError> {
+async fn trust_test_host_key(state: State<'_, AppState>, input: NewHost) -> Result<(), OpError> {
     let host = sshee_core::hosts::preview(&input).map_err(OpError::failed)?;
-    state.host_keys.trust(&host.id, &host.target())
+    let keys = state.host_keys.clone();
+    blocking(move || keys.trust(&host.id, &host.target())).await
 }
 
 /// Recent scrollback of a durable session, for the "while you were away" summary.
@@ -543,8 +577,8 @@ fn remove_old_portable() {
 
 /// This computer's user and machine name, for streamer mode.
 #[tauri::command]
-fn local_identity() -> sshee_core::identity::LocalIdentity {
-    sshee_core::identity::local()
+async fn local_identity() -> Result<sshee_core::identity::LocalIdentity, OpError> {
+    blocking(|| Ok(sshee_core::identity::local())).await
 }
 
 /// AI coding agents installed on the server ("claude", "codex", …).
@@ -686,7 +720,16 @@ fn pick_local_port(preferred: u16, avoid: Vec<u16>) -> Result<u16, OpError> {
 /// same panel, then Alt, which hides the number hints Windows adds when the
 /// panel comes from the keyboard. Elsewhere it does nothing.
 #[tauri::command]
-fn show_snap_layouts() {
+async fn show_snap_layouts() -> Result<(), OpError> {
+    // It waits a moment between the two key presses: not on the UI thread.
+    blocking(|| {
+        press_snap_keys();
+        Ok(())
+    })
+    .await
+}
+
+fn press_snap_keys() {
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_LWIN, VK_MENU};

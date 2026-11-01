@@ -13,7 +13,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,8 +44,6 @@ pub struct SessionSpec {
     /// Stable per pane, so reconnecting (or reopening the app) finds the
     /// same tmux session on the server.
     pub key: String,
-    pub cols: u16,
-    pub rows: u16,
     pub env: SshEnv,
     /// Run this instead of a login shell (e.g. a shell inside a container).
     pub run: Option<Vec<String>>,
@@ -115,13 +114,25 @@ impl SessionManager {
         Self::default()
     }
 
-    pub fn open(&self, id: &str, spec: SessionSpec, sink: EventSink) {
+    /// Opens pane `id`'s session at `cols` x `rows`. `prepare` works out what
+    /// to run on the session's own thread, as it may wait on the keychain;
+    /// the session is there at once, so keys, resizes and Close sent
+    /// meanwhile find it. An `Err` from it ends the session as Failed.
+    pub fn open(
+        &self,
+        id: &str,
+        cols: u16,
+        rows: u16,
+        prepare: impl FnOnce() -> Result<SessionSpec, String> + Send + 'static,
+        sink: EventSink,
+    ) {
         self.close(id);
+        let sink = batched(sink);
         let shared = Arc::new(Shared {
             writer: Mutex::new(None),
             master: Mutex::new(None),
             killer: Mutex::new(None),
-            size: Mutex::new(PtySize { rows: spec.rows.max(2), cols: spec.cols.max(2), pixel_width: 0, pixel_height: 0 }),
+            size: Mutex::new(PtySize { rows: rows.max(2), cols: cols.max(2), pixel_width: 0, pixel_height: 0 }),
             closed: AtomicBool::new(false),
             auto_reconnect: AtomicBool::new(self.auto_reconnect.load(Ordering::SeqCst)),
             wake: Mutex::new(false),
@@ -130,7 +141,10 @@ impl SessionManager {
         self.sessions.lock().unwrap().insert(id.to_string(), shared.clone());
         std::thread::Builder::new()
             .name(format!("session-{id}"))
-            .spawn(move || run_loop(shared, spec, sink))
+            .spawn(move || match prepare() {
+                Ok(spec) => run_loop(shared, spec, sink),
+                Err(message) => sink(SessionEvent::Status { state: SessionState::Failed { message } }),
+            })
             .expect("spawn session thread");
     }
 
@@ -248,6 +262,90 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
         }
         sink(SessionEvent::Status { state: SessionState::Ended { code: Some(exit.code) } });
         return;
+    }
+}
+
+/// Output that comes right after a pause goes to the screen at once; while
+/// it keeps coming it's sent at most this often, so `cat` of a big file is a
+/// few hundred messages to the window instead of tens of thousands.
+const BATCH_WINDOW: Duration = Duration::from_millis(8);
+/// Held-back output past this size goes without waiting out the window.
+const BATCH_MAX: usize = 64 * 1024;
+
+/// Output held back to go to the screen in one piece.
+#[derive(Default)]
+struct Batch {
+    pending: String,
+    last_sent: Option<Instant>,
+}
+
+impl Batch {
+    /// Output that arrived at `now`: what to send right away, if anything.
+    fn add(&mut self, data: String, now: Instant) -> Option<String> {
+        let quiet = self.pending.is_empty() && self.last_sent.is_none_or(|t| now.duration_since(t) >= BATCH_WINDOW);
+        if quiet {
+            self.last_sent = Some(now);
+            return Some(data);
+        }
+        self.pending.push_str(&data);
+        if self.pending.len() >= BATCH_MAX {
+            return self.take(now);
+        }
+        None
+    }
+
+    /// When the output held back is due, if there is any.
+    fn due(&self) -> Option<Instant> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        Some(self.last_sent.map_or_else(Instant::now, |t| t + BATCH_WINDOW))
+    }
+
+    /// Everything held back, to send now.
+    fn take(&mut self, now: Instant) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        self.last_sent = Some(now);
+        Some(std::mem::take(&mut self.pending))
+    }
+}
+
+/// A sink that hands output on in batches (see `Batch`), from a thread of
+/// its own. A status always comes after the output that was sent before it.
+fn batched(sink: EventSink) -> EventSink {
+    let (tx, rx) = mpsc::channel::<SessionEvent>();
+    let out = sink.clone();
+    let spawned = std::thread::Builder::new().name("session-output".into()).spawn(move || {
+        let mut batch = Batch::default();
+        let send = |data: Option<String>| {
+            if let Some(data) = data {
+                out(SessionEvent::Output { data });
+            }
+        };
+        loop {
+            let next = match batch.due() {
+                None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                Some(due) => rx.recv_timeout(due.saturating_duration_since(Instant::now())),
+            };
+            match next {
+                Ok(SessionEvent::Output { data }) => send(batch.add(data, Instant::now())),
+                Ok(status) => {
+                    send(batch.take(Instant::now()));
+                    out(status);
+                }
+                Err(RecvTimeoutError::Timeout) => send(batch.take(Instant::now())),
+                // The session is over and its reader done.
+                Err(RecvTimeoutError::Disconnected) => return send(batch.take(Instant::now())),
+            }
+        }
+    });
+    match spawned {
+        Ok(_) => Arc::new(move |event| {
+            let _ = tx.send(event);
+        }),
+        Err(_) => sink,
     }
 }
 
@@ -519,6 +617,74 @@ mod tests {
         assert_eq!(parse_scroll("sshee-scroll 0  480 24 2000"), Some(TmuxScroll { in_mode: false, position: 0, history: 480, height: 24, limit: 2000 }));
         assert_eq!(parse_scroll("vim ~/notes"), None);
         assert_eq!(parse_scroll("sshee-scroll 1 x 480 24 2000"), None);
+    }
+
+    #[test]
+    fn output_after_a_pause_goes_at_once_and_a_stream_in_batches() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut b = Batch::default();
+        // A key's echo: nothing to wait for.
+        assert_eq!(b.add("a".into(), t0).as_deref(), Some("a"));
+        assert_eq!(b.due(), None);
+        // More right behind it waits for the window, then goes as one.
+        assert_eq!(b.add("b".into(), ms(1)), None);
+        assert_eq!(b.add("c".into(), ms(3)), None);
+        assert_eq!(b.due(), Some(t0 + BATCH_WINDOW));
+        assert_eq!(b.take(ms(8)).as_deref(), Some("bc"));
+        assert_eq!(b.take(ms(8)), None);
+        // Still streaming: batched again.
+        assert_eq!(b.add("d".into(), ms(10)), None);
+        assert_eq!(b.take(ms(16)).as_deref(), Some("d"));
+        // Quiet again: straight through.
+        assert_eq!(b.add("e".into(), ms(40)).as_deref(), Some("e"));
+    }
+
+    #[test]
+    fn a_full_batch_goes_without_waiting() {
+        let t0 = Instant::now();
+        let mut b = Batch::default();
+        assert!(b.add("x".into(), t0).is_some());
+        assert_eq!(b.add("y".repeat(BATCH_MAX - 1), t0), None);
+        let full = b.add("z".into(), t0).expect("sent once full");
+        assert_eq!(full.len(), BATCH_MAX);
+        assert_eq!(b.due(), None);
+    }
+
+    #[test]
+    fn batched_output_keeps_its_order_and_comes_before_a_status() {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let sink = batched(Arc::new(move |e| {
+            let _ = tx.lock().unwrap().send(e);
+        }));
+        let mut want = String::new();
+        for i in 0..500 {
+            let chunk = format!("{i} ");
+            want.push_str(&chunk);
+            sink(SessionEvent::Output { data: chunk });
+        }
+        sink(SessionEvent::Status { state: SessionState::Ended { code: Some(0) } });
+        sink(SessionEvent::Output { data: "after".into() });
+        drop(sink);
+        let (mut shown, mut messages) = (String::new(), 0);
+        let mut events = rx.iter();
+        for e in events.by_ref() {
+            match e {
+                SessionEvent::Output { data } => {
+                    shown.push_str(&data);
+                    messages += 1;
+                }
+                SessionEvent::Status { state } => {
+                    assert_eq!(state, SessionState::Ended { code: Some(0) });
+                    break;
+                }
+            }
+        }
+        assert_eq!(shown, want);
+        assert!(messages < 500, "{messages} messages for 500 chunks");
+        let rest: Vec<_> = events.collect();
+        assert!(matches!(rest.as_slice(), [SessionEvent::Output { data }] if data == "after"));
     }
 
     #[test]
