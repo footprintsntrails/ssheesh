@@ -422,16 +422,18 @@ fn is_portable() -> bool {
 #[tauri::command]
 async fn install_portable_update(app: tauri::AppHandle, on_progress: Channel<TransferProgress>) -> Result<(), OpError> {
     use tauri_plugin_updater::UpdaterExt;
-    let failed = |e: tauri_plugin_updater::Error| OpError::failed(e.to_string());
+    // Each step says what it was doing when it went wrong, so a failure can be told apart.
+    let failed = |step: &'static str| move |e: tauri_plugin_updater::Error| OpError::failed(format!("{step}: {e}"));
     let update = app
         .updater_builder()
         .target("windows-x86_64-portable")
         .build()
-        .map_err(failed)?
+        .map_err(failed("Couldn't get ready to update"))?
         .check()
         .await
-        .map_err(failed)?
+        .map_err(failed("Couldn't look for the new version"))?
         .ok_or_else(|| OpError::failed("There's no newer portable version yet."))?;
+    let version = update.version.clone();
     let mut done = 0u64;
     let bytes = update
         .download(
@@ -442,8 +444,8 @@ async fn install_portable_update(app: tauri::AppHandle, on_progress: Channel<Tra
             || {},
         )
         .await
-        .map_err(failed)?;
-    blocking(move || swap_in_portable(&bytes)).await
+        .map_err(failed("Couldn't download the new version"))?;
+    blocking(move || swap_in_portable(&bytes, &version)).await
 }
 
 /// "SSHeesh.exe" -> "SSHeesh.<tag>.exe", next to it.
@@ -455,24 +457,70 @@ fn portable_beside(exe: &std::path::Path, tag: &str) -> PathBuf {
 /// Windows won't overwrite a running program but lets it be renamed, so the
 /// running copy steps aside as "<name>.old.exe" (removed at the next start)
 /// and the new one takes its name, which keeps shortcuts working.
-fn swap_in_portable(bytes: &[u8]) -> Result<(), OpError> {
-    swap_in(&std::env::current_exe()?, bytes)
+fn swap_in_portable(bytes: &[u8], version: &str) -> Result<(), OpError> {
+    let exe = std::env::current_exe().map_err(|e| OpError::failed(format!("Couldn't tell where SSHeesh runs from: {e}")))?;
+    swap_in(&exe, bytes, version)
 }
 
-fn swap_in(exe: &std::path::Path, bytes: &[u8]) -> Result<(), OpError> {
+/// An antivirus looks at a new program as it's saved: it may hold the file
+/// for a moment, or take it away. The swap gives it this long first.
+const ANTIVIRUS_LOOK: std::time::Duration = std::time::Duration::from_millis(if cfg!(test) { 0 } else { 1500 });
+
+/// What to say when the saved update disappears: the app isn't signed yet,
+/// and Windows Security (or another antivirus) may take a new copy away.
+const TAKEN_AWAY: &str = "The new version was taken away right after it was saved, most likely by Windows Security or another antivirus, since SSHeesh isn't signed yet. Allow it under Windows Security → Virus & threat protection → Protection history and try again, or get the new file from the download page.";
+
+fn swap_in(exe: &std::path::Path, bytes: &[u8], version: &str) -> Result<(), OpError> {
     let (new, old) = (portable_beside(exe, "new"), portable_beside(exe, "old"));
-    std::fs::write(&new, bytes).map_err(|e| OpError::failed(format!("Couldn't save the update next to SSHeesh: {e}")))?;
-    let _ = std::fs::remove_file(&old);
-    if let Err(e) = std::fs::rename(exe, &old) {
-        let _ = std::fs::remove_file(&new);
-        return Err(e.into());
+    let dir = exe.parent().map(|d| d.display().to_string()).unwrap_or_default();
+    std::fs::write(&new, bytes).map_err(|e| OpError::failed(format!("Couldn't save the update in {dir}: {e}")))?;
+    std::thread::sleep(ANTIVIRUS_LOOK);
+    if !new.exists() {
+        return Err(OpError::failed(TAKEN_AWAY));
     }
-    if let Err(e) = std::fs::rename(&new, exe) {
+    let _ = std::fs::remove_file(&old);
+    if let Err(e) = retrying(|| std::fs::rename(exe, &old)) {
+        // This copy can't step aside: the new one stays next to it under its
+        // version's name, to open by hand.
+        let kept = exe.with_file_name(format!("SSHeesh-{version}.exe"));
+        let _ = std::fs::remove_file(&kept);
+        return Err(OpError::failed(match std::fs::rename(&new, &kept) {
+            Ok(()) => format!(
+                "Couldn't replace the SSHeesh that's running ({e}). The new version is saved next to it as {}: open that one.",
+                kept.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            Err(_) => {
+                let _ = std::fs::remove_file(&new);
+                format!("Couldn't replace the SSHeesh that's running: {e}")
+            }
+        }));
+    }
+    if let Err(e) = retrying(|| std::fs::rename(&new, exe)) {
         let _ = std::fs::rename(&old, exe);
+        if !new.exists() {
+            return Err(OpError::failed(TAKEN_AWAY));
+        }
         let _ = std::fs::remove_file(&new);
-        return Err(e.into());
+        return Err(OpError::failed(format!("Couldn't put the new version in place: {e}")));
     }
     Ok(())
+}
+
+/// Runs a file step again for a few seconds while something else holds the
+/// file (an antivirus scanning it, a backup or sync app reading it).
+fn retrying(mut step: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    // 32: the file is in use by another program.
+    let held = |e: &std::io::Error| e.kind() == std::io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(32);
+    let mut tries = 0;
+    loop {
+        match step() {
+            Err(e) if held(&e) && tries < 8 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(if cfg!(test) { 1 } else { 500 }));
+            }
+            done => return done,
+        }
+    }
 }
 
 /// Removes the copy the last portable update set aside, once the old
@@ -749,14 +797,45 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("SSHeesh_0.4.0_x64-portable.exe");
         std::fs::write(&exe, "old").unwrap();
-        swap_in(&exe, b"new").unwrap();
+        swap_in(&exe, b"new", "0.4.1").unwrap();
         assert_eq!(std::fs::read_to_string(&exe).unwrap(), "new");
         assert_eq!(std::fs::read_to_string(dir.join("SSHeesh_0.4.0_x64-portable.old.exe")).unwrap(), "old");
         assert!(!dir.join("SSHeesh_0.4.0_x64-portable.new.exe").exists());
         // A second update replaces the copy the first one set aside.
-        swap_in(&exe, b"newer").unwrap();
+        swap_in(&exe, b"newer", "0.4.2").unwrap();
         assert_eq!(std::fs::read_to_string(&exe).unwrap(), "newer");
         assert_eq!(std::fs::read_to_string(dir.join("SSHeesh_0.4.0_x64-portable.old.exe")).unwrap(), "new");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_portable_update_that_cant_replace_the_running_copy_keeps_the_new_one() {
+        let dir = std::env::temp_dir().join(format!("sshee-swap-gone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The running copy isn't where it was started from (moved while open).
+        let err = swap_in(&dir.join("SSHeesh.exe"), b"new", "0.7.2").unwrap_err();
+        assert!(err.message.contains("saved next to it as SSHeesh-0.7.2.exe"), "{}", err.message);
+        assert_eq!(std::fs::read_to_string(dir.join("SSHeesh-0.7.2.exe")).unwrap(), "new");
+        assert!(!dir.join("SSHeesh.new.exe").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retries_a_file_another_program_holds() {
+        let mut calls = 0;
+        let held = retrying(|| {
+            calls += 1;
+            if calls < 3 { Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)) } else { Ok(()) }
+        });
+        assert!(held.is_ok());
+        assert_eq!(calls, 3);
+        // A missing file isn't waited on.
+        let mut calls = 0;
+        let missing = retrying(|| {
+            calls += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        });
+        assert!(missing.is_err());
+        assert_eq!(calls, 1);
     }
 }

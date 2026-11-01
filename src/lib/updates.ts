@@ -64,12 +64,14 @@ export const useUpdates = create<UpdatesState>()((set, get) => ({
       await (portable ? backend.installPortableUpdate(onProgress) : backend.installUpdate(onProgress));
       set({ status: { kind: "ready", version: s.version } });
     } catch (e) {
-      // Releases before 0.4.2 have no signed portable file; the download page always works.
-      const fallback = portable ? " Get the new file from the download page instead." : "";
-      set({ status: { kind: "error", message: `The update didn't install: ${toOpError(e).message}${fallback}` } });
+      const message = toOpError(e).message;
+      // The new version saved beside this one is there to open; else the download page always works.
+      const saved = /open that one/.test(message);
+      const fallback = portable && !saved && !/download page/.test(message) ? " Get the new file from the download page instead." : "";
+      set({ status: { kind: "error", message: `The update didn't install: ${message}${fallback}` } });
       // The download page opens when you asked for the update, not behind your back every few hours.
       if (auto) set({ autoFailed: true });
-      else if (portable) void backend.openExternal(RELEASES);
+      else if (portable && !saved) void backend.openExternal(RELEASES);
     }
   },
 

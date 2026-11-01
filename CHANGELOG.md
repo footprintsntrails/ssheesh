@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 — the Windows app updates more surely
+
+- **The Windows app (SSHeesh.exe) updates itself more surely.** It gives your antivirus a moment to look at the new version before swapping it in, and tries again while something else holds the file. If Windows Security takes the new version away (SSHeesh isn't signed yet), it says so and where to allow it, instead of "the file can't be found". If the running copy can't be replaced, the new one is left next to it as `SSHeesh-<version>.exe`, to open by hand. Each failure now says which step it was. The update to this version still runs the old way, so if it fails, download it from the release page once.
+
 ## 0.7.2 — at the right line
 
 - **A path with lines opens at them.** Click `notes.md:242-296` (or `main.rs:12`, `main.rs:12:5`, GitHub's `#L10-L20`) and the file opens beside the terminal scrolled to those lines, with a band marking them and "lines 242–296" over the file. Formatted Markdown marks the paragraphs, headings and code those lines make up; Source marks the lines themselves. Before, the line number was dropped and the file opened at the top.
