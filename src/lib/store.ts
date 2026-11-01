@@ -481,6 +481,9 @@ export const useStore = create<AppState>()(
 
       setAttention(id, a) {
         set((s) => {
+          // The same again changes nothing, so nothing draws again.
+          const now = s.attention[id];
+          if (a ? now && now.kind === a.kind && now.message === a.message && now.at === a.at : !now) return s;
           const next = { ...s.attention };
           if (a) next[id] = a;
           else delete next[id];
@@ -512,6 +515,9 @@ export const useStore = create<AppState>()(
 
       setProgress(id, p) {
         set((s) => {
+          // A progress bar reports the same value many times over.
+          const now = s.progress[id];
+          if (p ? now && now.state === p.state && now.value === p.value : !now) return s;
           const next = { ...s.progress };
           if (p) next[id] = p;
           else delete next[id];

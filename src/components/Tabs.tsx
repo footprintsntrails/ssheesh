@@ -338,12 +338,15 @@ const SidebarTab = memo(function SidebarTab({ id, narrow, split, props }: { id: 
  * hanging from a line that starts at the server's icon. Narrow, they're
  * smaller icons under the server's.
  */
+const NO_TABS: string[] = [];
+
 export function SidebarTabs({ target, narrow }: { target: TargetRef; narrow: boolean }) {
   const names = useNames();
   const split = useSideBySide(useStore(currentScreen));
-  // Tabs are in one place: along the top, or here, never both.
+  // Tabs are in one place: along the top, or here, never both. Along the
+  // top, this machine's tabs aren't worked out on every change to the store.
   const here = useSettings((s) => s.tabsPlacement === "sidebar");
-  const { shown, tabProps, menuEl } = useTabList((s) => tabsOn(s, target).map((p) => p.id), "y");
+  const { shown, tabProps, menuEl } = useTabList((s) => (here ? tabsOn(s, target).map((p) => p.id) : NO_TABS), "y");
   if (!here || !shown.length) return null;
   return (
     <div

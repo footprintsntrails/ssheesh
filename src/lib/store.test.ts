@@ -306,3 +306,33 @@ describe("from 0.5's single layout", () => {
     expect(saved.home).toBe(true);
   });
 });
+
+describe("progress and attention", () => {
+  it("change nothing, and wake nobody, when told what they already say", () => {
+    useStore.setState({ progress: {}, attention: {} });
+    let changes = 0;
+    const stop = useStore.subscribe(() => changes++);
+    const st = () => useStore.getState();
+    st().setProgress("t1", { state: "normal", value: 40 });
+    st().setProgress("t1", { state: "normal", value: 40 });
+    expect(changes).toBe(1);
+    st().setProgress("t1", { state: "normal", value: 41 });
+    expect(st().progress.t1).toEqual({ state: "normal", value: 41 });
+    st().setProgress("t1", null);
+    st().setProgress("t1", null);
+    expect(changes).toBe(3);
+    expect(st().progress).toEqual({});
+
+    st().setAttention("t1", null);
+    expect(changes).toBe(3);
+    st().setAttention("t1", { kind: "input", at: 5 });
+    st().setAttention("t1", { kind: "input", at: 5 });
+    expect(changes).toBe(4);
+    // A new moment is news: it's when the program asked.
+    st().setAttention("t1", { kind: "input", at: 6 });
+    expect(st().attention.t1.at).toBe(6);
+    st().setAttention("t1", null);
+    expect(changes).toBe(6);
+    stop();
+  });
+});
