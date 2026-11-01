@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 — a click opens it
+
+- **A click on a path or link in the terminal opens it**, no Ctrl or ⌘ needed: the file beside the terminal, a link in your browser. A double-click or a drag across a path still just selects it, and Ctrl+click (⌘-click) still opens at once.
+- **This computer in the Pixels style** is a small old desktop, so it's plainly pixels like the rest; the laptop it was looked just like the line one. The laptop is still in the icon picker, now with pixel corners.
+
 ## 0.7.0 — files that don't fall over, secrets that stay hidden
 
 - **Uploads and downloads go on after a dropped connection.** When the Wi-Fi drops or the laptop sleeps, the card in the corner says it's waiting, and once the server answers again it carries on by itself: a file from the very byte it stopped at, a folder (and a copy between two servers) from the start. It waits up to ten minutes without getting anywhere, and Stop works all the while. A file that changed on the server meanwhile is fetched again from the start, so nothing comes out mixed.

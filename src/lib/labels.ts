@@ -80,7 +80,7 @@ function glyph(icon: PhosphorIcon, pixel: string): ServerGlyph {
 }
 
 /** This computer, in the sidebar and wherever servers are listed. */
-export const LOCAL_GLYPH = glyph(Laptop, "laptop");
+export const LOCAL_GLYPH = glyph(Laptop, "local");
 
 /** Icons you can give a server, so it's easy to spot, also in the narrow sidebar. */
 export const HOST_ICONS: Record<string, { icon: ServerGlyph; name: string }> = {
@@ -113,7 +113,7 @@ export const HOST_ICONS: Record<string, { icon: ServerGlyph; name: string }> = {
   camera: { icon: glyph(SecurityCamera, "camera"), name: "Cameras" },
   iot: { icon: glyph(WifiHigh, "iot"), name: "Smart home" },
   desktop: { icon: glyph(Desktop, "desktop"), name: "Workstation" },
-  laptop: { icon: LOCAL_GLYPH, name: "Computer" },
+  laptop: { icon: glyph(Laptop, "laptop"), name: "Laptop" },
 };
 
 /**

@@ -6,7 +6,7 @@
 import { RotateCcw } from "lucide-react";
 import { useEffect, useState, type ComponentType } from "react";
 import { cn } from "../lib/format";
-import { isMac, shortcutLabel } from "../lib/keys";
+import { shortcutLabel } from "../lib/keys";
 import { toggleStreamer } from "../lib/privacy";
 import { useTour } from "../lib/tour";
 import { useSettings } from "../lib/settings";
@@ -50,7 +50,7 @@ const STEPS: Step[] = [
   {
     scene: ScenePeek,
     title: "Peek at a file",
-    body: () => `${isMac ? "⌘-click" : "Ctrl+click"} a path in the output to see the file beside the terminal.`,
+    body: () => "Click a path in the output to see the file beside the terminal.",
     detail: () => "Markdown shows formatted. Links open in your browser.",
   },
   {

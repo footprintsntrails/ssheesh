@@ -408,10 +408,10 @@ const CHECKOUT = [
   "});",
 ];
 
-/** T4: Ctrl+click a path in the output to peek at the file beside the terminal. */
+/** T4: click a path in the output to peek at the file beside the terminal. */
 export function ScenePeek() {
   return (
-    <Frame label="A path in the output is Ctrl+clicked and the file opens beside the terminal, at the changed line">
+    <Frame label="A path in the output is clicked and the file opens beside the terminal, at the changed line">
       <Main full>
         <Pane title="Terminal 2 (Claude Code)" icon={CLAUDE} className="flex-1">
           <span className="text-fg">● Fixed it in</span>

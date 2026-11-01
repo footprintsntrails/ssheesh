@@ -427,7 +427,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     else if (top + ROW > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW - el.clientHeight;
   };
 
-  // A file to pick out, from a Ctrl+click on its path in a terminal.
+  // A file to pick out, from a click on its path in a terminal.
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   useEffect(() => {

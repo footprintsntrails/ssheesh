@@ -9,7 +9,7 @@ import { ArrowLeft, ChevronDown, Eye, EyeOff, FileUp, MessageSquare, Plus, Rotat
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
-import { isMac, shortcutLabel } from "../lib/keys";
+import { shortcutLabel } from "../lib/keys";
 import { useLabels, useUndecidedConfig } from "../lib/labels";
 import { toggleStreamer, useNames } from "../lib/privacy";
 import { ONBOARDING_VERSION, useSettings, type Settings } from "../lib/settings";
@@ -172,7 +172,7 @@ function WhatChanged({ onCustomize, onDone }: { onCustomize: () => void; onDone:
   const [take, setTake] = useState(0);
   const rows: { title: string; body: string; scene?: ComponentType }[] = [
     { title: "Main menu", body: "A start page with your servers, agents at work and tabs you closed.", scene: SceneMainMenu },
-    { title: "Peek at files", body: `${isMac ? "⌘-click" : "Ctrl+click"} a path in a terminal to see the file beside it.`, scene: ScenePeek },
+    { title: "Peek at files", body: "Click a path in a terminal to see the file beside it.", scene: ScenePeek },
     { title: "Agents in the sidebar", body: "Claude Code and Codex show up by name, on every server.", scene: SceneTabs },
     { title: "Your own colors and keys", body: "Edit any theme color, and set your own keyboard shortcuts." },
   ];

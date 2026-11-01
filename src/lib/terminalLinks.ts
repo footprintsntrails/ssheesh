@@ -1,4 +1,4 @@
-// Ctrl+click (⌘-click on a Mac) on a file path or web link in a terminal's
+// A click on a file path or web link in a terminal's
 // output: links open in the browser, paths in the Files pane beside the
 // terminal, with the file picked out and previewed.
 

@@ -30,9 +30,9 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 
 ## Tricks worth knowing
 
-- **Peek at a file.** Paths in a terminal's output are faintly underlined: Ctrl+click one (⌘-click on a Mac) and the file opens beside the terminal, Markdown nicely formatted. A path an agent prints from its own project is found too.
+- **Peek at a file.** Paths in a terminal's output are faintly underlined: click one and the file opens beside the terminal, Markdown nicely formatted. A path an agent prints from its own project is found too.
 
-<p align="center"><img src="docs/media/peek.gif" alt="Ctrl+clicking a path in an agent's output opens the file beside the terminal"></p>
+<p align="center"><img src="docs/media/peek.gif" alt="Clicking a path in an agent's output opens the file beside the terminal"></p>
 
 - **Drag a tab onto the page** to see two at once, also two servers' tabs side by side; its × (or dragging it back to the tabs) makes it a tab again, still running. Ctrl+Shift+S switches between one tab at a time and side by side.
 

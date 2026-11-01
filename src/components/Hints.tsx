@@ -8,7 +8,7 @@
 import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { agentRunning } from "../lib/agents";
-import { isMac, shortcutLabel } from "../lib/keys";
+import { shortcutLabel } from "../lib/keys";
 import { markHintSeen, ONBOARDING_VERSION, useSettings } from "../lib/settings";
 import { currentScreen, currentTarget, isSplit, machineSummary, useStore } from "../lib/store";
 import { toggleSplit } from "../lib/tabs";
@@ -48,7 +48,7 @@ export const HINTS: Hint[] = [
     id: "peek",
     anchor: "terminal",
     title: "Peek at a file",
-    body: () => `${isMac ? "⌘-click" : "Ctrl+click"} a path in the output to see the file beside the terminal.`,
+    body: () => "Click a path in the output to see the file beside the terminal.",
     when: (s) => s.sessions[s.focused]?.kind === "connected" && s.panes[s.focused]?.kind === "terminal",
   },
   {

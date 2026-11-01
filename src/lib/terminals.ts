@@ -63,7 +63,9 @@ function rowText(line: IBufferLine, cols: number): { text: string; cells: number
   return { text, cells };
 }
 
-const OPEN_HINT = `${isMac ? "⌘" : "Ctrl"}+click to open`;
+const OPEN_HINT = "Click to open";
+/** A plain click opens a link this long after, unless it turns out to be a double-click. */
+const CLICK_WAIT_MS = 260;
 
 /** Keys and mouse reports that aren't typing: they don't end scrolling back. */
 const NOT_TYPING = /^\x1b\[(?:<|M|I$|O$)/;
@@ -120,6 +122,7 @@ class TerminalHandle {
   /** Paths and links on screen, faintly underlined so you can tell they open. */
   private linkLayer: HTMLDivElement | null = null;
   private markTimer = 0;
+  private linkTimer = 0;
   /** Secrets on screen, covered with dots, and the ones you chose to see. */
   private secretLayer: HTMLDivElement | null = null;
   private secrets: SecretMark[] = [];
@@ -231,7 +234,9 @@ class TerminalHandle {
       }
       return true;
     });
-    // Paths and links in the output open with Ctrl+click (⌘-click on a Mac).
+    // Paths and links in the output open with a click. Ctrl+click (⌘-click)
+    // opens at once; a plain click waits a beat, so a double-click that
+    // selects part of a path, or a drag across it, doesn't open anything.
     this.term.registerLinkProvider({
       provideLinks: (y, callback) => {
         const line = this.term.buffer.active.getLine(y - 1);
@@ -242,8 +247,11 @@ class TerminalHandle {
           text: text.slice(link.start, link.end),
           decorations: { pointerCursor: true, underline: true },
           activate: (e: MouseEvent) => {
-            if (!(isMac ? e.metaKey : e.ctrlKey)) return;
-            void openTerminalLink({ paneId, target, sessionKey, durable: this.durable, cwd: this.cwd }, link);
+            const open = () => void openTerminalLink({ paneId, target, sessionKey, durable: this.durable, cwd: this.cwd }, link);
+            window.clearTimeout(this.linkTimer);
+            if (isMac ? e.metaKey : e.ctrlKey) return open();
+            if (e.detail > 1 || this.term.hasSelection()) return;
+            this.linkTimer = window.setTimeout(() => !this.term.hasSelection() && open(), CLICK_WAIT_MS);
           },
           hover: () => {
             this.el.title = OPEN_HINT;

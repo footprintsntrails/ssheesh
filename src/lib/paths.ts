@@ -1,5 +1,5 @@
 // Paths and links: the Files address bar's clickable folders, and the file
-// paths and web links in a terminal's output that open with Ctrl+click.
+// paths and web links in a terminal's output that open with a click.
 
 export interface Crumb {
   label: string;
