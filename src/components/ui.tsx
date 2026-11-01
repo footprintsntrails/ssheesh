@@ -84,6 +84,8 @@ export function healthOf(s: SessionState | undefined): Health {
       return "warn";
     case "failed":
       return "bad";
+    // Let go of while unused: nothing's wrong, and nothing's connected.
+    case "asleep":
     default:
       return "idle";
   }
@@ -129,7 +131,7 @@ export function EnvChip({ env, className }: { env: EnvLabel | null; className?: 
 
 
 
-export type Mood = "ok" | "busy" | "lost" | "dead" | "done";
+export type Mood = "ok" | "busy" | "lost" | "dead" | "done" | "asleep";
 
 export function moodOf(s: SessionState | undefined): Mood {
   switch (s?.kind) {
@@ -142,6 +144,8 @@ export function moodOf(s: SessionState | undefined): Mood {
       return "dead";
     case "ended":
       return "done";
+    case "asleep":
+      return "asleep";
     default:
       return s && s.kind === "connecting" && s.attempt > 1 ? "lost" : "busy";
   }
@@ -153,14 +157,16 @@ const MOOD_LABEL: Record<Mood, string> = {
   lost: "Connection lost, reconnecting",
   dead: "Couldn't connect",
   done: "Session ended",
+  asleep: "Asleep: disconnected while unused",
 };
 
 /**
  * The logo as a status light: >_ all good, >_< connection lost,
- * x_x couldn't connect, -_- session ended. Shape, not only color.
+ * x_x couldn't connect, -_- session ended, eyes shut asleep. Shape, not
+ * only color.
  */
 export function Face({ mood, className }: { mood: Mood; className?: string }) {
-  const cursor = { ok: "var(--ui-ok)", busy: "var(--ui-fg-3)", lost: "var(--ui-warn)", dead: "var(--ui-bad)", done: "var(--ui-fg-3)" }[mood];
+  const cursor = { ok: "var(--ui-ok)", busy: "var(--ui-fg-3)", lost: "var(--ui-warn)", dead: "var(--ui-bad)", done: "var(--ui-fg-3)", asleep: "var(--ui-fg-3)" }[mood];
   const eye = { strokeWidth: 2.4, strokeLinecap: "square" as const, fill: "none", stroke: "currentColor" };
   return (
     <svg viewBox="0 0 30 16" className={cn("h-3.5 w-[26px] shrink-0 text-fg-2", className)} role="img" aria-label={MOOD_LABEL[mood]}>
@@ -177,6 +183,7 @@ export function Face({ mood, className }: { mood: Mood; className?: string }) {
         </>
       )}
       {mood === "done" && <path d="M3 8 H9 M21 8 H27" {...eye} />}
+      {mood === "asleep" && <path d="M3 7 Q6 11 9 7 M21 7 Q24 11 27 7" {...eye} strokeLinecap="round" />}
       <rect
         x={mood === "ok" || mood === "busy" ? 12 : 11}
         y="11"

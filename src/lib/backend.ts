@@ -95,6 +95,8 @@ export interface Backend {
   writeSession(paneId: string, data: string): void;
   resizeSession(paneId: string, cols: number, rows: number): void;
   reconnectSession(paneId: string): void;
+  /** Lets go of an unused terminal's connection; its tmux shell keeps running. Reconnect brings it back. */
+  sleepSession(paneId: string): void;
   /** Reconnect by itself after a drop, or wait for the user. Applies to open sessions. */
   setAutoReconnect(enabled: boolean): void;
   closeSession(paneId: string, target: TargetRef, sessionKey: string, endRemote: boolean): void;
@@ -108,9 +110,10 @@ export interface Backend {
   archivePaths(target: TargetRef, dir: string, names: string[], archive: string): Promise<void>;
   deletePath(target: TargetRef, path: string): Promise<void>;
   downloadPath(target: TargetRef, path: string, isDir: boolean, hooks: TransferHooks): Promise<string>;
-  uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, hooks: TransferHooks): Promise<void>;
-  /** Copies `paths`, all in one folder on `from`, into `destDir` on the server `to`. */
-  copyToServer(from: TargetRef, to: TargetRef, paths: string[], destDir: string, overwrite: boolean, hooks: TransferHooks): Promise<void>;
+  /** With `clean`, files lose their metadata (location, camera, author…) on the way to a server. */
+  uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
+  /** Copies `paths`, all in one folder on `from`, into `destDir` on the server `to`; cleaned as an upload when `from` is this computer. */
+  copyToServer(from: TargetRef, to: TargetRef, paths: string[], destDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
   /** Stops an upload or download; its call then fails with code "cancelled". */
   cancelTransfer(id: string): void;
   sessionCwd(target: TargetRef, sessionKey: string): Promise<string>;
@@ -251,6 +254,7 @@ async function tauriBackend(): Promise<Backend> {
     writeSession: (paneId, data) => fire("write_session", { paneId, data }),
     resizeSession: (paneId, cols, rows) => fire("resize_session", { paneId, cols, rows }),
     reconnectSession: (paneId) => fire("reconnect_session", { paneId }),
+    sleepSession: (paneId) => fire("sleep_session", { paneId }),
     setAutoReconnect: (enabled) => fire("set_auto_reconnect", { enabled }),
     closeSession: (paneId, target, sessionKey, endRemote) =>
       fire("close_session", { paneId, target, sessionKey, endRemote }),
@@ -263,9 +267,10 @@ async function tauriBackend(): Promise<Backend> {
     archivePaths: (target, dir, names, archive) => call("archive_paths", { target, dir, names, archive }),
     deletePath: (target, path) => call("delete_path", { target, path }),
     downloadPath: (target, path, isDir, hooks) => call("download_path", { target, path, isDir, ...progress(hooks) }),
-    uploadPaths: (target, paths, remoteDir, overwrite, hooks) =>
-      call("upload_paths", { target, paths, remoteDir, overwrite, ...progress(hooks) }),
-    copyToServer: (from, to, paths, destDir, overwrite, hooks) => call("copy_to_server", { from, to, paths, destDir, overwrite, ...progress(hooks) }),
+    uploadPaths: (target, paths, remoteDir, overwrite, clean, hooks) =>
+      call("upload_paths", { target, paths, remoteDir, overwrite, clean, ...progress(hooks) }),
+    copyToServer: (from, to, paths, destDir, overwrite, clean, hooks) =>
+      call("copy_to_server", { from, to, paths, destDir, overwrite, clean, ...progress(hooks) }),
     cancelTransfer: (id) => fire("cancel_transfer", { id }),
     sessionCwd: (target, sessionKey) => call("session_cwd", { target, sessionKey }),
     findPath: (target, path, cwd) => call("find_path", { target, path, cwd }),

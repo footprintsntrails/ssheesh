@@ -24,6 +24,12 @@ describe("finding secrets in output", () => {
     expect(secrets("DATABASE_URL=postgres://app:s3cr3t@db:5432/app")).toEqual(["s3cr3t"]);
   });
 
+  it("still finds a password in a URL that streamer mode dotted out in part", () => {
+    // A server whose user is "postgres": streaming hides that word, scheme and all.
+    expect(secrets("DATABASE_URL=••••••••://app:s3cr3t@db:5432/app")).toEqual(["s3cr3t"]);
+    expect(secrets("url: my••••••://••••:s3cr3t@db/app")).toEqual(["s3cr3t"]);
+  });
+
   it("leaves ordinary output alone", () => {
     for (const line of [
       "max_tokens: 4096",

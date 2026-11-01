@@ -43,14 +43,14 @@ fn main() {
     let (xfer, reports) = recorded();
     xfer.add_total(files::upload_size(&big));
     let t0 = Instant::now();
-    files::upload(&target, &env, &big, &base, false, &xfer).expect("upload file");
+    files::upload(&target, &env, &big, &base, false, false, &xfer).expect("upload file");
     let last = *reports.lock().unwrap().last().unwrap();
     println!("upload file: {} reports in {:?}, last {last:?}", reports.lock().unwrap().len(), t0.elapsed());
     assert_eq!(last, (256 * MIB, 256 * MIB));
 
     let (xfer, reports) = recorded();
     xfer.add_total(files::upload_size(&folder));
-    files::upload(&target, &env, &folder, &base, false, &xfer).expect("upload folder");
+    files::upload(&target, &env, &folder, &base, false, false, &xfer).expect("upload folder");
     let last = *reports.lock().unwrap().last().unwrap();
     println!("upload folder: {} reports, last {last:?}", reports.lock().unwrap().len());
     assert_eq!(last, (256 * MIB + 2, 256 * MIB + 2));
@@ -76,10 +76,10 @@ fn main() {
     files::make_dir(&target, &env, &format!("{base}/c")).expect("mkdir c");
     let dir_c = format!("{base}/c");
     let xfer = cancelled_early();
-    let err = files::upload(&target, &env, &big, &dir_c, false, &xfer).expect_err("cancelled file upload");
+    let err = files::upload(&target, &env, &big, &dir_c, false, false, &xfer).expect_err("cancelled file upload");
     assert_eq!(err.code, ErrorCode::Cancelled);
     let xfer = cancelled_early();
-    let err = files::upload(&target, &env, &folder, &dir_c, false, &xfer).expect_err("cancelled folder upload");
+    let err = files::upload(&target, &env, &folder, &dir_c, false, false, &xfer).expect_err("cancelled folder upload");
     assert_eq!(err.code, ErrorCode::Cancelled);
     // The server side tidies up on its own within a moment.
     std::thread::sleep(Duration::from_secs(3));
@@ -101,7 +101,7 @@ fn main() {
 
     // Replacing still works, and a replaced file is whole.
     let xfer = Transfer::quiet();
-    files::upload(&target, &env, &big, &base, true, &xfer).expect("replace file");
+    files::upload(&target, &env, &big, &base, true, false, &xfer).expect("replace file");
     let listing = files::list(&target, &env, &base).expect("list base");
     let size = listing.entries.iter().find(|e| e.name == "big.bin").map(|e| e.size);
     assert_eq!(size, Some(256 * MIB));

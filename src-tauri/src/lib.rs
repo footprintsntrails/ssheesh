@@ -8,6 +8,7 @@ use sshee_core::fixes;
 use sshee_core::containers::{self, ContainerList, Engine};
 use sshee_core::files::{self, DirListing, TextFile, Transfer};
 use sshee_core::metrics::{self, Metrics};
+use sshee_core::scrub::Cleaning;
 use sshee_core::secrets::PasswordStore;
 use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::session::{self, EventSink};
@@ -194,6 +195,13 @@ fn reconnect_session(state: State<AppState>, pane_id: String) {
     state.sessions.reconnect_now(&pane_id);
 }
 
+/// Lets go of the connection of a terminal left unused; its shell keeps
+/// running in tmux on the server until you reconnect.
+#[tauri::command]
+fn sleep_session(state: State<AppState>, pane_id: String) {
+    state.sessions.sleep(&pane_id);
+}
+
 /// Closes a pane's session. With `end_remote`, also ends its tmux session on
 /// the server (the user closed the pane on purpose). The close itself stays
 /// on the UI thread, in order with `open_session` for the same pane; the
@@ -348,12 +356,15 @@ async fn delete_path(state: State<'_, AppState>, target: TargetSpec, path: Strin
 }
 
 /// Bytes moved so far and the total (0 when unknown), for the transfers
-/// panel, and whether it's waiting for a dropped connection to come back.
+/// panel, whether it's waiting for a dropped connection to come back, and
+/// what cleaning took out of an upload's files.
 #[derive(Clone, Serialize)]
 struct TransferProgress {
     done: u64,
     total: u64,
     waiting: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cleaning: Option<Cleaning>,
 }
 
 /// Runs an upload or download that the UI can follow and cancel by `id`.
@@ -364,7 +375,7 @@ async fn run_transfer<T: Send + 'static>(
     work: impl FnOnce(Arc<Transfer>) -> Result<T, OpError> + Send + 'static,
 ) -> Result<T, OpError> {
     let xfer = Transfer::new(move |p| {
-        let _ = on_progress.send(TransferProgress { done: p.done, total: p.total, waiting: p.waiting });
+        let _ = on_progress.send(TransferProgress { done: p.done, total: p.total, waiting: p.waiting, cleaning: p.cleaning });
     });
     state.transfers.lock().unwrap().insert(id.clone(), xfer.clone());
     let result = blocking(move || work(xfer)).await;
@@ -401,13 +412,17 @@ async fn download_path(
     run_transfer(&state, transfer_id, on_progress, move |xfer| files::download(&t, &env, &path, is_dir, &downloads_dir(), &xfer)).await
 }
 
+/// Uploads files and folders into `remote_dir`; with `clean`, files lose
+/// what they say about where they came from on the way.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn upload_paths(
     state: State<'_, AppState>,
     target: TargetSpec,
     paths: Vec<String>,
     remote_dir: String,
     overwrite: bool,
+    clean: bool,
     transfer_id: String,
     on_progress: Channel<TransferProgress>,
 ) -> Result<(), OpError> {
@@ -421,7 +436,7 @@ async fn upload_paths(
         xfer.check()?;
         xfer.add_total(paths.iter().map(|p| files::upload_size(p)).sum());
         for p in &paths {
-            files::upload(&t, &env, p, &remote_dir, overwrite, &xfer)?;
+            files::upload(&t, &env, p, &remote_dir, overwrite, clean, &xfer)?;
         }
         Ok(())
     })
@@ -439,11 +454,12 @@ async fn copy_to_server(
     paths: Vec<String>,
     dest_dir: String,
     overwrite: bool,
+    clean: bool,
     transfer_id: String,
     on_progress: Channel<TransferProgress>,
 ) -> Result<(), OpError> {
     let (a, b, env) = (resolve(&state, &from)?, resolve(&state, &to)?, state.env.clone());
-    run_transfer(&state, transfer_id, on_progress, move |xfer| files::copy_between(&a, &b, &env, &paths, &dest_dir, overwrite, &xfer)).await
+    run_transfer(&state, transfer_id, on_progress, move |xfer| files::copy_between(&a, &b, &env, &paths, &dest_dir, overwrite, clean, &xfer)).await
 }
 
 /// The portable Windows .exe: run straight from a download, not installed.
@@ -481,7 +497,7 @@ async fn install_portable_update(app: tauri::AppHandle, on_progress: Channel<Tra
         .download(
             |chunk, total| {
                 done += chunk as u64;
-                let _ = on_progress.send(TransferProgress { done, total: total.unwrap_or(0), waiting: false });
+                let _ = on_progress.send(TransferProgress { done, total: total.unwrap_or(0), waiting: false, cleaning: None });
             },
             || {},
         )
@@ -798,6 +814,7 @@ pub fn run() {
             write_session,
             resize_session,
             reconnect_session,
+            sleep_session,
             set_auto_reconnect,
             close_session,
             list_dir,

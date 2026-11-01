@@ -16,6 +16,7 @@ pub mod hosts;
 pub mod identity;
 pub mod keys;
 pub mod metrics;
+pub mod scrub;
 pub mod secrets;
 pub mod session;
 pub mod shell_pool;

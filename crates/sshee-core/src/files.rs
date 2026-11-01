@@ -2,6 +2,7 @@
 //! this computer.
 
 use crate::error::{ErrorCode, OpError};
+use crate::scrub::{self, CleanCopy, Cleaning};
 use crate::ssh::{remote_command, run_remote, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
 use serde::Serialize;
 use std::fs::File;
@@ -458,13 +459,15 @@ pub fn delete(target: &Target, env: &SshEnv, path: &str) -> Result<(), OpError> 
 // ---------------------------------------------------------------- transfers
 
 /// Where a transfer stands, for the app to show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Progress {
     pub done: u64,
     /// 0 while the size isn't known.
     pub total: u64,
     /// The connection dropped; it carries on once the server answers again.
     pub waiting: bool,
+    /// What came out of the files so far; None when they go uncleaned.
+    pub cleaning: Option<Cleaning>,
 }
 
 /// An upload or download the app shows while it runs: bytes moved out of the
@@ -475,6 +478,7 @@ pub struct Transfer {
     total: AtomicU64,
     done: AtomicU64,
     last_report: Mutex<Option<Instant>>,
+    cleaning: Mutex<Option<Cleaning>>,
     report: Box<dyn Fn(Progress) + Send + Sync>,
 }
 
@@ -488,6 +492,7 @@ impl Transfer {
             total: AtomicU64::new(0),
             done: AtomicU64::new(0),
             last_report: Mutex::new(None),
+            cleaning: Mutex::new(None),
             report: Box::new(report),
         })
     }
@@ -542,6 +547,22 @@ impl Transfer {
         self.report_now();
     }
 
+    /// The total, once a file turned out another size than counted: its
+    /// cleaned copy.
+    fn retotal(&self, was: u64, now: u64) {
+        if now >= was {
+            self.total.fetch_add(now - was, Ordering::Relaxed);
+        } else {
+            self.total.fetch_sub(was - now, Ordering::Relaxed);
+        }
+    }
+
+    /// Counts what cleaning came to for one more file or folder, and says so at once.
+    fn cleaned(&self, count: impl FnOnce(&mut Cleaning)) {
+        count(self.cleaning.lock().unwrap().get_or_insert_with(Cleaning::default));
+        self.report_now();
+    }
+
     fn set_waiting(&self, waiting: bool) {
         if self.waiting.swap(waiting, Ordering::Relaxed) != waiting {
             self.report_now();
@@ -553,6 +574,7 @@ impl Transfer {
             done: self.done(),
             total: self.total.load(Ordering::Relaxed),
             waiting: self.waiting.load(Ordering::Relaxed),
+            cleaning: self.cleaning.lock().unwrap().clone(),
         });
     }
 }
@@ -693,7 +715,7 @@ fn joined(errors: JoinHandle<String>) -> String {
 }
 
 /// 64 random bits, from the randomly keyed hasher std seeds from the OS.
-fn unguessable() -> u64 {
+pub(crate) fn unguessable() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     std::collections::hash_map::RandomState::new().build_hasher().finish()
 }
@@ -1019,7 +1041,9 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
 /// Copies a file or folder from this computer into `dir` on the target: over
 /// ssh for a server, a plain copy for this computer's own file manager.
 /// Progress adds up in `xfer`, whose total the caller sets (`upload_size`).
-pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str, overwrite: bool, xfer: &Arc<Transfer>) -> Result<(), OpError> {
+/// With `clean`, a server gets a file without what it says about where it
+/// came from (`scrub`), and a folder without its dates, owner or Mac extras.
+pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str, overwrite: bool, clean: bool, xfer: &Arc<Transfer>) -> Result<(), OpError> {
     xfer.check()?;
     let base = xfer.done();
     let (size, tar_size) = local_tree_size(local_path);
@@ -1052,6 +1076,17 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     };
 
     if local_path.is_file() {
+        // A cleaned copy goes instead, made once, so picking up after a drop
+        // goes on with the very same bytes. Only the content travels, so the
+        // server's file is dated by the upload, with nothing else attached.
+        let copy = if clean { clean_for_upload(local_path, &name, xfer)? } else { None };
+        let (source, size) = match &copy {
+            Some(c) => {
+                xfer.retotal(size, c.len());
+                (c.path(), c.len())
+            }
+            None => (local_path, size),
+        };
         let mut first = true;
         let result = resuming(&[t], env, xfer, || {
             // After a drop, the rest goes on from what's staged.
@@ -1059,7 +1094,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
             first = false;
             loop {
                 xfer.settle(base + from);
-                let mut source = File::open(local_path)?;
+                let mut source = File::open(source)?;
                 source.seek(SeekFrom::Start(from))?;
                 let mut cmd = remote_command(t, env, &upload_file_script(&guard, &s, &d, size, from));
                 cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -1101,10 +1136,15 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     // A new folder unpacks into the hidden one and moves into place once
     // everything arrived. Replacing unpacks over the folder that's there.
     // A tar stream can't be picked up midway, so after a drop it starts over.
+    // Cleaned, what it unpacks is dated now and owned by whoever unpacks it.
+    if clean {
+        xfer.cleaned(|c| c.folders += 1);
+    }
+    let unpack = if clean { "tar -xmof -" } else { "tar -xf -" };
     let script = if overwrite {
-        format!("cd -- {} && tar -xf -", shell_quote(remote_dir))
+        format!("cd -- {} && {unpack}", shell_quote(remote_dir))
     } else {
-        format!("{guard}rm -rf -- {s} && mkdir -- {s} && cd -- {s} && tar -xf -")
+        format!("{guard}rm -rf -- {s} && mkdir -- {s} && cd -- {s} && {unpack}")
     };
     let parent = local_path.parent().unwrap_or(Path::new("."));
     // The tar stream is a little bigger than the files in it; count in file bytes.
@@ -1112,6 +1152,11 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     let result = resuming(&[t], env, xfer, || {
         xfer.settle(base);
         let mut pack = Command::new(crate::ssh::program("tar"));
+        if clean && cfg!(target_os = "macos") {
+            // The Mac's tar brings extended attributes along, as ._ files
+            // among them: quarantine, and the address a file was downloaded from.
+            pack.args(["--no-mac-metadata", "--no-xattrs", "--no-acls", "--no-fflags"]).env("COPYFILE_DISABLE", "1");
+        }
         pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(local_tar_item(local_path, &name)).stdout(Stdio::piped()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut pack);
         let mut pack = pack.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
@@ -1161,6 +1206,19 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     }
 }
 
+/// Cleans a copy of a file for `upload` and counts what came out. None when
+/// the file itself goes: nothing came out, or it's a kind it doesn't clean.
+fn clean_for_upload(path: &Path, name: &str, xfer: &Transfer) -> Result<Option<CleanCopy>, OpError> {
+    let (scrub, copy) = scrub::clean_copy(path).map_err(|e| {
+        OpError::failed(format!(
+            "Couldn't clean \"{name}\" before sending it: {e}. To send it as it is, turn off Clean files before uploading in Settings → Privacy."
+        ))
+    })?;
+    xfer.cleaned(|c| c.add(&scrub));
+    xfer.check()?;
+    Ok(copy)
+}
+
 /// The scripts `copy_between` runs: what to pack on the first server (the
 /// `names` in `parent`, quoted), how big that is, and how to unpack on the
 /// second, always into the hidden folder `staging`: the stream is whatever
@@ -1195,8 +1253,10 @@ fn copy_finish_script(names: &str, dest: &str, staging: &str, overwrite: bool) -
 /// needn't reach each other, and nothing waits on this computer's disk.
 /// From this computer it's an upload. As with an upload, nothing is
 /// replaced unless `overwrite` (one check names everything first), and
-/// what arrives stays under a hidden name until all of it is there.
-pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], dest_dir: &str, overwrite: bool, xfer: &Arc<Transfer>) -> Result<(), OpError> {
+/// what arrives stays under a hidden name until all of it is there; and
+/// from this computer, it's cleaned first with `clean`.
+#[allow(clippy::too_many_arguments)]
+pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], dest_dir: &str, overwrite: bool, clean: bool, xfer: &Arc<Transfer>) -> Result<(), OpError> {
     let b = ssh_only(to).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "Copies go to a server; use Download for this computer."))?;
     let Some(a) = ssh_only(from) else {
         let local: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
@@ -1205,7 +1265,7 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
         }
         xfer.add_total(local.iter().map(|p| upload_size(p)).sum());
         for p in &local {
-            upload(to, env, p, dest_dir, overwrite, xfer)?;
+            upload(to, env, p, dest_dir, overwrite, clean, xfer)?;
         }
         return Ok(());
     };
@@ -1432,13 +1492,13 @@ mod tests {
         let env = SshEnv::default();
         let d = dst.display().to_string();
         let xfer = Transfer::quiet();
-        upload(&Target::Local, &env, &src.join("site"), &d, false, &xfer).unwrap();
+        upload(&Target::Local, &env, &src.join("site"), &d, false, false, &xfer).unwrap();
         assert_eq!(std::fs::read_to_string(dst.join("site/index.html")).unwrap(), "hi");
         assert_eq!(xfer.done(), 2);
-        let again = upload(&Target::Local, &env, &src.join("site"), &d, false, &xfer);
+        let again = upload(&Target::Local, &env, &src.join("site"), &d, false, false, &xfer);
         assert_eq!(again.unwrap_err().code, ErrorCode::Exists);
         xfer.cancel();
-        let stopped = upload(&Target::Local, &env, &src.join("site"), &d, true, &xfer);
+        let stopped = upload(&Target::Local, &env, &src.join("site"), &d, true, false, &xfer);
         assert_eq!(stopped.unwrap_err().code, ErrorCode::Cancelled);
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -1731,13 +1791,13 @@ mod tests {
         let env = SshEnv::default();
         let xfer = Transfer::quiet();
         // Into itself, or a folder inside it: refused.
-        let into = upload(&Target::Local, &env, &base.join("real"), &base.join("real/sub").to_string_lossy(), false, &xfer);
+        let into = upload(&Target::Local, &env, &base.join("real"), &base.join("real/sub").to_string_lossy(), false, false, &xfer);
         assert!(into.is_err());
         assert!(!base.join("real/sub/real").exists());
         // A link inside is copied as a link; the picked link is followed.
         let dst = base.join("dst");
         std::fs::create_dir_all(&dst).unwrap();
-        upload(&Target::Local, &env, &base.join("link"), &dst.to_string_lossy(), false, &xfer).unwrap();
+        upload(&Target::Local, &env, &base.join("link"), &dst.to_string_lossy(), false, false, &xfer).unwrap();
         assert!(dst.join("link").symlink_metadata().unwrap().is_dir());
         assert!(dst.join("link/sub/loop").symlink_metadata().unwrap().is_symlink());
         assert_eq!(std::fs::read_to_string(dst.join("link/a.txt")).unwrap(), "hello");

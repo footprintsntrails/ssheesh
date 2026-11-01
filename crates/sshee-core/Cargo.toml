@@ -11,3 +11,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+# Office files are zips; cleaned ones are written back in pure Rust.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }

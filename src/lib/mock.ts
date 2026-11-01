@@ -3,7 +3,7 @@
 
 import type { Backend, TransferHooks } from "./backend";
 import pkg from "../../package.json";
-import type { Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
+import type { Cleaning, Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
 import type { WebApp } from "./types";
 
 /** The demo pretends the next patch version is out. */
@@ -19,13 +19,16 @@ const hosts: Host[] = [
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const fakeCancels = new Map<string, () => void>();
+/** What the demo's uploads pretend to clean out of a photo. */
+const DEMO_CLEANING: Cleaning = { cleaned: 1, clean: 0, asIs: 0, folders: 0, removed: ["location", "camera", "dates"] };
+
 /** Pretends to move `total` bytes over a few seconds; Cancel stops it. */
-function fakeTransfer(hooks: TransferHooks, total: number): Promise<void> {
+function fakeTransfer(hooks: TransferHooks, total: number, cleaning?: Cleaning): Promise<void> {
   return new Promise((resolve, reject) => {
     let done = 0;
     const timer = setInterval(() => {
       done = Math.min(total, done + (total / 30) * (0.5 + Math.random()));
-      hooks.onProgress({ done, total, waiting: false });
+      hooks.onProgress({ done, total, waiting: false, cleaning });
       if (done < total) return;
       clearInterval(timer);
       fakeCancels.delete(hooks.id);
@@ -78,9 +81,32 @@ const tree: Record<string, FileEntry[]> = {
     file("release-2026-10-29.tar.gz", 48_211_332, 3600 * 20),
     file("server.log", 7_340_032, 45),
   ],
+  "/var/www/app/src": [dir("middleware", 1200), dir("routes", 1200), file("server.ts", 1408, 86400 * 3)],
+  "/var/www/app/src/middleware": [file("rateLimit.ts", 712, 1200)],
+  "/var/www/app/src/routes": [file("checkout.ts", 2034, 1200)],
 };
 
 const textFiles: Record<string, string> = {
+  // The agent's change, which its output points at by line.
+  "rateLimit.ts": `import type { Request, Response, NextFunction } from "express";
+import { redis } from "../lib/redis";
+
+/** Checkouts a client may start per window, and the window in seconds. */
+const LIMIT = Number(process.env.CHECKOUT_LIMIT ?? 20);
+const WINDOW = 60;
+
+export async function rateLimit(req: Request, res: Response, next: NextFunction) {
+  const key = \`rl:checkout:\${req.ip}\`;
+  const used = await redis.incr(key);
+  if (used === 1) await redis.expire(key, WINDOW);
+  if (used > LIMIT) {
+    res.set("Retry-After", String(await redis.ttl(key)));
+    return res.status(429).json({ error: "Too many checkouts, try again in a minute." });
+  }
+  res.set("X-RateLimit-Remaining", String(LIMIT - used));
+  next();
+}
+`,
   "api.log": [
     "2026-10-29T23:09:41Z INFO  listening on :8080",
     "2026-10-29T23:09:41Z INFO  connected to postgres (app-db-1:5432)",
@@ -182,7 +208,21 @@ function agentScreen(agent: "claude" | "codex"): string {
     `  ${C.dim}⎿${C.r} Updated ${C.b}src/routes/checkout.ts${C.r} ${C.g}(+3 -1)${C.r}`,
     `  ${C.dim}⎿${C.r} Documented the limits in ./README.md`,
     "",
+    `${o}●${C.r} The limit is checked in ${C.b}src/middleware/rateLimit.ts:8-18${C.r}.`,
+    "",
     `${o}●${C.r} Run the test suite now? ${C.dim}(y/n)${C.r} `,
+  ].join("\r\n");
+}
+
+/** A deploy under way, for the reconnect scene: the connection drops halfway and the server finishes it. */
+function deployBanner(name: string, user: string): string {
+  const prompt = `${C.g}${user}@${name}${C.r}:${C.bl}~/app${C.r}$ `;
+  return [
+    `${prompt}./deploy.sh`,
+    `${C.dim}Deploying acme/api 2.15.0 to production${C.r}`,
+    " ✔ Image ghcr.io/acme/api:2.15.0  Pulled",
+    " ✔ Network app_default           Created",
+    " ⠿ Container app-db-1           Waiting",
   ].join("\r\n");
 }
 
@@ -441,12 +481,14 @@ export const mockBackend: Backend = {
                 ? agentScreen(sessionKey.includes("claude") ? "claude" : "codex")
               : new URLSearchParams(location.search).get("scene") === "simple"
                 ? simpleBanner(name, user)
-                : banner(name, user),
+                : new URLSearchParams(location.search).get("scene") === "reconnect" && sessionKey === "demo"
+                  ? deployBanner(name, user)
+                  : banner(name, user),
         });
         // The agent asks a question a moment later, as a real one rings for you.
         if (sessionKey.includes("claude")) s.timers.push(window.setTimeout(() => s.emit({ type: "output", data: "\x1b]777;notify;Claude Code;Waiting for your answer\x07" }), 2500));
         if (new URLSearchParams(location.search).get("scene") === "reconnect" && target.kind !== "local") {
-          s.timers.push(window.setTimeout(() => simulateDrop(s), 600));
+          s.timers.push(window.setTimeout(() => simulateDrop(s), 2600));
         }
       }, 350),
     );
@@ -466,6 +508,16 @@ export const mockBackend: Backend = {
           uptime: " 23:14:02 up 37 days,  5:02,  1 user,  load average: 1.42, 1.18, 0.97",
           whoami: "root",
           "node -v": "v22.11.0",
+          // Settings stay readable; the passwords and keys show as dots.
+          "cat .env": [
+            "APP_ENV=production",
+            "APP_URL=https://shop.acme.example",
+            "DATABASE_URL=postgres://shop:Xk29fLq7vRt2@db.internal:5432/shop",
+            "REDIS_PASSWORD=8hQm2LzT9wPqVd",
+            "SESSION_SECRET=3f9a1c7e5b2d8f4a6c0e9b1d7a3f5c8e",
+            "MAIL_FROM=orders@acme.example",
+            "PAYMENTS_API_KEY=pay_9X2mQ7rT4vZ8wL1nB6yH3jF5",
+          ].join("\r\n"),
         };
         if (cmd && canned[cmd]) s.emit({ type: "output", data: `${canned[cmd]}\r\n` });
         else if (cmd) s.emit({ type: "output", data: `${C.dim}(demo) try “drop” to see a reconnect${C.r}\r\n` });
@@ -500,8 +552,16 @@ export const mockBackend: Backend = {
   reconnectSession(paneId) {
     const s = sessions.get(paneId);
     if (!s) return;
+    s.emit({ type: "status", state: { kind: "connecting", attempt: 2 } });
     s.raw({ type: "status", state: { kind: "connected", durable: true } });
     s.raw({ type: "output", data: `\x1b[H\x1b[2J${WHILE_AWAY.slice(-5).join("\r\n")}\r\n${s.prompt}` });
+  },
+  sleepSession(paneId) {
+    const s = sessions.get(paneId);
+    if (!s) return;
+    // The server carries on while the tab sleeps; tmux keeps it all.
+    s.scrollback += `\r\n${WHILE_AWAY.join("\r\n")}\r\n${s.prompt}`;
+    s.emit({ type: "status", state: { kind: "asleep" } });
   },
   async localAuth() {
     await wait(120);
@@ -600,10 +660,10 @@ export const mockBackend: Backend = {
     await fakeTransfer(hooks, 48 * 1024 * 1024);
     return `~/Downloads/${path.split("/").pop()}`;
   },
-  async uploadPaths(_t, _paths, _dir, _overwrite, hooks) {
-    await fakeTransfer(hooks, 23 * 1024 * 1024);
+  async uploadPaths(_t, _paths, _dir, _overwrite, clean, hooks) {
+    await fakeTransfer(hooks, 23 * 1024 * 1024, clean ? DEMO_CLEANING : undefined);
   },
-  async copyToServer(_from, _to, paths, destDir, overwrite, hooks) {
+  async copyToServer(_from, _to, paths, destDir, overwrite, _clean, hooks) {
     const names = paths.map((p) => p.split("/").pop() ?? p);
     const there = listing(destDir).entries;
     const taken = names.filter((n) => there.some((e) => e.name === n));
@@ -650,6 +710,7 @@ export const mockBackend: Backend = {
     await wait(1200);
     if (/upgrade|-Syu/.test(command)) return { kind: "needsYou", ask: "It lists what it's about to install and asks whether to go ahead: type y and press Enter." };
     if (command.includes("sshd_config") || command.includes("reload ssh")) return { kind: "needsYou", ask: "sudo asks for your password on the server, the one you log in with: type it and press Enter. Nothing shows while you type; that's normal." };
+    if (command.includes("fail2ban")) return { kind: "done", output: "fail2ban is installed and running. Addresses that keep failing to log in are blocked for 10 minutes." };
     return { kind: "done", output: "Vacuuming done, freed 1.2G of archived journals from /var/log/journal." };
   },
   async securityCheckup() {

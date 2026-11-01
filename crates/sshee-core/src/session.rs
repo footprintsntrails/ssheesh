@@ -34,6 +34,9 @@ pub enum SessionState {
     /// The connection dropped and automatic reconnecting is off: waiting
     /// for the user to press Reconnect.
     Disconnected { reason: String },
+    /// Let go of after sitting unused; the shell keeps running in tmux on
+    /// the server. Waiting for the user to come back and reconnect.
+    Asleep,
     Ended { code: Option<u32> },
     Failed { message: String },
 }
@@ -74,6 +77,8 @@ struct Shared {
     size: Mutex<PtySize>,
     closed: AtomicBool,
     auto_reconnect: AtomicBool,
+    /// Put to sleep: its connection was let go of on purpose (see `sleep`).
+    asleep: AtomicBool,
     wake: Mutex<bool>,
     wake_cv: Condvar,
 }
@@ -135,6 +140,7 @@ impl SessionManager {
             size: Mutex::new(PtySize { rows: rows.max(2), cols: cols.max(2), pixel_width: 0, pixel_height: 0 }),
             closed: AtomicBool::new(false),
             auto_reconnect: AtomicBool::new(self.auto_reconnect.load(Ordering::SeqCst)),
+            asleep: AtomicBool::new(false),
             wake: Mutex::new(false),
             wake_cv: Condvar::new(),
         });
@@ -180,7 +186,21 @@ impl SessionManager {
 
     pub fn reconnect_now(&self, id: &str) {
         if let Some(s) = self.get(id) {
+            s.asleep.store(false, Ordering::SeqCst);
             s.wake();
+        }
+    }
+
+    /// Lets go of the connection of a session nobody has used for a while.
+    /// Its shell lives on in tmux on the server, and the session waits,
+    /// Asleep, until `reconnect_now`. One with no connection up is left as
+    /// it is.
+    pub fn sleep(&self, id: &str) {
+        if let Some(s) = self.get(id) {
+            if let Some(k) = s.killer.lock().unwrap().as_mut() {
+                s.asleep.store(true, Ordering::SeqCst);
+                let _ = k.kill();
+            }
         }
     }
 
@@ -232,6 +252,15 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
         };
         if shared.closed.load(Ordering::SeqCst) {
             return;
+        }
+        if shared.asleep.load(Ordering::SeqCst) {
+            sink(SessionEvent::Status { state: SessionState::Asleep });
+            // Only Reconnect wakes it: not turning automatic reconnecting on.
+            while shared.asleep.load(Ordering::SeqCst) && !shared.closed.load(Ordering::SeqCst) {
+                shared.wait_for_wake();
+            }
+            failures = 0;
+            continue;
         }
         ever_ready |= exit.ready;
         if is_ssh && exit.code == 255 {
@@ -685,6 +714,32 @@ mod tests {
         assert!(matches!(rest.as_slice(), [SessionEvent::Output { data }] if data == "after"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_session_put_to_sleep_waits_for_reconnect() {
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let m = SessionManager::new();
+        let spec = || Ok(SessionSpec { target: Target::Local, key: "p".into(), env: SshEnv::default(), run: Some(vec!["sleep".into(), "30".into()]), welcome: Default::default() });
+        m.open("p", 80, 24, spec, Arc::new(move |e| {
+            if let SessionEvent::Status { state } = e {
+                let _ = tx.lock().unwrap().send(state);
+            }
+        }));
+        let next = || rx.recv_timeout(Duration::from_secs(5)).expect("a status");
+        assert_eq!(next(), SessionState::Connecting { attempt: 1 });
+        assert_eq!(next(), SessionState::Connected { durable: false });
+        m.sleep("p");
+        assert_eq!(next(), SessionState::Asleep);
+        // Automatic reconnecting is for drops; a session put to sleep waits for you.
+        m.set_auto_reconnect(true);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        m.reconnect_now("p");
+        assert_eq!(next(), SessionState::Connecting { attempt: 2 });
+        assert_eq!(next(), SessionState::Connected { durable: false });
+        m.close("p");
+    }
+
     #[test]
     fn backoff_grows_and_caps() {
         assert_eq!(backoff_ms(1), 1000);
@@ -707,5 +762,7 @@ mod tests {
         };
         let json = serde_json::to_string(&e).unwrap();
         assert_eq!(json, r#"{"type":"status","state":{"kind":"reconnecting","attempt":2,"retryInMs":2000,"reason":"x"}}"#);
+        let asleep = serde_json::to_string(&SessionEvent::Status { state: SessionState::Asleep }).unwrap();
+        assert_eq!(asleep, r#"{"type":"status","state":{"kind":"asleep"}}"#);
     }
 }

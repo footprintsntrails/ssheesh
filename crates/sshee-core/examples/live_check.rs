@@ -69,9 +69,9 @@ fn main() {
     println!("files: downloaded {f}, {d}, {d2}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "привет\n");
     assert!(d2.ends_with("sub dir (1)"));
-    files::upload(&target, &env, &PathBuf::from(&d), &base, false, &Transfer::quiet()).expect_err("upload must not overwrite");
-    files::upload(&target, &env, &PathBuf::from(&d2), &base, false, &Transfer::quiet()).expect("upload dir");
-    files::upload(&target, &env, &PathBuf::from(&f), &base, false, &Transfer::quiet()).expect("upload file");
+    files::upload(&target, &env, &PathBuf::from(&d), &base, false, false, &Transfer::quiet()).expect_err("upload must not overwrite");
+    files::upload(&target, &env, &PathBuf::from(&d2), &base, false, false, &Transfer::quiet()).expect("upload dir");
+    files::upload(&target, &env, &PathBuf::from(&f), &base, false, false, &Transfer::quiet()).expect("upload file");
     let after = files::list(&target, &env, &base).expect("list after upload");
     let names: Vec<_> = after.entries.iter().map(|e| e.name.as_str()).collect();
     println!("files: {base} now has {names:?}");

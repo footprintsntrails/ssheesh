@@ -16,6 +16,7 @@ import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scr
 import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { OutputPipeline } from "./output";
+import { sleepsNow, wasDown } from "./poll";
 import { maskText, streamerOn, targetName } from "./privacy";
 import { findSecrets, keyLines, keyOpenAfter, looksLikeKeyBody, secretsHidden } from "./secrets";
 import { markHintSeen, useSettings } from "./settings";
@@ -143,6 +144,10 @@ class TerminalHandle {
   private busySince = 0;
   private lastOutput = 0;
   private quietNoted = true;
+  /** When you last typed here, looked here, or it printed something. */
+  private lastActive = Date.now();
+  /** Woken from asleep and not connected yet: typing waits (see onData). */
+  private waking = false;
   /** When the connection dropped, and the lines that were on screen then. */
   private away: { since: number; anchor: string[]; current: string } | null = null;
   /** Where tmux on the server is scrolled to; null when the history is this terminal's own. */
@@ -250,6 +255,15 @@ class TerminalHandle {
     });
     this.typeDroppedText();
     this.term.onData((d) => {
+      // A terminal that let go of its unused connection comes back on a key.
+      // That key, and any typed before it's connected again, go nowhere: ssh
+      // signing in again would echo them (a password typed ahead, say).
+      if (this.last?.kind === "asleep") {
+        if (!NOT_TYPING.test(d)) this.reconnectNow();
+        return;
+      }
+      if (this.waking) return;
+      this.lastActive = Date.now();
       this.sent++;
       // Typing while scrolled back goes to the prompt, as in other terminals,
       // instead of tmux's copy mode.
@@ -469,6 +483,7 @@ class TerminalHandle {
   /** Notes output for the "went quiet after a long run" check. */
   private noteOutput() {
     const now = Date.now();
+    this.lastActive = now;
     if (this.watched()) {
       this.busySince = 0;
     } else if (!this.busySince || now - this.lastOutput > 4000) {
@@ -500,6 +515,18 @@ class TerminalHandle {
       this.quietNoted = true;
       this.notice({ kind: "done" });
     }
+  }
+
+  /**
+   * Called every few seconds: a terminal nobody typed in, looked at or got
+   * output from for the time set in Settings lets go of its connection. Only
+   * where tmux keeps the shell running on the server (see `sleepsNow`).
+   */
+  checkIdle(now: number) {
+    if (this.disposed || !sleepsNow(this.last, this.target.kind === "host", now - this.lastActive, useSettings.getState().idleSleep)) return;
+    // Asked once; the next try, if this one found nothing to let go of, is a while off.
+    this.lastActive = now;
+    backend.sleepSession(this.paneId);
   }
 
   mount(container: HTMLElement) {
@@ -609,6 +636,7 @@ class TerminalHandle {
   }
 
   focus() {
+    this.lastActive = Date.now();
     this.term.focus();
   }
 
@@ -852,7 +880,8 @@ class TerminalHandle {
         }
         for (const s of findSecrets(text)) {
           const secret = text.slice(s.start, s.end);
-          if (this.revealed.has(secret)) continue;
+          // One you showed hides again while streaming: then nothing shows.
+          if (this.revealed.has(secret) && !streamerOn()) continue;
           for (let i = s.start; i < s.end; ) {
             let j = i;
             while (j + 1 < s.end && at[j + 1].row === at[i].row) j++;
@@ -874,7 +903,9 @@ class TerminalHandle {
   }
 
   reconnectNow() {
-    if (this.last?.kind === "reconnecting" || this.last?.kind === "disconnected") backend.reconnectSession(this.paneId);
+    const kind = this.last?.kind;
+    if (kind === "asleep") this.waking = true;
+    if (kind === "reconnecting" || kind === "disconnected" || kind === "asleep") backend.reconnectSession(this.paneId);
     else this.start();
   }
 
@@ -887,8 +918,10 @@ class TerminalHandle {
     }
     const prev = this.last;
     this.last = e.state;
+    if (e.state.kind !== "connecting") this.waking = false;
     if (e.state.kind === "connected") {
       this.durable = e.state.durable;
+      this.lastActive = Date.now();
       // A new shell has its history here, not in tmux.
       if (!e.state.durable) this.setTmux(null);
     }
@@ -897,7 +930,7 @@ class TerminalHandle {
       this.output.flush();
       this.term.write(STOP_REPORTS);
     }
-    const down = e.state.kind === "reconnecting" || e.state.kind === "disconnected";
+    const down = e.state.kind === "reconnecting" || e.state.kind === "disconnected" || e.state.kind === "asleep";
     if (down && !this.away && this.target.kind === "host") this.away = { since: Date.now(), anchor: anchorLines(this.term), current: cursorLine(this.term) };
     if (e.state.kind === "connected" && this.away) {
       const away = this.away;
@@ -905,7 +938,7 @@ class TerminalHandle {
       if (e.state.durable) this.collectRecap(away);
     }
     if (e.state.kind === "connected") {
-      if ((prev?.kind === "reconnecting" || prev?.kind === "disconnected") && !e.state.durable) {
+      if (wasDown(prev) && !e.state.durable) {
         this.term.write("\r\n\x1b[2m── reconnected · this is a new shell ──\x1b[0m\r\n");
       }
       if (this.pendingCommand) {
@@ -985,7 +1018,10 @@ useSettings.subscribe((s, prev) => {
 if (typeof window !== "undefined") {
   setInterval(() => {
     const now = Date.now();
-    for (const h of handles.values()) h.checkQuiet(now);
+    for (const h of handles.values()) {
+      h.checkQuiet(now);
+      h.checkIdle(now);
+    }
   }, 2000);
   // Coming back to the window counts as seeing the focused terminal.
   window.addEventListener("focus", () => {

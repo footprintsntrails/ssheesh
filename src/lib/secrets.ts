@@ -43,8 +43,9 @@ const VALUES = [
     String.raw`\b[\w.-]*?(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|auth[_-]?key|credentials?)["']?` + VALUE,
     "gid",
   ),
-  // A password in a URL: scheme://user:password@host
-  new RegExp(String.raw`\b[a-z][a-z0-9+.-]*://[^\s:/@]*:([^\s@/]{3,})@`, "gid"),
+  // A password in a URL: scheme://user:password@host. Streamer mode may have
+  // dotted out part of it (a server's user called "postgres"), so • counts too.
+  new RegExp(String.raw`(?<![\w+.•-])[a-z•][a-z0-9+.•-]*://[^\s:/@]*:([^\s@/]{3,})@`, "gid"),
   // Authorization headers.
   new RegExp(String.raw`\b(?:Bearer|Basic)\s+([A-Za-z0-9._~+/-]{16,}=*)`, "gd"),
 ];

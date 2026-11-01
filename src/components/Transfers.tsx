@@ -1,6 +1,7 @@
 // Cards for uploads and downloads in progress, stacked above the toasts.
 
-import { ArrowDownToLine, ArrowUpFromLine, Copy, WifiOff, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Copy, Eraser, WifiOff, X } from "lucide-react";
+import { cleaningNote } from "../lib/cleaning";
 import { bytes, cn, percent, rate } from "../lib/format";
 import { cancelTransfer, useTransfers, type Transfer } from "../lib/transfers";
 
@@ -13,6 +14,7 @@ function TransferCard({ t }: { t: Transfer }) {
   // A folder's size is an estimate, so the count can run a little past it.
   const done = known ? Math.min(t.done, t.total) : t.done;
   const fraction = known ? done / t.total : 0;
+  const cleaned = t.cleaning ? cleaningNote(t.cleaning) : "";
   return (
     <div role="status" className="glass pointer-events-auto animate-slide-up rounded-[13px] px-3.5 py-3">
       <div className="flex items-center gap-2.5">
@@ -48,6 +50,12 @@ function TransferCard({ t }: { t: Transfer }) {
         </span>
         {!t.cancelling && !t.waiting && t.rate > 0 && <span className="shrink-0">{rate(t.rate)}</span>}
       </div>
+      {cleaned && (
+        <p className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-fg-3" title={cleaned}>
+          <Eraser size={12} className="shrink-0 text-accent" aria-hidden />
+          <span className="truncate">{cleaned}</span>
+        </p>
+      )}
     </div>
   );
 }

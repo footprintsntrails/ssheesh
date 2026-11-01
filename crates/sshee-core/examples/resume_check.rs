@@ -1,13 +1,13 @@
 //! End-to-end check that transfers live through a dropped connection: they
 //! wait, go on once the server is back (a file from where it stopped), and
-//! everything arrives whole. The drop is `<drop>`, a shell command run once
+//! everything arrives whole, a cleaned photo too. The drop is `<drop>`, a shell command run once
 //! some of the data has moved, for example one that ends the test server's
 //! connections.
 //!
 //! cargo run -p sshee-core --example resume_check -- <ssh_config> <host> <control_dir|none> <drop>
 
 use sshee_core::files::{self, Progress, Transfer};
-use sshee_core::{ssh, SshEnv, SshTarget, Target};
+use sshee_core::{scrub, ssh, SshEnv, SshTarget, Target};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,7 @@ fn dropping(drop: &str) -> (Arc<Transfer>, Arc<Mutex<Vec<Progress>>>) {
     let reports: Arc<Mutex<Vec<Progress>>> = Arc::default();
     let (r, fired, drop) = (reports.clone(), Arc::new(AtomicBool::new(false)), drop.to_string());
     let xfer = Transfer::new(move |p| {
-        r.lock().unwrap().push(p);
+        r.lock().unwrap().push(p.clone());
         if p.total > 0 && p.done > p.total / 3 && !fired.swap(true, Ordering::Relaxed) {
             println!("  dropping the connection at {} of {} MiB", p.done / MIB, p.total / MIB);
             let _ = Command::new("sh").arg("-c").arg(&drop).status();
@@ -77,10 +77,27 @@ fn main() {
     let (xfer, reports) = dropping(drop);
     xfer_total(&xfer, &got);
     run(&format!("mkdir -p {base}/up"));
-    files::upload(&target, &env, &got, &format!("{base}/up"), false, &xfer).expect("upload");
+    files::upload(&target, &env, &got, &format!("{base}/up"), false, false, &xfer).expect("upload");
     check_reports(&reports.lock().unwrap(), true);
     assert_eq!(sum(&format!("{base}/up/big.bin")), local_sum(&got), "the upload arrived whole");
     assert_eq!(run(&format!("ls -A {base}/up")), "big.bin", "nothing staged is left behind");
+
+    println!("upload a photo, cleaned:");
+    let photo = local.join("photo.jpg");
+    write_photo(&photo, 96 * MIB as usize);
+    let clean = scrub::clean_copy(&photo).expect("clean").1.expect("something to clean");
+    let (xfer, reports) = dropping(drop);
+    xfer_total(&xfer, &photo);
+    run(&format!("mkdir -p {base}/photos"));
+    files::upload(&target, &env, &photo, &format!("{base}/photos"), false, true, &xfer).expect("upload photo");
+    let reports = reports.lock().unwrap();
+    check_reports(&reports, true);
+    assert_eq!(sum(&format!("{base}/photos/photo.jpg")), local_sum(&clean.path().to_path_buf()), "the cleaned copy arrived whole");
+    let cleaning = reports.last().unwrap().cleaning.clone().expect("it says what it cleaned");
+    assert_eq!(cleaning.removed, ["location", "camera"]);
+    assert_eq!(run(&format!("grep -c Nikon {base}/photos/photo.jpg || true")), "0", "no camera on the server");
+    std::mem::drop(reports);
+    forget_photo(clean, &photo);
 
     println!("download a folder:");
     let (xfer, reports) = dropping(drop);
@@ -94,6 +111,41 @@ fn main() {
     run(&format!("rm -rf {base}"));
     std::fs::remove_dir_all(&local).ok();
     println!("resume_check: all good");
+}
+
+/// A JPEG-shaped file of about `size` bytes, with the camera and a GPS
+/// position in its EXIF.
+fn write_photo(path: &Path, size: usize) {
+    // EXIF, big-endian: Make, and a GPS directory with a latitude reference.
+    let mut tiff = b"MM\0*\0\0\0\x08\0\x02".to_vec();
+    tiff.extend_from_slice(&[0x01, 0x0F, 0, 2, 0, 0, 0, 4, b'N', b'i', b'k', 0]);
+    tiff.extend_from_slice(&[0x88, 0x25, 0, 4, 0, 0, 0, 1, 0, 0, 0, 38]);
+    tiff.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 1, 0, 2, 0, 0, 0, 2, b'N', 0, 0, 0, 0, 0, 0, 0]);
+    let mut app1 = b"Exif\0\0".to_vec();
+    app1.extend_from_slice(&tiff);
+    app1.extend_from_slice(b"Nikon D850 body serial 1234");
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    jpeg.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+    jpeg.extend_from_slice(&app1);
+    jpeg.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0]);
+    // The picture: noise without 0xFF, so nothing in it reads as a marker.
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    jpeg.extend((0..size).map(|_| {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x as u8).min(0xFE)
+    }));
+    jpeg.extend_from_slice(&[0xFF, 0xD9]);
+    std::fs::write(path, jpeg).unwrap();
+}
+
+/// Once sent, the cleaned copy is gone; the photo itself is as it was.
+fn forget_photo(clean: scrub::CleanCopy, photo: &Path) {
+    let at = clean.path().to_path_buf();
+    std::mem::drop(clean);
+    assert!(!at.exists());
+    assert!(std::fs::read(photo).unwrap().windows(5).any(|w| w == b"Nikon"));
 }
 
 /// Sets an upload's total, as the app does before it starts.

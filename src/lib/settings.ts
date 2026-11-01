@@ -72,6 +72,12 @@ export interface Settings {
   copyOnSelect: boolean;
   terminalPadding: number;
   reconnectMode: ReconnectMode;
+  /**
+   * Minutes a terminal on a server can sit unused (no typing, no output)
+   * before it lets go of its connection; 0 never. Only where tmux keeps the
+   * shell running; a key brings it back.
+   */
+  idleSleep: number;
   sidebarSide: "left" | "right";
   sidebarVisible: boolean;
   sidebarWidth: number;
@@ -94,6 +100,8 @@ export interface Settings {
   streamerMode: boolean;
   /** Tokens, keys and passwords in terminal output show as dots until clicked. Always on while streaming. */
   hideSecrets: boolean;
+  /** Files uploaded to a server lose their metadata first (location, camera, author…); a cleaned copy goes, yours stays as it is. */
+  cleanUploads: boolean;
   /** Color errors, warnings and addresses in terminal output, plus your own rules. */
   highlightErrors: boolean;
   highlightWarnings: boolean;
@@ -158,6 +166,7 @@ export const DEFAULT_SETTINGS: Settings = {
   copyOnSelect: true,
   terminalPadding: 12,
   reconnectMode: "ask",
+  idleSleep: 20,
   sidebarSide: "left",
   sidebarVisible: true,
   sidebarWidth: 232,
@@ -175,6 +184,7 @@ export const DEFAULT_SETTINGS: Settings = {
   updateMode: "auto",
   streamerMode: false,
   hideSecrets: true,
+  cleanUploads: true,
   highlightErrors: true,
   highlightWarnings: true,
   highlightAddresses: false,

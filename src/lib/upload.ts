@@ -1,13 +1,16 @@
 // Sending files to a folder: from this computer to a server over ssh (or a
 // copy when the folder is on this computer), or from one server straight to
-// another. Asks before replacing anything.
+// another. Asks before replacing anything. What goes from this computer to a
+// server loses its metadata first, unless that's turned off in Settings.
 
 import { backend, type TransferHooks } from "./backend";
+import { cleaningNote, watchCleaning } from "./cleaning";
 import { dirCache } from "./dirCache";
 import { targetName } from "./privacy";
+import { useSettings } from "./settings";
 import { useStore } from "./store";
 import { track } from "./transfers";
-import { targetKey, toOpError, type TargetRef } from "./types";
+import { targetKey, toOpError, type Cleaning, type TargetRef } from "./types";
 
 /** "notes.txt" or "3 items", for messages. */
 export function filesLabel(paths: string[]): string {
@@ -46,13 +49,22 @@ async function sending(label: string, kind: "upload" | "copy", run: (overwrite: 
   return true;
 }
 
+/** The toast's line under a finished upload: what came out first, when anything did. */
+function doneBody(dir: string, cleaning: Cleaning | undefined): string {
+  return cleaning?.removed.length ? `${cleaningNote(cleaning)} · ${dir}` : dir;
+}
+
 /** Uploads `paths` into `dir`; true when it went through. */
 export async function uploadTo(target: TargetRef, dir: string, paths: string[]): Promise<boolean> {
   if (!paths.length) return false;
   const label = filesLabel(paths);
   const host = target.kind === "host";
-  const ok = await sending(label, host ? "upload" : "copy", (overwrite, hooks) => backend.uploadPaths(target, paths, dir, overwrite, hooks));
-  if (ok) useStore.getState().toast({ tone: "success", title: `${host ? "Uploaded" : "Copied"} ${label}`, body: dir });
+  const clean = useSettings.getState().cleanUploads;
+  let cleaning: Cleaning | undefined;
+  const ok = await sending(label, host ? "upload" : "copy", (overwrite, hooks) =>
+    backend.uploadPaths(target, paths, dir, overwrite, clean, watchCleaning(hooks, (c) => (cleaning = c))),
+  );
+  if (ok) useStore.getState().toast({ tone: "success", title: `${host ? "Uploaded" : "Copied"} ${label}`, body: doneBody(dir, cleaning) });
   return ok;
 }
 
@@ -64,10 +76,14 @@ export async function uploadTo(target: TargetRef, dir: string, paths: string[]):
 export async function copyToServer(from: TargetRef, paths: string[], to: TargetRef, dir: string): Promise<boolean> {
   if (!paths.length) return false;
   const label = filesLabel(paths);
-  const ok = await sending(label, "copy", (overwrite, hooks) => backend.copyToServer(from, to, paths, dir, overwrite, hooks));
+  const clean = useSettings.getState().cleanUploads;
+  let cleaning: Cleaning | undefined;
+  const ok = await sending(label, "copy", (overwrite, hooks) =>
+    backend.copyToServer(from, to, paths, dir, overwrite, clean, watchCleaning(hooks, (c) => (cleaning = c))),
+  );
   if (ok) {
     dirCache.changed(targetKey(to), dir);
-    useStore.getState().toast({ tone: "success", title: `Copied ${label} to ${targetName(to)}`, body: dir });
+    useStore.getState().toast({ tone: "success", title: `Copied ${label} to ${targetName(to)}`, body: doneBody(dir, cleaning) });
   }
   return ok;
 }

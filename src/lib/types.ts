@@ -78,6 +78,8 @@ export type SessionState =
   | { kind: "connected"; durable: boolean }
   | { kind: "reconnecting"; attempt: number; retryInMs: number; reason: string }
   | { kind: "disconnected"; reason: string }
+  /** Let go of after sitting unused; the shell keeps running in tmux on the server. */
+  | { kind: "asleep" }
   | { kind: "ended"; code: number | null }
   | { kind: "failed"; message: string };
 
@@ -294,6 +296,22 @@ export interface TransferProgress {
   total: number;
   /** The connection dropped; it goes on by itself once the server's back. */
   waiting: boolean;
+  /** What came out of an upload's files so far; missing when they go uncleaned. */
+  cleaning?: Cleaning;
+}
+
+/** What cleaning took out of an upload's files before they went. */
+export interface Cleaning {
+  /** Files something came out of. */
+  cleaned: number;
+  /** Files of a kind SSHeesh cleans that had nothing to take out. */
+  clean: number;
+  /** Files sent as they are: a kind SSHeesh doesn't clean. */
+  asIs: number;
+  /** Folders: they go without dates or Mac extras, the files inside as they are. */
+  folders: number;
+  /** What came out, each once: "location", "camera", "author"… */
+  removed: string[];
 }
 
 export interface OpError {

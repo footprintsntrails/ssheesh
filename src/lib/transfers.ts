@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { backend, type TransferHooks } from "./backend";
 import { newId } from "./layout";
-import type { TransferProgress } from "./types";
+import type { Cleaning, TransferProgress } from "./types";
 
 export interface Transfer {
   id: string;
@@ -20,6 +20,8 @@ export interface Transfer {
   /** The connection dropped; it picks up again once the server answers. */
   waiting: boolean;
   cancelling: boolean;
+  /** What came out of the files on the way, for uploads that clean them. */
+  cleaning?: Cleaning;
 }
 
 export const useTransfers = create<{ items: Transfer[] }>(() => ({ items: [] }));
@@ -36,9 +38,10 @@ export async function track<T>(kind: Transfer["kind"], label: string, run: (hook
   const id = newId("x");
   useTransfers.setState((s) => ({ items: [...s.items, { id, kind, label, done: 0, total: 0, rate: 0, waiting: false, cancelling: false }] }));
   let sample = { at: performance.now(), done: 0 };
-  const onProgress = ({ done, total, waiting = false }: TransferProgress) => {
+  const onProgress = ({ done, total, waiting = false, cleaning }: TransferProgress) => {
     const t = useTransfers.getState().items.find((x) => x.id === id);
     if (!t) return;
+    if (cleaning) patch(id, { cleaning });
     // No speed while waiting, and a fresh measure once it goes on.
     if (waiting || t.waiting) {
       sample = { at: performance.now(), done };

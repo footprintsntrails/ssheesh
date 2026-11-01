@@ -40,7 +40,7 @@ fn main() {
 
     // ---- arrives whole, progress reaches the total
     let (xfer, reports) = recorded();
-    files::copy_between(&a, &b, &env, &paths, &to, false, &xfer).expect("copy");
+    files::copy_between(&a, &b, &env, &paths, &to, false, false, &xfer).expect("copy");
     let last = *reports.lock().unwrap().last().unwrap();
     println!("copy: {} reports, last {last:?}", reports.lock().unwrap().len());
     assert!(last.1 > 0 && last.0 == last.1, "ends at the total");
@@ -49,11 +49,11 @@ fn main() {
     assert_eq!(same.trim(), "hi\nbody\nbig.bin\nsite");
 
     // ---- nothing replaced unless asked
-    let err = files::copy_between(&a, &b, &env, &paths, &to, false, &Transfer::quiet()).expect_err("refuses");
+    let err = files::copy_between(&a, &b, &env, &paths, &to, false, false, &Transfer::quiet()).expect_err("refuses");
     assert_eq!(err.code, ErrorCode::Exists);
     println!("refused: {}", err.message);
     run(&sa, &format!("echo changed > {from}/site/index.html"));
-    files::copy_between(&a, &b, &env, &paths, &to, true, &Transfer::quiet()).expect("replace");
+    files::copy_between(&a, &b, &env, &paths, &to, true, false, &Transfer::quiet()).expect("replace");
     assert_eq!(run(&sb, &format!("cat {to}/site/index.html")).trim(), "changed");
 
     // ---- Stop midway leaves nothing behind
@@ -64,7 +64,7 @@ fn main() {
         std::thread::sleep(Duration::from_millis(400));
         stop.cancel();
     });
-    let err = files::copy_between(&a, &b, &env, &[format!("{from}/huge.bin")], &to, false, &xfer).expect_err("stopped");
+    let err = files::copy_between(&a, &b, &env, &[format!("{from}/huge.bin")], &to, false, false, &xfer).expect_err("stopped");
     assert_eq!(err.code, ErrorCode::Cancelled);
     std::thread::sleep(Duration::from_secs(3));
     let left = run(&sb, &format!("ls -A {to}"));

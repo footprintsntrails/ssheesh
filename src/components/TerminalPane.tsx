@@ -7,6 +7,7 @@ import { useNames } from "../lib/privacy";
 import { maskSecrets } from "../lib/secrets";
 import { useSettings } from "../lib/settings";
 import { getTerminal } from "../lib/terminals";
+import { wasDown } from "../lib/poll";
 import { thumb, topForOffset, type ScrollView } from "../lib/scroll";
 import { resolveScheme } from "../lib/themes";
 import type { Fingerprint, HostKeyCheck, SessionState } from "../lib/types";
@@ -32,8 +33,7 @@ function useBackOnline(state: SessionState | undefined): SessionState | null {
   useEffect(() => {
     const was = prev.current;
     prev.current = state;
-    const wasDown = was?.kind === "reconnecting" || was?.kind === "disconnected" || (was?.kind === "connecting" && was.attempt > 1);
-    if (state?.kind === "connected" && wasDown) {
+    if (state?.kind === "connected" && wasDown(was)) {
       setShown(state);
       const t = setTimeout(() => setShown(null), 3200);
       return () => clearTimeout(t);
@@ -315,6 +315,7 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
   }, [focused, pane.id]);
 
   const reconnectMode = useSettings((s) => s.reconnectMode);
+  const idleSleep = useSettings((s) => s.idleSleep);
   const updateSettings = useSettings((s) => s.update);
   const offline =
     state?.kind === "reconnecting" || state?.kind === "disconnected" || (state?.kind === "connecting" && state.attempt > 1);
@@ -328,6 +329,8 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
         className={cn(
           "absolute inset-0 overflow-hidden transition-[opacity,filter] duration-300",
           (offline || stopped) && "opacity-40 saturate-50",
+          // Asleep isn't trouble: the text stays readable.
+          state?.kind === "asleep" && "opacity-60",
         )}
       />
       <TerminalScrollbar pane={pane} top={Math.round(pad * 0.66)} bottom={Math.round(pad * 0.66)} right={Math.round(pad / 3)} />
@@ -347,6 +350,24 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
               </button>
             </div>
             <Button size="sm" variant="primary" autoFocus onClick={() => getTerminal(pane).reconnectNow()}>
+              <RotateCw size={12.5} /> Reconnect
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {state?.kind === "asleep" && (
+        // No autofocus: the terminal keeps it, so any key you press there brings it back.
+        <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center px-3">
+          <div className="glass pointer-events-auto flex max-w-full animate-pop-in items-center gap-3 rounded-[14px] py-2 pr-2 pl-3">
+            <Face mood="asleep" />
+            <div className="min-w-0">
+              <div className="truncate text-[12.5px] font-medium text-fg">
+                {idleSleep > 0 ? `Disconnected after ${idleSleep < 60 ? `${idleSleep} min` : "an hour"} unused` : "Disconnected while unused"}
+              </div>
+              <div className="truncate text-[11.5px] text-fg-3">Your shell keeps running on the server. Press any key to come back</div>
+            </div>
+            <Button size="sm" variant="primary" onClick={() => getTerminal(pane).reconnectNow()}>
               <RotateCw size={12.5} /> Reconnect
             </Button>
           </div>

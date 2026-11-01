@@ -72,6 +72,7 @@ function SessionPill({ state, local }: { state: SessionState | undefined; local:
     connected: "Connected",
     reconnecting: "Reconnecting",
     disconnected: "Disconnected",
+    asleep: "Idle",
     ended: "Ended",
     failed: "Failed",
   }[state.kind];
@@ -161,7 +162,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
         </span>
       )}
       {pane.kind === "terminal" && <ProgressLine id={pane.id} />}
-      {pane.kind === "terminal" && state?.kind === "disconnected" && (
+      {pane.kind === "terminal" && (state?.kind === "disconnected" || state?.kind === "asleep") && (
         <button
           type="button"
           onClick={() => getTerminal(pane).reconnectNow()}

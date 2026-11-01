@@ -5,7 +5,7 @@
 // closes it, right-click for more. Ctrl+Tab goes to the next. What tabs do
 // lives in lib/tabs.ts.
 
-import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, Plus, Rows2, SquareTerminal, X, type LucideIcon } from "lucide-react";
+import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, Moon, Plus, Rows2, SquareTerminal, X, type LucideIcon } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { agentRunning, agentShort } from "../lib/agents";
@@ -190,6 +190,12 @@ function TabState({ id, noInput = false }: { id: string; noInput?: boolean }) {
       </span>
     );
   if (attention?.kind === "done") return <Check size={12} strokeWidth={2.6} aria-label="Went quiet" className="shrink-0 text-ok" />;
+  if (state === "asleep")
+    return (
+      <span title="Asleep: disconnected while unused. Press any key in it to come back" className="flex shrink-0">
+        <Moon size={11} strokeWidth={2.2} aria-label="Asleep" className="text-fg-3" />
+      </span>
+    );
   if (progress || state === "connecting" || state === "reconnecting")
     return <span aria-label="Working" className="size-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-accent border-t-transparent" />;
   return null;

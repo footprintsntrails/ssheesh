@@ -31,9 +31,9 @@ const PREFIX = /^\s*(srv|cmd|file|set):\s*/i;
 /** Settings sections, with words people might search for. */
 const SETTINGS_SECTIONS: [string, string, string][] = [
   ["appearance", "Appearance", "theme colors accent zoom size"],
-  ["terminal", "Terminal", "font cursor colors scheme copy gpu"],
+  ["terminal", "Terminal", "font cursor colors scheme copy gpu idle afk sleep disconnect"],
   ["layout", "Layout", "tabs side by side sidebar compact vitals reconnect"],
-  ["privacy", "Privacy", "streamer mode"],
+  ["privacy", "Privacy", "streamer mode metadata exif gps clean uploads"],
   ["updates", "Updates", "version download"],
   ["about", "About", "version license credits"],
 ];

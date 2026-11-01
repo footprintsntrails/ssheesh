@@ -100,6 +100,7 @@ const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
   { section: "terminal", label: "Cursor", words: "bar block underline caret" },
   { section: "terminal", label: "Blinking cursor", words: "blink caret" },
   { section: "terminal", label: "When the connection drops", words: "reconnect disconnect auto ask network" },
+  { section: "terminal", label: "Disconnect unused terminals", words: "idle afk sleep disconnect unused away tmux timeout" },
   { section: "terminal", label: "Tell me when a terminal needs me", words: "notification bell alert agent claude codex done attention" },
   { section: "terminal", label: "Hide secrets", words: "tokens keys passwords api redact mask privacy streamer env" },
   { section: "terminal", label: "Errors", words: "highlight red error output logs" },
@@ -121,6 +122,7 @@ const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
   { section: "keyboard", label: "Keyboard shortcuts", words: "keys hotkeys keybindings bindings combos remap" },
   ...SHORTCUT_GROUPS.flatMap((g) => g.ids).map((id) => ({ section: "keyboard", label: SHORTCUT_NAMES[id], words: "shortcut keys hotkey keybinding" })),
   { section: "privacy", label: "Streamer mode", words: "hide names ip addresses screen share recording obs twitch" },
+  { section: "privacy", label: "Clean files before uploading", words: "metadata exif gps location camera author strip remove photos pdf word upload" },
   { section: "privacy", label: "What SSHeesh connects to", words: "network telemetry tracking internet" },
   { section: "updates", label: "Install updates", words: "auto update version check" },
 ];
@@ -471,6 +473,7 @@ function Terminal({ s, set, reset }: SectionProps) {
             "copyOnSelect",
             "terminalPadding",
             "reconnectMode",
+            "idleSleep",
             "hideSecrets",
             "highlightErrors",
             "highlightWarnings",
@@ -592,6 +595,26 @@ function Terminal({ s, set, reset }: SectionProps) {
             { value: "auto", label: "Reconnect" },
             { value: "ask", label: "Ask me" },
             { value: "off", label: "Off" },
+          ]}
+        />
+      </Row>
+      <Row
+        label="Disconnect unused terminals"
+        hint={
+          s.idleSleep > 0
+            ? `A server terminal with no typing and no output for ${s.idleSleep < 60 ? `${s.idleSleep} min` : "an hour"} lets go of its connection. Only where tmux keeps the shell running on the server. Any key brings it back.`
+            : "Terminals stay connected for as long as they're open."
+        }
+      >
+        <Segmented
+          value={String(s.idleSleep)}
+          onChange={(v) => set({ idleSleep: Number(v) })}
+          options={[
+            { value: "0", label: "Off" },
+            { value: "15", label: "15 min" },
+            { value: "20", label: "20 min" },
+            { value: "30", label: "30 min" },
+            { value: "60", label: "1 h" },
           ]}
         />
       </Row>
@@ -971,6 +994,12 @@ function Privacy({ s, set }: SectionProps) {
           </span>
         </div>
       )}
+      <Row
+        label="Clean files before uploading"
+        hint="Photos lose where and with what they were taken; PDFs and Word, Excel and PowerPoint files lose author, company and the app that made them. A cleaned copy goes to the server, yours stays as it is. Other kinds of files, and files inside folders, go as they are."
+      >
+        <Switch checked={s.cleanUploads} onChange={(v) => set({ cleanUploads: v })} label="Clean files before uploading" />
+      </Row>
       <SubHeading title="What SSHeesh connects to" />
       <NetworkList updates={s.updateMode !== "manual"} />
     </>
