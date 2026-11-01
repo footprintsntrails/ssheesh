@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — smoother terminals, and no grey under the welcome
+
+- **Smoother wheel scrolling and fast output.** Since 0.8.1 a screen drawn in a few pieces (scrolling a server's terminal with the wheel, a program redrawing, a lot of output at once) could show half drawn for a moment, or wait a beat. It now reaches the window whole, as soon as it's done.
+- **No grey under the welcome.** With links and addresses highlighted, what came after a link, and the rest of the screen below it, could take on the grey of the welcome's logo.
+- **Updating installs the newest version.** An update found a while ago is looked up again as it installs, so one that came out since isn't skipped.
+
 ## 0.8.1 — quicker, and easier on your servers
 
 - **A busy terminal doesn't slow the window down.** A `cat` of a big file or a long build log sent the window one message per read, tens of thousands a second. While output keeps coming it now arrives in small batches; after a pause it still comes at once, so typing feels the same.
