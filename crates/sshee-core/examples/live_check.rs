@@ -27,7 +27,7 @@ fn main() {
     let env = SshEnv::with_control_dir(PathBuf::from(control));
 
     // ---- metrics
-    let m = metrics::fetch(&target, &env).expect("metrics");
+    let m = metrics::fetch(&target, &env, true).expect("metrics");
     println!(
         "metrics: host={} kernel={} cores={} load={:?} mem={} MiB avail={} MiB rx={} tx={} ifaces={:?} disks={:?} month={:?}",
         m.hostname,

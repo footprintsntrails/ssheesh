@@ -16,6 +16,7 @@ import { LoadLine, RailCard, RailLoad } from "./ServerLoad";
 import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
 import { SidebarTabs } from "./Tabs";
 import { newTab } from "../lib/tabs";
+import { backoff } from "../lib/poll";
 import { toolItems } from "./Tabs";
 import { openInNewWindow } from "../lib/windows";
 import { forgetHostTunnels } from "../lib/tunnels";
@@ -45,25 +46,51 @@ function StatusMark({ health }: { health: Health }) {
 }
 
 const POLL_MS = 10000;
+/** The longest wait between looks while they keep failing. */
+const MAX_POLL_MS = 60000;
 
+/**
+ * The containers on a machine, looked at again a while after each answer
+ * (later while looks keep failing), and not while the window is hidden.
+ * `refresh` looks now.
+ */
 function useContainers(target: TargetRef) {
   const [list, setList] = useState<ContainerList | null>(null);
   const [error, setError] = useState<OpError | null>(null);
   const key = targetKey(target);
+  // `run` tells the newest look from older ones still on their way.
+  const poll = useRef({ timer: 0, failures: 0, run: 0 });
   const refresh = useCallback(() => {
+    const p = poll.current;
+    window.clearTimeout(p.timer);
+    const run = ++p.run;
+    const next = () => {
+      if (run === p.run) p.timer = window.setTimeout(refresh, backoff(POLL_MS, p.failures, MAX_POLL_MS));
+    };
+    if (document.visibilityState === "hidden") return next();
     backend
       .listContainers(target)
       .then((l) => {
+        if (run !== p.run) return;
+        p.failures = 0;
         setList(l);
         setError(null);
       })
-      .catch((e) => setError(toOpError(e)));
+      .catch((e) => {
+        if (run !== p.run) return;
+        p.failures++;
+        setError(toOpError(e));
+      })
+      .finally(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
+    const p = poll.current;
+    return () => {
+      window.clearTimeout(p.timer);
+      p.run++;
+    };
   }, [refresh]);
   return { list, error, refresh };
 }

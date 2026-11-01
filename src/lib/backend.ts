@@ -135,7 +135,8 @@ export interface Backend {
   pickFiles(): Promise<string[]>;
   onFileDrop(cb: (e: DropEvent) => void): () => void;
 
-  fetchMetrics(target: TargetRef): Promise<Metrics>;
+  /** `full` also reads what hardly changes (name, kernel, cores, disks, the month's traffic); without it those come back empty. */
+  fetchMetrics(target: TargetRef, full: boolean): Promise<Metrics>;
   listContainers(target: TargetRef): Promise<ContainerList>;
   containerAction(target: TargetRef, engine: Engine, id: string, action: "start" | "stop" | "restart"): Promise<void>;
 
@@ -303,7 +304,7 @@ async function tauriBackend(): Promise<Backend> {
       };
     },
 
-    fetchMetrics: (target) => call("fetch_metrics", { target }),
+    fetchMetrics: (target, full) => call("fetch_metrics", { target, full }),
     listContainers: (target) => call("list_containers", { target }),
     containerAction: (target, engine, id, action) => call("container_action", { target, engine, id, action }),
 

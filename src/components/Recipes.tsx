@@ -136,7 +136,7 @@ function useOs(target: TargetRef) {
   useEffect(() => {
     if (picked || target.kind !== "host" || guesses.has(key)) return;
     let live = true;
-    backend.fetchMetrics(target).then(
+    backend.fetchMetrics(target, true).then(
       (m) => {
         const g = guessOs(m.kernel);
         guesses.set(key, g);

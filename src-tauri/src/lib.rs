@@ -664,10 +664,11 @@ async fn container_action(
 
 // ---------------------------------------------------------------- metrics
 
+/// `full` also reads what hardly changes (name, cores, disks); see `metrics::fetch`.
 #[tauri::command]
-async fn fetch_metrics(state: State<'_, AppState>, target: TargetSpec) -> Result<Metrics, OpError> {
+async fn fetch_metrics(state: State<'_, AppState>, target: TargetSpec, full: Option<bool>) -> Result<Metrics, OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
-    blocking(move || metrics::fetch(&t, &env)).await
+    blocking(move || metrics::fetch(&t, &env, full.unwrap_or(true))).await
 }
 
 // ---------------------------------------------------------------- tunnels

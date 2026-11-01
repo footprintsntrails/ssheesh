@@ -50,22 +50,39 @@ pub struct Disk {
     pub used: u64,
 }
 
-const SCRIPT: &str = r#"export LC_ALL=C
-echo @load; cat /proc/loadavg 2>/dev/null
-echo @cpu; head -n1 /proc/stat 2>/dev/null
-echo @mem; grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo 2>/dev/null
-echo @net; cat /proc/net/dev 2>/dev/null
-echo @disk; df -kP 2>/dev/null
-echo @uptime; cat /proc/uptime 2>/dev/null
+/// What changes from one look to the next, read with the shell's own
+/// `read`: no program starts on the server for it.
+const LIVE: &str = r#"export LC_ALL=C
+{
+echo @load; read -r l < /proc/loadavg && printf '%s\n' "$l"
+echo @cpu; read -r l < /proc/stat && printf '%s\n' "$l"
+echo @mem; while read -r k v _; do case $k in MemTotal:|MemAvailable:|SwapTotal:|SwapFree:) printf '%s %s kB\n' "$k" "$v";; esac; done < /proc/meminfo
+echo @net; while IFS= read -r l; do printf '%s\n' "$l"; done < /proc/net/dev
+echo @uptime; read -r l < /proc/uptime && printf '%s\n' "$l"
+} 2>/dev/null
+"#;
+
+/// What hardly changes: the name, kernel and cores, disks, and the month's
+/// traffic. These start programs, so they're asked for now and then.
+const SLOW: &str = r#"echo @disk; df -kP 2>/dev/null
 echo @cores; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null
 echo @host; hostname 2>/dev/null; uname -sr 2>/dev/null
 echo @vnstat; command -v vnstat >/dev/null 2>&1 && vnstat --oneline b 2>/dev/null
-exit 0"#;
+"#;
 
-pub fn fetch(target: &Target, env: &SshEnv) -> Result<Metrics, OpError> {
+/// The script for one look; `full` adds the slow part.
+fn script(full: bool) -> String {
+    format!("{LIVE}{}exit 0", if full { SLOW } else { "" })
+}
+
+/// A snapshot of the machine. Without `full`, the name, kernel, cores,
+/// disks and month are left empty, for the caller to keep from its last
+/// full one.
+pub fn fetch(target: &Target, env: &SshEnv, full: bool) -> Result<Metrics, OpError> {
+    let script = script(full);
     let out = match target {
-        Target::Ssh(t) => run_remote_poll(t, env, SCRIPT)?,
-        Target::Local => run_local(SCRIPT)?,
+        Target::Ssh(t) => run_remote_poll(t, env, &script)?,
+        Target::Local => run_local(&script)?,
     };
     let mut m = parse(&String::from_utf8_lossy(&out));
     if m.cpu_total == 0 && m.mem_total == 0 {
@@ -255,6 +272,56 @@ Linux 6.8.0
 @vnstat
 1;eth0;2026-10-29;100;200;300;1 bit/s;2026-10;4000;5000;9000;2 bit/s;1;2;3
 ";
+
+    /// The script as it was when every look started ten programs.
+    const BEFORE: &str = r#"export LC_ALL=C
+echo @load; cat /proc/loadavg 2>/dev/null
+echo @cpu; head -n1 /proc/stat 2>/dev/null
+echo @mem; grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo 2>/dev/null
+echo @net; cat /proc/net/dev 2>/dev/null
+echo @disk; df -kP 2>/dev/null
+echo @uptime; cat /proc/uptime 2>/dev/null
+echo @cores; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null
+echo @host; hostname 2>/dev/null; uname -sr 2>/dev/null
+echo @vnstat; command -v vnstat >/dev/null 2>&1 && vnstat --oneline b 2>/dev/null
+exit 0"#;
+
+    /// Runs a script with `shell` (a program and its first arguments), or
+    /// None when that shell isn't on this machine.
+    fn run(shell: &[&str], script: &str) -> Option<Metrics> {
+        let out = std::process::Command::new(shell[0]).args(&shell[1..]).arg("-c").arg(script).output().ok()?;
+        assert!(out.status.success(), "{shell:?}: {}", String::from_utf8_lossy(&out.stderr));
+        Some(parse(&String::from_utf8_lossy(&out.stdout)))
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn reads_this_machine_as_the_old_script_did() {
+        // dash (Debian, Ubuntu), bash, and busybox's sh (Alpine), where they're here.
+        for shell in [&["sh"][..], &["dash"], &["bash"], &["busybox", "sh"]] {
+            let (Some(old), Some(new), Some(live)) = (run(shell, BEFORE), run(shell, &script(true)), run(shell, &script(false))) else {
+                continue;
+            };
+            assert!(new.cpu_total > 0 && new.mem_total > 0, "{shell:?}");
+            assert_eq!((new.mem_total, new.swap_total), (old.mem_total, old.swap_total), "{shell:?}");
+            assert_eq!(new.net_ifaces, old.net_ifaces, "{shell:?}");
+            assert_eq!((&new.hostname, &new.kernel, new.cores), (&old.hostname, &old.kernel, old.cores), "{shell:?}");
+            let mounts = |m: &Metrics| m.disks.iter().map(|d| d.mount.clone()).collect::<Vec<_>>();
+            assert_eq!(mounts(&new), mounts(&old), "{shell:?}");
+            assert!(new.uptime_secs >= old.uptime_secs, "{shell:?}");
+            // The quick look leaves the slow facts out.
+            assert!(live.cpu_total >= new.cpu_total && live.mem_total == new.mem_total, "{shell:?}");
+            assert!(live.hostname.is_empty() && live.cores == 0 && live.disks.is_empty() && live.month.is_none(), "{shell:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_machine_without_proc_says_nothing_and_still_succeeds() {
+        // macOS has no /proc: the look ends cleanly, so the UI can be told it's unsupported.
+        let m = run(&["sh"], &script(true).replace("/proc/", "/no-such-proc/")).unwrap();
+        assert_eq!((m.cpu_total, m.mem_total), (0, 0));
+    }
 
     #[test]
     fn parses_a_snapshot() {

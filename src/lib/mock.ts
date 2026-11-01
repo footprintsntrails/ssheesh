@@ -736,9 +736,10 @@ export const mockBackend: Backend = {
     c.status = c.running ? "Up 1 second" : "Exited (0) 1 second ago";
   },
 
-  async fetchMetrics(target) {
+  async fetchMetrics(target, full) {
     await wait(60);
-    return metricsFor(target);
+    const m = metricsFor(target);
+    return full ? m : { ...m, hostname: "", kernel: "", cores: 0, disks: [], month: null };
   },
 
   async scanWebApps(target) {
