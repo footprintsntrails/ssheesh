@@ -402,25 +402,48 @@ fn once(t: &Arc<Tunnel>, target: &SshTarget, env: &SshEnv, forward: &Forward) ->
     std::thread::spawn(move || {
         let _ = tx.send(read_stderr(stderr, &reader_t, &reader_fwd));
     });
+    Ok(wait_for_exit(t, &rx))
+}
+
+/// Waits until the tunnel's ssh exits (or Stop ends it), then hands back
+/// what it said. Its errors end when it does, so this waits on them instead
+/// of asking every 100 ms whether it exited. Something ssh started (a
+/// ProxyCommand) may keep them open after it's gone: a look every few
+/// seconds catches that.
+fn wait_for_exit(t: &Tunnel, rx: &mpsc::Receiver<Exit>) -> Exit {
+    let mut exit = None;
     loop {
+        if exit.is_none() {
+            match rx.recv_timeout(EXIT_CHECK) {
+                Ok(e) => exit = Some(e),
+                Err(RecvTimeoutError::Disconnected) => exit = Some(Exit::default()),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
         {
             let mut slot = t.child.lock().unwrap();
             match slot.as_mut().map(Child::try_wait) {
                 Some(Ok(None)) => {}
                 // Exited. None: Stop took it and ended it.
-                Some(_) => {
+                _ => {
                     if let Some(mut c) = slot.take() {
                         let _ = c.wait();
                     }
                     break;
                 }
-                None => break,
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
+        if exit.is_some() {
+            // Its errors end a moment before it's done exiting.
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
-    Ok(rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default())
+    exit.unwrap_or_else(|| rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default())
 }
+
+/// How often a running tunnel looks whether ssh exited while something
+/// else still holds its error output.
+const EXIT_CHECK: Duration = Duration::from_millis(if cfg!(test) { 200 } else { 2000 });
 
 /// Follows what ssh says: "up" once it's listening, and warnings when a
 /// connection through the tunnel goes nowhere.
@@ -1093,6 +1116,65 @@ mod tests {
         let closed = "debug1: channel 3: free: direct-tcpip: listening port 8080 for 127.0.0.1 port 3000, connect from 127.0.0.1 port 51000 to 127.0.0.1 port 8080, nchannels 2";
         assert!(matches!(channel_event(closed), Some((c, ChannelEvent::Closed)) if c == "3"));
         assert!(channel_event("debug1: channel 0: new port-listener [port listener] (inactive timeout: 0)").is_none());
+    }
+
+    /// A tunnel running `script` in place of ssh, and what it said once done.
+    #[cfg(unix)]
+    fn run_stand_in(script: &str, stop_after: Option<Duration>) -> (Exit, Duration) {
+        let t = Arc::new(Tunnel {
+            args: Vec::new(),
+            port: 0,
+            stopped: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            child: Mutex::new(None),
+            sink: Mutex::new(Arc::new(|_| {})),
+            state: Mutex::new(TunnelState::Starting),
+            nap: Mutex::new(()),
+            wake: Condvar::new(),
+        });
+        let mut child = Command::new("sh").args(["-c", script]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+        let stderr = child.stderr.take();
+        *t.child.lock().unwrap() = Some(child);
+        let (tx, rx) = mpsc::channel();
+        let reader = t.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_stderr(stderr, &reader, &Forward::Socks { local_port: 1080 }));
+        });
+        if let Some(after) = stop_after {
+            let stopper = t.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(after);
+                stopper.stop();
+            });
+        }
+        let started = Instant::now();
+        let exit = wait_for_exit(&t, &rx);
+        assert!(t.child.lock().unwrap().is_none(), "the process is reaped");
+        (exit, started.elapsed())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_tunnel_sees_ssh_exit_as_its_errors_end() {
+        let (exit, took) = run_stand_in("echo 'debug1: Entering interactive session.' >&2; echo 'Connection closed by 10.0.0.1' >&2; exit 255", None);
+        assert!(exit.up_at.is_some());
+        assert_eq!(exit.lines, ["Connection closed by 10.0.0.1"]);
+        assert!(took < Duration::from_secs(1), "{took:?}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_tunnel_sees_ssh_exit_while_something_else_holds_its_errors() {
+        // A leftover child keeps the error pipe open after "ssh" exits.
+        let (_, took) = run_stand_in("sleep 4 & exit 255", None);
+        assert!(took < Duration::from_secs(3), "{took:?}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stop_ends_a_running_tunnel_at_once() {
+        let (_, took) = run_stand_in("exec sleep 30", Some(Duration::from_millis(100)));
+        assert!(took < Duration::from_secs(1), "{took:?}");
     }
 
     #[test]
