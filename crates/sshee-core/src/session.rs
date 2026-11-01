@@ -265,49 +265,50 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
     }
 }
 
-/// Output that comes right after a pause goes to the screen at once; while
-/// it keeps coming it's sent at most this often, so `cat` of a big file is a
-/// few hundred messages to the window instead of tens of thousands.
-const BATCH_WINDOW: Duration = Duration::from_millis(8);
-/// Held-back output past this size goes without waiting out the window.
+/// Output is held until it stops coming for this long, so a screen drawn in
+/// a few reads (tmux after a scroll, a program redrawing) reaches the window
+/// whole and never shows half drawn. A key's echo waits just this.
+const BATCH_QUIET: Duration = Duration::from_millis(2);
+/// Output that keeps coming still goes at least this often (about a frame),
+/// so `cat` of a big file is a few hundred messages to the window instead of
+/// tens of thousands.
+const BATCH_WINDOW: Duration = Duration::from_millis(16);
+/// Held-back output past this size goes without waiting.
 const BATCH_MAX: usize = 64 * 1024;
 
 /// Output held back to go to the screen in one piece.
 #[derive(Default)]
 struct Batch {
     pending: String,
-    last_sent: Option<Instant>,
+    /// When the first and the latest output held back came.
+    first: Option<Instant>,
+    latest: Option<Instant>,
 }
 
 impl Batch {
     /// Output that arrived at `now`: what to send right away, if anything.
     fn add(&mut self, data: String, now: Instant) -> Option<String> {
-        let quiet = self.pending.is_empty() && self.last_sent.is_none_or(|t| now.duration_since(t) >= BATCH_WINDOW);
-        if quiet {
-            self.last_sent = Some(now);
-            return Some(data);
-        }
         self.pending.push_str(&data);
+        self.first.get_or_insert(now);
+        self.latest = Some(now);
         if self.pending.len() >= BATCH_MAX {
-            return self.take(now);
+            return self.take();
         }
         None
     }
 
     /// When the output held back is due, if there is any.
     fn due(&self) -> Option<Instant> {
-        if self.pending.is_empty() {
-            return None;
-        }
-        Some(self.last_sent.map_or_else(Instant::now, |t| t + BATCH_WINDOW))
+        Some((self.latest? + BATCH_QUIET).min(self.first? + BATCH_WINDOW))
     }
 
     /// Everything held back, to send now.
-    fn take(&mut self, now: Instant) -> Option<String> {
+    fn take(&mut self) -> Option<String> {
+        self.first = None;
+        self.latest = None;
         if self.pending.is_empty() {
             return None;
         }
-        self.last_sent = Some(now);
         Some(std::mem::take(&mut self.pending))
     }
 }
@@ -332,12 +333,12 @@ fn batched(sink: EventSink) -> EventSink {
             match next {
                 Ok(SessionEvent::Output { data }) => send(batch.add(data, Instant::now())),
                 Ok(status) => {
-                    send(batch.take(Instant::now()));
+                    send(batch.take());
                     out(status);
                 }
-                Err(RecvTimeoutError::Timeout) => send(batch.take(Instant::now())),
+                Err(RecvTimeoutError::Timeout) => send(batch.take()),
                 // The session is over and its reader done.
-                Err(RecvTimeoutError::Disconnected) => return send(batch.take(Instant::now())),
+                Err(RecvTimeoutError::Disconnected) => return send(batch.take()),
             }
         }
     });
@@ -620,31 +621,28 @@ mod tests {
     }
 
     #[test]
-    fn output_after_a_pause_goes_at_once_and_a_stream_in_batches() {
+    fn output_goes_once_it_stops_coming_and_a_stream_in_batches() {
         let t0 = Instant::now();
-        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let us = |n: u64| t0 + Duration::from_micros(n);
         let mut b = Batch::default();
-        // A key's echo: nothing to wait for.
-        assert_eq!(b.add("a".into(), t0).as_deref(), Some("a"));
-        assert_eq!(b.due(), None);
-        // More right behind it waits for the window, then goes as one.
-        assert_eq!(b.add("b".into(), ms(1)), None);
-        assert_eq!(b.add("c".into(), ms(3)), None);
-        assert_eq!(b.due(), Some(t0 + BATCH_WINDOW));
-        assert_eq!(b.take(ms(8)).as_deref(), Some("bc"));
-        assert_eq!(b.take(ms(8)), None);
-        // Still streaming: batched again.
-        assert_eq!(b.add("d".into(), ms(10)), None);
-        assert_eq!(b.take(ms(16)).as_deref(), Some("d"));
-        // Quiet again: straight through.
-        assert_eq!(b.add("e".into(), ms(40)).as_deref(), Some("e"));
+        // A screen redrawn in three reads goes as one, once they stop.
+        assert_eq!(b.add("top ".into(), t0), None);
+        assert_eq!(b.add("middle ".into(), us(300)), None);
+        assert_eq!(b.add("bottom".into(), us(600)), None);
+        assert_eq!(b.due(), Some(us(600) + BATCH_QUIET));
+        assert_eq!(b.take().as_deref(), Some("top middle bottom"));
+        assert_eq!((b.take(), b.due()), (None, None));
+        // Output that keeps coming goes a window after it started.
+        for n in 0..40 {
+            assert_eq!(b.add("x".into(), us(10_000 + n * 1000)), None);
+        }
+        assert_eq!(b.due(), Some(us(10_000) + BATCH_WINDOW));
     }
 
     #[test]
     fn a_full_batch_goes_without_waiting() {
         let t0 = Instant::now();
         let mut b = Batch::default();
-        assert!(b.add("x".into(), t0).is_some());
         assert_eq!(b.add("y".repeat(BATCH_MAX - 1), t0), None);
         let full = b.add("z".into(), t0).expect("sent once full");
         assert_eq!(full.len(), BATCH_MAX);
