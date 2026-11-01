@@ -65,6 +65,22 @@ function rowText(line: IBufferLine, cols: number): { text: string; cells: number
   return { text, cells };
 }
 
+/**
+ * Whether some text on screen (a row, or rows a long token runs over) holds
+ * a secret, by that text. The cover is drawn again with every frame the
+ * terminal draws, and most rows are the same as in the frame before.
+ */
+const secretIn = new Map<string, boolean>();
+function holdsSecret(text: string): boolean {
+  let found = secretIn.get(text);
+  if (found === undefined) {
+    if (secretIn.size >= 2000) secretIn.clear();
+    found = findSecrets(text).length > 0;
+    secretIn.set(text, found);
+  }
+  return found;
+}
+
 const OPEN_HINT = "Click to open";
 /** A plain click opens a link this long after, unless it turns out to be a double-click. */
 const CLICK_WAIT_MS = 260;
@@ -493,6 +509,8 @@ class TerminalHandle {
     this.startGpu();
     this.refit();
     if (!this.started) this.start();
+    // Links weren't marked while it was out of sight.
+    this.markLinksSoon();
   }
 
   unmount() {
@@ -674,6 +692,8 @@ class TerminalHandle {
   }
 
   private markLinksSoon() {
+    // Out of sight there's nothing to mark; showing it again marks it.
+    if (this.el.parentElement === parking) return;
     window.clearTimeout(this.markTimer);
     const now = Date.now();
     this.markWaitSince ||= now;
@@ -706,7 +726,7 @@ class TerminalHandle {
    * screen each time, so no line keeps a mark its text has lost.
    */
   private markLinks() {
-    if (this.disposed) return;
+    if (this.disposed || this.el.parentElement === parking) return;
     const screen = this.term.element?.querySelector<HTMLElement>(".xterm-screen");
     if (!screen) return;
     if (this.linkLayer?.parentElement !== screen) {
@@ -820,7 +840,7 @@ class TerminalHandle {
       let end = r;
       while (end + 1 < rows && !keys[end + 1] && runsOn(top + end)) end++;
       // Most lines have nothing: the quick look skips the exact one.
-      if (findSecrets(texts.slice(r, end + 1).join("")).length) {
+      if (holdsSecret(texts.slice(r, end + 1).join(""))) {
         let text = "";
         const at: { row: number; col: number }[] = [];
         for (let k = r; k <= end; k++) {
