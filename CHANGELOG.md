@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1 — quicker, and easier on your servers
+
+- **A busy terminal doesn't slow the window down.** A `cat` of a big file or a long build log sent the window one message per read, tens of thousands a second. While output keeps coming it now arrives in small batches; after a pause it still comes at once, so typing feels the same.
+- **The window doesn't wait on the keychain or the disk.** Adding, removing and listing servers, forgetting a password, trusting a server's key and Snap Layouts happen out of its way.
+- **Server stats ask the server far less.** The look every two seconds at CPU, memory and network started ten programs on the server; now it starts none, and disks, the month's traffic and the server's name are read every 30 seconds. Stats stop asking a computer that can't give them (This computer on a Mac), ask less often while they fail, and wait while the server's terminals reconnect. The container list asks less while it fails, and not while the window is hidden.
+- **Tunnels sit still.** Each one woke ten times a second to check on its ssh; now it waits for ssh to finish.
+- **Files scrolls smoothly.** A long folder no longer draws the whole list again on every frame of a scroll, and its dates take far less work to write.
+- **Terminals do less each time they draw.** Hidden secrets are looked for only in lines that changed, highlighting does less work per piece of output, and a terminal in another tab marks its links when you come back to it.
+- A progress bar that reports the same value again no longer redraws the window.
+
 ## 0.8.0 — a calm new look, and a safer server in a click
 
 - **Security check-up and Free up disk space (once "What's using the disk"), at the foot of the sidebar.** Two buttons over Settings look at the server you have open; with several open, you pick one. They've left the tab and stats menus, where they were one more thing to read past.
