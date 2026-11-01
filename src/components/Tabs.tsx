@@ -5,8 +5,8 @@
 // closes it, right-click for more. Ctrl+Tab goes to the next. What tabs do
 // lives in lib/tabs.ts.
 
-import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, HardDrive, Plus, Rows2, ShieldCheck, SquareTerminal, X, type LucideIcon } from "lucide-react";
-import { Fragment, memo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, Plus, Rows2, SquareTerminal, X, type LucideIcon } from "lucide-react";
+import { Fragment, memo, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { agentRunning, agentShort } from "../lib/agents";
 import { cn } from "../lib/format";
@@ -20,7 +20,6 @@ import { targetKey, type TargetRef } from "../lib/types";
 import { AgentIcon } from "./AgentIcons";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { openRecipes } from "./Recipes";
-import { openServerTool } from "./ServerTools";
 import { openTunnels } from "./Tunnels";
 
 const KIND: Record<PaneKind, { label: string; icon: LucideIcon }> = {
@@ -60,8 +59,6 @@ export function toolItems(target: TargetRef, address?: string): (MenuItem | "sep
     ...(target.kind === "host"
       ? ([
           "sep",
-          { label: "Security check-up", icon: ShieldCheck, run: () => openServerTool("checkup", target) },
-          { label: "What's using the disk", icon: HardDrive, run: () => openServerTool("disk", target) },
           { label: "Web apps and tunnels", icon: Cable, run: () => openTunnels(target) },
           { label: "Recipes", icon: BookOpen, run: () => openRecipes(target) },
         ] as (MenuItem | "sep")[])
@@ -376,11 +373,19 @@ const StripTab = memo(function StripTab({ id, split, several, props }: { id: str
   const onScreen = useStore((s) => split && !s.home && !s.hidden.includes(id) && screenOf(s, id) === screenOf(s, s.focused));
   const command = useStore((s) => s.foreground[id]);
   const names = useNames();
+  // The tab you're on is always in sight, also at the far end of a long strip.
+  useEffect(() => {
+    if (!active) return;
+    // After the frame, once the bar around it has its new size.
+    const frame = requestAnimationFrame(() => document.querySelector(`[data-strip-tab="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, [active, id]);
   if (!pane) return null;
   const label = tabLabel(pane, command, several ? names.target(pane.target) : undefined);
   return (
     <div
       {...props}
+      data-strip-tab={id}
       aria-selected={active}
       aria-label={label}
       data-hint={agentRunning(command) ? "agent-tab" : undefined}
@@ -416,9 +421,30 @@ export function TabStrip({ target }: { target: TargetRef | null }) {
   // stands between one machine's and the next.
   const machines = useStore(useShallow((s) => shown.map((id) => s.panes[id]?.target).map((t) => (t ? targetKey(t) : ""))));
   const several = new Set(machines).size > 1;
+  // Which ends have more tabs past them, to fade there.
+  const [more, setMore] = useState({ left: false, right: false });
+  const list = useRef<HTMLDivElement>(null);
+  const measure = () => {
+    const el = list.current;
+    if (el) setMore({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
+  };
+  useEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    // A strip that got narrower (a longer address beside it) keeps the tab you're on in sight.
+    const ro = new ResizeObserver(() => {
+      el.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      measure();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(measure, [shown.length]);
+  const fade = `linear-gradient(to right, ${more.left ? "transparent, black 24px" : "black"}, ${more.right ? "black calc(100% - 24px), transparent" : "black"})`;
   return (
     <div className="flex min-w-0 items-center gap-1">
       <div
+        ref={list}
         data-tab-list
         data-hint="tabs"
         role="tablist"
@@ -426,6 +452,8 @@ export function TabStrip({ target }: { target: TargetRef | null }) {
         onWheel={(e) => {
           if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY;
         }}
+        onScroll={measure}
+        style={{ maskImage: fade, WebkitMaskImage: fade }}
         className="flex h-7 min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {shown.map((id, i) => (

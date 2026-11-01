@@ -112,6 +112,23 @@
   color-scheme: dark;
 }
 
+/* SSHeesh Default: Claude Code's colors on Claude's warm dark, with the logo's green. */
+[data-theme="ssheesh"] {
+  --ui-window: #1f1e1d;
+  --ui-canvas: #191817;
+  --ui-surface: #242321;
+  --ui-raised: #2b2a27;
+  --ui-fg: #faf9f5;
+  --ui-fg-2: #c2c0b6;
+  --ui-fg-3: #9c9a92;
+  --ui-glass: #2f2e2b;
+  --ui-glass-soft: #242321;
+  --ui-glow: 0.1;
+  --ui-file-code: #b1b9f9cc;
+  --ui-file-image: #e8b04bcc;
+  --ui-file-archive: #d77757cc;
+}
+
 [data-theme="graphite"] {
   --ui-window: #161616;
   --ui-canvas: #101010;
@@ -158,11 +175,18 @@
 
 :root {
   --ui-accent: #5b9dff;
-  --ui-ok: #3dd68c;
+  --ui-ok: #4eba65;
   --ui-warn: #f5b841;
   --ui-bad: #ff6159;
   --ui-gap: 6px;
   --ui-radius: 11px;
+}
+
+/* Claude Code's own success, warning and error colors. */
+[data-theme="ssheesh"] {
+  --ui-ok: #4eba65;
+  --ui-warn: #ffc107;
+  --ui-bad: #ff6b80;
 }
 
 /* Status colors dark enough to read as small text on the light window (4.5:1 or more). */

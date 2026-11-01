@@ -225,17 +225,38 @@ export function Logo({ size = 20, winking = false, className }: { size?: number;
         <circle cx="69" cy="27" r="5.5" fill="#5c5f67" />
         <path d={left} {...eye} />
         <path d={right} {...eye} />
-        <rect x="76" y="140" width="48" height="20" fill="#3dd68c" />
+        <rect x="76" y="140" width="48" height="20" fill="#4eba65" />
       </g>
     </svg>
   );
 }
 
-/** The logo as Settings → Appearance asks for it, or nothing. */
+/** The >_< logo as the terminal's welcome draws it, one cell per pixel. */
+export const PIXEL_LOGO = [".TTTTTTTTT.", "TTTTTTTTTTT", "BBBBBBBBBBB", "BEBBBBBBBEB", "BBEBBBBBEBB", "BEBBBBBBBEB", "BBBBGGGBBBB", ".BBBBBBBBB."];
+export const PIXEL_LOGO_COLORS: Record<string, string> = { T: "#2f3136", B: "#232428", E: "#f2f0ea", G: "#4eba65" };
+
+/** The logo in pixels, for the pixel icon pack: the welcome's, with its window dots. */
+function PixelLogo({ size = 20, className }: { size?: number; className?: string }) {
+  // One path per color, so neighboring pixels never show a seam.
+  const paths: Record<string, string> = {};
+  PIXEL_LOGO.forEach((row, y) => [...row].forEach((c, x) => c !== "." && (paths[c] = `${paths[c] ?? ""}M${x} ${y}h1v1h-1z`)));
+  return (
+    <svg viewBox="0 -1.5 11 11" width={size} height={size} role="img" aria-label="SSHeesh" shapeRendering="crispEdges" className={cn("shrink-0", className)}>
+      {Object.entries(paths).map(([c, d]) => (
+        <path key={c} d={d} fill={PIXEL_LOGO_COLORS[c]} />
+      ))}
+      <path d="M1.3 1.3h.4v.4h-.4zm1 0h.4v.4h-.4zm1 0h.4v.4h-.4z" fill="#5c5f67" />
+    </svg>
+  );
+}
+
+/** The logo as Settings → Appearance asks for it (in pixels with the pixel icons), or nothing. */
 export function AppLogo({ size, className }: { size?: number; className?: string }) {
   const style = useSettings((s) => s.logo);
   const animations = useSettings((s) => s.animations);
+  const pixel = useSettings((s) => s.iconPack === "pixel");
   if (style === "hidden") return null;
+  if (pixel) return <PixelLogo size={size} className={className} />;
   return <Logo size={size} winking={style === "winking" && animations} className={className} />;
 }
 

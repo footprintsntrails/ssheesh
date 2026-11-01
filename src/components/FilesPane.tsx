@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
 import { folderName, useBookmarks } from "../lib/bookmarks";
-import { bytes, cn, joinPath, modified, parentPath, shellQuote } from "../lib/format";
+import { bytes, cn, joinPath, modified, parentPath, shellOf, typedCd } from "../lib/format";
 import { isMac } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { useStore, type PaneState } from "../lib/store";
@@ -307,7 +307,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   /** Unsaved edits in the preview go only if you say so. */
-  const canDiscard = async () => !dirtyRef.current || (await confirm({ title: "Discard your changes?", confirmLabel: "Discard", danger: true }));
+  const canDiscard = async () =>
+    !dirtyRef.current || (await confirm({ title: preview ? `Discard your changes to ${preview.name}?` : "Discard your changes?", confirmLabel: "Discard", danger: true }));
 
   /** The folder this pane went to itself, to tell it from one picked elsewhere. */
   const moved = useRef<string | null>(null);
@@ -429,6 +430,13 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       ro.disconnect();
     };
   }, [listEl]);
+  // A new filter starts at the top of what it found, drawn right away, not
+  // where a long list was scrolled to.
+  useEffect(() => {
+    if (!listEl) return;
+    listEl.scrollTop = 0;
+    setView((v) => ({ ...v, top: 0 }));
+  }, [filter, listEl]);
   /** Every folder but the top of the disk starts with "..", the folder above. */
   const upRow = !!listing && upRowFor(dir);
   /** Space above the first row: the list's padding, "..", and a row being named. */
@@ -506,7 +514,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   const openPreview = async (entry: FileEntry, lines?: [number, number]) => {
     const full = joinPath(dir, entry.name);
-    if (!(await canDiscard())) return;
+    if (!(await canDiscard())) {
+      // Kept: the list goes back to the file that stays open.
+      if (preview && preview.path === joinPath(dir, preview.name)) setSelected([preview.name]);
+      return;
+    }
     setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false, lines });
     if (MARKDOWN.test(entry.name)) void loadMarkdownView().catch(() => {});
     try {
@@ -678,16 +690,27 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       .catch(() => toast({ tone: "error", title: "Couldn't copy", body: p }));
   };
 
-  const terminalHere = (folder: string) =>
-    openIn("terminal", target, { from: pane.id, split: true, initialCommand: `cd -- ${shellQuote(folder)} && clear` });
+  /** The `cd` into the folder, typed into a terminal; null, said in a toast, if its name would act as keys there. */
+  const cdInto = (folder: string, next?: string) => {
+    const cmd = typedCd(folder, shellOf(target), next);
+    if (cmd === null) toast({ tone: "error", title: "Can't open a terminal there", body: "This folder's name has control characters in it, which a terminal would take as keystrokes." });
+    return cmd;
+  };
+
+  const terminalHere = (folder: string) => {
+    const cmd = cdInto(folder, "clear");
+    if (cmd !== null) openIn("terminal", target, { from: pane.id, split: true, initialCommand: cmd });
+  };
 
   /** Moves the terminal you already use on this machine into the folder. */
   const mainTerminalHere = (folder: string) => {
     const st = useStore.getState();
     const id = st.mainTerminalFor(target);
     if (!id) return terminalHere(folder);
+    const cmd = cdInto(folder);
+    if (cmd === null) return;
     // Ctrl+U first clears anything half-typed on the prompt.
-    backend.writeSession(id, `\x15cd -- ${shellQuote(folder)}\r`);
+    backend.writeSession(id, `\x15${cmd}\r`);
     st.focus(id);
     findTerminal(id)?.focus();
   };
@@ -812,7 +835,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 ]
               : []),
           ]
-        : []),
+        : [{ label: `Archive ${targets.length} items`, icon: FileArchive, run: () => setCreating({ kind: "archive", names: targets.map((t) => t.name) }) }]),
       "sep",
       { label: many ? `Delete ${targets.length} items` : "Delete", icon: Trash, run: () => remove(targets), danger: true },
     ];
@@ -1039,11 +1062,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                       }}
                       className={cn(
                         "mx-1.5 grid h-7 grid-cols-[minmax(0,1fr)_68px] items-center gap-3 rounded-md px-2.5 text-[13px] @md:grid-cols-[minmax(0,1fr)_68px_118px] @2xl:grid-cols-[minmax(0,1fr)_68px_90px_118px]",
-                        isSel ? (focused ? "bg-accent/85 text-white" : "bg-ink/[0.09] text-fg") : "text-fg hover:bg-ink/[0.035]",
+                        isSel ? (focused ? "bg-accent/85 text-on-accent" : "bg-ink/[0.09] text-fg") : "text-fg hover:bg-ink/[0.035]",
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-2.5">
-                        <span className={cn(isSel && focused && "[&_svg]:text-white")}>
+                        <span className={cn(isSel && focused && "[&_svg]:text-on-accent")}>
                           <EntryIcon entry={entry} />
                         </span>
                         {renaming === entry.name ? (
@@ -1052,16 +1075,16 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                           <span className={cn("truncate", entry.name.startsWith(".") && !isSel && "text-fg-2")}>{entry.name}</span>
                         )}
                         {entry.isLink && entry.kind !== "link" && (
-                          <span className={cn("shrink-0 text-[11px]", isSel && focused ? "text-white/70" : "text-fg-3")}>↗</span>
+                          <span className={cn("shrink-0 text-[11px]", isSel && focused ? "text-on-accent/70" : "text-fg-3")}>↗</span>
                         )}
                       </span>
-                      <span className={cn("text-right text-[12px] tabular-nums", isSel && focused ? "text-white/80" : "text-fg-3")}>
+                      <span className={cn("text-right text-[12px] tabular-nums", isSel && focused ? "text-on-accent/80" : "text-fg-3")}>
                         {entry.kind === "dir" ? "—" : bytes(entry.size)}
                       </span>
-                      <span className={cn("hidden font-mono text-[11px] @2xl:block", isSel && focused ? "text-white/70" : "text-fg-3")}>
+                      <span className={cn("hidden font-mono text-[11px] @2xl:block", isSel && focused ? "text-on-accent/70" : "text-fg-3")}>
                         {entry.mode}
                       </span>
-                      <span className={cn("hidden truncate text-[12px] tabular-nums @md:block", isSel && focused ? "text-white/80" : "text-fg-3")}>
+                      <span className={cn("hidden truncate text-[12px] tabular-nums @md:block", isSel && focused ? "text-on-accent/80" : "text-fg-3")}>
                         {modified(entry.modified)}
                       </span>
                     </div>

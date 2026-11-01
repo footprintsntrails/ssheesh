@@ -2,31 +2,42 @@
 
 <img src="docs/banner.gif" alt="ssheesh: servers, terminals and files that don't fall over">
 
-[![Latest release](https://img.shields.io/github/v/release/footprintsntrails/ssheesh?include_prereleases&label=release&color=5b9dff)](https://github.com/footprintsntrails/ssheesh/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/footprintsntrails/ssheesh?include_prereleases&label=release&color=4eba65)](https://github.com/footprintsntrails/ssheesh/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/footprintsntrails/ssheesh/ci.yml?branch=main&label=build)](https://github.com/footprintsntrails/ssheesh/actions/workflows/ci.yml)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-6b717b)](LICENSE)
-![macOS · Windows · Linux](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-0f1013)
+![macOS · Windows · Linux](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-1f1e1d)
 
 [**Download**](https://github.com/footprintsntrails/ssheesh/releases/latest) · [Install on macOS](docs/install-macos.md) · [Install on Windows](docs/install-windows.md) · [Request a feature](https://github.com/footprintsntrails/ssheesh/issues/new/choose)
 
 </div>
 
 > [!WARNING]
-> **Version 0.6 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
+> **Version 0.8 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
 <p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a server's terminal with the log it printed opened beside it, its tabs along the top, and an AI agent that needs you"></p>
 
-SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each saying whose it is: “Files (web-1)”.
+SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each saying whose it is: “Files (web-1)”. It checks your servers' security and frees their disks with one click each.
 
 ## The idea
+
+**Simple, and the screen is yours.** The terminal gets the room. The sidebar is a slim row of server icons, the tabs share one bar with the server you're on, and a button shows up when you reach for it, not before. A compact mode hides the sidebar, the tab bar or both. Nothing to learn first: it reads like a browser.
 
 **Your servers stay yours.** No account and no cloud: hosts, keys and passwords stay on your computer, and passwords live in your system's keychain. SSHeesh talks to your servers, and to GitHub to check for updates. Tokens, keys and passwords in a terminal's output show as dots until you click them, and **streamer mode** hides server names, addresses and users everywhere, terminal output included, so you can share your screen or stream without a second thought.
 
 **It's convenient from the first minute.** Paste a whole `ssh` command and every field fills in; your `~/.ssh/config`, keys and agent just work. Errors come in plain words, and every command SSHeesh suggests says what it does. A dropped Wi-Fi doesn't end your work: with `tmux` on the server, your session keeps running and SSHeesh tells you what you missed, and uploads and downloads pick up where they stopped.
 
-**You make it yours.** Themes you can edit down to every color, any accent color and your own terminal colors, your own keyboard shortcuts, tabs along the top or under each server, one tab at a time or side by side, a compact mode that hides the sidebar, the tab bar or both, icons in lines or pixels (in any color) or your own picture for every server, and the welcome a server greets you with. Change it all in the first minute, with a live preview, or later in Settings.
+**You make it yours.** SSHeesh Default, Claude's warm dark with the >_< logo's green, Midnight and three more themes you can edit down to every color, any accent color and your own terminal colors, your own keyboard shortcuts, tabs along the top or under each server, one tab at a time or side by side, a compact mode that hides the sidebar, the tab bar or both, icons in lines or pixels (in any color) or your own picture for every server, and the welcome a server greets you with. Change it all in the first minute, with a live preview, or later in Settings.
 
 <p align="center"><img src="docs/media/onboarding.gif" alt="The first-run setup: picking servers from ~/.ssh/config, then a theme, terminal colors and a layout with a live preview of the app"></p>
+
+## Keep a server safe and tidy
+
+Two buttons at the foot of the sidebar, over Settings, look at the server you have open (with several open, you pick one).
+
+- **Security check-up** (the shield). Password logins, root login, open ports, the firewall, Docker ports that go around it, automatic updates, waiting security fixes, brute-force protection and a restart that's due, each in plain words with what it means for you. Looking changes nothing. A fix runs when you press **Run**, on the server, without a terminal, and you see how it went. When it needs you (sudo asks for your password, or the package manager asks whether to go ahead), it opens in a terminal instead and says exactly what to type.
+- **Free up disk space** (the disk). What fills each disk, the biggest folders, and the cleanups that are safe: unused Docker images and build cache, old system logs, package caches, old temporary files, each with how much it frees. **Run** does it.
+
+<p align="center"><img src="docs/screenshots/checkup.png" alt="The security check-up: what to fix, what's worth a look and what's good, each with a Run button" width="560"></p>
 
 ## Tricks worth knowing
 
@@ -48,7 +59,7 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 - **One bar for everything.** Ctrl+Shift+L (⌘L) finds servers, folders, commands and settings, and says which server a command runs on.
 - **Your keys.** Every shortcut is listed in Settings → Keyboard, and you can change any of them.
 - **Server icons that mean something.** SSHeesh sees what a server runs (a website, a database, Docker) and picks its icon; each server gets a color of its own. Right-click a server for 30 more, in lines or pixels, in any color.
-- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads (a download opens its folder with the file picked out), its Docker containers, stats, a read-only security check-up, what's using the disk, web apps opened through your SSH login, and step-by-step recipes for the usual jobs.
+- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads (a download opens its folder with the file picked out), its Docker containers, stats, web apps opened through your SSH login, and step-by-step recipes for the usual jobs, whose steps run in the terminal with **Run**.
 
 <p align="center"><img src="docs/media/streamer.gif" alt="Streamer mode hides server names and addresses across the app and the terminal"></p>
 
@@ -97,9 +108,9 @@ Everything remote runs through the system `ssh` with connection sharing, so file
 
 What's planned next. The order may still change.
 
-- **0.8: Docker and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services, and version history for config files.
-- **0.9: workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
-- **0.10: sync.** Encrypted sync through a folder you pick, with no account.
+- **0.9: Docker and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services, and version history for config files.
+- **0.10: workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
+- **0.11: sync.** Encrypted sync through a folder you pick, with no account.
 - **Along the way:** signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
 
 See what changed in each version in the [changelog](CHANGELOG.md).

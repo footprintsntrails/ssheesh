@@ -367,7 +367,7 @@ impl Found {
                 choices,
             });
         }
-        out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        out.sort_by_key(|e| std::cmp::Reverse(e.bytes));
         out
     }
 }

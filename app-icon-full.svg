@@ -10,6 +10,6 @@
     <circle cx="69" cy="27" r="5.5" fill="#5c5f67"/>
     <path d="M32 86 L61 112 L32 138" fill="none" stroke="#f2f0ea" stroke-width="20" stroke-linecap="square" stroke-linejoin="miter"/>
     <path d="M168 86 L139 112 L168 138" fill="none" stroke="#f2f0ea" stroke-width="20" stroke-linecap="square" stroke-linejoin="miter"/>
-    <rect x="76" y="140" width="48" height="20" fill="#3dd68c"/>
+    <rect x="76" y="140" width="48" height="20" fill="#4eba65"/>
   </g>
 </svg>

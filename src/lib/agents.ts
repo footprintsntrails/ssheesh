@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { backend } from "./backend";
-import { shellQuote } from "./format";
+import { shellOf, typedCd } from "./format";
 import { useStore, type PaneState } from "./store";
 import { findTerminal } from "./terminals";
 import { targetKey, type TargetRef } from "./types";
@@ -134,6 +134,10 @@ export async function startAgent(pane: PaneState, agent: AgentId) {
   }
   // Busy, or no way to tell (no tmux on the server): typing could land in
   // vim or a password prompt, so the agent gets a terminal of its own.
-  const initialCommand = info ? `cd ${shellQuote(info.cwd)} && ${agent}` : agent;
+  const initialCommand = info ? typedCd(info.cwd, shellOf(pane.target), agent) : agent;
+  if (initialCommand === null) {
+    useStore.getState().toast({ tone: "error", title: "Can't start it in this folder", body: "The folder's name has control characters in it, which a terminal would take as keystrokes." });
+    return;
+  }
   useStore.getState().openIn("terminal", pane.target, { from: pane.id, split: true, initialCommand });
 }

@@ -407,7 +407,8 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
         Some(t) => {
             let items = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
             let script = format!(
-                r#"cd -- {dir} || exit 1; [ -e {name} ] && {{ echo EXISTS >&2; exit 5; }}; {set}; tar -czf {name} -- "$@""#,
+                // "./": GNU tar takes a name with ":" in it as host:file and runs ssh to reach it.
+                r#"cd -- {dir} || exit 1; [ -e {name} ] && {{ echo EXISTS >&2; exit 5; }}; {set}; tar -czf ./{name} -- "$@""#,
                 dir = shell_quote(dir),
                 name = shell_quote(archive),
                 set = tar_items(&items),
@@ -421,8 +422,8 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
             }
             // tar ships with macOS, Linux and Windows 10 and newer.
             let items = names.iter().map(|n| local_tar_item(&base.join(n), n));
-            let mut cmd = std::process::Command::new("tar");
-            cmd.current_dir(&base).arg("-czf").arg(archive).arg("--").args(items);
+            let mut cmd = std::process::Command::new(crate::ssh::program("tar"));
+            cmd.current_dir(&base).arg("-czf").arg(Path::new(".").join(archive)).arg("--").args(items);
             crate::ssh::hide_console(&mut cmd);
             let out = cmd.output()?;
             if out.status.success() {
@@ -691,6 +692,12 @@ fn joined(errors: JoinHandle<String>) -> String {
     errors.join().unwrap_or_default()
 }
 
+/// 64 random bits, from the randomly keyed hasher std seeds from the OS.
+fn unguessable() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new().build_hasher().finish()
+}
+
 /// A hidden name for a download in progress, unique within this run.
 fn scratch_name(name: &str) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -830,10 +837,13 @@ fn taken_in(out: &[u8], names: &[String]) -> Vec<String> {
 /// write permission, a program running from it) or nothing's there yet,
 /// the staged file takes its place.
 fn upload_file_script(guard: &str, s: &str, d: &str, size: u64, from: u64) -> String {
+    // The staged file is made new (set -C refuses one that's there), so in a
+    // folder others can write to, such as /tmp, nobody else's file under
+    // that name receives the upload; nor does a link, when picking it up.
     let receive = if from == 0 {
-        format!("cat > {s} || exit 1")
+        format!("rm -f -- {s}; (set -C; : > {s}) 2>/dev/null && [ -f {s} ] && [ ! -L {s} ] || {{ echo \"Something else already holds this upload's temporary file.\" >&2; exit 1; }}\ncat >> {s} || exit 1")
     } else {
-        format!("{{ [ -f {s} ] && [ $(($(wc -c < {s}))) -eq {from} ]; }} || {{ echo CHANGED >&2; exit 6; }}\ncat >> {s} || exit 1")
+        format!("{{ [ -f {s} ] && [ ! -L {s} ] && [ $(($(wc -c < {s}))) -eq {from} ]; }} || {{ echo CHANGED >&2; exit 6; }}\ncat >> {s} || exit 1")
     };
     format!(
         "{guard}[ -d {d} ] && {{ echo 'A folder with this name is already here.' >&2; exit 1; }}
@@ -897,7 +907,8 @@ fn resume_script(path: &str, id: &str, from: u64) -> String {
 /// where it stopped, a folder from the start.
 pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, dest_dir: &Path, xfer: &Arc<Transfer>) -> Result<String, OpError> {
     let t = ssh_only(target).ok_or_else(|| OpError::new(ErrorCode::Unsupported, "This file is already on your computer."))?;
-    let name = base_name(remote_path);
+    let remote_name = base_name(remote_path);
+    let name = local_name(&remote_name, cfg!(windows)).ok_or_else(|| OpError::failed(format!("\"{remote_name}\" can't be saved under that name on this computer.")))?;
     std::fs::create_dir_all(dest_dir)?;
     let scratch = dest_dir.join(scratch_name(&name));
 
@@ -961,11 +972,11 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch)?;
         xfer.settle(base);
-        let mut untar = Command::new("tar");
+        let mut untar = Command::new(crate::ssh::program("tar"));
         untar.args(["-xf", "-", "-C"]).arg(&scratch).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut untar);
         let mut untar = untar.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
-        let mut cmd = remote_command(t, env, &pack_script(&parent_dir(remote_path), &name));
+        let mut cmd = remote_command(t, env, &pack_script(&parent_dir(remote_path), &remote_name));
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut ssh = match cmd.spawn() {
             Ok(ssh) => ssh,
@@ -991,8 +1002,13 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         Ok(())
     })
     .and_then(|()| {
+        // The one thing tar put there, under the server's name for it.
+        let mut unpacked = std::fs::read_dir(&scratch)?;
+        let (Some(folder), None) = (unpacked.next().transpose()?, unpacked.next()) else {
+            return Err(OpError::failed("Unpacking failed: the folder didn't arrive as one folder."));
+        };
         let final_path = unique_path(dest_dir, &name);
-        std::fs::rename(scratch.join(&name), &final_path)?;
+        std::fs::rename(folder.path(), &final_path)?;
         xfer.settle(xfer.done());
         Ok(final_path.display().to_string())
     });
@@ -1019,7 +1035,8 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     let dest = join_remote(remote_dir, &name);
     // Both kinds land under a hidden name first, so a stopped or broken
     // upload never leaves a cut-off file or half a folder in its place.
-    let staging = join_remote(remote_dir, &format!(".{name}.sshee-part"));
+    // A part nobody can guess, so nobody else can have a file (or a pipe) waiting under the name.
+    let staging = join_remote(remote_dir, &format!(".{name}.{:016x}.sshee-part", unguessable()));
     let (d, s) = (shell_quote(&dest), shell_quote(&staging));
     let guard = if overwrite {
         String::new()
@@ -1094,7 +1111,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
     let scaled = move |n: u64| if tar_size == 0 { 0 } else { (n as u128 * size as u128 / tar_size as u128).min(size as u128) as u64 };
     let result = resuming(&[t], env, xfer, || {
         xfer.settle(base);
-        let mut pack = Command::new("tar");
+        let mut pack = Command::new(crate::ssh::program("tar"));
         pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(local_tar_item(local_path, &name)).stdout(Stdio::piped()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut pack);
         let mut pack = pack.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
@@ -1146,20 +1163,27 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
 
 /// The scripts `copy_between` runs: what to pack on the first server (the
 /// `names` in `parent`, quoted), how big that is, and how to unpack on the
-/// second: into the hidden folder `staging`, or over `dest` when replacing.
-fn copy_scripts(parent: &str, names: &str, dest: &str, staging: &str, overwrite: bool) -> (String, String, String) {
-    let (p, d, s) = (shell_quote(parent), shell_quote(dest), shell_quote(staging));
+/// second, always into the hidden folder `staging`: the stream is whatever
+/// the first server sends, so it never unpacks straight into `dest`.
+fn copy_scripts(parent: &str, names: &str, staging: &str) -> (String, String, String) {
+    let (p, s) = (shell_quote(parent), shell_quote(staging));
     let pack = format!("cd -- {p} || exit 1; {}; tar -cf - -- \"$@\"", tar_items(names));
     let size = format!("cd -- {p} || exit 1; {}; du -sk -- \"$@\"", tar_items(names));
     // After a dropped connection it starts over, so a hidden folder from before goes first.
-    let unpack = if overwrite { format!("cd -- {d} && tar -xf -") } else { format!("rm -rf -- {s}; mkdir -- {s} && cd -- {s} && tar -xf -") };
+    let unpack = format!("rm -rf -- {s}; mkdir -- {s} && cd -- {s} && tar -xf -");
     (pack, size, unpack)
 }
 
-/// Once all of it arrived in `staging`, moves each of `names` into `dest`,
-/// still never over anything that turned up meanwhile.
-fn copy_finish_script(names: &str, dest: &str, staging: &str) -> String {
+/// Once all of it arrived in `staging`, puts each of `names` (and nothing
+/// else that came along) into `dest`: moved, still never over anything that
+/// turned up meanwhile, or when replacing, unpacked over what's there.
+fn copy_finish_script(names: &str, dest: &str, staging: &str, overwrite: bool) -> String {
     let (d, s) = (shell_quote(dest), shell_quote(staging));
+    if overwrite {
+        return format!(
+            r#"for n in {names}; do [ -e {s}/"$n" ] || [ -L {s}/"$n" ] || {{ echo "$n didn't arrive." >&2; exit 1; }}; done; (cd -- {s} && tar -cf - -- {names}) | (cd -- {d} && tar -xf -) || exit 1; rm -rf -- {s}"#
+        );
+    }
     format!(
         r#"for n in {names}; do if [ -e {d}/"$n" ] || [ -L {d}/"$n" ]; then echo EXISTS >&2; exit 5; fi; done; for n in {names}; do mv -- {s}/"$n" {d}/"$n" || exit 1; done; rmdir -- {s}"#
     )
@@ -1197,7 +1221,7 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
     xfer.check()?;
     let quoted = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
     let staging = join_remote(dest_dir, &scratch_name("copy"));
-    let (pack, size, unpack) = copy_scripts(&parent, &quoted, dest_dir, &staging, overwrite);
+    let (pack, size, unpack) = copy_scripts(&parent, &quoted, &staging);
     let total = run_remote(a, env, &size, None)
         .map(|out| String::from_utf8_lossy(&out).lines().filter_map(|l| l.split_whitespace().next()?.parse::<u64>().ok()).sum::<u64>() * 1024)
         .unwrap_or(0);
@@ -1240,15 +1264,13 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
         if !unpacked.success() {
             return Err(OpError::from_ssh(unpacked.code(), &joined(dst_errors)));
         }
-        if !overwrite {
-            run_remote(b, env, &copy_finish_script(&quoted, dest_dir, &staging), None).map_err(|e| {
-                if e.message == "EXISTS" {
-                    OpError::new(ErrorCode::Exists, exists_message(&names))
-                } else {
-                    e
-                }
-            })?;
-        }
+        run_remote(b, env, &copy_finish_script(&quoted, dest_dir, &staging, overwrite), None).map_err(|e| {
+            if e.message == "EXISTS" {
+                OpError::new(ErrorCode::Exists, exists_message(&names))
+            } else {
+                e
+            }
+        })?;
         Ok(())
     });
     match result {
@@ -1257,9 +1279,7 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
             Ok(())
         }
         Err(e) => {
-            if !overwrite {
-                discard_remote(b, env, &staging);
-            }
+            discard_remote(b, env, &staging);
             Err(e)
         }
     }
@@ -1315,6 +1335,30 @@ pub fn find_path(target: &Target, env: &SshEnv, rel: &str, cwd: &str) -> Result<
 
 pub fn base_name(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
+}
+
+/// The name a server's file gets on this computer, or None if it can't have
+/// one. On Windows `\` and `:` are path syntax, so a Linux file named
+/// `x\..\..\AppData\…\Startup\evil.bat` would otherwise land in Startup:
+/// there they and the other characters Windows refuses become `_`. Whatever
+/// is left must be one plain name inside the download folder.
+fn local_name(name: &str, windows: bool) -> Option<String> {
+    let mut name = name.to_string();
+    if windows {
+        name = name.chars().map(|c| if c < ' ' || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+        // Windows drops trailing dots and spaces, which would make ".." of "...".
+        name.truncate(name.trim_end_matches(['.', ' ']).len());
+        let device = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+        let numbered = device.len() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) && device.as_bytes()[3].is_ascii_digit();
+        if numbered || matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+            name.insert(0, '_');
+        }
+    }
+    let mut parts = Path::new(&name).components();
+    match (parts.next(), parts.next()) {
+        (Some(std::path::Component::Normal(n)), None) if n == name.as_str() => Some(name),
+        _ => None,
+    }
 }
 
 pub fn parent_dir(path: &str) -> String {
@@ -1481,26 +1525,63 @@ mod tests {
         let names = "'notes.txt' 'link'";
         let sh = |script: &str| Command::new("sh").arg("-c").arg(script).output().unwrap();
         // One server packs, the other unpacks under the hidden name, then it moves into place.
-        let (pack, size, unpack) = copy_scripts(&base.to_string_lossy(), names, &dest_s, &staging, false);
+        let (pack, size, unpack) = copy_scripts(&base.to_string_lossy(), names, &staging);
         assert!(sh(&format!("({pack}) | ({unpack})")).status.success());
         assert!(!dest.join("notes.txt").exists(), "nothing in place before it's all there");
-        assert!(sh(&copy_finish_script(names, &dest_s, &staging)).status.success());
+        assert!(sh(&copy_finish_script(names, &dest_s, &staging, false)).status.success());
         assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "n");
         assert_eq!(std::fs::read_to_string(dest.join("link/sub/b.txt")).unwrap(), "x");
         assert!(!Path::new(&staging).exists());
         let kb: u64 = String::from_utf8_lossy(&sh(&size).stdout).lines().filter_map(|l| l.split_whitespace().next()?.parse::<u64>().ok()).sum();
         assert!(kb > 0);
         // Something that turned up meanwhile is never replaced.
-        let (pack, _, unpack) = copy_scripts(&base.to_string_lossy(), names, &dest_s, &staging, false);
+        let (pack, _, unpack) = copy_scripts(&base.to_string_lossy(), names, &staging);
         assert!(sh(&format!("({pack}) | ({unpack})")).status.success());
-        let finish = sh(&copy_finish_script(names, &dest_s, &staging));
+        let finish = sh(&copy_finish_script(names, &dest_s, &staging, false));
         assert_eq!(finish.status.code(), Some(5));
         assert_eq!(String::from_utf8_lossy(&finish.stderr).trim(), "EXISTS");
-        // Replacing unpacks over what's there.
+        std::fs::remove_dir_all(&staging).unwrap();
+        // Replacing unpacks over what's there, keeping what only the old one had.
         std::fs::write(base.join("notes.txt"), "new").unwrap();
-        let (pack, _, unpack) = copy_scripts(&base.to_string_lossy(), "'notes.txt'", &dest_s, &staging, true);
+        std::fs::write(dest.join("link/sub/mine.txt"), "kept").unwrap();
+        let (pack, _, unpack) = copy_scripts(&base.to_string_lossy(), names, &staging);
         assert!(sh(&format!("({pack}) | ({unpack})")).status.success());
+        assert!(sh(&copy_finish_script(names, &dest_s, &staging, true)).status.success());
         assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(dest.join("link/sub/b.txt")).unwrap(), "x");
+        assert_eq!(std::fs::read_to_string(dest.join("link/sub/mine.txt")).unwrap(), "kept");
+        assert!(!Path::new(&staging).exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_between_servers_brings_only_what_was_picked() {
+        let base = std::env::temp_dir().join(format!("sshee-between-forged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (from, dest) = (base.join("from"), base.join("home"));
+        std::fs::create_dir_all(from.join(".ssh")).unwrap();
+        std::fs::create_dir_all(dest.join("app")).unwrap();
+        std::fs::create_dir_all(from.join("app")).unwrap();
+        std::fs::write(from.join("app/main.py"), "new").unwrap();
+        std::fs::write(from.join(".ssh/authorized_keys"), "the other server's key").unwrap();
+        let (dest_s, staging) = (dest.to_string_lossy().to_string(), dest.join(".copy.part").to_string_lossy().to_string());
+        let sh = |script: &str| Command::new("sh").arg("-c").arg(script).output().unwrap();
+        // The first server was asked for app, and slipped .ssh into the stream.
+        let forged = format!("tar -cf - -C {} -- app .ssh", shell_quote(&from.to_string_lossy()));
+        let (_, _, unpack) = copy_scripts("/unused", "'app'", &staging);
+        for overwrite in [true, false] {
+            if !overwrite {
+                std::fs::remove_dir_all(dest.join("app")).unwrap();
+            }
+            assert!(sh(&format!("({forged}) | ({unpack})")).status.success());
+            // Moving leaves the extra behind in the hidden folder, so that copy ends in an error.
+            let finish = sh(&copy_finish_script("'app'", &dest_s, &staging, overwrite));
+            assert_eq!(finish.status.success(), overwrite, "{}", String::from_utf8_lossy(&finish.stderr));
+            assert_eq!(std::fs::read_to_string(dest.join("app/main.py")).unwrap(), "new");
+            assert!(!dest.join(".ssh").exists(), "only app arrives (overwrite: {overwrite})");
+            let _ = std::fs::remove_dir_all(&staging);
+        }
         std::fs::remove_dir_all(&base).unwrap();
     }
 
@@ -1569,6 +1650,15 @@ mod tests {
         let (n, nq) = (dir.join("fresh.txt"), shell_quote(&dir.join("fresh.txt").to_string_lossy()));
         assert!(sh_with_input(&upload_file_script("", &sq, &nq, 2, 0), b"hi").success());
         assert_eq!(std::fs::read_to_string(&n).unwrap(), "hi");
+        // A link planted under the staged name gets nothing written through it.
+        let other = dir.join("someone-elses.txt");
+        std::fs::write(&other, "theirs").unwrap();
+        std::os::unix::fs::symlink(&other, &s).unwrap();
+        let out = Command::new("sh").arg("-c").arg(upload_file_script("", &sq, &nq, 10, 3)).stdin(Stdio::null()).output().unwrap();
+        assert_eq!(out.status.code(), Some(6), "a link isn't picked up");
+        assert!(sh_with_input(&upload_file_script("", &sq, &nq, 6, 0), b"secret").success());
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), "theirs");
+        assert_eq!(std::fs::read_to_string(&n).unwrap(), "secret");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1676,6 +1766,27 @@ mod tests {
         assert_eq!(e[1].modified, 1700000001);
         assert!(e[2].is_link);
         assert_eq!(e[2].kind, FileKind::Link);
+    }
+
+    #[test]
+    fn a_download_keeps_to_the_download_folder() {
+        // A Linux name that is a path on Windows stays one name there.
+        let escape = r"x\..\..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\evil.bat";
+        assert_eq!(local_name(escape, true).unwrap(), "x_.._.._AppData_Roaming_Microsoft_Windows_Start Menu_Programs_Startup_evil.bat");
+        assert_eq!(local_name(r"C:\Windows\evil.exe", true).unwrap(), "C__Windows_evil.exe");
+        assert_eq!(local_name("report 10:30.txt", true).unwrap(), "report 10_30.txt");
+        assert_eq!(local_name("notes. . ", true).unwrap(), "notes");
+        assert_eq!(local_name("con.txt", true).unwrap(), "_con.txt");
+        assert_eq!(local_name("COM1", true).unwrap(), "_COM1");
+        assert_eq!(local_name("COMPANY.txt", true).unwrap(), "COMPANY.txt");
+        for gone in ["", ".", "..", "...", " . "] {
+            assert_eq!(local_name(gone, true), None, "{gone:?}");
+        }
+        // Elsewhere only `/` separates, and base_name already took the last part.
+        assert_eq!(local_name(r"a\b:c", false).unwrap(), r"a\b:c");
+        assert_eq!(local_name("..", false), None);
+        assert_eq!(local_name(".", false), None);
+        assert_eq!(local_name("", false), None);
     }
 
     #[test]

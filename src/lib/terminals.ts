@@ -7,8 +7,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type IBufferLine } from "@xterm/xterm";
+import { agentRunning } from "./agents";
 import { backend, type WelcomeSpec } from "./backend";
 import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
+import { withoutKeys } from "./format";
 import { findLinks } from "./paths";
 import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
 import { openTerminalLink } from "./terminalLinks";
@@ -69,6 +71,14 @@ const CLICK_WAIT_MS = 260;
 
 /** Keys and mouse reports that aren't typing: they don't end scrolling back. */
 const NOT_TYPING = /^\x1b\[(?:<|M|I$|O$)/;
+
+/** Programs that draw their own screen, besides the agents. */
+const FULL_SCREEN = new Set(["vim", "nvim", "vi", "nano", "less", "man", "htop", "top", "btop", "mc", "lazygit", "k9s", "watch"]);
+
+/** The terminal runs something that draws its own screen: its output isn't highlighted. */
+function drawsOwnScreen(command: string | undefined): boolean {
+  return !!command && (agentRunning(command) !== null || FULL_SCREEN.has(command.toLowerCase()));
+}
 /**
  * Turns off mouse, focus and paste reports. Whatever asked for them (tmux,
  * an agent, vim) is gone with the connection; left on, every click and drag
@@ -97,12 +107,22 @@ class TerminalHandle {
   readonly el: HTMLDivElement;
   private fit = new FitAddon();
   private gpu: WebglAddon | null = null;
+  /** Settings say to draw with the GPU. */
+  private gpuWanted = false;
+  /** When the browser took the GPU away, in the last minute. */
+  private gpuLosses: number[] = [];
+  private gpuRelease = 0;
   private started = false;
   private disposed = false;
   private fitTimer = 0;
+  /** How many times the terminal has sent input, to tell when xterm dropped some. */
+  private sent = 0;
   private last?: SessionState;
   private pendingCommand?: string;
-  private output = new OutputPipeline((text) => this.term.write(text));
+  private output = new OutputPipeline(
+    (text) => this.term.write(text),
+    () => drawsOwnScreen(useStore.getState().foreground[this.paneId]),
+  );
   /** Start of the current run of output nobody was watching, and the last output. */
   private busySince = 0;
   private lastOutput = 0;
@@ -122,6 +142,8 @@ class TerminalHandle {
   /** Paths and links on screen, faintly underlined so you can tell they open. */
   private linkLayer: HTMLDivElement | null = null;
   private markTimer = 0;
+  /** When output started coming without the pause marks wait for. */
+  private markWaitSince = 0;
   private linkTimer = 0;
   /** Secrets on screen, covered with dots, and the ones you chose to see. */
   private secretLayer: HTMLDivElement | null = null;
@@ -155,6 +177,19 @@ class TerminalHandle {
     this.term.loadAddon(new Unicode11Addon());
     this.term.unicode.activeVersion = "11";
     this.term.open(this.el);
+    // Pastes go through here before xterm's own handler, which would pass an
+    // Esc or Ctrl+U in the clipboard (a server can set it, OSC 52) to the shell.
+    this.el.addEventListener(
+      "paste",
+      (e) => {
+        const text = e.clipboardData?.getData("text/plain");
+        if (text === undefined) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.term.paste(withoutKeys(text));
+      },
+      { capture: true },
+    );
     this.setGpu(useSettings.getState().gpuRendering);
     this.term.attachCustomKeyEventHandler((e) => {
       const copy = terminalCopyKey(e);
@@ -197,7 +232,9 @@ class TerminalHandle {
       // browser, which fires the paste event xterm handles.
       return matchShortcut(e) === null && !isTerminalPaste(e);
     });
+    this.typeDroppedText();
     this.term.onData((d) => {
+      this.sent++;
       // Typing while scrolled back goes to the prompt, as in other terminals,
       // instead of tmux's copy mode.
       if (this.tmux?.inMode && !NOT_TYPING.test(d)) {
@@ -264,7 +301,10 @@ class TerminalHandle {
       },
     });
     // Secrets are covered as the text is drawn, never a frame later.
-    this.term.onRender(() => this.markSecrets());
+    this.term.onRender(({ start, end }) => {
+      this.dropLinkMarks(start, end);
+      this.markSecrets();
+    });
     // Paths stay faintly underlined, not only under the mouse.
     this.term.onWriteParsed(() => this.markLinksSoon());
     this.term.onScroll(() => this.markLinksSoon());
@@ -287,7 +327,8 @@ class TerminalHandle {
       const payload = data.slice(data.indexOf(";") + 1);
       if (payload && payload !== "?" && payload.length < 4_000_000) {
         try {
-          void copyText(new TextDecoder().decode(Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))));
+          // What a server copies can come back as a paste anywhere: no keys in it.
+          void copyText(withoutKeys(new TextDecoder().decode(Uint8Array.from(atob(payload), (c) => c.charCodeAt(0)))));
         } catch {
           /* not base64 */
         }
@@ -317,24 +358,68 @@ class TerminalHandle {
    * with no gaps between lines. Without WebGL, or once the browser takes the
    * context back (it caps how many a page has), the DOM renderer carries on.
    */
+  /**
+   * Types text the system put in the terminal without key presses, when
+   * xterm dropped it. Windows' clipboard history (Win+V) and emoji panel
+   * insert text this way, and xterm ignores it while it thinks a key is down:
+   * the panel takes the Win key's release, so the Win key never comes up.
+   * Only text nothing else sent since the last key press is typed here, so
+   * nothing goes twice.
+   */
+  private typeDroppedText() {
+    const textarea = this.term.textarea;
+    if (!textarea) return;
+    let sentAtKey = 0;
+    let sentAtInput = 0;
+    this.el.addEventListener("keydown", () => (sentAtKey = this.sent), { capture: true });
+    this.el.addEventListener("input", () => (sentAtInput = this.sent), { capture: true });
+    // After xterm's own listener, which takes the text when it can.
+    textarea.addEventListener("input", (e) => {
+      const ev = e as InputEvent;
+      if (!ev.data || ev.isComposing || (ev.inputType !== "insertText" && ev.inputType !== "insertFromPaste")) return;
+      if (this.sent !== sentAtInput || this.sent !== sentAtKey) return;
+      const text = withoutKeys(ev.data);
+      if (ev.inputType === "insertFromPaste" || text.includes("\n")) this.term.paste(text);
+      else this.term.input(text);
+      textarea.value = "";
+    });
+  }
+
+  /** Draws with the GPU (WebGL) or not, as Settings → Terminal says. */
   setGpu(on: boolean) {
-    if (this.disposed || on === !!this.gpu) return;
-    if (!on) {
-      this.gpu?.dispose();
-      this.gpu = null;
-      return;
-    }
+    this.gpuWanted = on;
+    if (on) this.startGpu();
+    else this.stopGpu();
+  }
+
+  private startGpu() {
+    const now = Date.now();
+    this.gpuLosses = this.gpuLosses.filter((t) => now - t < 60_000);
+    // A GPU that keeps going away is left alone for a minute.
+    if (this.disposed || this.gpu || !this.gpuWanted || this.gpuLosses.length > 3) return;
     try {
       const gpu = new WebglAddon();
       gpu.onContextLoss(() => {
-        gpu.dispose();
+        // The browser took the GPU back: after sleep, a GPU reset, or with
+        // more terminals open than it gives GPUs to. On the fallback a Mac's
+        // WebKit leaves grey blocks and smeared colors, so the GPU comes
+        // back: now if this terminal is on screen, else when it's shown.
         if (this.gpu === gpu) this.gpu = null;
+        gpu.dispose();
+        this.gpuLosses.push(Date.now());
+        if (this.el.parentElement !== park()) window.setTimeout(() => this.startGpu(), 500);
       });
       this.term.loadAddon(gpu);
       this.gpu = gpu;
     } catch {
       /* no WebGL2 here */
     }
+  }
+
+  private stopGpu() {
+    window.clearTimeout(this.gpuRelease);
+    this.gpu?.dispose();
+    this.gpu = null;
   }
 
   /** You're looking at this terminal right now. */
@@ -404,12 +489,21 @@ class TerminalHandle {
   mount(container: HTMLElement) {
     if (this.disposed) return;
     container.appendChild(this.el);
+    window.clearTimeout(this.gpuRelease);
+    this.startGpu();
     this.refit();
     if (!this.started) this.start();
   }
 
   unmount() {
     if (!this.disposed && this.el.parentElement !== park()) park().appendChild(this.el);
+    // A terminal out of sight a while gives its GPU back, so the ones on
+    // screen keep theirs: browsers give a page only so many.
+    window.clearTimeout(this.gpuRelease);
+    this.gpuRelease = window.setTimeout(() => {
+      this.gpu?.dispose();
+      this.gpu = null;
+    }, 30_000);
   }
 
   /**
@@ -581,7 +675,28 @@ class TerminalHandle {
 
   private markLinksSoon() {
     window.clearTimeout(this.markTimer);
-    this.markTimer = window.setTimeout(() => this.markLinks(), 250);
+    const now = Date.now();
+    this.markWaitSince ||= now;
+    // Output that never pauses (an agent's spinner) still gets its marks back each second.
+    const wait = now - this.markWaitSince >= 1000 ? 0 : 250;
+    this.markTimer = window.setTimeout(() => {
+      this.markWaitSince = 0;
+      this.markLinks();
+    }, wait);
+  }
+
+  /**
+   * Takes the marks off rows the terminal just drew again, in the same
+   * frame: their text may have moved or gone (a program redrawing its
+   * screen), and a mark left there is a stray dotted line. `markLinks` puts
+   * back the ones still right.
+   */
+  private dropLinkMarks(start: number, end: number) {
+    if (!this.linkLayer?.childElementCount) return;
+    for (const mark of [...this.linkLayer.children] as HTMLElement[]) {
+      const row = Number(mark.dataset.row);
+      if (row >= start && row <= end) mark.remove();
+    }
   }
 
   /**
@@ -612,6 +727,7 @@ class TerminalHandle {
         const x = cells[link.start];
         const mark = document.createElement("span");
         mark.className = "term-link-mark";
+        mark.dataset.row = String(r);
         mark.style.cssText = `left:${x * w}px;top:${(r + 1) * h - 2}px;width:${(cells[link.end - 1] + 1 - x) * w}px`;
         marks.appendChild(mark);
       }
@@ -797,6 +913,7 @@ class TerminalHandle {
     if (this.disposed) return;
     this.disposed = true;
     window.clearTimeout(this.markTimer);
+    window.clearTimeout(this.gpuRelease);
     backend.closeSession(this.paneId, this.target, this.sessionKey, endRemote);
     this.term.dispose();
     this.el.remove();
@@ -812,7 +929,8 @@ export function getTerminal(pane: PaneState): TerminalHandle {
   if (!h) {
     h = new TerminalHandle(pane.id, pane.target ?? { kind: "local" }, pane.sessionKey ?? pane.id, pane.initialCommand, pane.container ?? null);
     handles.set(pane.id, h);
-    if (pane.initialCommand) useStore.getState().setPane(pane.id, { initialCommand: undefined });
+    // The handle has the command now. Told after this render, which may be the one asking.
+    if (pane.initialCommand) queueMicrotask(() => useStore.getState().setPane(pane.id, { initialCommand: undefined }));
   }
   return h;
 }

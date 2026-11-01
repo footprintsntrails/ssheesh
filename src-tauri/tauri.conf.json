@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SSHeesh",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "identifier": "io.github.footprintsntrails.ssheesh",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -20,7 +20,7 @@
         "minHeight": 540,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#0b0c0e"
+        "backgroundColor": "#1f1e1d"
       }
     ],
     "security": {
@@ -47,7 +47,7 @@
     "createUpdaterArtifacts": true,
     "publisher": "SSHeesh contributors",
     "homepage": "https://github.com/footprintsntrails/ssheesh",
-    "copyright": "\u00a9 2026 footprintsntrails. CC BY-NC-SA 4.0",
+    "copyright": "© 2026 footprintsntrails. CC BY-NC-SA 4.0",
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0"

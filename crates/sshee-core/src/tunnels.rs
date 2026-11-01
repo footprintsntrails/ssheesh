@@ -1047,7 +1047,9 @@ mod tests {
         assert_ne!(picked, port);
         assert!(port_free(picked));
         drop(taken);
-        assert_eq!(pick_local_port(port, &[]).unwrap(), port);
+        // Freed, it's picked again, unless a test running alongside took that port meanwhile.
+        let again = pick_local_port(port, &[]).unwrap();
+        assert!(again == port || !port_free(port), "picked {again} though {port} is free");
         assert_ne!(pick_local_port(port, &[port]).unwrap(), port);
     }
 

@@ -91,7 +91,7 @@ describe("custom themes", () => {
       expect(themeInfo(t.id).name).toBe("Mine");
       // A see-through pane, as it looks over the window.
       expect(resolveScheme("auto", t.id, "#5b9dff").background).toBe("#800000");
-      expect(themeInfo("custom-gone").id).toBe("midnight");
+      expect(themeInfo("custom-gone").id).toBe("ssheesh");
     } finally {
       setCustomThemeSource(() => []);
     }

@@ -22,7 +22,7 @@ pub fn local() -> LocalIdentity {
 }
 
 fn hostname_command() -> Option<String> {
-    let mut cmd = Command::new("hostname");
+    let mut cmd = Command::new(crate::ssh::program("hostname"));
     cmd.stdin(Stdio::null()).stderr(Stdio::null());
     hide_console(&mut cmd);
     let out = cmd.output().ok()?;

@@ -646,6 +646,12 @@ export const mockBackend: Backend = {
     const keys = new Set([...byKey.keys(), "demo-claude", "demo-codex"]);
     return [...keys].map((sessionKey) => ({ sessionKey, command: sessionKey.includes("claude") ? "claude" : sessionKey.includes("codex") ? "codex" : "zsh" }));
   },
+  async runFix(_t, command) {
+    await wait(1200);
+    if (/upgrade|-Syu/.test(command)) return { kind: "needsYou", ask: "It lists what it's about to install and asks whether to go ahead: type y and press Enter." };
+    if (command.includes("sshd_config") || command.includes("reload ssh")) return { kind: "needsYou", ask: "sudo asks for your password on the server, the one you log in with: type it and press Enter. Nothing shows while you type; that's normal." };
+    return { kind: "done", output: "Vacuuming done, freed 1.2G of archived journals from /var/log/journal." };
+  },
   async securityCheckup() {
     await wait(1400);
     return {

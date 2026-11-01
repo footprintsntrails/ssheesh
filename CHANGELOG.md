@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.8.0 — a calm new look, and a safer server in a click
+
+- **Security check-up and Free up disk space (once "What's using the disk"), at the foot of the sidebar.** Two buttons over Settings look at the server you have open; with several open, you pick one. They've left the tab and stats menus, where they were one more thing to read past.
+- **Run, instead of Paste into terminal.** A check-up fix or a cleanup runs on the server when you press Run, without a terminal, after one question, and says how it went (its output, or the error); the check comes back up to date. One that needs you (sudo asks for your password, or a package manager asks whether to go ahead) opens in a new terminal instead, with what to type in plain words. A recipe's steps run in the server's terminal, so what they print is there to compare.
+- **SSHeesh Default, the new look:** Claude's warm dark with Claude Code's green, yellow and red, and the >_< logo's green as the accent. Midnight is still in Settings → Appearance. If you kept the look SSHeesh came with (Midnight in blue), you're moved over once; a theme or accent you picked stays. Claude Code's orange is in the accents too, as Terracotta.
+- **Win+V pastes into terminals.** Windows' clipboard history (and the emoji panel) typed nothing, because the terminal thought the Win key was still held down.
+- **Icons from one set.** Search, the two new buttons, Settings and Add server are drawn like the server icons beside them: in lines, or with the pixel icons, in pixels, the logo too (as the terminal's welcome draws it).
+- **The green is softer**, in the logo, the welcome, status colors and the app icon.
+- **Quieter terminals.** The buttons that start an agent show up when you point at the pane's title, instead of sitting over every terminal in four colors.
+- **Pasting can't run things by itself.** A paste loses the control characters a terminal would take as keys (Esc, Ctrl+U, a lone Enter), so text can't end the shell's paste guard early and run a line.
+
+### Fixed
+- **Grey blocks in Mac terminals stay away.** When macOS took the GPU back (after sleep, or with many terminals open), a terminal went on drawing without it for good, and WebKit's grey blocks came back. Now the GPU comes back, and a terminal out of sight for half a minute gives its GPU back so the ones on screen keep theirs.
+- **No more rainbow over agents and full-screen programs.** Error, warning and address highlighting stays out of the way while Claude Code, Codex, OpenCode, oh-my-pi, vim, htop or less runs: they redraw lines in pieces, and the highlight landed on half an address one time and not the next.
+- **No stray dotted lines.** A path's dotted underline goes as soon as its line is drawn again, instead of staying where the text was while an agent's spinner keeps output coming.
+- "Open new terminal here" and starting an agent work in Windows' PowerShell, which has no `&&`.
+- **Dialogs keep the keyboard.** Shortcuts no longer open tabs behind a dialog, and Tab and Esc stay in it, instead of typing into the terminal behind.
+- **Menus work from the keyboard:** arrows move through them, and Esc closes the menu without clearing the files you picked.
+- Esc in an icon or color picker closes just the picker, not Add server (with what you typed) or Settings.
+- The tab you're on stays in sight in a long row of tabs, which fades where more are off to the side.
+- A recipe stepped aside sits in the top bar beside the tabs, instead of over them.
+- Add server brings the connection test's answer into view.
+- Settings' close button no longer covers what's under it as you scroll.
+- Archive is in the menu of several picked files too.
+- Filtering a long folder starts at the top of what it found, at once.
+- Keeping an edited file open after "Discard your changes?" leaves the list on that file, and the question names it.
+- The server card names the disk it means ("Disk /mnt/backups"), and doesn't say "no terminal" for one that just hasn't connected yet.
+- Dialogs fit a short window, with their buttons in sight.
+- Text on the accent color stays readable whatever the accent.
+
+### Security
+Severity is rated with how likely an attack is; in brackets, what it would be on impact alone.
+
+- **A server file name could place a download outside Downloads on Windows.** A Linux file named like `x\..\..\AppData\…\Startup\evil.bat` landed in the Startup folder and ran at the next sign-in. Names are now made into one plain Windows name. Severity: Low (High without likelihood).
+- **A folder name could run a command when you opened a terminal in it.** "Open terminal here", "Open in main terminal", starting an agent and dropping a file on this computer's terminal typed the name with only quotes around it; Ctrl+U and Enter inside a name acted as keys. Such names are now refused with a note, and the quoting also holds in fish and PowerShell. Severity: Low (High without likelihood).
+- **Server output could set your clipboard to a command that ran when pasted.** Programs may copy (OSC 52); what they copy and every paste now lose those keys. Severity: Medium (High without likelihood).
+- **Copying between servers with Replace took everything the first server sent.** A compromised server could add, say, `.ssh/authorized_keys` next to the folder you copied. Only what you picked arrives now. Severity: Low (High without likelihood).
+- **A saved password could be given to a jump host.** Behind ProxyJump, the hop's own login got it. It's now typed only for the server it's saved for, and not at all behind a hop with an ssh older than OpenSSH 8.4, which can't show who's asking. Severity: Low (Medium without likelihood).
+- **A container's label could make up a container whose name was a command,** typed by the "pick a container" snippets. Names docker and podman can't give are dropped. Severity: Low (High without likelihood).
+- **The Windows app could start an `ssh.exe` or `tar.exe` from its own folder,** which for the portable app is often Downloads. It now looks only where Windows keeps programs. Severity: Low (High without likelihood).
+- **On Linux without a Downloads folder, downloads went straight into your home folder,** where a server's `.bashrc` would be live. They go to ~/Downloads now. Severity: Low (High without likelihood).
+- **A server's key was fetched through a file in the shared /tmp** (Linux), where another user on the computer could slip in a key of their own. It's fetched in your own ~/.sshee now, only lines for that server are kept, and nothing is offered to trust without a fingerprint to compare. Severity: Low (Medium without likelihood).
+- **An upload into a folder others can write to (/tmp) could go into a file someone else made** under its temporary name. Its temporary file is always new now. Severity: Low (Medium without likelihood).
+- An archive whose name has a `:` in it is no longer taken by GNU tar as a file on another computer. Severity: Low (Low without likelihood).
+
 ## 0.7.3 — the Windows app updates more surely
 
 - **The Windows app (SSHeesh.exe) updates itself more surely.** It gives your antivirus a moment to look at the new version before swapping it in, and tries again while something else holds the file. If Windows Security takes the new version away (SSHeesh isn't signed yet), it says so and where to allow it, instead of "the file can't be found". If the running copy can't be replaced, the new one is left next to it as `SSHeesh-<version>.exe`, to open by hand. Each failure now says which step it was. The update to this version still runs the old way, so if it fails, download it from the release page once.

@@ -83,7 +83,7 @@ pub fn keys_in(dir: &Path) -> Vec<LocalKey> {
 
 /// How many keys an agent holds: Some(n) when it answered, None when it didn't.
 fn agent_keys(socket: Option<&Path>) -> Option<usize> {
-    let mut cmd = Command::new("ssh-add");
+    let mut cmd = Command::new(crate::ssh::program("ssh-add"));
     cmd.arg("-l").stdin(Stdio::null()).stderr(Stdio::null());
     if let Some(s) = socket {
         cmd.env("SSH_AUTH_SOCK", s);

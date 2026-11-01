@@ -50,6 +50,22 @@ describe("OutputPipeline", () => {
     expect(out).toBe(`${ESC}[32mbuild ${ESC}[1;31mERROR${ESC}[0m${ESC}[32m here`);
   });
 
+  it("leaves a program that draws its own screen alone", () => {
+    let shown = "";
+    let agent = true;
+    const p = new OutputPipeline((t) => (shown += t), () => agent);
+    // An agent redrawing a line of addresses: its colors, untouched.
+    const redraw = `${ESC}[2K${ESC}[32m'198.51.100.63'${ESC}[39m: 1, ERROR`;
+    p.push(redraw);
+    vi.runAllTimers();
+    expect(shown).toBe(redraw);
+    agent = false;
+    shown = "";
+    p.push("ERROR\n");
+    vi.runAllTimers();
+    expect(shown).toContain(`${ESC}[1;31mERROR`);
+  });
+
   it("colors warnings with lowercase tool output", () => {
     expect(run(["warning: unused variable"])).toBe(`${ESC}[33mwarning${ESC}[0m: unused variable`);
   });

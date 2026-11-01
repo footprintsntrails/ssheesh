@@ -368,7 +368,7 @@ export function Welcome() {
           </div>
         </div>
       ) : (
-        <div className="flex max-h-[calc(84vh-16px)] flex-col p-6">
+        <div className="flex max-h-[calc(84vh-16px)] flex-col p-6 [@media(max-height:640px)]:max-h-[calc(100vh-32px)]">
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <h2 className="text-[22px] font-semibold tracking-tight text-fg">Make it yours</h2>

@@ -6,7 +6,7 @@ import { contrast, parseHex } from "./color";
 import { quietStorage } from "./persist";
 import type { HighlightRule } from "./highlight";
 import { isMac, isWindows, setShortcutSource, type ShortcutOverrides } from "./keys";
-import { ACCENTS, customThemeVars, setCustomThemeSource, setTerminalColorsSource, type AppThemeId, type CustomTheme, type TerminalColors } from "./themes";
+import { ACCENTS, customThemeVars, DEFAULT_THEME, setCustomThemeSource, setTerminalColorsSource, type AppThemeId, type CustomTheme, type TerminalColors } from "./themes";
 
 export type UpdateMode = "auto" | "notify" | "manual";
 
@@ -126,10 +126,10 @@ export const compactSidebar = (m: CompactMode) => m === "sidebar" || m === "both
 export const compactTabbar = (m: CompactMode) => m === "tabbar" || m === "both";
 
 export const DEFAULT_SETTINGS: Settings = {
-  theme: "midnight",
+  theme: DEFAULT_THEME,
   themeFollowsSystem: false,
   lightTheme: "daylight",
-  darkTheme: "midnight",
+  darkTheme: DEFAULT_THEME,
   customThemes: [],
   shortcuts: {},
   uiZoom: 100,
@@ -202,6 +202,13 @@ export function migrateSettings(saved: unknown, version: number, mac: boolean): 
     s.compactMode = s.compactMode === true ? "both" : "off";
     s.railStatus = "off";
   }
+  // 4: SSHeesh Default is the new look, for whoever kept the old one as it came
+  // (Midnight in blue). A theme or accent picked by hand stays; Midnight stays in the list.
+  if (version < 4 && s.theme === "midnight" && (s.accent ?? "#5b9dff") === "#5b9dff") {
+    s.theme = DEFAULT_THEME;
+    s.accent = ACCENTS[0].value;
+    if (s.darkTheme === "midnight") s.darkTheme = DEFAULT_THEME;
+  }
   return s;
 }
 
@@ -215,7 +222,7 @@ export const useSettings = create<SettingsStore>()(
     }),
     {
       name: "sshee-settings",
-      version: 3,
+      version: 4,
       storage: quietStorage(),
       migrate: (saved, version) => migrateSettings(saved, version, isMac) as unknown as SettingsStore,
     },

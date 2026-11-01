@@ -32,9 +32,9 @@ w_boiler='^[[:space:]]*\* (Documentation|Management|Support):|^Welcome to (Ubunt
 w_has() { case " $w_parts " in *" $1 "*) return 0 ;; esac; return 1; }
 w_bar() { n=$(( $1 * $2 / 100 )); c=$grn; [ "$1" -ge 80 ] && c=$amb; [ "$1" -ge 90 ] && c=$red; s="$c"; i=0; while [ $i -lt "$2" ]; do [ $i -eq $n ] && s="$s$trk"; s="$s━"; i=$((i+1)); done; printf '%s%s' "$s" "$R"; }
 w_pct() { c=$txt; [ "$1" -ge 80 ] && c=$amb; [ "$1" -ge 90 ] && c=$red; printf '%s%3d%%%s' "$c" "$1" "$R"; }
-w_logo() { o=; p=$1; i=0; while [ -n "$p" ]; do c=${p%"${p#?}"}; p=${p#?}; case $c in .) o="$o$R  " ;; T) if [ "$2" = 2 ] && [ $i -ge 1 ] && [ $i -le 3 ]; then o="$o$E[48;2;47;49;54m$E[38;2;92;95;103m• "; else o="$o$E[48;2;47;49;54m  "; fi ;; B) o="$o$E[48;2;35;36;40m  " ;; E) o="$o$E[48;2;242;240;234m  " ;; G) o="$o$E[48;2;61;214;140m  " ;; esac; i=$((i+1)); done; printf '%s%s' "$o" "$R"; }
+w_logo() { o=; p=$1; i=0; while [ -n "$p" ]; do c=${p%"${p#?}"}; p=${p#?}; case $c in .) o="$o$R  " ;; T) if [ "$2" = 2 ] && [ $i -ge 1 ] && [ $i -le 3 ]; then o="$o$E[48;2;47;49;54m$E[38;2;92;95;103m• "; else o="$o$E[48;2;47;49;54m  "; fi ;; B) o="$o$E[48;2;35;36;40m  " ;; E) o="$o$E[48;2;242;240;234m  " ;; G) o="$o$E[48;2;78;186;101m  " ;; esac; i=$((i+1)); done; printf '%s%s' "$o" "$R"; }
 w_banner() {
-  txt="$E[38;2;216;220;226m"; dim="$E[38;2;125;133;144m"; lab="$E[38;2;95;103;117m"; trk="$E[38;2;43;48;56m"; grn="$E[38;2;61;214;140m"; amb="$E[38;2;229;184;79m"; red="$E[38;2;247;118;142m"
+  txt="$E[38;2;216;220;226m"; dim="$E[38;2;125;133;144m"; lab="$E[38;2;95;103;117m"; trk="$E[38;2;43;48;56m"; grn="$E[38;2;78;186;101m"; amb="$E[38;2;229;184;79m"; red="$E[38;2;247;118;142m"
   w_cols=$(stty size 2>/dev/null | cut -d' ' -f2); case "$w_cols" in ''|*[!0-9]*) w_cols=${COLUMNS:-80} ;; esac
   os=$( . /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-$(uname -sr)}" ); arch=$(uname -m 2>/dev/null); cores=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null)
   up=$(awk '{d=int($1/86400); h=int($1%86400/3600); n=int($1%3600/60); if (d) printf "%d day%s", d, (d==1 ? "" : "s"); else if (h) printf "%dh %dm", h, n; else printf "%d min", n}' /proc/uptime 2>/dev/null)
@@ -111,7 +111,7 @@ mod tests {
     fn ssheesh_welcome_shows_the_logo_and_facts() {
         let out = run(&Welcome { mode: "ssheesh".into(), parts: vec![], note: "be careful: production".into() });
         assert!(out.contains("cores"), "{out}");
-        assert!(out.contains("\x1b[48;2;61;214;140m"), "the green mouth of the logo");
+        assert!(out.contains("\x1b[48;2;78;186;101m"), "the green mouth of the logo");
         assert!(out.contains("be careful: production"));
     }
 
@@ -120,7 +120,7 @@ mod tests {
     fn parts_can_be_left_out() {
         let out = run(&Welcome { mode: "ssheesh".into(), parts: vec!["system".into()], note: String::new() });
         assert!(out.contains("cores"));
-        assert!(!out.contains("\x1b[48;2;61;214;140m"), "no logo");
+        assert!(!out.contains("\x1b[48;2;78;186;101m"), "no logo");
         assert!(!out.contains("mem "), "no usage bars");
     }
 
@@ -204,7 +204,7 @@ permitted by applicable law.
     }
 
     const UBUNTU_SCRIPTS: [&str; 6] = ["00-header", "10-help-text", "50-motd-news", "50-landscape-sysinfo", "90-updates-available", "91-release-upgrade"];
-    const LOGO: &str = "\x1b[48;2;61;214;140m";
+    const LOGO: &str = "\x1b[48;2;78;186;101m";
 
     #[cfg(unix)]
     #[test]

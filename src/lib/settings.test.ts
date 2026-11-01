@@ -14,6 +14,15 @@ describe("settings from older versions", () => {
     expect(migrateSettings({ railStatus: "bars", compactMode: "sidebar" }, 3, false)).toEqual({ railStatus: "bars", compactMode: "sidebar" });
   });
 
+  it("moves the look that came with the app to SSHeesh Default, once", () => {
+    const old = { theme: "midnight", darkTheme: "midnight", lightTheme: "daylight", accent: "#5b9dff" };
+    expect(migrateSettings(old, 3, false)).toMatchObject({ theme: "ssheesh", darkTheme: "ssheesh", lightTheme: "daylight", accent: "#4eba65" });
+    // A theme or accent picked by hand stays, and Midnight picked again after the update stays.
+    expect(migrateSettings({ ...old, accent: "#b07cff" }, 3, false)).toMatchObject({ theme: "midnight", accent: "#b07cff" });
+    expect(migrateSettings({ ...old, theme: "graphite" }, 3, false)).toMatchObject({ theme: "graphite", accent: "#5b9dff" });
+    expect(migrateSettings(old, 4, false)).toEqual(old);
+  });
+
   it("still moves Macs to the GPU from version 1", () => {
     expect(migrateSettings({ gpuRendering: false }, 1, true).gpuRendering).toBe(true);
     expect(migrateSettings({ gpuRendering: false }, 2, true).gpuRendering).toBe(false);

@@ -1,4 +1,4 @@
-import { ArrowDownToLine, EyeOff, House, Minimize2, PanelLeft, PanelRight, RotateCw, Settings } from "lucide-react";
+import { ArrowDownToLine, EyeOff, House, Minimize2, PanelLeft, PanelRight, RotateCw } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn } from "../lib/format";
@@ -19,6 +19,9 @@ import { VitalsBar } from "./StatsPane";
 import { EdgeReveal } from "./EdgeReveal";
 import { useCustomTitleBar, WindowControls } from "./WindowControls";
 import { EnvChip, IconButton } from "./ui";
+import { RecipeAside } from "./Recipes";
+import { ServerToolButton } from "./Sidebar";
+import { SIDEBAR_GLYPHS } from "../lib/labels";
 
 function Tree({ node }: { node: LayoutNode }) {
   if (node.kind === "pane") return <PaneView id={node.id} />;
@@ -176,15 +179,20 @@ function Toolbar({ target }: { target: TargetRef | null }) {
         {tabsOnTop && <TabStrip target={target} />}
       </div>
 
-      <div className="flex items-center gap-0.5">
+      <div className="flex min-w-0 shrink items-center gap-0.5">
+        <RecipeAside />
         <StreamerBadge />
         <ZoomBadge target={target} />
         <UpdateButton />
-        {/* Settings live at the foot of the sidebar; up here only while it's away. */}
+        {/* The sidebar's foot (the looks at a server, Settings); up here only while it's away. */}
         {sideAway && (
-          <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => useStore.getState().openSettings()}>
-            <Settings size={15} />
-          </IconButton>
+          <>
+            <ServerToolButton tool="checkup" menuAt="below" size={15} />
+            <ServerToolButton tool="disk" menuAt="below" size={15} />
+            <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => useStore.getState().openSettings()}>
+              <SIDEBAR_GLYPHS.settings size={15} />
+            </IconButton>
+          </>
         )}
       </div>
       {controls && (

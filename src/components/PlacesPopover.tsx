@@ -361,7 +361,7 @@ function PlacesPopover({
                     className={cn(
                       "flex h-7 items-center gap-2.5 rounded-[7px] pl-2 text-[12.5px]",
                       row.pin ? "pr-1" : "pr-2",
-                      hi ? "bg-accent/90 text-white" : row.here ? "bg-ink/[0.07] text-fg" : "text-fg",
+                      hi ? "bg-accent/90 text-on-accent" : row.here ? "bg-ink/[0.07] text-fg" : "text-fg",
                     )}
                   >
                     <row.icon
@@ -370,7 +370,7 @@ function PlacesPopover({
                       className={cn("shrink-0", row.pin ? (hi ? "fill-current" : "fill-warn text-warn") : hi ? "opacity-90" : "text-fg-3")}
                     />
                     <span className={cn("min-w-0 flex-1 truncate", row.here && "font-medium")}>{row.label}</span>
-                    {row.hint && <span className={cn("max-w-[40%] shrink-0 truncate text-[11px]", hi ? "text-white/70" : "text-fg-3")}>{row.hint}</span>}
+                    {row.hint && <span className={cn("max-w-[40%] shrink-0 truncate text-[11px]", hi ? "text-on-accent/70" : "text-fg-3")}>{row.hint}</span>}
                     {row.pin && row.takeOut && (
                       <button
                         type="button"
@@ -382,7 +382,7 @@ function PlacesPopover({
                           e.stopPropagation();
                           row.takeOut?.run();
                         }}
-                        className={cn("size-5 shrink-0 items-center justify-center rounded-[5px] text-white/80 hover:bg-white/20 hover:text-white", hi ? "flex" : "hidden")}
+                        className={cn("size-5 shrink-0 items-center justify-center rounded-[5px] text-on-accent/80 hover:bg-on-accent/15 hover:text-on-accent", hi ? "flex" : "hidden")}
                       >
                         <X size={12} />
                       </button>

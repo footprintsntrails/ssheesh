@@ -4,7 +4,7 @@
 // before anything is saved.
 
 import { Check, CircleAlert, Copy, Eye, EyeOff, KeyRound, LoaderCircle, Lock, ShieldQuestion, TriangleAlert, Wand2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { parseAddress } from "../lib/address";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
@@ -13,7 +13,7 @@ import { useStore } from "../lib/store";
 import { toOpError, type ConnectionTest, type LocalAuth, type NewHost } from "../lib/types";
 import { LookIcon } from "./HostIcon";
 import { LookGrid, OwnHostColor } from "./LookPicker";
-import { Modal } from "./Overlays";
+import { Modal, useEscapeLayer } from "./Overlays";
 import { Button } from "./ui";
 
 const inputClass =
@@ -82,6 +82,11 @@ function Step({ state, title, children }: { state: StepState; title: string; chi
 
 function TestResult({ test, busy, onTrust }: { test: ConnectionTest | null; busy: boolean; onTrust: () => void }) {
   const toast = useStore((s) => s.toast);
+  // It shows up at the foot of a long form: brought into sight, not left below the fold.
+  const result = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (test) result.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [test]);
   if (busy && !test)
     return (
       <ul className="flex flex-col gap-2">
@@ -92,7 +97,7 @@ function TestResult({ test, busy, onTrust }: { test: ConnectionTest | null; busy
   const hk = test.hostKey;
   const install = "sudo apt install tmux";
   return (
-    <ul className="flex flex-col gap-2">
+    <ul ref={result} className="flex flex-col gap-2">
       <Step state={hk.kind === "unreachable" ? "bad" : "ok"} title={hk.kind === "unreachable" ? "Couldn't reach the server" : "The server answered"}>
         {hk.kind === "unreachable" && (hk.message || "Check the address and port, and that the server is on.")}
       </Step>
@@ -166,6 +171,9 @@ export function AddHostDialog() {
   const [image, setImage] = useState<string | null>(null);
   const [env, setEnv] = useState<EnvLabel | null>(null);
   const [iconsOpen, setIconsOpen] = useState(false);
+  // Esc closes the icon list first, not the whole form with what you typed.
+  const closeIcons = useCallback(() => setIconsOpen(false), []);
+  useEscapeLayer(iconsOpen, closeIcons);
   // Untouched, the server gets the icon it's detected to need and a color of its own.
   const [lookPicked, setLookPicked] = useState(false);
   const [local, setLocal] = useState<LocalAuth | null>(null);

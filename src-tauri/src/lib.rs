@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sshee_core::agents::{self, PaneInfo};
 use sshee_core::checkup::{self, Checkup};
 use sshee_core::disk::{self, DiskReport, Usage};
+use sshee_core::fixes;
 use sshee_core::containers::{self, ContainerList, Engine};
 use sshee_core::files::{self, DirListing, TextFile, Transfer};
 use sshee_core::metrics::{self, Metrics};
@@ -344,6 +345,14 @@ fn cancel_transfer(state: State<AppState>, id: String) {
     }
 }
 
+/// Where downloads go. Without a Downloads folder set up (a minimal Linux
+/// desktop) the system names none, or names the home folder: a server's
+/// `.bashrc` would then land live in it, so they go to ~/Downloads instead.
+fn downloads_dir() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    dirs::download_dir().filter(|d| *d != home).unwrap_or_else(|| home.join("Downloads"))
+}
+
 /// Saves a server file or folder into Downloads; returns the local path.
 #[tauri::command]
 async fn download_path(
@@ -355,8 +364,7 @@ async fn download_path(
     on_progress: Channel<TransferProgress>,
 ) -> Result<String, OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
-    let dest = dirs::download_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."));
-    run_transfer(&state, transfer_id, on_progress, move |xfer| files::download(&t, &env, &path, is_dir, &dest, &xfer)).await
+    run_transfer(&state, transfer_id, on_progress, move |xfer| files::download(&t, &env, &path, is_dir, &downloads_dir(), &xfer)).await
 }
 
 #[tauri::command]
@@ -567,6 +575,13 @@ async fn security_checkup(state: State<'_, AppState>, target: TargetSpec) -> Res
     blocking(move || checkup::run(&t, &env)).await
 }
 
+/// Runs a check-up fix or a cleanup without a terminal, unless it needs you.
+#[tauri::command]
+async fn run_fix(state: State<'_, AppState>, target: TargetSpec, command: String) -> Result<fixes::RunOutcome, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || fixes::run_unattended(&t, &env, &command)).await
+}
+
 /// Disks, Docker, the journal and safe cleanups.
 #[tauri::command]
 async fn disk_report(state: State<'_, AppState>, target: TargetSpec) -> Result<DiskReport, OpError> {
@@ -757,6 +772,7 @@ pub fn run() {
             show_snap_layouts,
             pane_info,
             security_checkup,
+            run_fix,
             disk_report,
             disk_biggest,
             session_cwd,

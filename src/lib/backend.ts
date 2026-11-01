@@ -2,7 +2,7 @@
 // Tauri (Rust); in a plain browser it's a demo backend with sample data, so
 // the interface can be designed and screenshotted without servers.
 
-import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage, TmuxScroll } from "./types";
+import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage, TmuxScroll, RunOutcome } from "./types";
 import { toOpError } from "./types";
 import type { Forward, TunnelState, WebAppScan } from "./types";
 
@@ -126,6 +126,8 @@ export interface Backend {
   foreground(target: TargetRef): Promise<{ sessionKey: string; command: string }[]>;
   /** A read-only security check of the server. */
   securityCheckup(target: TargetRef): Promise<Checkup>;
+  /** Runs a fix or cleanup without a terminal, unless it needs you. */
+  runFix(target: TargetRef, command: string): Promise<RunOutcome>;
   /** Disks, Docker, the journal and safe cleanups. */
   diskReport(target: TargetRef): Promise<DiskReport>;
   /** The biggest files and folders directly inside `path`, largest first. */
@@ -271,6 +273,7 @@ async function tauriBackend(): Promise<Backend> {
     foreground: (target) => call("foreground", { target }),
     showSnapLayouts: () => fire("show_snap_layouts", {}),
     securityCheckup: (target) => call("security_checkup", { target }),
+    runFix: (target, command) => call("run_fix", { target, command }),
     diskReport: (target) => call("disk_report", { target }),
     diskBiggest: (target, path) => call("disk_biggest", { target, path }),
     async pickFiles() {

@@ -32,8 +32,22 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
         y: Math.min(menu.y, window.innerHeight - r.height - 8),
       });
     }
+    // The keys are the menu's while it's open: arrows move through it, and
+    // nothing (Esc, Enter, Delete) reaches what's behind it, such as a file list.
+    el?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
     const close = (e: Event) => {
-      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e instanceof KeyboardEvent) {
+        const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+        const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+        if (step && buttons.length) buttons[(at + step + buttons.length) % buttons.length].focus();
+        else if (e.key === "Enter" && at >= 0) buttons[at].click();
+        else if (e.key !== "Escape" && e.key !== "Delete" && e.key !== "Backspace" && e.key !== "Tab") return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!step && e.key !== "Enter") onClose();
+        return;
+      }
       if (e.type === "mousedown" && ref.current?.contains(e.target as Node)) return;
       onClose();
     };
@@ -68,7 +82,7 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
             }}
             className={cn(
               "flex h-7 w-full items-center gap-2.5 rounded-[7px] px-2 text-left text-[12.5px] disabled:opacity-35",
-              it.danger ? "text-bad hover:bg-bad/15" : "text-fg hover:bg-accent/90 hover:text-white",
+              it.danger ? "text-bad hover:bg-bad/15" : "text-fg hover:bg-accent/90 hover:text-on-accent focus-visible:bg-accent/90 focus-visible:text-on-accent",
             )}
           >
             <it.icon size={13.5} strokeWidth={1.8} className={cn("shrink-0", it.iconClass ?? "opacity-80")} />

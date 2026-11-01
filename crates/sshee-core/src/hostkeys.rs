@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::ssh::{common_args, hide_console, ssh_program, SshEnv, SshTarget};
+use crate::ssh::{common_args, config_value, hide_console, ssh_config, ssh_program, SshEnv, SshTarget};
 use crate::OpError;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -54,20 +54,15 @@ struct Resolved {
 }
 
 fn resolve(t: &SshTarget) -> Result<Resolved, OpError> {
-    let mut cmd = Command::new(ssh_program());
-    cmd.args(common_args(t, &SshEnv::default())).arg("-G").arg("--").arg(&t.destination);
-    cmd.stdin(Stdio::null());
-    hide_console(&mut cmd);
-    let out = cmd.output().map_err(crate::ssh::spawn_error)?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let get = |key: &str| text.lines().find_map(|l| l.strip_prefix(key).map(|v| v.trim().to_string()));
-    let host = get("hostkeyalias ").or_else(|| get("hostname ")).unwrap_or_else(|| t.destination.clone());
-    let port = get("port ").and_then(|p| p.parse::<u16>().ok()).unwrap_or(22);
+    let config = ssh_config(t)?;
+    let get = |key: &str| config_value(&config, key);
+    let host = get("hostkeyalias").or_else(|| get("hostname")).unwrap_or_else(|| t.destination.clone());
+    let port = get("port").and_then(|p| p.parse::<u16>().ok()).unwrap_or(22);
     let spec = if port == 22 { host } else { format!("[{host}]:{port}") };
-    let files = get("userknownhostsfile ")
+    let files = get("userknownhostsfile")
         .map(|v| v.split_whitespace().map(expand_home).collect())
         .unwrap_or_else(|| vec![default_known_hosts()]);
-    let strict = get("stricthostkeychecking ").unwrap_or_else(|| "ask".into());
+    let strict = get("stricthostkeychecking").unwrap_or_else(|| "ask".into());
     Ok(Resolved { spec, files, strict })
 }
 
@@ -83,7 +78,7 @@ fn default_known_hosts() -> PathBuf {
 }
 
 fn keygen(args: &[&str]) -> Option<String> {
-    let mut cmd = Command::new("ssh-keygen");
+    let mut cmd = Command::new(crate::ssh::program("ssh-keygen"));
     cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null());
     hide_console(&mut cmd);
     let out = cmd.output().ok()?;
@@ -119,8 +114,9 @@ fn known_fingerprints(r: &Resolved) -> Vec<Fingerprint> {
 }
 
 /// Asks the server for its keys through ssh, with the user's config, and
-/// returns the known_hosts lines ssh wrote for them.
-fn fetch_keys(t: &SshTarget, scratch: &Path) -> Result<Vec<String>, OpError> {
+/// returns the known_hosts lines ssh wrote for them: only plain lines for
+/// `spec` itself, never a marker (`@cert-authority`) or a pattern (`*`).
+fn fetch_keys(t: &SshTarget, spec: &str, scratch: &Path) -> Result<Vec<String>, OpError> {
     let _ = std::fs::remove_file(scratch);
     let mut cmd = Command::new(ssh_program());
     // ssh keeps the first value it sees for an option, so these go first:
@@ -128,7 +124,8 @@ fn fetch_keys(t: &SshTarget, scratch: &Path) -> Result<Vec<String>, OpError> {
     cmd.args(["-o", "BatchMode=yes", "-o", "PreferredAuthentications=none", "-o", "ControlPath=none"])
         .args(["-o", "StrictHostKeyChecking=accept-new", "-o", "GlobalKnownHostsFile=/dev/null"])
         .arg("-o")
-        .arg(format!("UserKnownHostsFile={}", scratch.display()))
+        // Quoted: ssh splits the value at spaces, as in "C:\\Users\\John Smith".
+        .arg(format!("UserKnownHostsFile=\"{}\"", scratch.display()))
         .args(common_args(t, &SshEnv::default()))
         .args(["-T", "--"])
         .arg(&t.destination)
@@ -136,12 +133,9 @@ fn fetch_keys(t: &SshTarget, scratch: &Path) -> Result<Vec<String>, OpError> {
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     hide_console(&mut cmd);
     let out = cmd.output().map_err(crate::ssh::spawn_error)?;
-    let lines: Vec<String> = std::fs::read_to_string(scratch)
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(str::to_string)
-        .collect();
+    // `-F` finds the lines for this host, hashed or not, between "# Host … found" notes.
+    let found = keygen(&["-F", spec, "-f", &scratch.display().to_string()]).unwrap_or_default();
+    let lines: Vec<String> = found.lines().filter(|l| is_key_for_one_host(l)).map(str::to_string).collect();
     let _ = std::fs::remove_file(scratch);
     if lines.is_empty() {
         return Err(OpError::from_ssh(out.status.code(), &String::from_utf8_lossy(&out.stderr)));
@@ -158,9 +152,27 @@ fn fingerprints_of(lines: &[String], scratch: &Path) -> Vec<Fingerprint> {
     fps
 }
 
-fn scratch_file(host_id: &str) -> PathBuf {
-    let clean: String = host_id.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    std::env::temp_dir().join(format!("ssheesh-hostkey-{}-{clean}", std::process::id()))
+/// A known_hosts line naming hosts outright: no comment, no `@` marker, no
+/// wildcard or negated pattern that would vouch for other servers too.
+fn is_key_for_one_host(line: &str) -> bool {
+    let line = line.trim();
+    let hosts = line.split_whitespace().next().unwrap_or_default();
+    !line.is_empty() && !line.starts_with(['#', '@']) && !hosts.contains(['*', '?', '!'])
+}
+
+/// Where a server's keys are fetched to: ~/.sshee/hostkeys, a folder only
+/// you can open. The system temp folder is /tmp on Linux, shared with every
+/// user, any of whom could create a file under this name first.
+fn scratch_file(host_id: &str) -> Result<PathBuf, OpError> {
+    let dir = dirs::home_dir().ok_or_else(|| OpError::failed("Couldn't find your home folder."))?.join(".sshee").join("hostkeys");
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let clean: String = host_id.chars().filter(char::is_ascii_alphanumeric).collect();
+    Ok(dir.join(format!("{}-{clean}", std::process::id())))
 }
 
 impl PendingKeys {
@@ -175,12 +187,16 @@ impl PendingKeys {
         if !old.is_empty() && !changed {
             return Ok(HostKeyCheck::Known);
         }
-        let scratch = scratch_file(host_id);
-        let lines = match fetch_keys(t, &scratch) {
+        let scratch = scratch_file(host_id)?;
+        let lines = match fetch_keys(t, &r.spec, &scratch) {
             Ok(l) => l,
             Err(e) => return Ok(HostKeyCheck::Unreachable { message: e.message }),
         };
         let new = fingerprints_of(&lines, &scratch);
+        // Nothing to compare by eye, nothing to trust.
+        if new.is_empty() {
+            return Ok(HostKeyCheck::Unreachable { message: "Couldn't read the key the server presented.".into() });
+        }
         self.0.lock().unwrap().insert(host_id.to_string(), lines);
         Ok(if old.is_empty() { HostKeyCheck::Unknown { fingerprints: new } } else { HostKeyCheck::Changed { old, new } })
     }
@@ -230,5 +246,18 @@ mod tests {
         assert_eq!(fps.len(), 2);
         assert_eq!(fps[0], Fingerprint { kind: "ED25519".into(), sha256: "SHA256:abcDEF123".into() });
         assert_eq!(fps[1].kind, "RSA");
+    }
+
+    #[test]
+    fn trusts_only_lines_for_one_host() {
+        assert!(is_key_for_one_host("web.example ssh-ed25519 AAAAC3Nza"));
+        assert!(is_key_for_one_host("[web.example]:2222 ssh-ed25519 AAAAC3Nza"));
+        assert!(is_key_for_one_host("|1|c2FsdA==|aGFzaA== ssh-ed25519 AAAAC3Nza"));
+        assert!(!is_key_for_one_host("# Host web.example found: line 1"));
+        assert!(!is_key_for_one_host("@cert-authority * ssh-ed25519 AAAAC3Nza"));
+        assert!(!is_key_for_one_host("@revoked web.example ssh-ed25519 AAAAC3Nza"));
+        assert!(!is_key_for_one_host("* ssh-ed25519 AAAAC3Nza"));
+        assert!(!is_key_for_one_host("web.example,!other,*.example ssh-ed25519 AAAAC3Nza"));
+        assert!(!is_key_for_one_host("   "));
     }
 }

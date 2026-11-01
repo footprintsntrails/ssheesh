@@ -6,9 +6,9 @@ import { useWindowFrame } from "./components/WindowControls";
 import { WhatsNew } from "./components/WhatsNew";
 import { UploadDialog, useUploadAsk } from "./components/UploadDialog";
 import { findTerminal } from "./lib/terminals";
-import { shellQuote } from "./lib/format";
+import { shellOf, typedQuote } from "./lib/format";
 import { EdgeReveal } from "./components/EdgeReveal";
-import { CommandPalette, ConfirmDialog, Toasts } from "./components/Overlays";
+import { CommandPalette, ConfirmDialog, dialogOpen, Toasts } from "./components/Overlays";
 import { Sidebar } from "./components/Sidebar";
 import { EnvStripe, Workspace } from "./components/Workspace";
 import { backend } from "./lib/backend";
@@ -34,6 +34,9 @@ import { restoreTunnels } from "./lib/tunnels";
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Behind a dialog nothing opens, closes or switches; its keys are its own.
+      // Streamer mode still toggles: hiding names can't wait for a dialog to close.
+      if (dialogOpen() && matchShortcut(e) !== "streamer") return;
       const step = tabStep(e);
       if (step) {
         e.preventDefault();
@@ -121,8 +124,14 @@ function useFileDrop() {
         } else if (pane?.kind === "terminal" && pane.target?.kind === "host") {
           useUploadAsk.getState().ask({ target: pane.target, paths: e.paths, sessionKey: pane.sessionKey });
         } else if (pane?.kind === "terminal") {
-          // This computer's terminal: type the paths, like any terminal app does.
-          backend.writeSession(pane.id, `${e.paths.map(shellQuote).join(" ")} `);
+          // This computer's terminal: type the paths, like any terminal app does,
+          // unless a name would act as keys there.
+          const typed = e.paths.map((p) => typedQuote(p, shellOf({ kind: "local" }))).filter((t) => t !== null);
+          if (typed.length < e.paths.length) {
+            s.toast({ tone: "error", title: "Can't type that name", body: "A file's name has control characters in it, which the terminal would take as keystrokes." });
+            return;
+          }
+          backend.writeSession(pane.id, `${typed.join(" ")} `);
           findTerminal(pane.id)?.focus();
         } else {
           s.toast({ tone: "info", title: "Drop files on a terminal or a file manager", body: "On a server they're uploaded; you pick the folder." });

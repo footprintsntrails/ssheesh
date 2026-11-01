@@ -157,6 +157,13 @@ export interface Metrics {
 export type ErrorCode = "auth" | "hostKey" | "network" | "notFound" | "exists" | "tooLarge" | "unsupported" | "cancelled" | "failed";
 
 /** One finding of the security check-up. */
+/** What became of a fix or cleanup SSHeesh ran for you. */
+export type RunOutcome =
+  | { kind: "done"; output: string }
+  | { kind: "failed"; output: string; code: number | null }
+  /** It has to run in a terminal, where you can answer it; `ask` says what it wants. */
+  | { kind: "needsYou"; ask: string };
+
 export interface Check {
   /** "password-login", "root-login", "open-ports", "firewall", "docker-ports", "auto-updates", "brute-force", "reboot". */
   id: string;

@@ -4,7 +4,9 @@ import type { ITheme } from "@xterm/xterm";
 import { contrast, isLightColor, over, parseHex, toHex, type Rgba } from "./color";
 import { isMac } from "./keys";
 
-export type BuiltInThemeId = "midnight" | "graphite" | "oled" | "daylight";
+export type BuiltInThemeId = "ssheesh" | "midnight" | "graphite" | "oled" | "daylight";
+/** What a new install looks like, and what an unknown theme falls back to. */
+export const DEFAULT_THEME: BuiltInThemeId = "ssheesh";
 /** One made in Settings → Appearance: "custom-" and a random id. */
 export type CustomThemeId = `custom-${string}`;
 export type AppThemeId = BuiltInThemeId | CustomThemeId;
@@ -20,6 +22,7 @@ export interface ThemeInfo {
 }
 
 export const APP_THEMES: (ThemeInfo & { id: BuiltInThemeId })[] = [
+  { id: "ssheesh", name: "SSHeesh Default", window: "#1f1e1d", canvas: "#191817", fg: "#faf9f5" },
   { id: "midnight", name: "Midnight", window: "#0f1013", canvas: "#0a0b0d", fg: "#eceef1" },
   { id: "graphite", name: "Graphite", window: "#161616", canvas: "#101010", fg: "#ededed" },
   { id: "oled", name: "OLED", window: "#000000", canvas: "#000000", fg: "#f2f2f2" },
@@ -79,11 +82,15 @@ export const THEME_COLORS: { key: ThemeColorKey; cssVar: string; group: string; 
   { key: "fileArchive", cssVar: "--ui-file-archive", group: "Files", label: "Archives", hint: "Zip, tar and other packed files.", alpha: true },
 ];
 
-const DARK_STATUS = { ok: "#3dd68c", warn: "#f5b841", bad: "#ff6159" };
+const DARK_STATUS = { ok: "#4eba65", warn: "#f5b841", bad: "#ff6159" };
 const DARK_FILES = { fileCode: "#c792eacc", fileImage: "#f5c451cc", fileArchive: "#ff9f6bcc" };
 
 /** The built-in themes' colors, as index.css sets them. A test keeps the two in step. */
 export const BUILT_IN_COLORS: Record<BuiltInThemeId, Record<ThemeColorKey, string>> = {
+  ssheesh: {
+    window: "#1f1e1d", canvas: "#191817", raised: "#2b2a27", ink: "#ffffff", fg: "#faf9f5", fg2: "#c2c0b6", fg3: "#9c9a92",
+    ok: "#4eba65", warn: "#ffc107", bad: "#ff6b80", glass: "#2f2e2b", fileCode: "#b1b9f9cc", fileImage: "#e8b04bcc", fileArchive: "#d77757cc",
+  },
   midnight: {
     window: "#0f1013", canvas: "#0a0b0d", raised: "#1a1c20", ink: "#ffffff", fg: "#eceef1", fg2: "#a2a8b1", fg3: "#8a919b",
     ...DARK_STATUS, glass: "#1f2126", ...DARK_FILES,
@@ -138,7 +145,7 @@ const solid = (hex: string) => parseHex(hex) ?? { r: 0, g: 0, b: 0, a: 1 };
  * shading" follows the window (white on dark, near-black on light) until set.
  */
 export function themeColors(t: CustomTheme): Record<ThemeColorKey, string> {
-  const colors = { ...(BUILT_IN_COLORS[t.base] ?? BUILT_IN_COLORS.midnight) };
+  const colors = { ...(BUILT_IN_COLORS[t.base] ?? BUILT_IN_COLORS[DEFAULT_THEME]) };
   for (const { key, alpha } of THEME_COLORS) {
     const c = parseHex(t.colors?.[key] ?? "");
     if (c) colors[key] = toHex(alpha ? c : { ...c, a: 1 });
@@ -168,7 +175,7 @@ export function customThemeVars(t: CustomTheme): Record<string, string> {
   return vars;
 }
 
-/** A built-in or custom theme by id, as the pickers show it. Unknown ids fall back to Midnight. */
+/** A built-in or custom theme by id, as the pickers show it. Unknown ids fall back to the default. */
 export function themeInfo(id: string, list = customSource()): ThemeInfo {
   const custom = findCustomTheme(id, list);
   if (!custom) return APP_THEMES.find((t) => t.id === id) ?? APP_THEMES[0];
@@ -238,11 +245,15 @@ export function themeFromJson(text: string): { theme: Omit<CustomTheme, "id"> } 
 
 // No orange, pink, red, yellow or green: they would read as a warning or a status.
 export const ACCENTS: { name: string; value: string }[] = [
+  // The >_< logo's green, as in the welcome; SSHeesh Default is drawn around it.
+  { name: "Green", value: "#4eba65" },
   { name: "Blue", value: "#5b9dff" },
   { name: "Indigo", value: "#7c83ff" },
   { name: "Violet", value: "#b07cff" },
   { name: "Mint", value: "#2bc4b4" },
   { name: "Silver", value: "#9aa3ad" },
+  // Claude Code's orange.
+  { name: "Terracotta", value: "#d77757" },
 ];
 
 /** The scheme with your own background and text color; the rest follows the app theme. */
@@ -272,7 +283,7 @@ const NIGHT: ITheme = {
   selectionInactiveBackground: "rgba(255, 255, 255, 0.12)",
   black: "#1c1e22",
   red: "#ff6b6b",
-  green: "#3dd68c",
+  green: "#4eba65",
   yellow: "#f5c451",
   blue: "#5b9dff",
   magenta: "#c792ea",
@@ -280,7 +291,7 @@ const NIGHT: ITheme = {
   white: "#c9cdd3",
   brightBlack: "#5f656e",
   brightRed: "#ff8a85",
-  brightGreen: "#6be3a8",
+  brightGreen: "#74c98a",
   brightYellow: "#ffd479",
   brightBlue: "#86b6ff",
   brightMagenta: "#dbaaf7",

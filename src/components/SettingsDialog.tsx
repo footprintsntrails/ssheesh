@@ -37,6 +37,7 @@ import { useStore } from "../lib/store";
 import {
   ACCENTS,
   APP_THEMES,
+  DEFAULT_THEME,
   findCustomTheme,
   fontStack,
   isBuiltInTheme,
@@ -60,7 +61,7 @@ import { ShortcutsEditor } from "./ShortcutsEditor";
 import { ThemeEditor, ThemeImport } from "./ThemeEditor";
 import { ColorButton, OwnAccent } from "./ColorPicker";
 import { useEscapeLayer } from "./Overlays";
-import { Button, Logo, Spinner } from "./ui";
+import { Button, Logo, PIXEL_LOGO, PIXEL_LOGO_COLORS, Spinner } from "./ui";
 
 const REPO = "https://github.com/footprintsntrails/ssheesh";
 
@@ -153,25 +154,22 @@ const WELCOME_PARTS: [WelcomePart, string][] = [
   ["status", "Containers and updates"],
 ];
 
-/** The SSHeesh logo as the welcome draws it, one cell per pixel. */
-const WELCOME_LOGO = [".TTTTTTTTT.", "TTTTTTTTTTT", "BBBBBBBBBBB", "BEBBBBBBBEB", "BBEBBBBBEBB", "BEBBBBBBBEB", "BBBBGGGBBBB", ".BBBBBBBBB."];
-const WELCOME_COLORS: Record<string, string> = { T: "#2f3136", B: "#232428", E: "#f2f0ea", G: "#3dd68c" };
 
 /** What SSHeesh's welcome will look like, with made-up facts. */
 function WelcomePreview({ s }: { s: Settings }) {
   const has = (p: WelcomePart) => s.welcomeParts.includes(p);
   const bar = (pct: number) => (
     <span className="inline-flex h-[2px] w-[110px] translate-y-[-3px] rounded-full bg-[#2b3038]">
-      <span className="h-full rounded-full bg-[#3dd68c]" style={{ width: `${pct}%` }} />
+      <span className="h-full rounded-full bg-[#4eba65]" style={{ width: `${pct}%` }} />
     </span>
   );
   return (
     <div className="flex gap-5 overflow-hidden rounded-[10px] bg-[#0a0b0d] px-4 py-3.5 font-mono text-[11px] leading-[17px] text-[#d8dce2] ring-1 ring-ink/[0.08]">
       {has("logo") && (
         <div className="grid shrink-0 grid-cols-[repeat(11,9px)] grid-rows-[repeat(8,9px)] self-start pt-0.5" aria-hidden>
-          {WELCOME_LOGO.flatMap((row, r) =>
+          {PIXEL_LOGO.flatMap((row, r) =>
             [...row].map((c, x) => (
-              <span key={`${r}-${x}`} className="flex items-center justify-center text-[6px] text-[#5c5f67]" style={{ background: WELCOME_COLORS[c] }}>
+              <span key={`${r}-${x}`} className="flex items-center justify-center text-[6px] text-[#5c5f67]" style={{ background: PIXEL_LOGO_COLORS[c] }}>
                 {r === 1 && x >= 1 && x <= 3 ? "•" : ""}
               </span>
             )),
@@ -199,7 +197,7 @@ function WelcomePreview({ s }: { s: Settings }) {
         )}
         {has("status") && (
           <div className="mt-1.5 truncate">
-            <span className="text-[#3dd68c]">▲</span> 12 containers <span className="text-[#7d8590]">↑</span> 7 updates
+            <span className="text-[#4eba65]">▲</span> 12 containers <span className="text-[#7d8590]">↑</span> 7 updates
           </div>
         )}
         <div className="mt-1.5 truncate text-[#7d8590]">23 updates can be applied immediately.</div>
@@ -260,7 +258,7 @@ function Appearance({ s, set, reset }: SectionProps) {
   };
   // A copy of the theme you're on, to change. It's in use right away, so edits show live.
   const duplicate = () => {
-    const base = custom?.base ?? (isBuiltInTheme(s.theme) ? s.theme : "midnight");
+    const base = custom?.base ?? (isBuiltInTheme(s.theme) ? s.theme : DEFAULT_THEME);
     const name = custom ? `${custom.name} copy` : `My ${themeInfo(s.theme).name}`;
     const t: CustomTheme = { id: newCustomThemeId(), name, base, colors: { ...custom?.colors } };
     add(t);
@@ -1248,7 +1246,7 @@ export function SettingsDialog() {
             </button>
           ))}
         </nav>
-        {/* Outside the scrolling section, so it stays put. */}
+        {/* Outside the scrolling section, so it stays put; the section keeps clear of it. */}
         <button
           onClick={close}
           aria-label="Close settings"
@@ -1256,7 +1254,7 @@ export function SettingsDialog() {
         >
           <X size={15} />
         </button>
-        <div key={visit} className="relative min-w-0 flex-1 overflow-y-auto px-7 py-6">
+        <div key={visit} className="relative min-w-0 flex-1 overflow-y-auto py-6 pr-14 pl-7">
           {section === "appearance" && <Appearance {...props} />}
           {section === "terminal" && <Terminal {...props} />}
           {section === "layout" && <Layout {...props} />}

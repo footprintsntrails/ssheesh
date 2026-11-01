@@ -1,11 +1,10 @@
-import { Activity, BookOpen, Cable, HardDrive, ShieldCheck, SquareTerminal, X } from "lucide-react";
+import { Activity, BookOpen, Cable, SquareTerminal, X } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { bytes, cn, monthName, percent, rate, uptime } from "../lib/format";
 import { useMetrics, type Sample } from "../lib/metrics";
 import { useNames } from "../lib/privacy";
 import { useStore, type PaneState } from "../lib/store";
 import type { Metrics, OpError, TargetRef } from "../lib/types";
-import { openServerTool } from "./ServerTools";
 import { openRecipes } from "./Recipes";
 import { openTunnels } from "./Tunnels";
 import { Button, IconButton, Spinner } from "./ui";
@@ -149,12 +148,6 @@ export function StatsPane({ pane, target }: { pane: PaneState; target: TargetRef
       </p>
       {target.kind === "host" && (
         <div className="flex flex-wrap gap-1.5 px-3 pt-2 pb-3">
-          <Button size="sm" variant="ghost" onClick={() => openServerTool("checkup", target)}>
-            <ShieldCheck size={13} /> Security check-up
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => openServerTool("disk", target)}>
-            <HardDrive size={13} /> What's using the disk
-          </Button>
           <Button size="sm" variant="ghost" onClick={() => openTunnels(target)}>
             <Cable size={13} /> Web apps and tunnels
           </Button>

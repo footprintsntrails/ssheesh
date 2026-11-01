@@ -1,4 +1,4 @@
-import { Box, ChevronRight, Circle, Copy, EyeOff, House, KeyRound, Palette, Layers, LayoutDashboard, Play, Plus, RotateCw, ScrollText, Search, Settings, Square, SquareTerminal, Trash } from "lucide-react";
+import { Box, ChevronRight, Circle, Copy, EyeOff, House, KeyRound, Palette, Layers, LayoutDashboard, Play, Plus, RotateCw, ScrollText, Server, Square, SquareTerminal, Trash } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
@@ -6,7 +6,7 @@ import { shortcutLabel } from "../lib/keys";
 import { compactSidebar, useSettings } from "../lib/settings";
 import { currentTarget, hostAddress, machineSummary, showingHome, useMachine, useStore } from "../lib/store";
 import { useNames } from "../lib/privacy";
-import { ENV_LABELS, ENV_ORDER, useEnv, useLabels, useVisibleHosts } from "../lib/labels";
+import { ENV_LABELS, ENV_ORDER, SIDEBAR_GLYPHS, useEnv, useLabels, useVisibleHosts } from "../lib/labels";
 import { sameTarget, targetKey, toOpError, type Container, type ContainerList, type Host, type OpError, type TargetRef } from "../lib/types";
 import { ContextMenu, type Menu, type MenuItem } from "./ContextMenu";
 import { HostIcon } from "./HostIcon";
@@ -20,6 +20,7 @@ import { toolItems } from "./Tabs";
 import { openInNewWindow } from "../lib/windows";
 import { forgetHostTunnels } from "../lib/tunnels";
 import { useCustomTitleBar, WindowControls } from "./WindowControls";
+import { openServerTool } from "./ServerTools";
 
 const RANK: Record<Health, number> = { idle: 0, busy: 1, live: 2, warn: 3, bad: 4 };
 
@@ -453,13 +454,65 @@ function HomeButton({ narrow }: { narrow: boolean }) {
   );
 }
 
-/** Settings, at the foot of the sidebar like most apps keep them. Also a shortcut away, and in search. */
-function SettingsButton({ narrow }: { narrow: boolean }) {
-  const openSettings = useStore((s) => s.openSettings);
+/** Servers with files or a terminal open, the one you're looking at first. */
+function serversInUse(): TargetRef[] {
+  const s = useStore.getState();
+  const focused = s.focused ? s.panes[s.focused]?.target : undefined;
+  const found = new Map<string, TargetRef>();
+  if (focused?.kind === "host") found.set(targetKey(focused), focused);
+  for (const p of Object.values(s.panes)) {
+    if ((p.kind === "terminal" || p.kind === "files") && p.target?.kind === "host") found.set(targetKey(p.target), p.target);
+  }
+  return [...found.values()];
+}
+
+const SERVER_TOOLS = {
+  checkup: { label: "Security check-up", Icon: SIDEBAR_GLYPHS.checkup },
+  disk: { label: "Free up disk space", Icon: SIDEBAR_GLYPHS.disk },
+};
+
+/**
+ * A look at a server, from the foot of the sidebar or the top bar: the
+ * server you have files or a terminal open on, or with several, the one you
+ * pick. `menuAt` is where that pick opens, beside or under the button.
+ */
+export function ServerToolButton({ tool, menuAt, size = 19, className }: { tool: "checkup" | "disk"; menuAt: "right" | "left" | "below"; size?: number; className?: string }) {
+  const names = useNames();
+  const [pick, setPick] = useState<{ menu: Menu; items: MenuItem[] } | null>(null);
+  const { label, Icon } = SERVER_TOOLS[tool];
+  const open = (e: MouseEvent<HTMLButtonElement>) => {
+    const s = useStore.getState();
+    const inUse = serversInUse();
+    const list = inUse.length ? inUse : s.hosts.map((h): TargetRef => ({ kind: "host", hostId: h.id }));
+    if (!list.length) return s.toast({ tone: "info", title: "Add a server first", body: `${label} looks at one of your servers.` });
+    if (list.length === 1) return openServerTool(tool, list[0]);
+    const r = e.currentTarget.getBoundingClientRect();
+    const at = menuAt === "right" ? { x: r.right + 6, y: r.top } : menuAt === "left" ? { x: r.left - 236, y: r.top } : { x: r.right - 230, y: r.bottom + 6 };
+    setPick({ menu: at, items: list.map((t) => ({ label: names.target(t), icon: Server, run: () => openServerTool(tool, t) })) });
+  };
   return (
-    <div className={cn("flex shrink-0 pt-1 pb-2.5", narrow ? "justify-center" : "px-2.5")}>
+    <>
+      <IconButton label={label} onClick={open} active={!!pick} className={className}>
+        <Icon size={size} />
+      </IconButton>
+      {pick && <ContextMenu menu={pick.menu} items={pick.items} onClose={() => setPick(null)} />}
+    </>
+  );
+}
+
+/**
+ * The foot of the sidebar: the two looks at a server, then Settings, where
+ * most apps keep them. Settings is also a shortcut away, and in search.
+ */
+function SidebarFoot({ narrow, side }: { narrow: boolean; side: "left" | "right" }) {
+  const openSettings = useStore((s) => s.openSettings);
+  const menuAt = side === "left" ? "right" : "left";
+  return (
+    <div className={cn("flex shrink-0 gap-1 pt-1 pb-2.5", narrow ? "flex-col items-center" : "px-2.5")}>
+      <ServerToolButton tool="checkup" menuAt={menuAt} className="size-10 rounded-[10px]" />
+      <ServerToolButton tool="disk" menuAt={menuAt} className="size-10 rounded-[10px]" />
       <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => openSettings()} className="size-10 rounded-[10px]">
-        <Settings size={20} strokeWidth={1.8} />
+        <SIDEBAR_GLYPHS.settings size={20} />
       </IconButton>
     </div>
   );
@@ -546,12 +599,12 @@ export function Sidebar() {
         <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pb-2">
           <HomeButton narrow />
           <IconButton label={`Search (${shortcutLabel("palette")})`} onClick={() => setPaletteOpen(true)} className="size-10 rounded-[10px]">
-            <Search size={17} strokeWidth={1.9} />
+            <SIDEBAR_GLYPHS.search size={18} />
           </IconButton>
           <div className="my-1 h-px w-6 shrink-0 bg-ink/[0.09]" />
           {rows}
           <IconButton label="Add server" onClick={() => setAddHostOpen(true)} className="size-10 shrink-0 rounded-[10px]">
-            <Plus size={17} strokeWidth={1.9} />
+            <SIDEBAR_GLYPHS.add size={18} />
           </IconButton>
         </nav>
       ) : (
@@ -559,7 +612,7 @@ export function Sidebar() {
           <div className="flex items-center gap-1 px-2.5 pb-2">
             <HomeButton narrow={false} />
             <IconButton label={`Search (${shortcutLabel("palette")})`} onClick={() => setPaletteOpen(true)} className="size-8 rounded-[8px]">
-              <Search size={15} strokeWidth={2} />
+              <SIDEBAR_GLYPHS.search size={16} />
             </IconButton>
           </div>
 
@@ -568,7 +621,7 @@ export function Sidebar() {
             <div className="mt-1 flex h-6 items-center justify-between pr-0.5 pl-2">
               <h2 className="text-[11px] font-semibold text-fg-2">Servers</h2>
               <IconButton label="Add server" onClick={() => setAddHostOpen(true)} className="size-5 rounded-[5px]">
-                <Plus size={14} strokeWidth={2} />
+                <SIDEBAR_GLYPHS.add size={14} />
               </IconButton>
             </div>
             <div className="mt-0.5 flex flex-col gap-px">{rows}</div>
@@ -580,7 +633,7 @@ export function Sidebar() {
           </nav>
         </>
       )}
-      <SettingsButton narrow={narrow} />
+      <SidebarFoot narrow={narrow} side={side} />
     </aside>
   );
 }

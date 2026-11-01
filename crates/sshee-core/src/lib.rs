@@ -10,6 +10,7 @@ pub mod containers;
 pub mod disk;
 pub mod error;
 pub mod files;
+pub mod fixes;
 pub mod hostkeys;
 pub mod hosts;
 pub mod identity;

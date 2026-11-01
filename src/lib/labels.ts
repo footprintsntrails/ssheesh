@@ -16,6 +16,7 @@ import {
   Desktop,
   Envelope,
   FilmSlate,
+  GearSix,
   Flask,
   GameController,
   GitBranch,
@@ -26,8 +27,10 @@ import {
   Key,
   Laptop,
   LockKey,
+  MagnifyingGlass,
   MusicNotes,
   Network,
+  Plus,
   Robot,
   RocketLaunch,
   SecurityCamera,
@@ -81,6 +84,15 @@ function glyph(icon: PhosphorIcon, pixel: string): ServerGlyph {
 
 /** This computer, in the sidebar and wherever servers are listed. */
 export const LOCAL_GLYPH = glyph(Laptop, "local");
+
+/** The sidebar's own buttons, in the same pack as the server icons beside them. */
+export const SIDEBAR_GLYPHS = {
+  search: glyph(MagnifyingGlass, "search"),
+  checkup: glyph(ShieldCheck, "shield"),
+  disk: glyph(HardDrive, "drive"),
+  settings: glyph(GearSix, "gear"),
+  add: glyph(Plus, "plus"),
+};
 
 /** Icons you can give a server, so it's easy to spot, also in the narrow sidebar. */
 export const HOST_ICONS: Record<string, { icon: ServerGlyph; name: string }> = {

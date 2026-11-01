@@ -7,7 +7,8 @@ import type { CSSProperties } from "react";
 import { cn, percent, uptime } from "../lib/format";
 import { useMetrics } from "../lib/metrics";
 import type { EnvLabel } from "../lib/labels";
-import type { TargetRef } from "../lib/types";
+import { targetKey, type TargetRef } from "../lib/types";
+import { useStore } from "../lib/store";
 import { memFraction, Sparkline } from "./StatsPane";
 import { EnvChip, type Health } from "./ui";
 
@@ -17,7 +18,9 @@ const FULL = 0.9;
 interface Load {
   cpu: number;
   mem: number;
+  /** The fullest disk, and its mount ("/" is called just "Disk", as in the vitals bar). */
   disk: number;
+  diskLabel: string;
   history: number[];
   uptimeSecs: number;
   warning: string | null;
@@ -32,9 +35,10 @@ function useLoad(target: TargetRef): Load | null {
     return !a || used > a.used ? { mount: d.mount, used } : a;
   }, null);
   const disk = fullest?.used ?? 0;
+  const diskLabel = !fullest || fullest.mount === "/" ? "Disk" : `Disk ${fullest.mount}`;
   const warning =
     disk >= FULL
-      ? `${fullest?.mount === "/" ? "Disk" : fullest?.mount} ${percent(disk)} full`
+      ? `${diskLabel} ${percent(disk)} full`
       : mem >= FULL
         ? `Memory ${percent(mem)} used`
         : null;
@@ -42,6 +46,7 @@ function useLoad(target: TargetRef): Load | null {
     cpu: samples[samples.length - 1]?.cpu ?? 0,
     mem,
     disk,
+    diskLabel,
     history: samples.map((s) => s.cpu),
     uptimeSecs: m.uptimeSecs,
     warning,
@@ -70,7 +75,7 @@ function Warning({ text, className }: { text: string; className?: string }) {
 /** CPU and memory under a connected server's name in the list. */
 export function LoadLine({ target }: { target: TargetRef }) {
   const load = useLoad(target);
-  const summary = load && `CPU ${percent(load.cpu)} · Memory ${percent(load.mem)} · Disk ${percent(load.disk)}`;
+  const summary = load && `CPU ${percent(load.cpu)} · Memory ${percent(load.mem)} · ${load.diskLabel} ${percent(load.disk)}`;
   return (
     <span title={summary ?? undefined} className="flex flex-col gap-1.5 pb-2 pl-[23px] text-[10.5px] leading-none text-fg-3">
       <span className="flex items-center gap-1.5">
@@ -170,7 +175,7 @@ function CardLoad({ target }: { target: TargetRef }) {
   const rows: [string, number][] = [
     ["CPU", load?.cpu ?? 0],
     ["Memory", load?.mem ?? 0],
-    ["Disk", load?.disk ?? 0],
+    [load?.diskLabel ?? "Disk", load?.disk ?? 0],
   ];
   return (
     <>
@@ -216,8 +221,16 @@ export function RailCard({
     ...(side === "left" ? { left: at.right + 10 } : { right: window.innerWidth - at.left + 10 }),
   };
   const open = `${panes} ${panes === 1 ? "pane" : "panes"} open`;
+  // A terminal that's open but hasn't connected yet (restored at start) still counts.
+  const terminals = useStore((s) => Object.values(s.panes).filter((p) => p.kind === "terminal" && !!p.target && targetKey(p.target) === targetKey(target)).length);
   const status =
-    health === "live" ? `${STATUS.live} · ${open}` : health === "idle" && panes > 0 ? `${open}, no terminal. Click for one.` : STATUS[health];
+    health === "live"
+      ? `${STATUS.live} · ${open}`
+      : health === "idle" && terminals > 0
+        ? `${open}. The terminal connects when you open it.`
+        : health === "idle" && panes > 0
+          ? `${open}, no terminal. Click for one.`
+          : STATUS[health];
   return (
     <div role="tooltip" style={pos} className="glass pointer-events-none fixed z-50 w-[228px] animate-fade-in rounded-[11px] px-3.5 py-3">
       <div className="flex items-center gap-2">

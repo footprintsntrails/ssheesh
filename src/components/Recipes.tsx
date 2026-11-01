@@ -47,7 +47,6 @@ import {
   type RecipeContext,
   type Step,
 } from "../lib/recipes";
-import { compactTabbar, useSettings } from "../lib/settings";
 import { useStore } from "../lib/store";
 import { targetKey, type Host, type TargetRef } from "../lib/types";
 import { Modal } from "./Overlays";
@@ -97,13 +96,20 @@ const close = () => useRecipes.setState({ open: null, aside: false });
 const show = (recipe: string | null) => useRecipes.setState((s) => ({ open: s.open && { ...s.open, recipe }, aside: false }));
 const recipeKey = (t: TargetRef, id: string) => `${targetKey(t)}|${id}`;
 
-/** Always mounted; shows the dialog, or the bar while it's stepped aside. */
+/** The recipe stepped aside, in the top bar: where the tabs leave room, never over them. */
+export function RecipeAside() {
+  const open = useRecipes((s) => s.open);
+  const aside = useRecipes((s) => s.aside);
+  const recipe = recipeById(open?.recipe);
+  return open && aside && recipe ? <AsideBar target={open.target} recipe={recipe} /> : null;
+}
+
+/** Always mounted; shows the dialog (stepped aside, it's `RecipeAside`). */
 export function Recipes() {
   const open = useRecipes((s) => s.open);
   const aside = useRecipes((s) => s.aside);
   const recipe = recipeById(open?.recipe);
-  if (!open) return null;
-  if (aside && recipe) return <AsideBar target={open.target} recipe={recipe} />;
+  if (!open || (aside && recipe)) return null;
   return (
     <Modal open onClose={close} width={620}>
       <div className="p-5">
@@ -383,7 +389,7 @@ function StepCard({
           }}
           className={cn(
             "mt-px inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10.5px] font-semibold tabular-nums ring-1 ring-inset transition-colors",
-            done ? "bg-ok text-white ring-ok" : "text-fg-2 ring-ink/25 hover:bg-ink/[0.07] hover:ring-ink/40",
+            done ? "bg-ok text-on-accent ring-ok" : "text-fg-2 ring-ink/25 hover:bg-ink/[0.07] hover:ring-ink/40",
           )}
         >
           {done ? <Check size={12} strokeWidth={3} /> : n}
@@ -411,7 +417,7 @@ function StepCard({
               <p className="selectable mt-1.5 text-[12px] leading-relaxed text-fg-2">{names.text(resolve(step.explain, ctx))}</p>
               {step.skipIfKey && hasKey && <p className="mt-1.5 text-[11.5px] leading-snug text-ok">SSHeesh found a key on this computer, so you can skip this step.</p>}
               {command ? (
-                <Command command={command} display={names.text(command)} target={local ? LOCAL : target} onPaste={onPaste} />
+                <Command command={command} display={names.text(command)} target={local ? LOCAL : target} inTerminal={onPaste} />
               ) : (
                 <p className="mt-2.5 rounded-[9px] bg-ink/[0.04] px-3 py-2 text-[12px] text-fg-3">
                   Fill in {missing.map((f) => `"${f.label}"`).join(" and ")} above to see the command.
@@ -439,7 +445,7 @@ function StepCard({
                   <p className="selectable mt-1 text-[12px] leading-relaxed text-fg-2">{resolve(step.ifFails.explain, ctx)}</p>
                   {(() => {
                     const fix = resolve(step.ifFails.command, ctx);
-                    return <Command command={fix} display={names.text(fix)} target={target} onPaste={onPaste} />;
+                    return <Command command={fix} display={names.text(fix)} target={target} inTerminal={onPaste} />;
                   })()}
                 </details>
               )}
@@ -641,22 +647,18 @@ function KeyField({ field, typed, onChange }: { field: Field; typed: Record<stri
 
 // ---------------------------------------------------------------- stepped aside
 
-/** Up in the title bar, clear of the terminal's prompt, where a pasted command waits. */
+/** Up in the top bar, clear of the terminal's prompt, while a step runs in it. */
 function AsideBar({ target, recipe }: { target: TargetRef; recipe: Recipe }) {
   const names = useNames();
   const { os } = useOs(target);
   const done = useRecipes((s) => s.done[recipeKey(target, recipe.id)]) ?? NO_STEPS;
   const steps = stepsFor(recipe, os);
-  const compact = useSettings((s) => compactTabbar(s.compactMode));
   const Icon = ICONS[recipe.id] ?? BookOpen;
   return (
     <div
       role="region"
       aria-label="Recipe"
-      className={cn(
-        "glass fixed left-1/2 z-50 flex max-w-[calc(100vw-32px)] -translate-x-1/2 animate-pop-in items-center gap-2 rounded-full py-0.5 pr-0.5 pl-3",
-        compact ? "top-2" : "top-[6px]",
-      )}
+      className="flex min-w-0 shrink animate-pop-in items-center gap-2 rounded-full bg-ink/[0.06] py-0.5 pr-0.5 pl-3 ring-1 ring-inset ring-ink/[0.08]"
     >
       <Icon size={13.5} className="shrink-0 text-accent" />
       <span className="min-w-0 max-w-[240px] truncate text-[12.5px] font-medium text-fg" title={`${recipe.title} · ${names.target(target)}`}>

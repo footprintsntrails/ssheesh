@@ -8,7 +8,7 @@
 
 use sshee_core::files::{self, Progress, Transfer};
 use sshee_core::{ssh, SshEnv, SshTarget, Target};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -97,6 +97,6 @@ fn main() {
 }
 
 /// Sets an upload's total, as the app does before it starts.
-fn xfer_total(xfer: &Transfer, path: &PathBuf) {
+fn xfer_total(xfer: &Transfer, path: &Path) {
     xfer.add_total(files::upload_size(path));
 }

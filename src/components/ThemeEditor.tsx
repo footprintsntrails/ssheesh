@@ -2,19 +2,22 @@
 // app restyles as you go. Text that gets hard to read is pointed out, not blocked.
 
 import { ArrowLeft, Check, Copy, RotateCcw, Trash2, TriangleAlert } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
 import { useSettings } from "../lib/settings";
 import { useStore } from "../lib/store";
+import { useEscapeLayer } from "./Overlays";
 import { findTerminal } from "../lib/terminals";
 import {
   ACCENTS,
   APP_THEMES,
+  DEFAULT_THEME,
   newCustomThemeId,
   THEME_COLORS,
   themeColors,
   themeFromJson,
+  themeInfo,
   themeToJson,
   weakContrast,
   type AppThemeId,
@@ -42,6 +45,9 @@ export function ThemeEditor({ id, onClose, onUse }: { id: CustomThemeId; onClose
   const accent = useSettings((s) => s.accent);
   const follows = useSettings((s) => s.themeFollowsSystem);
   const [open, setOpen] = useState<ThemeColorKey | null>(null);
+  // Esc closes the color picker first, then Settings.
+  const closePicker = useCallback(() => setOpen(null), []);
+  useEscapeLayer(open !== null, closePicker);
   const [copied, setCopied] = useState(false);
   /** Shown to copy by hand when the clipboard can't be reached. */
   const [shareText, setShareText] = useState("");
@@ -122,11 +128,11 @@ export function ThemeEditor({ id, onClose, onUse }: { id: CustomThemeId; onClose
       customThemes: st.customThemes.filter((t) => t.id !== id),
       theme: swap(st.theme, theme.base),
       lightTheme: swap(st.lightTheme, baseLight ? theme.base : "daylight"),
-      darkTheme: swap(st.darkTheme, baseLight ? "midnight" : theme.base),
+      darkTheme: swap(st.darkTheme, baseLight ? DEFAULT_THEME : theme.base),
     });
   };
 
-  const baseName = APP_THEMES.find((t) => t.id === theme.base)?.name ?? "Midnight";
+  const baseName = themeInfo(theme.base).name;
   const changed = Object.keys(theme.colors).length > 0;
   const groups = [...new Set(THEME_COLORS.map((c) => c.group))];
 

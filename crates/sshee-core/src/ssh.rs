@@ -1,10 +1,12 @@
 //! Building `ssh` invocations and running one-off remote commands.
 
-use crate::secrets::{askpass_env, Secret};
+use crate::secrets::{askpass_env, PasswordFor, Secret};
 use crate::error::OpError;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Where a session or file operation runs.
 #[derive(Debug, Clone)]
@@ -51,8 +53,26 @@ impl SshEnv {
     }
 }
 
-pub fn ssh_program() -> &'static str {
-    "ssh"
+pub fn ssh_program() -> std::ffi::OsString {
+    program("ssh")
+}
+
+/// The program to start for a bare `name`. On Windows that name is looked
+/// up in SSHeesh's own folder first (Rust does as CreateProcess does), and
+/// the portable app often runs from Downloads, where a downloaded `ssh.exe`
+/// would win. So there it's looked up as Rust would minus that folder:
+/// System32, then each absolute folder on PATH.
+pub fn program(name: &str) -> std::ffi::OsString {
+    #[cfg(windows)]
+    {
+        let system = std::env::var_os("SystemRoot").map(|root| PathBuf::from(root).join("System32"));
+        let path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
+        let found = system.into_iter().chain(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(format!("{name}.exe"))).find(|exe| exe.is_file());
+        if let Some(exe) = found {
+            return exe.into_os_string();
+        }
+    }
+    name.into()
 }
 
 /// Options shared by interactive sessions and one-off commands.
@@ -175,7 +195,63 @@ pub fn durable_command(key: &str, run: Option<&[String]>, welcome: &crate::welco
 
 /// Environment that lets ssh log in with the target's password, if it has one.
 pub fn password_env(t: &SshTarget, env: &SshEnv) -> Option<Vec<(&'static str, String)>> {
-    Some(askpass_env(env.askpass.as_deref()?, t.password.as_ref()?))
+    let program = env.askpass.as_deref()?;
+    let password = t.password.as_ref()?;
+    Some(askpass_env(program, password, &password_for(t)))
+}
+
+/// Whether this computer's ssh labels a server's questions with the account
+/// (OpenSSH 8.4 on). Asked of `ssh -V` once in a run.
+fn labels_questions() -> bool {
+    static LABELS: OnceLock<bool> = OnceLock::new();
+    *LABELS.get_or_init(|| {
+        let mut cmd = Command::new(ssh_program());
+        cmd.arg("-V").stdin(Stdio::null()).stdout(Stdio::null());
+        hide_console(&mut cmd);
+        // ssh -V prints its version to stderr.
+        let banner = cmd.output().map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
+        crate::secrets::openssh_version(&banner).is_some_and(|v| v >= (8, 4))
+    })
+}
+
+/// What `ssh -G` resolves for a target with your config: one "key value"
+/// per line. It reads the config only, without connecting.
+pub fn ssh_config(t: &SshTarget) -> Result<String, OpError> {
+    let mut cmd = Command::new(ssh_program());
+    cmd.args(common_args(t, &SshEnv::default())).arg("-G").arg("--").arg(&t.destination);
+    cmd.stdin(Stdio::null()).stderr(Stdio::null());
+    hide_console(&mut cmd);
+    let out = cmd.output().map_err(spawn_error)?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The value of `key` in `ssh -G` output.
+pub fn config_value(config: &str, key: &str) -> Option<String> {
+    config.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(' ').map(|v| v.trim().to_string()))
+}
+
+/// Who a target's password is for, as ssh names them in its prompts. Asked
+/// of `ssh -G` once per target in a run.
+fn password_for(t: &SshTarget) -> Arc<PasswordFor> {
+    static SEEN: OnceLock<Mutex<HashMap<Vec<String>, Arc<PasswordFor>>>> = OnceLock::new();
+    let mut key = common_args(t, &SshEnv::default());
+    key.push(t.destination.clone());
+    let seen = SEEN.get_or_init(Default::default);
+    if let Some(known) = seen.lock().unwrap().get(&key) {
+        return known.clone();
+    }
+    let Ok(config) = ssh_config(t) else {
+        let who = format!("{}@{}", t.user.as_deref().unwrap_or_default(), t.destination);
+        return Arc::new(PasswordFor { who, hops: false, labels_questions: labels_questions() });
+    };
+    let get = |k: &str| config_value(&config, k);
+    let user = get("user").or_else(|| t.user.clone()).unwrap_or_default();
+    let host = get("hostkeyalias").or_else(|| get("hostname")).unwrap_or_else(|| t.destination.clone());
+    // Through ProxyJump or ProxyCommand another ssh logs in to the hop first.
+    let hops = ["proxyjump", "proxycommand"].iter().any(|k| get(k).is_some_and(|v| v != "none"));
+    let found = Arc::new(PasswordFor { who: format!("{user}@{host}"), hops, labels_questions: labels_questions() });
+    seen.lock().unwrap().insert(key, found.clone());
+    found
 }
 
 /// Builds a non-interactive ssh command that runs `script` with `sh`.
@@ -237,7 +313,7 @@ pub fn run_remote_poll(t: &SshTarget, env: &SshEnv, script: &str) -> Result<Vec<
 
 /// Runs a script on this computer with `sh` (used for "This computer").
 pub fn run_local(script: &str) -> Result<Vec<u8>, OpError> {
-    let mut cmd = Command::new("sh");
+    let mut cmd = Command::new(program("sh"));
     cmd.arg("-c").arg(script).stdin(Stdio::null());
     hide_console(&mut cmd);
     let out = cmd.output().map_err(|e| OpError::failed(format!("Couldn't run sh: {e}")))?;

@@ -78,12 +78,20 @@ export class OutputPipeline {
   /** SGR parameters since the last reset, replayed after a highlight. */
   private style: string[] = [];
 
-  constructor(private readonly emit: (text: string) => void) {}
+  /**
+   * `ownScreen`: a program that draws its own screen is running (an agent,
+   * vim). It redraws lines in pieces, so a highlight would land on half an
+   * address one time and not the next, mixed into its own colors.
+   */
+  constructor(
+    private readonly emit: (text: string) => void,
+    private readonly ownScreen: () => boolean = () => false,
+  ) {}
 
   push(chunk: string) {
     clearTimeout(this.timer);
     const mask = streamerOn();
-    const highlight = highlightOn();
+    const highlight = highlightOn() && !this.ownScreen();
     if (!mask && !highlight) {
       this.flush();
       this.trackStyle(chunk);
@@ -112,7 +120,7 @@ export class OutputPipeline {
     const rest = this.carry;
     this.carry = "";
     if (rest.startsWith("\x1b")) return this.emit(rest);
-    this.emit(this.render([{ kind: "text", s: rest }], streamerOn(), highlightOn()));
+    this.emit(this.render([{ kind: "text", s: rest }], streamerOn(), highlightOn() && !this.ownScreen()));
   }
 
   private render(tokens: Token[], mask: boolean, highlight: boolean): string {

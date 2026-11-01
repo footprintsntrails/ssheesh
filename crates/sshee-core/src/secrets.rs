@@ -15,6 +15,9 @@ const SERVICE: &str = "io.github.footprintsntrails.ssheesh";
 /// Set on the ssh process so our executable knows it was started as askpass.
 pub const ASKPASS_FLAG: &str = "SSHEESH_ASKPASS";
 const PASSWORD_VAR: &str = "SSHEESH_PASSWORD";
+const FOR_VAR: &str = "SSHEESH_PASSWORD_FOR";
+const HOPS_VAR: &str = "SSHEESH_PASSWORD_HOPS";
+const LABELS_VAR: &str = "SSHEESH_PASSWORD_LABELS";
 
 /// A password that never shows up in logs or debug output.
 #[derive(Clone, PartialEq, Eq, serde::Deserialize)]
@@ -101,8 +104,22 @@ impl PasswordStore {
     }
 }
 
-/// Environment for an ssh process that should log in with `password`.
-pub fn askpass_env(program: &std::path::Path, password: &Secret) -> Vec<(&'static str, String)> {
+/// Who a saved password is for, as ssh names them in its prompts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordFor {
+    /// "user@host", with the host as `ssh -G` resolves it (its HostKeyAlias if set).
+    pub who: String,
+    /// The connection goes through another server first (ProxyJump,
+    /// ProxyCommand), whose own ssh inherits this environment and asks too.
+    pub hops: bool,
+    /// ssh labels a server's own questions with the account, "(user@host)
+    /// Password:" (OpenSSH 8.4 on). Before that a hop could word its
+    /// question exactly like this server's password prompt.
+    pub labels_questions: bool,
+}
+
+/// Environment for an ssh process that should log in to `to` with `password`.
+pub fn askpass_env(program: &std::path::Path, password: &Secret, to: &PasswordFor) -> Vec<(&'static str, String)> {
     vec![
         ("SSH_ASKPASS", program.display().to_string()),
         ("SSH_ASKPASS_REQUIRE", "force".into()),
@@ -110,6 +127,9 @@ pub fn askpass_env(program: &std::path::Path, password: &Secret) -> Vec<(&'stati
         ("DISPLAY", std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into())),
         (ASKPASS_FLAG, "1".into()),
         (PASSWORD_VAR, password.expose().to_string()),
+        (FOR_VAR, to.who.clone()),
+        (HOPS_VAR, if to.hops { "1" } else { "0" }.into()),
+        (LABELS_VAR, if to.labels_questions { "1" } else { "0" }.into()),
     ]
 }
 
@@ -119,6 +139,35 @@ pub fn is_password_prompt(prompt: &str) -> bool {
     p.ends_with("password:") || p.contains("'s password")
 }
 
+/// Whether `prompt` asks for the password of `who`. ssh names the account
+/// it asks for ("user@host's password:", and "(user@host) Password:" from
+/// OpenSSH 8.4 on), so a hop's ssh asking for its own account gets nothing.
+/// Only an older ssh's bare "Password:" names nobody: that one is answered
+/// when there's no hop that could be asking. Through a hop, an older ssh
+/// can't tell a hop's question worded as "user@host's password:" from the
+/// real prompt, so neither is answered.
+pub fn answers(prompt: &str, to: &PasswordFor) -> bool {
+    let p = prompt.trim().to_lowercase();
+    let who = to.who.to_lowercase();
+    if p.starts_with(&format!("{who}'s password:")) {
+        return !to.hops || to.labels_questions;
+    }
+    // Before OpenSSH 8.4 ssh adds no label, so one in the prompt is the server's own wording.
+    if let Some(rest) = p.strip_prefix(&format!("({who}) ")) {
+        return (!to.hops || to.labels_questions) && is_password_prompt(rest);
+    }
+    !to.hops && !p.starts_with('(') && !p.contains("'s password") && is_password_prompt(&p)
+}
+
+/// (major, minor) from `ssh -V`: "OpenSSH_10.2p1 …", "OpenSSH_for_Windows_8.1p1, …".
+pub fn openssh_version(banner: &str) -> Option<(u32, u32)> {
+    let rest = banner.split("OpenSSH_").nth(1)?;
+    let rest = rest.strip_prefix("for_Windows_").unwrap_or(rest);
+    let (major, rest) = rest.split_once('.')?;
+    let minor: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
 /// When this executable was started by ssh as its askpass helper, answers
 /// the prompt and returns the exit code. Returns None for a normal launch.
 pub fn askpass_main() -> Option<i32> {
@@ -126,12 +175,23 @@ pub fn askpass_main() -> Option<i32> {
         return None;
     }
     let prompt = std::env::args().nth(1).unwrap_or_default();
+    // Unset means the cautious answer: there may be a hop, and an older ssh.
+    let to = PasswordFor {
+        who: std::env::var(FOR_VAR).unwrap_or_default(),
+        hops: std::env::var(HOPS_VAR).as_deref() != Ok("0"),
+        labels_questions: std::env::var(LABELS_VAR).as_deref() == Ok("1"),
+    };
     match std::env::var(PASSWORD_VAR) {
-        Ok(pw) if is_password_prompt(&prompt) => {
+        Ok(pw) if answers(&prompt, &to) => {
             println!("{pw}");
             Some(0)
         }
-        _ => Some(1),
+        _ => {
+            if to.hops && !to.labels_questions && is_password_prompt(&prompt) {
+                eprintln!("SSHeesh didn't type the saved password: through a jump host, an ssh older than OpenSSH 8.4 can't show which server is asking. Update OpenSSH, or sign in with a key.");
+            }
+            Some(1)
+        }
     }
 }
 
@@ -147,6 +207,37 @@ mod tests {
         assert!(!is_password_prompt("Are you sure you want to continue connecting (yes/no/[fingerprint])? "));
         assert!(!is_password_prompt("Enter passphrase for key '/home/me/.ssh/id_ed25519': "));
         assert!(!is_password_prompt("Verification code: "));
+    }
+
+    #[test]
+    fn answers_only_the_server_the_password_is_for() {
+        let direct = PasswordFor { who: "deploy@203.0.113.10".into(), hops: false, labels_questions: true };
+        assert!(answers("deploy@203.0.113.10's password: ", &direct));
+        assert!(answers("(deploy@203.0.113.10) Password: ", &direct));
+        assert!(answers("Password:", &direct), "an older ssh's keyboard-interactive prompt");
+        assert!(!answers("root@203.0.113.10's password: ", &direct));
+        assert!(!answers("(deploy@203.0.113.10) Verification code: ", &direct));
+        // Behind a ProxyJump, the hop's ssh asks for its own account: it gets nothing.
+        let behind = PasswordFor { who: "deploy@10.0.0.5".into(), hops: true, labels_questions: true };
+        assert!(answers("deploy@10.0.0.5's password: ", &behind));
+        assert!(answers("(deploy@10.0.0.5) Password: ", &behind));
+        assert!(!answers("jump@bastion.example's password: ", &behind));
+        assert!(!answers("(jump@bastion.example) Password: ", &behind));
+        assert!(!answers("Password:", &behind), "can't tell which server asks");
+        // An older ssh shows the hop's own question unlabeled, worded as it likes.
+        let old = PasswordFor { labels_questions: false, ..behind.clone() };
+        assert!(!answers("deploy@10.0.0.5's password: ", &old));
+        assert!(!answers("(deploy@10.0.0.5) Password: ", &old), "the hop can write the label itself");
+        // Without a hop an older ssh is fine: only the server itself can ask.
+        assert!(answers("deploy@203.0.113.10's password: ", &PasswordFor { labels_questions: false, ..direct }));
+    }
+
+    #[test]
+    fn reads_the_openssh_version() {
+        assert_eq!(openssh_version("OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026"), Some((10, 2)));
+        assert_eq!(openssh_version("OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2"), Some((8, 1)));
+        assert_eq!(openssh_version("OpenSSH_8.4p1 Debian-5+deb11u3, OpenSSL 1.1.1w"), Some((8, 4)));
+        assert_eq!(openssh_version("Sun_SSH_1.1"), None);
     }
 
     #[test]

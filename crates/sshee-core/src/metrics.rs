@@ -152,7 +152,7 @@ pub fn parse(text: &str) -> Metrics {
         }
     }
     finish_net(&mut m, net_all);
-    m.disks.sort_by(|a, b| b.size.cmp(&a.size));
+    m.disks.sort_by_key(|d| std::cmp::Reverse(d.size));
     m.disks.truncate(4);
     m
 }

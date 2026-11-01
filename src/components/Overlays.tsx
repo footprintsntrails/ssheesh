@@ -258,7 +258,7 @@ export function CommandPalette() {
                   <Item
                     icon={HardDrive}
                     value="disk space usage full clean up docker logs biggest folders"
-                    label="What's using the disk"
+                    label="Free up disk space"
                     onSelect={run(() => focused.target && openServerTool("disk", focused.target))}
                   />
                   <Item
@@ -356,16 +356,45 @@ export function useEscapeLayer(open: boolean, onClose: () => void) {
   }, [open, onClose]);
 }
 
+/** Focusable controls inside `box`, in order, that are on screen. */
+function focusables(box: HTMLElement): HTMLElement[] {
+  return [...box.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+}
+
+/** A dialog is open: the app's shortcuts and the terminal behind it wait. */
+export function dialogOpen(): boolean {
+  return !!document.querySelector('[role="dialog"][aria-modal]');
+}
+
 export function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
   useEscapeLayer(open, onClose);
+  const box = useRef<HTMLDivElement>(null);
+  // Keys go to the dialog, not to a terminal behind it: focus starts inside and Tab stays there.
+  useEffect(() => {
+    if (open && box.current && !box.current.contains(document.activeElement)) box.current.focus({ preventScroll: true });
+  }, [open]);
+  const trap = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab" || !box.current) return;
+    const items = focusables(box.current);
+    if (!items.length) return e.preventDefault();
+    const [first, last] = [items[0], items[items.length - 1]];
+    if (e.shiftKey ? document.activeElement === first || document.activeElement === box.current : document.activeElement === last) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
+  };
   if (!open) return null;
   // On top of everything already open, Settings included: the last one opened sits highest.
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[16vh] animate-fade-in" onMouseDown={onClose}>
+    // In a short window the gap above goes, so a dialog's buttons stay in sight.
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[16vh] animate-fade-in [@media(max-height:640px)]:pt-4" onMouseDown={onClose}>
       <div
+        ref={box}
         role="dialog"
         aria-modal
-        className="glass max-h-[calc(84vh-16px)] animate-pop-in overflow-y-auto rounded-[16px]"
+        tabIndex={-1}
+        onKeyDown={trap}
+        className="glass max-h-[calc(84vh-16px)] animate-pop-in overflow-y-auto rounded-[16px] outline-none [@media(max-height:640px)]:max-h-[calc(100vh-32px)]"
         style={{ width, maxWidth: "100%" }}
         onMouseDown={(e) => e.stopPropagation()}
       >

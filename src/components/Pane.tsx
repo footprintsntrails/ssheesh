@@ -133,7 +133,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
       data-hint={pane.kind === "terminal" ? "terminal" : undefined}
       title={tabs ? "Drag onto the page to show it beside another tab" : "Drag to move, onto the tab list to make it a tab again; double-click to fill the window"}
       className={cn(
-        "@container relative flex h-9 shrink-0 items-center gap-2 border-b pr-1 pl-2 @2xs:pr-1.5 @2xs:pl-3",
+        "@container group/header relative flex h-9 shrink-0 items-center gap-2 border-b pr-1 pl-2 @2xs:pr-1.5 @2xs:pl-3",
         pane.kind === "terminal" ? "border-ink/[0.06]" : "border-line",
       )}
     >
@@ -154,8 +154,9 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
           <SessionPill state={state} local={pane.target?.kind === "local"} />
         </span>
       )}
+      {/* Quiet until you reach for them: the agents' own colors would sit over every terminal. */}
       {pane.kind === "terminal" && (
-        <span className="contents @max-[24rem]:hidden">
+        <span className="flex opacity-0 transition-opacity group-hover/header:opacity-100 focus-within:opacity-100 @max-[24rem]:hidden">
           <AgentButtons pane={pane} connected={state?.kind === "connected"} />
         </span>
       )}
