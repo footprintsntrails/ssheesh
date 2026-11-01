@@ -150,17 +150,28 @@ export class OutputPipeline {
     return out + text.slice(at);
   }
 
-  /** Follows SGR (text style) sequences so the style can be put back. */
+  /**
+   * Follows SGR (text style) sequences, `ESC [ params m`, so the style can be
+   * put back. Every chunk passes through here, so it's a plain scan rather
+   * than a regex.
+   */
   private trackStyle(s: string) {
-    if (!s.includes("\x1b[")) return;
-    for (const m of s.matchAll(/\x1b\[([0-9;:]*)m/g)) {
-      const p = m[1];
+    for (let i = s.indexOf("\x1b["); i !== -1; i = s.indexOf("\x1b[", i)) {
+      let j = i + 2;
+      // Digits, ":" and ";".
+      while (j < s.length && s.charCodeAt(j) >= 0x30 && s.charCodeAt(j) <= 0x3b) j++;
+      if (s.charCodeAt(j) !== 0x6d /* m */) {
+        i = j;
+        continue;
+      }
+      const p = s.slice(i + 2, j);
       if (p === "" || p === "0") this.style = [];
       else if (p.startsWith("0;")) this.style = [p.slice(2)];
       else {
         this.style.push(p);
         if (this.style.length > 24) this.style.shift();
       }
+      i = j + 1;
     }
   }
 }

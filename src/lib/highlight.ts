@@ -49,12 +49,18 @@ export function compileRule(pattern: string): RegExp | null {
   }
 }
 
-let cache: { key: string; rules: { re: RegExp; sgr: string }[] } | null = null;
-function activeRules(): { re: RegExp; sgr: string }[] {
+type Settings = ReturnType<typeof useSettings.getState>;
+type Rules = { re: RegExp; sgr: string }[];
+
+/** The rules, made again only when a highlight setting changes (settings are replaced, never changed in place). */
+let cache: { errors: boolean; warnings: boolean; addresses: boolean; custom: HighlightRule[]; rules: Rules } | null = null;
+const cached = (s: Settings) =>
+  cache?.errors === s.highlightErrors && cache.warnings === s.highlightWarnings && cache.addresses === s.highlightAddresses && cache.custom === s.highlightRules;
+
+function activeRules(): Rules {
   const s = useSettings.getState();
-  const key = JSON.stringify([s.highlightErrors, s.highlightWarnings, s.highlightAddresses, s.highlightRules]);
-  if (cache?.key === key) return cache.rules;
-  const rules: { re: RegExp; sgr: string }[] = [];
+  if (cache && cached(s)) return cache.rules;
+  const rules: Rules = [];
   // Your own rules first: they win where they overlap a built-in one.
   for (const r of s.highlightRules) {
     const re = compileRule(r.pattern);
@@ -63,7 +69,7 @@ function activeRules(): { re: RegExp; sgr: string }[] {
   if (s.highlightErrors) rules.push({ re: ERRORS, sgr: `1;${SGR.red}` });
   if (s.highlightWarnings) rules.push({ re: WARNINGS, sgr: SGR.yellow });
   if (s.highlightAddresses) rules.push({ re: ADDRESSES, sgr: `4;${SGR.cyan}` });
-  cache = { key, rules };
+  cache = { errors: s.highlightErrors, warnings: s.highlightWarnings, addresses: s.highlightAddresses, custom: s.highlightRules, rules };
   return rules;
 }
 

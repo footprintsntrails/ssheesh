@@ -102,4 +102,54 @@ describe("OutputPipeline", () => {
     useSettings.setState({ highlightErrors: false, highlightWarnings: false, highlightRules: [{ id: "x", pattern: "/([/", color: "red" }] });
     expect(run(["fine"])).toBe("fine");
   });
+
+  it("picks up a rule changed while output flows", () => {
+    expect(run(["nginx"])).toBe("nginx");
+    useSettings.setState({ highlightRules: [{ id: "a", pattern: "nginx", color: "green" }] });
+    expect(run(["nginx"])).toBe(`${ESC}[32mnginx${ESC}[0m`);
+    useSettings.setState({ highlightRules: [{ id: "a", pattern: "nginx", color: "blue" }] });
+    expect(run(["nginx"])).toBe(`${ESC}[34mnginx${ESC}[0m`);
+  });
+
+  it("follows the text style as it always did", () => {
+    /** The style as the regex this replaced read it. */
+    const regexStyle = (s: string) => {
+      let style: string[] = [];
+      for (const m of s.matchAll(/\x1b\[([0-9;:]*)m/g)) {
+        const p = m[1];
+        if (p === "" || p === "0") style = [];
+        else if (p.startsWith("0;")) style = [p.slice(2)];
+        else style = [...style, p].slice(-24);
+      }
+      return style;
+    };
+    const inputs = [
+      `${ESC}[1m${ESC}[38:2:255:0:0mred `,
+      `${ESC}[1;32m${ESC}[2J${ESC}[?25h${ESC}[Hx `,
+      `${ESC}[33m${ESC}[0;1mbold `,
+      `${ESC}[31m${ESC}[mplain `,
+      `${ESC}[3${ESC}[4mbroken then underlined `,
+      `${ESC}[35m${ESC}]0;title ${ESC}[1m\x07after a title `,
+      Array.from({ length: 30 }, (_, i) => `${ESC}[${(i % 7) + 31}m`).join("") + "many ",
+    ];
+    const marking = { highlightRules: [{ id: "x", pattern: "mark", color: "cyan" as const }] };
+    for (const quick of [true, false]) {
+      for (const input of inputs) {
+        // With nothing to hide or color, output takes the quick path, which follows the style all the same.
+        const off = { highlightErrors: false, highlightWarnings: false, highlightAddresses: false };
+        useSettings.setState({ ...DEFAULT_SETTINGS, ...(quick ? off : marking) });
+        const want = regexStyle(input);
+        const restore = `${ESC}[0m${want.length ? `${ESC}[${want.join(";")}m` : ""}`;
+        let shown = "";
+        const p = new OutputPipeline((t) => (shown += t));
+        p.push(input);
+        vi.runAllTimers();
+        shown = "";
+        useSettings.setState(marking);
+        p.push("mark");
+        vi.runAllTimers();
+        expect(shown, JSON.stringify(input)).toBe(`${ESC}[36mmark${restore}`);
+      }
+    }
+  });
 });
