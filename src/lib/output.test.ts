@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OutputPipeline, tokenize } from "./output";
+import { OutputPipeline, TextStyle, tokenize } from "./output";
 import { usePrivacy } from "./privacy";
 import { DEFAULT_SETTINGS, useSettings } from "./settings";
 import { useStore } from "./store";
@@ -111,35 +111,23 @@ describe("OutputPipeline", () => {
     expect(run(["nginx"])).toBe(`${ESC}[34mnginx${ESC}[0m`);
   });
 
-  it("follows the text style as it always did", () => {
-    /** The style as the regex this replaced read it. */
-    const regexStyle = (s: string) => {
-      let style: string[] = [];
-      for (const m of s.matchAll(/\x1b\[([0-9;:]*)m/g)) {
-        const p = m[1];
-        if (p === "" || p === "0") style = [];
-        else if (p.startsWith("0;")) style = [p.slice(2)];
-        else style = [...style, p].slice(-24);
-      }
-      return style;
-    };
-    const inputs = [
-      `${ESC}[1m${ESC}[38:2:255:0:0mred `,
-      `${ESC}[1;32m${ESC}[2J${ESC}[?25h${ESC}[Hx `,
-      `${ESC}[33m${ESC}[0;1mbold `,
-      `${ESC}[31m${ESC}[mplain `,
-      `${ESC}[3${ESC}[4mbroken then underlined `,
-      `${ESC}[35m${ESC}]0;title ${ESC}[1m\x07after a title `,
-      Array.from({ length: 30 }, (_, i) => `${ESC}[${(i % 7) + 31}m`).join("") + "many ",
+  it("follows the text style", () => {
+    const inputs: [string, string][] = [
+      [`${ESC}[1m${ESC}[38:2:255:0:0mred `, "1;38:2:255:0:0"],
+      [`${ESC}[1;32m${ESC}[2J${ESC}[?25h${ESC}[Hx `, "1;32"],
+      [`${ESC}[33m${ESC}[0;1mbold `, "1"],
+      [`${ESC}[31m${ESC}[mplain `, ""],
+      [`${ESC}[3${ESC}[4mbroken then underlined `, "4"],
+      [`${ESC}[35m${ESC}]0;title ${ESC}[1m\x07after a title `, "1;35"],
+      [Array.from({ length: 30 }, (_, i) => `${ESC}[${(i % 7) + 31}m`).join("") + "many ", "32"],
     ];
     const marking = { highlightRules: [{ id: "x", pattern: "mark", color: "cyan" as const }] };
     for (const quick of [true, false]) {
-      for (const input of inputs) {
+      for (const [input, want] of inputs) {
         // With nothing to hide or color, output takes the quick path, which follows the style all the same.
         const off = { highlightErrors: false, highlightWarnings: false, highlightAddresses: false };
         useSettings.setState({ ...DEFAULT_SETTINGS, ...(quick ? off : marking) });
-        const want = regexStyle(input);
-        const restore = `${ESC}[0m${want.length ? `${ESC}[${want.join(";")}m` : ""}`;
+        const restore = `${ESC}[0m${want ? `${ESC}[${want}m` : ""}`;
         let shown = "";
         const p = new OutputPipeline((t) => (shown += t));
         p.push(input);
@@ -151,5 +139,39 @@ describe("OutputPipeline", () => {
         expect(shown, JSON.stringify(input)).toBe(`${ESC}[36mmark${restore}`);
       }
     }
+  });
+
+  it("doesn't bring back a background switched off long ago", () => {
+    useSettings.setState({ highlightAddresses: true });
+    // The welcome's logo as tmux sends it: a new background every two
+    // columns, back to the plain one with 49 rather than a reset.
+    const pixel = (bg: string) => `${ESC}[48;2;${bg}m  `;
+    const row = pixel("47;49;54") + pixel("35;36;40") + pixel("242;240;234") + pixel("35;36;40") + `${ESC}[49m  ${ESC}[38;2;216;220;226mUbuntu${ESC}[39m\r\n`;
+    const out = run([row.repeat(8) + `${ESC}[38;2;125;133;144mLearn more at https://ubuntu.com/esm${ESC}[39m\r\n`]);
+    expect(out).toContain(`https://ubuntu.com/esm${ESC}[0m${ESC}[38;2;125;133;144m${ESC}[39m`);
+    // A terminal reads 32 parameters of one sequence and drops the rest.
+    for (const [, params] of out.matchAll(/\x1b\[([0-9;:]*)m/g)) expect(params.split(";").length).toBeLessThanOrEqual(32);
+  });
+});
+
+describe("TextStyle", () => {
+  const style = (...sequences: string[]) => {
+    const s = new TextStyle();
+    for (const p of sequences) s.apply(p);
+    return s.sgr();
+  };
+
+  it("keeps only what's in effect", () => {
+    expect(style("1;31", "48;5;236", "22", "39")).toBe("48;5;236");
+    expect(style("38;2;1;2;3", "38;5;208", "48;2;4;5;6", "49")).toBe("38;5;208");
+    expect(style("1;3;4;31", "0;2", "7")).toBe("2;7");
+    expect(style("4:3", "21", "58;2;9;9;9")).toBe("21;58;2;9;9;9");
+    expect(style("4;1;2", "4:0", "22")).toBe("");
+    expect(style(";1")).toBe("1");
+  });
+
+  it("skips a color cut short", () => {
+    expect(style("31", "38;5")).toBe("31");
+    expect(style("31", "48;2;1;2")).toBe("31");
   });
 });

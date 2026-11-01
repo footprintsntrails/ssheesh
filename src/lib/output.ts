@@ -66,6 +66,63 @@ function escapeEnd(s: string, at: number): number {
   return j < s.length ? j + 1 : -1;
 }
 
+/** Attributes that turn off together, by the SGR parameter that turns them off. */
+const ATTRIBUTE_OFF: Record<number, number[]> = { 22: [1, 2], 23: [3], 24: [4], 25: [5], 27: [7], 28: [8], 29: [9], 55: [53] };
+
+/**
+ * The text style in effect, folded from SGR sequences so it can be set again
+ * in one short sequence. Replaying every sequence since the last reset ran
+ * past the 32 parameters a terminal reads in one, after a colorful logo say,
+ * and then a background long switched off came back.
+ */
+export class TextStyle {
+  private fg = "";
+  private bg = "";
+  private underlineColor = "";
+  /** Bold, italic and so on, by the parameter that turns each on (4 also holds 21 and 4:3). */
+  private attributes = new Map<number, string>();
+
+  /** Takes in one SGR sequence's parameters, "1;38;2;255;0;0" for `ESC [ 1;38;2;255;0;0 m`. */
+  apply(params: string) {
+    const ps = params.split(";");
+    for (let k = 0; k < ps.length; k++) {
+      const p = ps[k];
+      const colon = p.indexOf(":");
+      const n = Number(colon === -1 ? p : p.slice(0, colon));
+      if (n === 0) this.reset();
+      else if (n === 38 || n === 48 || n === 58) {
+        // 38:2::r:g:b carries its color; 38;5;n and 38;2;r;g;b take the next parameters.
+        const take = colon !== -1 ? 0 : ps[k + 1] === "5" ? 2 : ps[k + 1] === "2" ? 4 : -1;
+        if (take === -1 || k + take >= ps.length) break;
+        const color = ps.slice(k, k + take + 1).join(";");
+        k += take;
+        if (n === 38) this.fg = color;
+        else if (n === 48) this.bg = color;
+        else this.underlineColor = color;
+      } else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) this.fg = p;
+      else if ((n >= 40 && n <= 47) || (n >= 100 && n <= 107)) this.bg = p;
+      else if (n === 39) this.fg = "";
+      else if (n === 49) this.bg = "";
+      else if (n === 59) this.underlineColor = "";
+      else if (n === 4 && p === "4:0") this.attributes.delete(4);
+      else if (n === 21 || n === 4) this.attributes.set(4, p);
+      else if (n === 6) this.attributes.set(5, p);
+      else if ((n >= 1 && n <= 9) || n === 53) this.attributes.set(n, p);
+      else for (const a of ATTRIBUTE_OFF[n] ?? []) this.attributes.delete(a);
+    }
+  }
+
+  /** The parameters that set this style again after a reset, "" for the plain one. */
+  sgr(): string {
+    return [...this.attributes.values(), this.fg, this.bg, this.underlineColor].filter(Boolean).join(";");
+  }
+
+  private reset() {
+    this.fg = this.bg = this.underlineColor = "";
+    this.attributes.clear();
+  }
+}
+
 /**
  * One terminal's output filter. It remembers the current text style so a
  * highlighted word can hand the color back afterwards, and it holds back a
@@ -75,8 +132,8 @@ function escapeEnd(s: string, at: number): number {
 export class OutputPipeline {
   private carry = "";
   private timer: ReturnType<typeof setTimeout> | undefined;
-  /** SGR parameters since the last reset, replayed after a highlight. */
-  private style: string[] = [];
+  /** The style in effect, set again after a highlight. */
+  private style = new TextStyle();
 
   /**
    * `ownScreen`: a program that draws its own screen is running (an agent,
@@ -140,7 +197,8 @@ export class OutputPipeline {
   private paint(text: string): string {
     const matches = findMatches(text);
     if (!matches.length) return text;
-    const restore = `\x1b[0m${this.style.length ? `\x1b[${this.style.join(";")}m` : ""}`;
+    const style = this.style.sgr();
+    const restore = `\x1b[0m${style ? `\x1b[${style}m` : ""}`;
     let out = "";
     let at = 0;
     for (const m of matches) {
@@ -164,13 +222,7 @@ export class OutputPipeline {
         i = j;
         continue;
       }
-      const p = s.slice(i + 2, j);
-      if (p === "" || p === "0") this.style = [];
-      else if (p.startsWith("0;")) this.style = [p.slice(2)];
-      else {
-        this.style.push(p);
-        if (this.style.length > 24) this.style.shift();
-      }
+      this.style.apply(s.slice(i + 2, j));
       i = j + 1;
     }
   }
