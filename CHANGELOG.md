@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 — terminals that rest, uploads without a trace
+
+- **Unused terminals let go of their connection.** A terminal on a server with `tmux` that you haven't typed in, and that printed nothing, for 20 minutes disconnects, so nobody holds a connection nobody uses; its shell keeps running on the server. Press any key or Reconnect and it's back, with what happened meanwhile. The key that wakes it isn't typed, and nothing you type reaches the server before it's connected again, so a password typed too early never shows. Pick 15, 20 or 30 minutes, an hour or never in Settings → Terminal. Terminals without tmux, where disconnecting would end the shell, stay connected.
+- **Uploads leave their metadata behind.** Photos lose where and with what they were taken, PDFs and Office files lose author, company and the app that made them; a cleaned copy goes to the server, your file stays as it is. The upload card says what came out. Folders arrive dated by the upload, without Mac extras. Turn it off in Settings → Privacy.
+- **Streamer mode never shows a password.** A secret you'd clicked to see stayed visible after you turned streamer mode on, and a password in an address like `postgres://user:password@host` showed once streamer mode had hidden part of it (on a server whose user is called "postgres"). Both stay dots now.
+- **A README that shows what's different**, with new animations: a dropped connection that tells you what you missed, secrets and streamer mode, the security check-up with a fix, clicking a path in an agent's output, and seven ways to lay out the window.
+
 ## 0.8.2 — smoother terminals, and no grey under the welcome
 
 - **Smoother wheel scrolling and fast output.** Since 0.8.1 a screen drawn in a few pieces (scrolling a server's terminal with the wheel, a program redrawing, a lot of output at once) could show half drawn for a moment, or wait a beat. It now reaches the window whole, as soon as it's done.
