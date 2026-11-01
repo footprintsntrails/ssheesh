@@ -73,7 +73,7 @@ async function find(from: LinkSource, link: TextLink, relative: boolean) {
   }
   const { dir, name, isDir } = found;
   if (isDir) showInFiles(from.paneId, from.target, joinPath(dir, name));
-  else showInFiles(from.paneId, from.target, dir, name);
+  else showInFiles(from.paneId, from.target, dir, name, link.line ? [link.line, link.endLine ?? link.line] : undefined);
 }
 
 type Looked = { kind: "found"; dir: string; name: string; isDir: boolean } | { kind: "missing"; dir: string } | { kind: "error"; message: string };
@@ -97,18 +97,18 @@ async function look(target: TargetRef, path: string): Promise<Looked> {
  * Shows a folder in a Files pane for the same server, beside the terminal
  * you clicked in (also when you work with one tab at a time): the Files tab
  * you have if there is one, else a new one. `reveal` picks out a file in it
- * and previews it.
+ * and previews it, at `lines` (first and last) when given.
  */
-export function showInFiles(from: string, target: TargetRef, path: string, reveal?: string) {
+export function showInFiles(from: string, target: TargetRef, path: string, reveal?: string, lines?: [number, number]) {
   const st = useStore.getState();
   const existing = panesOn(st, target).find((p) => p.kind === "files");
   let id: string;
   if (existing) {
     id = existing.id;
-    st.setPane(id, { path, reveal });
+    st.setPane(id, { path, reveal, revealLines: lines });
   } else {
     id = st.openIn("files", target, { from, split: true, path });
-    if (reveal) st.setPane(id, { reveal });
+    if (reveal) st.setPane(id, { reveal, revealLines: lines });
   }
   // Already beside it on screen: just look there. Otherwise put it there.
   const s = useStore.getState();

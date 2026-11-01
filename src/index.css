@@ -301,6 +301,12 @@
   border-bottom: 1px dotted color-mix(in srgb, var(--ui-accent) 60%, transparent);
 }
 
+/* The lines a path asked for ("notes.md:12-40"), marked in the file preview. */
+.lines-band {
+  background: color-mix(in srgb, var(--ui-accent) 10%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--ui-accent) 70%, transparent);
+}
+
 /* Secrets in terminal output, covered with a dot per character (secrets.ts). */
 .term-secret-layer {
   position: absolute;

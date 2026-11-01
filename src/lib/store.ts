@@ -21,6 +21,8 @@ export interface PaneState {
   path?: string;
   /** Files pane: a file in that folder to pick out and preview, once. */
   reveal?: string;
+  /** Files pane: the lines of that file to show and mark, first and last. */
+  revealLines?: [number, number];
   /** Terminal pane: typed once after the first connect (e.g. `cd` into a folder). */
   initialCommand?: string;
   /** Terminal pane: opened inside this container. */

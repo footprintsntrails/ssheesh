@@ -30,7 +30,7 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 
 ## Tricks worth knowing
 
-- **Peek at a file.** Paths in a terminal's output are faintly underlined: click one and the file opens beside the terminal, Markdown nicely formatted. A path an agent prints from its own project is found too.
+- **Peek at a file.** Paths in a terminal's output are faintly underlined: click one and the file opens beside the terminal, at the lines it names (`app.ts:12-40`), Markdown nicely formatted. A path an agent prints from its own project is found too.
 
 <p align="center"><img src="docs/media/peek.gif" alt="Clicking a path in an agent's output opens the file beside the terminal"></p>
 

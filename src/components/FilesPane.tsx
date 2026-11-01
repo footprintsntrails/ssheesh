@@ -37,8 +37,14 @@ interface Preview {
   saving: boolean;
   /** A Markdown file shown as its text rather than formatted. */
   source: boolean;
+  /** Lines to show and mark, first and last: from a path like "notes.md:12-40". */
+  lines?: [number, number];
 }
 
+
+/** The text view's padding and line height (p-3, 12px at 1.6), to find a line in it. */
+const TEXT_PAD = 12;
+const TEXT_LINE = 12 * 1.6;
 
 const CODE = /\.(js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|c|h|cc|cpp|hpp|php|json|ya?ml|toml|ini|conf|cfg|env|sql|html?|css|scss|lua|swift|vue|svelte|xml|dockerfile)$/i;
 const TEXT = /\.(md|txt|log|csv|rst)$/i;
@@ -272,6 +278,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const [toolMenu, setToolMenu] = useState<{ x: number; y: number; items: (MenuItem | "sep")[] } | null>(null);
   const [menu, setMenu] = useState<(Menu & { entry: FileEntry | null }) | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  // The text view's scroll, for the band over the lines a path asked for.
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const [textScroll, setTextScroll] = useState(0);
+  // Opened at some lines: the first of them a few lines from the top.
+  const linesFrom = preview?.lines?.[0];
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || !linesFrom) return;
+    el.scrollTop = Math.max(0, TEXT_PAD + (linesFrom - 4) * TEXT_LINE);
+    setTextScroll(el.scrollTop);
+  }, [preview?.path, preview?.file, preview?.source, linesFrom]);
   const [busy, setBusy] = useState<string | null>(null);
   const history = useRef<string[]>([]);
   /** Folders you went back from, for Forward. */
@@ -436,7 +453,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     const entry = listing.entries.find((e) => e.name === name);
     // A listing from the cache may not have it yet; the fresh one will tell.
     if (!entry && loading) return;
-    const done = () => setPane(pane.id, { reveal: undefined });
+    const done = () => setPane(pane.id, { reveal: undefined, revealLines: undefined });
     if (!entry) return done();
     if (name.startsWith(".")) setShowHidden(true);
     setFilter("");
@@ -445,7 +462,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     requestAnimationFrame(() => scrollToRow(visibleRef.current.findIndex((e) => e.name === name)));
     // Asked for until the preview is open: a pane drawn again meanwhile (side
     // by side being set up) opens it then.
-    if (entry.kind !== "dir") void openPreview(entry).then(done);
+    if (entry.kind !== "dir") void openPreview(entry, pane.revealLines).then(done);
     else done();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane.reveal, listing, loading]);
@@ -487,10 +504,10 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   const fail = (title: string, e: unknown) => toast({ tone: "error", title, body: toOpError(e).message });
 
-  const openPreview = async (entry: FileEntry) => {
+  const openPreview = async (entry: FileEntry, lines?: [number, number]) => {
     const full = joinPath(dir, entry.name);
     if (!(await canDiscard())) return;
-    setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false });
+    setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false, lines });
     if (MARKDOWN.test(entry.name)) void loadMarkdownView().catch(() => {});
     try {
       const file = await backend.readFile(target, full);
@@ -1132,6 +1149,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
               <span className="truncate text-[12.5px] font-medium text-fg">{preview.name}</span>
               {dirty && <span className="size-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes" />}
               {preview.file && <span className="shrink-0 text-[11px] text-fg-3">{bytes(preview.file.size)}</span>}
+              {preview.lines && (
+                <span className="shrink-0 text-[11px] font-medium text-accent tabular-nums">
+                  {preview.lines[1] > preview.lines[0] ? `lines ${preview.lines[0]}–${preview.lines[1]}` : `line ${preview.lines[0]}`}
+                </span>
+              )}
               <span className="flex-1" />
               {markdown && (
                 <div role="tablist" aria-label="Show the file" className="flex h-6 shrink-0 items-center rounded-[7px] bg-ink/[0.045] p-[2px] ring-1 ring-inset ring-ink/[0.06]">
@@ -1203,22 +1225,37 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
               </div>
             ) : markdown && !preview.source ? (
               <Suspense fallback={<PreviewLoading />}>
-                <MarkdownView text={preview.draft} />
+                <MarkdownView text={preview.draft} lines={preview.lines} />
               </Suspense>
             ) : (
-              <textarea
-                value={preview.draft}
-                spellCheck={false}
-                autoCorrect="off"
-                autoCapitalize="off"
-                wrap="off"
-                readOnly={preview.file.lossy}
-                onChange={(e) => {
-                  const draft = e.target.value;
-                  setPreview((p) => p && { ...p, draft });
-                }}
-                className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[12px] leading-[1.6] text-fg-2 outline-none focus:text-fg"
-              />
+              <div className="relative flex min-h-0 flex-1">
+                {preview.lines && (
+                  <div
+                    aria-hidden
+                    className="lines-band pointer-events-none absolute inset-x-0"
+                    style={{
+                      top: TEXT_PAD + (preview.lines[0] - 1) * TEXT_LINE - textScroll,
+                      height: (preview.lines[1] - preview.lines[0] + 1) * TEXT_LINE,
+                    }}
+                  />
+                )}
+                <textarea
+                  ref={textRef}
+                  value={preview.draft}
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  wrap="off"
+                  readOnly={preview.file.lossy}
+                  onScroll={(e) => setTextScroll(e.currentTarget.scrollTop)}
+                  onChange={(e) => {
+                    const draft = e.target.value;
+                    // Edited, the marked lines may not be those lines anymore.
+                    setPreview((p) => p && { ...p, draft, lines: undefined });
+                  }}
+                  className="relative min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[12px] leading-[1.6] text-fg-2 outline-none focus:text-fg"
+                />
+              </div>
             )}
           </div>
         )}

@@ -35,10 +35,12 @@ export interface TextLink {
   start: number;
   end: number;
   kind: "url" | "path";
-  /** The URL, or the path without a trailing ":line:column". */
+  /** The URL, or the path without a trailing ":line:column" or line range. */
   target: string;
-  /** "src/main.rs:12" → 12. */
+  /** "src/main.rs:12" → 12; the first of a range. */
   line?: number;
+  /** "notes.md:242-296" (or "#L242-L296") → 296. */
+  endLine?: number;
 }
 
 /** Characters that end a link: spaces, quotes, brackets and separators. */
@@ -82,14 +84,18 @@ function classify(word: string): TextLink | null {
   if (word.startsWith("file://", start)) start += "file://".length;
   let token = word.slice(start).replace(TRAILING, "");
   let line: number | undefined;
-  const pos = /^(.+?):(\d+)(?::\d+)?$/.exec(token);
+  let endLine: number | undefined;
+  // ":12", ":12:7" (a column), ":12-40", and GitHub's "#L12" and "#L12-L40".
+  const pos = /^(.+?)(?::(\d+)(?::\d+|[-–](\d+))?|#L(\d+)(?:-L?(\d+))?)$/.exec(token);
   if (pos) {
-    line = Number(pos[2]);
+    line = Number(pos[2] ?? pos[4]);
+    const last = Number(pos[3] ?? pos[5]);
+    if (last > line) endLine = last;
     token = pos[1];
   }
   if (!isPath(token)) return null;
   const end = start + (pos ? word.slice(start).replace(TRAILING, "").length : token.length);
-  return { start, end, kind: "path", target: token, line };
+  return { start, end, kind: "path", target: token, line, endLine };
 }
 
 function isPath(s: string): boolean {

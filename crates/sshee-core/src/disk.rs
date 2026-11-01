@@ -341,8 +341,11 @@ impl Found {
         }
         // Only files nobody has opened or changed for that long (whichever is
         // later counts), never sockets like tmux's, a systemd service's private
-        // folder, or a display's lock file. A week is picked first.
-        if let Some(by_age) = self.temp.filter(|t| t[0] >= WORTH) {
+        // folder, or a display's lock file. Unlike the others it's offered
+        // however little there is, so the command is always at hand, as long
+        // as anything is over a day old. A week is picked first, when a week
+        // frees something.
+        if let Some(by_age) = self.temp.filter(|t| t[0] > 0) {
             let choices: Vec<CleanupChoice> = [("Older than a day", 1440), ("Older than a week", 10_080), ("Older than a month", 43_200)]
                 .iter()
                 .zip(by_age)
@@ -354,12 +357,13 @@ impl Found {
                     bytes: Some(bytes),
                 })
                 .collect();
+            let first = if by_age[1] > 0 { 1 } else { 0 };
             out.push(Cleanup {
                 id: "temp".into(),
                 title: "Temporary files".into(),
                 detail: "Deletes files in /tmp and /var/tmp that nothing has opened or changed for as long as you pick. Programs leave these behind and often forget them.".into(),
-                command: choices[1].command.clone(),
-                bytes: choices[1].bytes,
+                command: choices[first].command.clone(),
+                bytes: choices[first].bytes,
                 choices,
             });
         }
@@ -693,8 +697,14 @@ cgroup_root              10240         0     10240   0% /sys/fs/cgroup
         assert!(t.command.contains("-mmin +10080 -amin +10080 -delete"));
         assert!(t.choices[0].command.starts_with("sudo find /tmp /var/tmp -xdev -type f ! -path '*/systemd-private-*'"));
         assert_eq!(t.choices[2].bytes, Some(0));
-        // Not worth it when even day-old files add up to little.
-        assert!(found(Some([10 * MIB, 0, 0])).cleanups(None, None).is_empty());
+        // However little there is, it's offered, from a day when nothing is a week old.
+        let small = found(Some([10 * MIB, 0, 0])).cleanups(None, None);
+        let t = small.iter().find(|c| c.id == "temp").expect("offered when small");
+        assert_eq!(t.bytes, Some(10 * MIB));
+        assert!(t.command.contains("-mmin +1440 -amin +1440 -delete"));
+        // Nothing over a day old, or no count at all: nothing to offer.
+        assert!(found(Some([0, 0, 0])).cleanups(None, None).is_empty());
+        assert!(found(None).cleanups(None, None).is_empty());
     }
 
     #[test]

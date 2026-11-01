@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 — at the right line
+
+- **A path with lines opens at them.** Click `notes.md:242-296` (or `main.rs:12`, `main.rs:12:5`, GitHub's `#L10-L20`) and the file opens beside the terminal scrolled to those lines, with a band marking them and "lines 242–296" over the file. Formatted Markdown marks the paragraphs, headings and code those lines make up; Source marks the lines themselves. Before, the line number was dropped and the file opened at the top.
+- **Old temporary files can always be cleaned up** from "What's using the disk": the Temporary files card shows whenever anything in /tmp or /var/tmp is over a day old, with how much it frees, instead of only from 50 MB up. It starts at files a week old when there are any, else a day.
+
 ## 0.7.1 — a click opens it
 
 - **A click on a path or link in the terminal opens it**, no Ctrl or ⌘ needed: the file beside the terminal, a link in your browser. A double-click or a drag across a path still just selects it, and Ctrl+click (⌘-click) still opens at once.

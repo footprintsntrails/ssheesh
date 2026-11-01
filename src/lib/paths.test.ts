@@ -37,6 +37,16 @@ describe("findLinks", () => {
     expect(l).toMatchObject({ kind: "path", target: "src/main.rs", line: 12 });
     expect("error at src/main.rs:12:5: oops".slice(l.start, l.end)).toBe("src/main.rs:12:5");
   });
+  it("keeps a range of lines", () => {
+    const text = "Read ~/notes/plan.md:242-296 now";
+    const [l] = findLinks(text);
+    expect(l).toMatchObject({ target: "~/notes/plan.md", line: 242, endLine: 296 });
+    expect(text.slice(l.start, l.end)).toBe("~/notes/plan.md:242-296");
+    expect(findLinks("docs/a.md#L10-L20")[0]).toMatchObject({ target: "docs/a.md", line: 10, endLine: 20 });
+    expect(findLinks("docs/a.md#L7")[0]).toMatchObject({ target: "docs/a.md", line: 7, endLine: undefined });
+    // A range that runs backwards is just its first line.
+    expect(findLinks("src/x.ts:30-10")[0]).toMatchObject({ target: "src/x.ts", line: 30, endLine: undefined });
+  });
   it("drops sentence punctuation and quotes", () => {
     expect(targets("Saved to '/etc/nginx/nginx.conf'.")).toEqual(["/etc/nginx/nginx.conf"]);
     expect(targets("(see /var/log/syslog), then")).toEqual(["/var/log/syslog"]);

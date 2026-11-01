@@ -1,6 +1,6 @@
 [package]
 name = "sshee-core"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 license = "CC-BY-NC-SA-4.0"
 description = "Connections, durable SSH sessions, remote files and metrics for SSHeesh"

@@ -4,8 +4,8 @@
 // all), and images aren't fetched, so opening a README doesn't phone home.
 
 import { ImageOff } from "lucide-react";
-import { memo, type ComponentProps } from "react";
-import Markdown, { type Components, type ExtraProps } from "react-markdown";
+import { memo, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import Markdown, { type Components, type ExtraProps, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { backend } from "../lib/backend";
 import { cn } from "../lib/format";
@@ -14,6 +14,18 @@ import { cn } from "../lib/format";
 const EXTERNAL = /^(?:https?:|mailto:)/i;
 /** Tables, task lists, strikethrough and bare links, as on GitHub. */
 const PLUGINS = [remarkGfm];
+
+type Block = { type: string; position?: { start: { line: number }; end: { line: number } }; properties?: Record<string, unknown> };
+
+/** Marks each top-level block with the lines of the file it comes from, so a range of lines can be found on screen. */
+function sourceLines() {
+  return (tree: { children: Block[] }) => {
+    for (const n of tree.children) {
+      if (n.type === "element" && n.position) n.properties = { ...n.properties, dataLs: n.position.start.line, dataLe: n.position.end.line };
+    }
+  };
+}
+const REHYPE = [sourceLines] as Options["rehypePlugins"];
 
 function Link({ href, title, children }: ComponentProps<"a"> & ExtraProps) {
   const external = !!href && EXTERNAL.test(href);
@@ -105,14 +117,34 @@ const components: Components = {
   ),
 };
 
-/** The formatted file. Drawn again only when its text changes. */
-export const MarkdownView = memo(function MarkdownView({ text }: { text: string }) {
+/**
+ * The formatted file. Drawn again only when its text changes. With `lines`
+ * (first and last, from a path like "notes.md:12-40") it opens at them, the
+ * blocks they make up marked by one band behind them.
+ */
+export const MarkdownView = memo(function MarkdownView({ text, lines }: { text: string; lines?: [number, number] }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const article = useRef<HTMLElement>(null);
+  const [band, setBand] = useState<{ top: number; height: number } | null>(null);
+  const [first, last] = lines ?? [0, 0];
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    const blocks = article.current ? [...article.current.querySelectorAll<HTMLElement>("[data-ls]")] : [];
+    const hits = first ? blocks.filter((el) => Number(el.dataset.le) >= first && Number(el.dataset.ls) <= last) : [];
+    if (!box || !article.current || !hits.length) return setBand(null);
+    const at = article.current.getBoundingClientRect().top;
+    const top = hits[0].getBoundingClientRect().top - at;
+    const bottom = Math.max(...hits.map((el) => el.getBoundingClientRect().bottom)) - at;
+    setBand({ top: top - 6, height: bottom - top + 12 });
+    box.scrollTop += hits[0].getBoundingClientRect().top - box.getBoundingClientRect().top - 28;
+  }, [text, first, last]);
   return (
-    <div tabIndex={0} aria-label="Formatted Markdown" className="selectable min-h-0 flex-1 overflow-y-auto outline-none">
-      <article className="mx-auto max-w-[760px] px-5 py-4 text-[13.5px] leading-[1.65] break-words text-fg [&>*:first-child]:mt-0">
-        <Markdown remarkPlugins={PLUGINS} skipHtml components={components}>
+    <div ref={scroller} tabIndex={0} aria-label="Formatted Markdown" className="selectable min-h-0 flex-1 overflow-y-auto outline-none">
+      <article ref={article} className="relative isolate mx-auto max-w-[760px] px-5 py-4 text-[13.5px] leading-[1.65] break-words text-fg [&>*:first-child]:mt-0">
+        <Markdown remarkPlugins={PLUGINS} rehypePlugins={REHYPE} skipHtml components={components}>
           {text}
         </Markdown>
+        {band && <div aria-hidden className="lines-band pointer-events-none absolute inset-x-2 -z-10 rounded-[6px]" style={band} />}
       </article>
     </div>
   );
