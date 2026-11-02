@@ -4,7 +4,7 @@
 
 import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage, TmuxScroll, RunOutcome } from "./types";
 import { toOpError } from "./types";
-import type { Forward, TunnelState, WebAppScan } from "./types";
+import type { Forward, TorStatus, TorSwitch, TunnelState, WebAppScan } from "./types";
 
 export interface DropEvent {
   type: "over" | "drop" | "leave";
@@ -156,6 +156,16 @@ export interface Backend {
   localPortProblem(port: number): Promise<string | null>;
   /** A free port here for the server's `preferred` one: the same number when it's free. */
   pickLocalPort(preferred: number, avoid: number[]): Promise<number>;
+
+  torStatus(): Promise<TorStatus>;
+  /** Hears every change of Tor's status; the function it returns stops that. */
+  onTorStatus(cb: (s: TorStatus) => void): () => void;
+  /** Turns Tor on or off. What's connected moves to the new way at once. */
+  setTor(on: boolean): Promise<TorSwitch>;
+  /** New Tor routes for every server, for when one turned slow. */
+  newTorRoutes(): Promise<TorSwitch>;
+  /** While Tor is on: ssh options that send an ssh typed on this computer through it too. */
+  torSshOptions(): Promise<string[] | null>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -168,6 +178,7 @@ async function tauriBackend(): Promise<Backend> {
   const proc = await import("@tauri-apps/plugin-process");
   const app = await import("@tauri-apps/api/app");
   const opener = await import("@tauri-apps/plugin-opener");
+  const { listen } = await import("@tauri-apps/api/event");
   let pending: Awaited<ReturnType<typeof updater.check>> = null;
 
   // Rust errors arrive as { code, message }; normalise everything else.
@@ -322,6 +333,23 @@ async function tauriBackend(): Promise<Backend> {
     stopTunnel: (id) => fire("stop_tunnel", { id }),
     localPortProblem: (port) => call("local_port_problem", { port }),
     pickLocalPort: (preferred, avoid) => call("pick_local_port", { preferred, avoid }),
+
+    torStatus: () => call("tor_status", {}),
+    onTorStatus(cb) {
+      let unlisten: (() => void) | undefined;
+      let cancelled = false;
+      void listen<TorStatus>("tor-status", (e) => cb(e.payload)).then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      });
+      return () => {
+        cancelled = true;
+        unlisten?.();
+      };
+    },
+    setTor: (on) => call("set_tor", { on }),
+    newTorRoutes: () => call("new_tor_routes", {}),
+    torSshOptions: () => call("tor_ssh_options", {}),
   };
 }
 

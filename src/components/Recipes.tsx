@@ -263,9 +263,10 @@ function RecipeView({ target, recipe }: { target: TargetRef; recipe: Recipe }) {
   const serverTerminal = useStore((s) => s.mainTerminalFor(target));
   const openIn = useStore((s) => s.openIn);
   const steps = stepsFor(recipe, os);
-  const base = useMemo(() => makeContext({ os, host, windows: isWindows, values: {} }), [os, host]);
+  const tor = useStore((s) => (s.tor.state === "off" ? null : s.torSsh));
+  const base = useMemo(() => makeContext({ os, host, windows: isWindows, values: {}, tor }), [os, host, tor]);
   const values = useMemo(() => fieldValues(recipe, typed, base), [recipe, typed, base]);
-  const ctx = useMemo(() => makeContext({ os, host, windows: isWindows, values }), [os, host, values]);
+  const ctx = useMemo(() => makeContext({ os, host, windows: isWindows, values, tor }), [os, host, values, tor]);
   const count = doneIn(steps, doneList);
 
   const setTyped = useCallback((patch: Record<string, string>) => useRecipes.setState((s) => ({ typed: { ...s.typed, [key]: { ...s.typed[key], ...patch } } })), [key]);

@@ -318,6 +318,16 @@ impl TunnelManager {
         }
     }
 
+    /// Restarts every running tunnel, so it goes the new way after Tor was
+    /// turned on or off.
+    pub fn reroute(&self) {
+        for t in self.tunnels.lock().unwrap().values() {
+            if let Some(child) = t.child.lock().unwrap().as_mut() {
+                let _ = child.kill();
+            }
+        }
+    }
+
     /// Ends every tunnel's ssh process; called when the app quits.
     pub fn stop_all(&self) {
         let all: Vec<Arc<Tunnel>> = self.tunnels.lock().unwrap().drain().map(|(_, t)| t).collect();

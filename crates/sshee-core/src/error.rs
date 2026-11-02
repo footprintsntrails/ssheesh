@@ -51,6 +51,9 @@ impl OpError {
                     "This server isn't trusted yet. Open a terminal to it once to confirm its fingerprint.",
                 );
             }
+            if let Some(why) = crate::tor::recent_failure() {
+                return Self::new(ErrorCode::Network, why);
+            }
             let detail = if last.is_empty() { "connection failed".to_string() } else { last };
             return Self::new(ErrorCode::Network, format!("Can't reach the server: {detail}"));
         }

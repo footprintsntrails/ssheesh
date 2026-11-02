@@ -90,7 +90,7 @@ fn main() {
     manager.open("p1", 100, 30, move || Ok(spec), sink);
     let mut log = Log { rx, output: String::new() };
 
-    log.wait("connected (durable)", 20, |s| matches!(s, SessionState::Connected { durable: true }));
+    log.wait("connected (durable)", 20, |s| matches!(s, SessionState::Connected { durable: true, .. }));
     manager.write("p1", b"export SSHEE_MARK=alive-123; cd /var/log\r");
     std::thread::sleep(Duration::from_millis(800));
     let cwd = files::session_cwd(&target, &env, &key).expect("cwd");
@@ -102,7 +102,7 @@ fn main() {
     std::process::Command::new("pkill").args(["-P", sshd_pid]).status().unwrap();
     let state = log.wait("reconnecting", 30, |s| matches!(s, SessionState::Reconnecting { .. }));
     println!("session: noticed the drop after {:?}: {state:?}", t0.elapsed());
-    log.wait("connected again (durable)", 30, |s| matches!(s, SessionState::Connected { durable: true }));
+    log.wait("connected again (durable)", 30, |s| matches!(s, SessionState::Connected { durable: true, .. }));
     println!("session: back after {:?}", t0.elapsed());
     manager.write("p1", b"echo mark=$SSHEE_MARK\r");
     log.wait_output("mark=alive-123", 10);
@@ -115,14 +115,14 @@ fn main() {
     log.expect_quiet(3);
     println!("session: manual mode waited without reconnecting");
     manager.reconnect_now("p1");
-    log.wait("connected after Reconnect", 30, |s| matches!(s, SessionState::Connected { durable: true }));
+    log.wait("connected after Reconnect", 30, |s| matches!(s, SessionState::Connected { durable: true, .. }));
     println!("session: Reconnect brought it back");
 
     // Turning automatic reconnecting on resumes a session that's waiting.
     std::process::Command::new("pkill").args(["-P", sshd_pid]).status().unwrap();
     log.wait("disconnected again", 30, |s| matches!(s, SessionState::Disconnected { .. }));
     manager.set_auto_reconnect(true);
-    log.wait("resumed by turning auto on", 30, |s| matches!(s, SessionState::Connected { durable: true }));
+    log.wait("resumed by turning auto on", 30, |s| matches!(s, SessionState::Connected { durable: true, .. }));
     manager.write("p1", b"echo again=$SSHEE_MARK\r");
     log.wait_output("again=alive-123", 10);
     println!("session: switching to automatic resumed it, shell state intact");
@@ -146,7 +146,7 @@ fn main() {
         let spec = SessionSpec { target: target.clone(), key: key2.clone(), env: env.clone(), run, welcome: Default::default() };
         manager.open("p2", 100, 30, move || Ok(spec), sink2);
         let mut log2 = Log { rx: rx2, output: String::new() };
-        log2.wait("container shell (durable)", 20, |s| matches!(s, SessionState::Connected { durable: true }));
+        log2.wait("container shell (durable)", 20, |s| matches!(s, SessionState::Connected { durable: true, .. }));
         manager.write("p2", b"echo inside-container=$((6*7))\r");
         log2.wait_output("inside-container=42", 10);
         println!("containers: shell inside {} works and is durable", c.name);

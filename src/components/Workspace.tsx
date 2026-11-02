@@ -22,6 +22,7 @@ import { EnvChip, IconButton } from "./ui";
 import { RecipeAside } from "./Recipes";
 import { ServerToolButton } from "./Sidebar";
 import { SIDEBAR_GLYPHS } from "../lib/labels";
+import { TorButton, TorMark } from "./TorButton";
 
 function Tree({ node }: { node: LayoutNode }) {
   if (node.kind === "pane") return <PaneView id={node.id} />;
@@ -129,6 +130,7 @@ function AddressChip({ target }: { target: TargetRef }) {
         <HostIcon hostId={host?.id} local={target.kind === "local"} size={14} strokeWidth={1.9} className="shrink-0" />
         <span className="truncate text-[13px] font-semibold text-fg">{names.target(target)}</span>
         <EnvChip env={env} />
+        {host && <TorMark />}
         {host && !names.on && <span className="hidden truncate text-[12px] text-fg-3 @2xl:inline">{names.address(host)}</span>}
       </button>
       {menu && <ContextMenu menu={menu} items={toolItems(target, names.on ? undefined : address)} onClose={() => setMenu(null)} />}
@@ -193,6 +195,7 @@ function Toolbar({ target }: { target: TargetRef | null }) {
           <>
             <ServerToolButton tool="checkup" menuAt="below" size={15} />
             <ServerToolButton tool="disk" menuAt="below" size={15} />
+            <TorButton size={15} />
             <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => useStore.getState().openSettings()}>
               <SIDEBAR_GLYPHS.settings size={15} />
             </IconButton>

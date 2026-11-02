@@ -123,10 +123,17 @@ fn pool() -> &'static Pool {
     })
 }
 
-/// Shells are shared only between identical logins.
+/// Signs out every shell kept, so the next commands connect anew: after
+/// Tor is turned on or off.
+pub fn forget_all() {
+    let all: Vec<Shell> = pool().lock().unwrap_or_else(|e| e.into_inner()).drain().flat_map(|(_, shells)| shells).collect();
+    drop(all);
+}
+
+/// Shells are shared only between identical logins, made the same way.
 fn key(t: &SshTarget, env: &SshEnv) -> String {
     format!(
-        "{}\0{:?}\0{:?}\0{:?}\0{:?}\0{:?}\0{}\0{:?}",
+        "{}\0{:?}\0{:?}\0{:?}\0{:?}\0{:?}\0{}\0{:?}\0{}",
         t.destination,
         t.user,
         t.port,
@@ -134,7 +141,8 @@ fn key(t: &SshTarget, env: &SshEnv) -> String {
         t.extra_args,
         t.identity_agent,
         t.password.is_some(),
-        env.control_dir
+        env.control_dir,
+        crate::tor::is_on()
     )
 }
 

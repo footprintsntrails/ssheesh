@@ -19,6 +19,7 @@ import { applyAppearance, compactSidebar, ONBOARDING_VERSION, toggleCompact, use
 import { useTour } from "./lib/tour";
 import { activePane, useStore } from "./lib/store";
 import { startForegroundWatch } from "./lib/agents";
+import { startTorWatch } from "./lib/tor";
 import { startRoleDetection } from "./lib/roles";
 import { useLabels } from "./lib/labels";
 import { isMainWindow, openedFor } from "./lib/windowInfo";
@@ -176,6 +177,7 @@ export function App() {
   // Shortcut labels all over the app follow your own keys at once.
   useSettings((s) => s.shortcuts);
   useEffect(() => startForegroundWatch(), []);
+  useEffect(() => startTorWatch(), []);
   useEffect(() => startRoleDetection(), []);
   useShortcuts();
   useFileDrop();

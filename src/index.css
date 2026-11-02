@@ -37,6 +37,8 @@
   --color-ok: var(--ui-ok);
   --color-warn: var(--ui-warn);
   --color-bad: var(--ui-bad);
+  /* Tor on: the Tor button and the mark beside a server's address, in the theme's green. */
+  --color-tor: var(--ui-ok);
 }
 
 @theme {

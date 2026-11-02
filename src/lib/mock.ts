@@ -3,7 +3,7 @@
 
 import type { Backend, TransferHooks } from "./backend";
 import pkg from "../../package.json";
-import type { Cleaning, Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile } from "./types";
+import type { Cleaning, Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile, TorStatus } from "./types";
 import type { WebApp } from "./types";
 
 /** The demo pretends the next patch version is out. */
@@ -260,6 +260,7 @@ function banner(name: string, user: string): string {
 }
 
 interface FakeSession {
+  target: TargetRef;
   emit: (e: SessionEvent) => void;
   /** Sends without adding to the server's scrollback (ssh's own messages). */
   raw: (e: SessionEvent) => void;
@@ -298,6 +299,22 @@ function hostFor(t: TargetRef): { name: string; user: string } {
 
 let autoReconnect = true;
 
+// Tor in the demo: starts in about a second, then the server terminals move over.
+let demoTor: TorStatus = { state: "off" };
+const torListeners = new Set<(s: TorStatus) => void>();
+const setDemoTor = (s: TorStatus) => {
+  demoTor = s;
+  torListeners.forEach((cb) => cb(s));
+};
+const viaTor = (target: TargetRef) => target.kind === "host" && demoTor.state === "on";
+function rerouteDemo() {
+  for (const s of sessions.values()) {
+    if (s.target.kind !== "host") continue;
+    s.emit({ type: "status", state: { kind: "connecting", attempt: 1 } });
+    s.timers.push(window.setTimeout(() => s.raw({ type: "status", state: { kind: "connected", durable: true, tor: viaTor(s.target) } }), 700));
+  }
+}
+
 /** A coding agent that works for a few seconds, then rings the bell for an answer. */
 function simulateAgent(s: FakeSession) {
   const steps = [
@@ -328,7 +345,7 @@ function simulateDrop(s: FakeSession) {
   s.timers.push(
     window.setTimeout(() => {
       s.emit({ type: "status", state: { kind: "connecting", attempt: 2 } });
-      s.raw({ type: "status", state: { kind: "connected", durable: true } });
+      s.raw({ type: "status", state: { kind: "connected", durable: true, tor: viaTor(s.target) } });
       s.raw({ type: "output", data: `\x1b[H\x1b[2J${WHILE_AWAY.slice(-5).join("\r\n")}\r\n${s.prompt}` });
     }, 4000),
   );
@@ -460,7 +477,7 @@ export const mockBackend: Backend = {
     const prompt = container
       ? `${C.g}root@${container.id}${C.r}:${C.bl}/app${C.r}# `
       : `${C.g}${user}@${name}${C.r}:${C.bl}~${C.r}$ `;
-    const s: FakeSession = { emit: onEvent, raw: onEvent, line: "", prompt, timers: [], scrollback: "" };
+    const s: FakeSession = { target, emit: onEvent, raw: onEvent, line: "", prompt, timers: [], scrollback: "" };
     s.emit = (e) => {
       if (e.type === "output") s.scrollback += e.data;
       onEvent(e);
@@ -470,7 +487,7 @@ export const mockBackend: Backend = {
     onEvent({ type: "status", state: { kind: "connecting", attempt: 1 } });
     s.timers.push(
       window.setTimeout(() => {
-        onEvent({ type: "status", state: { kind: "connected", durable: target.kind !== "local" } });
+        onEvent({ type: "status", state: { kind: "connected", durable: target.kind !== "local", tor: viaTor(target) } });
         s.emit({
           type: "output",
           data: container?.run === "logs"
@@ -507,6 +524,8 @@ export const mockBackend: Backend = {
           ls: `${C.bl}dist${C.r}  Dockerfile  ${C.bl}node_modules${C.r}  package.json  README.md  ${C.bl}src${C.r}`,
           uptime: " 23:14:02 up 37 days,  5:02,  1 user,  load average: 1.42, 1.18, 0.97",
           whoami: "root",
+          // Where the server sees you coming from: you, or a Tor exit.
+          "who am i": `${hostFor(s.target).user}   pts/0        2026-11-02 09:41 (${viaTor(s.target) ? "198.51.100.187" : "198.51.100.3"})`,
           "node -v": "v22.11.0",
           // Settings stay readable; the passwords and keys show as dots.
           "cat .env": [
@@ -553,7 +572,7 @@ export const mockBackend: Backend = {
     const s = sessions.get(paneId);
     if (!s) return;
     s.emit({ type: "status", state: { kind: "connecting", attempt: 2 } });
-    s.raw({ type: "status", state: { kind: "connected", durable: true } });
+    s.raw({ type: "status", state: { kind: "connected", durable: true, tor: viaTor(s.target) } });
     s.raw({ type: "output", data: `\x1b[H\x1b[2J${WHILE_AWAY.slice(-5).join("\r\n")}\r\n${s.prompt}` });
   },
   sleepSession(paneId) {
@@ -843,6 +862,42 @@ export const mockBackend: Backend = {
     const free = (p: number) => p >= 1024 && p <= 65535 && !avoid.includes(p) && !demoBusyPorts.has(p) && ![...demoTunnels.values()].some((t) => t.port === p);
     const pick = [preferred, preferred < 1024 ? preferred + 8000 : 0, preferred + 10000].find(free);
     return pick ?? 49152 + Math.floor(Math.random() * 16000);
+  },
+
+  torStatus: async () => demoTor,
+  onTorStatus(cb) {
+    torListeners.add(cb);
+    return () => torListeners.delete(cb);
+  },
+  async setTor(on) {
+    await wait(60);
+    if (!on) {
+      setDemoTor({ state: "off" });
+      rerouteDemo();
+      return { status: demoTor, stayed: 0 };
+    }
+    setDemoTor({ state: "starting", percent: 5 });
+    void (async () => {
+      for (const percent of [30, 65, 90]) {
+        await wait(260);
+        if (demoTor.state !== "starting") return;
+        setDemoTor({ state: "starting", percent });
+      }
+      await wait(260);
+      if (demoTor.state !== "starting") return;
+      setDemoTor({ state: "on" });
+      rerouteDemo();
+    })();
+    return { status: demoTor, stayed: 0 };
+  },
+  async torSshOptions() {
+    if (demoTor.state === "off") return null;
+    return ["-o", "ProxyCommand='/Applications/SSHeesh.app/Contents/MacOS/SSHeesh' --tor-proxy %h %p", "-o", "CanonicalizeHostname=no", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=no"];
+  },
+  async newTorRoutes() {
+    await wait(60);
+    rerouteDemo();
+    return { status: demoTor, stayed: 0 };
   },
 };
 

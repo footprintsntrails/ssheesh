@@ -62,6 +62,8 @@ import { ThemeEditor, ThemeImport } from "./ThemeEditor";
 import { ColorButton, OwnAccent } from "./ColorPicker";
 import { useEscapeLayer } from "./Overlays";
 import { Button, Logo, PIXEL_LOGO, PIXEL_LOGO_COLORS, Spinner } from "./ui";
+import { newTorRoutes, switchTor } from "../lib/tor";
+import { TOR_GLYPH } from "../lib/labels";
 
 const REPO = "https://github.com/footprintsntrails/ssheesh";
 
@@ -948,13 +950,18 @@ function Keyboard({ reset }: SectionProps) {
 }
 
 /** Everything the app itself reaches out to. Kept short on purpose. */
-function NetworkList({ updates }: { updates: boolean }) {
+function NetworkList({ updates, tor }: { updates: boolean; tor: boolean }) {
   const items = [
-    { icon: Server, title: "Your servers", body: "Only the ones you open, through your own ssh." },
+    { icon: Server, title: "Your servers", body: tor ? "Only the ones you open, through your own ssh and Tor." : "Only the ones you open, through your own ssh." },
+    {
+      icon: TOR_GLYPH as unknown as typeof Server,
+      title: "The Tor network",
+      body: tor ? "While Tor is on: your servers are reached through it." : "Only while Tor is on.",
+    },
     {
       icon: Globe,
       title: "GitHub, for updates",
-      body: updates ? "When the app starts and every few hours. Turn it off in Updates." : "Turned off in Updates.",
+      body: `${updates ? "When the app starts and every few hours. Turn it off in Updates." : "Turned off in Updates."}${tor ? " Not through Tor." : ""}`,
     },
   ];
   return (
@@ -976,9 +983,33 @@ function NetworkList({ updates }: { updates: boolean }) {
 }
 
 function Privacy({ s, set }: SectionProps) {
+  const tor = useStore((st) => st.tor);
   return (
     <>
       <SectionTitle>Privacy</SectionTitle>
+      <Row
+        label="Connect through Tor"
+        hint="Servers and their logs see a Tor address instead of yours, and your internet provider doesn't see which servers you use. Everything goes through it: terminals, files, stats and tunnels; if Tor can't carry a connection, it isn't made. SSHeesh runs Tor itself, and for each server times a dozen routes and keeps the fastest. Servers on your own network connect directly; one reached through a jump host doesn't connect. An ssh you type yourself in This computer's terminal goes as you type it. The onion above Settings turns it on and off."
+      >
+        <Switch checked={tor.state !== "off"} onChange={(v) => void switchTor(v)} label="Connect through Tor" />
+      </Row>
+      {tor.state !== "off" && (
+        <div className="mt-1 flex items-center gap-2.5 rounded-[10px] bg-tor/10 px-3.5 py-2.5 text-[12px] leading-snug text-fg-2">
+          <TOR_GLYPH size={14} className={cn("shrink-0 text-tor", tor.state === "starting" && "animate-pulse")} />
+          <span className="flex-1">
+            {tor.state === "starting"
+              ? `Tor is starting… ${tor.percent}%`
+              : tor.state === "on"
+                ? "Tor is on. If typing feels slow on a server, pick new routes."
+                : `Tor can't start: ${tor.message} Nothing connects until it does; it keeps trying.`}
+          </span>
+          {tor.state === "on" && (
+            <Button size="sm" variant="ghost" onClick={() => void newTorRoutes()}>
+              New routes
+            </Button>
+          )}
+        </div>
+      )}
       <Row
         label="Streamer mode"
         hint={`Hides server names, addresses, IPs and user names in the sidebar, titles, stats and terminal output. For streams, screen shares and screenshots. ${shortcutLabel("streamer")} turns it on and off.`}
@@ -1001,7 +1032,7 @@ function Privacy({ s, set }: SectionProps) {
         <Switch checked={s.cleanUploads} onChange={(v) => set({ cleanUploads: v })} label="Clean files before uploading" />
       </Row>
       <SubHeading title="What SSHeesh connects to" />
-      <NetworkList updates={s.updateMode !== "manual"} />
+      <NetworkList updates={s.updateMode !== "manual"} tor={tor.state !== "off"} />
     </>
   );
 }

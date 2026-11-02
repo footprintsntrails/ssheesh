@@ -22,6 +22,7 @@ pub mod session;
 pub mod shell_pool;
 pub mod ssh;
 mod text;
+pub mod tor;
 pub mod tunnels;
 pub mod welcome;
 

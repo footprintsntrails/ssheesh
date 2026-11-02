@@ -75,13 +75,25 @@ export type TargetRef = { kind: "local" } | { kind: "host"; hostId: string };
 
 export type SessionState =
   | { kind: "connecting"; attempt: number }
-  | { kind: "connected"; durable: boolean }
+  /** `tor`: the connection goes through Tor. */
+  | { kind: "connected"; durable: boolean; tor?: boolean }
   | { kind: "reconnecting"; attempt: number; retryInMs: number; reason: string }
   | { kind: "disconnected"; reason: string }
   /** Let go of after sitting unused; the shell keeps running in tmux on the server. */
   | { kind: "asleep" }
   | { kind: "ended"; code: number | null }
   | { kind: "failed"; message: string };
+
+/** SSHeesh's own Tor (Settings → Privacy). Failed: it tries again by itself, and meanwhile nothing connects. */
+export type TorStatus = { state: "off" } | { state: "starting"; percent: number } | { state: "on" } | { state: "failed"; message: string };
+
+/** Tor just turned on or off; `stayed`: server terminals without tmux left on the old way until they reconnect. */
+export interface TorSwitch {
+  status: TorStatus;
+  stayed: number;
+  /** Something to tell you, such as Tor's state not saved for next time. */
+  warning?: string | null;
+}
 
 export type SessionEvent = { type: "output"; data: string } | { type: "status"; state: SessionState };
 

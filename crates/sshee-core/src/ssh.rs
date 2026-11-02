@@ -76,17 +76,30 @@ pub fn program(name: &str) -> std::ffi::OsString {
 }
 
 /// Options shared by interactive sessions and one-off commands.
-/// Everything before the destination.
+/// Everything before the destination. While Tor is on, they send the
+/// connection through it (see `tor`).
 pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
+    args(t, env, crate::tor::proxy_command_for(t))
+}
+
+/// For reading your config with `ssh -G`, which connects nowhere. While Tor
+/// is on it gets Tor's ProxyCommand too: with one, ssh looks no names up.
+fn config_args(t: &SshTarget) -> Vec<String> {
+    args(t, &SshEnv::default(), crate::tor::proxy_command())
+}
+
+fn args(t: &SshTarget, env: &SshEnv, tor: Option<String>) -> Vec<String> {
     let mut a: Vec<String> = t.extra_args.clone();
     let mut opt = |v: &str| {
         a.push("-o".into());
         a.push(v.into());
     };
     // Notice a dead connection within ~15s instead of hanging forever.
+    // Through Tor a route can stall for a few seconds and come back, and the
+    // first connection may wait for Tor to start.
     opt("ServerAliveInterval=5");
-    opt("ServerAliveCountMax=3");
-    opt("ConnectTimeout=10");
+    opt(if tor.is_some() { "ServerAliveCountMax=6" } else { "ServerAliveCountMax=3" });
+    opt(if tor.is_some() { "ConnectTimeout=60" } else { "ConnectTimeout=10" });
     // Kerberos is tried first where a system turns it on (Debian and Ubuntu
     // do), and can cost a second or more on every connect; nobody here uses it.
     opt("GSSAPIAuthentication=no");
@@ -97,9 +110,13 @@ pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
     if cfg!(unix) {
         if let Some(dir) = &env.control_dir {
             opt("ControlMaster=auto");
-            opt(&format!("ControlPath={}/%C", dir.display()));
+            // Connections through Tor share only with each other.
+            opt(&format!("ControlPath={}/{}%C", dir.display(), if tor.is_some() { TOR_SHARED } else { "" }));
             opt("ControlPersist=300");
         }
+    }
+    if let Some(cmd) = &tor {
+        a.extend(crate::tor::ssh_options(cmd));
     }
     if let Some(u) = &t.user {
         a.push("-l".into());
@@ -119,6 +136,36 @@ pub fn common_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
         a.push(format!("IdentityAgent=\"{}\"", expand_tilde(agent)));
     }
     a
+}
+
+/// What starts the name of a shared connection that goes through Tor.
+const TOR_SHARED: &str = "t";
+
+/// Ends the shared connections (see `SshEnv::control_dir`) that go through
+/// Tor, or the ones that don't: after Tor is turned on or off, nothing
+/// lingers on the old way. Sessions still using one end with it.
+pub fn close_shared(env: &SshEnv, tor: bool) {
+    let Some(dir) = env.control_dir.as_ref().filter(|_| cfg!(unix)) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut waiting = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // ssh names them by a 40-digit hash (%C).
+        let hash = name.strip_prefix(TOR_SHARED).filter(|_| tor).unwrap_or(&name);
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) || (hash.len() == name.len()) == tor {
+            continue;
+        }
+        let mut cmd = Command::new(ssh_program());
+        cmd.arg("-o").arg(format!("ControlPath={}", entry.path().display())).args(["-O", "exit", "sshee"]);
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        hide_console(&mut cmd);
+        if let Ok(child) = cmd.spawn() {
+            waiting.push(child);
+        }
+    }
+    for mut child in waiting {
+        let _ = child.wait();
+    }
 }
 
 pub fn expand_tilde(p: &str) -> String {
@@ -218,7 +265,20 @@ fn labels_questions() -> bool {
 /// per line. It reads the config only, without connecting.
 pub fn ssh_config(t: &SshTarget) -> Result<String, OpError> {
     let mut cmd = Command::new(ssh_program());
-    cmd.args(common_args(t, &SshEnv::default())).arg("-G").arg("--").arg(&t.destination);
+    cmd.args(config_args(t)).arg("-G").arg("--").arg(&t.destination);
+    cmd.stdin(Stdio::null()).stderr(Stdio::null());
+    hide_console(&mut cmd);
+    let out = cmd.output().map_err(spawn_error)?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Your config for `t` as you wrote it, Tor's ProxyCommand left out, so a
+/// ProxyJump or ProxyCommand of yours shows. Names aren't canonicalized, so
+/// nothing is looked up (unless `CanonicalizePermittedCNAMEs` is set, which
+/// `tor::check` asks first).
+pub fn ssh_config_as_written(t: &SshTarget) -> Result<String, OpError> {
+    let mut cmd = Command::new(ssh_program());
+    cmd.args(["-o", "CanonicalizeHostname=no"]).args(args(t, &SshEnv::default(), None)).arg("-G").arg("--").arg(&t.destination);
     cmd.stdin(Stdio::null()).stderr(Stdio::null());
     hide_console(&mut cmd);
     let out = cmd.output().map_err(spawn_error)?;
@@ -234,7 +294,7 @@ pub fn config_value(config: &str, key: &str) -> Option<String> {
 /// of `ssh -G` once per target in a run.
 fn password_for(t: &SshTarget) -> Arc<PasswordFor> {
     static SEEN: OnceLock<Mutex<HashMap<Vec<String>, Arc<PasswordFor>>>> = OnceLock::new();
-    let mut key = common_args(t, &SshEnv::default());
+    let mut key = config_args(t);
     key.push(t.destination.clone());
     let seen = SEEN.get_or_init(Default::default);
     if let Some(known) = seen.lock().unwrap().get(&key) {
@@ -248,7 +308,9 @@ fn password_for(t: &SshTarget) -> Arc<PasswordFor> {
     let user = get("user").or_else(|| t.user.clone()).unwrap_or_default();
     let host = get("hostkeyalias").or_else(|| get("hostname")).unwrap_or_else(|| t.destination.clone());
     // Through ProxyJump or ProxyCommand another ssh logs in to the hop first.
-    let hops = ["proxyjump", "proxycommand"].iter().any(|k| get(k).is_some_and(|v| v != "none"));
+    // Not while Tor is on: its ProxyCommand logs in to nothing, and a server
+    // with a hop of its own doesn't connect then (see `tor::check`).
+    let hops = !crate::tor::is_on() && ["proxyjump", "proxycommand"].iter().any(|k| get(k).is_some_and(|v| v != "none"));
     let found = Arc::new(PasswordFor { who: format!("{user}@{host}"), hops, labels_questions: labels_questions() });
     seen.lock().unwrap().insert(key, found.clone());
     found

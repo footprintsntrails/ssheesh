@@ -12,13 +12,21 @@
 </div>
 
 > [!WARNING]
-> **Version 0.9 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
+> **Version 0.10 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
 <p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a server's terminal with the log it printed opened beside it, its tabs along the top, and an AI agent that needs you"></p>
 
-SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each saying whose it is: “Files (web-1)”. It checks your servers' security and frees their disks with one click each.
+SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each saying whose it is: “Files (web-1)”. It checks your servers' security and frees their disks with one click each, and with one more it hides where you connect from, through Tor.
 
 ## What makes it different
+
+### Connect through Tor, in one click
+
+Press the onion above Settings and everything goes through Tor: terminals, files, stats and tunnels. Your servers and their logs see a Tor address instead of yours, and your internet provider sees Tor, not which servers you use. If Tor can't carry a connection, the connection isn't made: nothing slips around it, not even a name lookup. Tor is built in, so there's nothing to install, and terminals in `tmux` move over without losing their place.
+
+It's also fast, for Tor. Before a server's first connection, SSHeesh times a dozen Tor routes to it and keeps the quickest. In our tests a keystroke came back in about 70 ms that way, against about 115 ms on a random route as Tor would pick, and a login took about a second. Your own connection adds its share.
+
+<p align="center"><img src="docs/media/tor.gif" alt="who am i shows the server sees your own address; one click on the onion turns Tor on, the terminal moves over in a second, and who am i now shows a Tor address, with an onion beside the server's name"></p>
 
 ### Wi-Fi drops, your work doesn't
 
@@ -54,7 +62,7 @@ Tabs on top or under each server, one tab at a time or several side by side, and
 
 **Simple, and the screen is yours.** The terminal gets the room, and a button shows up when you reach for it, not before. Nothing to learn first: it reads like a browser.
 
-**Your servers stay yours.** No account and no cloud: hosts, keys and passwords stay on your computer, and passwords live in your system's keychain. SSHeesh talks to your servers, and to GitHub to check for updates. Files you upload lose their metadata first (a photo's location and camera, a document's author); your own copy stays as it is.
+**Your servers stay yours.** No account and no cloud: hosts, keys and passwords stay on your computer, and passwords live in your system's keychain. SSHeesh talks to your servers (through Tor, if you like), and to GitHub to check for updates. Files you upload lose their metadata first (a photo's location and camera, a document's author); your own copy stays as it is.
 
 **It's convenient from the first minute.** Paste a whole `ssh` command and every field fills in; your `~/.ssh/config`, keys and agent just work. Errors come in plain words, and every command SSHeesh suggests says what it does.
 
@@ -116,15 +124,15 @@ npm run tauri build    # make an installer
 | `src-tauri` | The desktop app shell; exposes the core to the window. |
 | `src` | The interface: React, Tailwind, xterm.js. |
 
-Everything remote runs through the system `ssh` with connection sharing, so files and stats reuse the terminal's login. Durable sessions are named `tmux` sessions on the server.
+Everything remote runs through the system `ssh` with connection sharing, so files and stats reuse the terminal's login. Durable sessions are named `tmux` sessions on the server. With Tor on, ssh hands each connection to SSHeesh's own Tor client, [Arti](https://gitlab.torproject.org/tpo/core/arti), through a `ProxyCommand`.
 
 ## Roadmap
 
 What's planned next. The order may still change.
 
-- **0.10: Docker and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services, and version history for config files.
-- **0.11: workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
-- **0.12: sync.** Encrypted sync through a folder you pick, with no account.
+- **0.11: Docker and services.** Compose stacks with per-container stats, and updates you can roll back. systemd services, and version history for config files.
+- **0.12: workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, importing from other SSH apps, and `ssh://` links.
+- **0.13: sync.** Encrypted sync through a folder you pick, with no account.
 - **Along the way:** signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
 
 See what changed in each version in the [changelog](CHANGELOG.md).
@@ -136,6 +144,8 @@ Made by [@footprintsntrails](https://github.com/footprintsntrails), built togeth
 Terminal color schemes come from their open-source authors: Tokyo Night, Catppuccin, Dracula, Nord, One Dark, Gruvbox and Solarized.
 
 Icons in prompts like oh-my-posh and Starship come from the [Nerd Fonts](https://www.nerdfonts.com) symbols font (MIT; each icon set under its own open license). Server icons are [Phosphor](https://phosphoricons.com) (MIT) and [pixelarticons](https://github.com/halfmage/pixelarticons) by Gerrit Halfmann (MIT).
+
+Tor comes from [Arti](https://gitlab.torproject.org/tpo/core/arti), the Tor Project's Tor in Rust (MIT or Apache 2.0). SSHeesh isn't made or endorsed by the Tor Project.
 
 ## License
 

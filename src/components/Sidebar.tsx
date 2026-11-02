@@ -15,6 +15,7 @@ import { ConfigNotice } from "./ConfigImport";
 import { LoadLine, RailCard, RailLoad } from "./ServerLoad";
 import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
 import { SidebarTabs } from "./Tabs";
+import { TorButton } from "./TorButton";
 import { newTab } from "../lib/tabs";
 import { backoff } from "../lib/poll";
 import { toolItems } from "./Tabs";
@@ -528,8 +529,8 @@ export function ServerToolButton({ tool, menuAt, size = 19, className }: { tool:
 }
 
 /**
- * The foot of the sidebar: the two looks at a server, then Settings, where
- * most apps keep them. Settings is also a shortcut away, and in search.
+ * The foot of the sidebar: the two looks at a server, Tor, then Settings,
+ * where most apps keep them. Settings is also a shortcut away, and in search.
  */
 function SidebarFoot({ narrow, side }: { narrow: boolean; side: "left" | "right" }) {
   const openSettings = useStore((s) => s.openSettings);
@@ -538,6 +539,7 @@ function SidebarFoot({ narrow, side }: { narrow: boolean; side: "left" | "right"
     <div className={cn("flex shrink-0 gap-1 pt-1 pb-2.5", narrow ? "flex-col items-center" : "px-2.5")}>
       <ServerToolButton tool="checkup" menuAt={menuAt} className="size-10 rounded-[10px]" />
       <ServerToolButton tool="disk" menuAt={menuAt} className="size-10 rounded-[10px]" />
+      <TorButton className="size-10 rounded-[10px]" />
       <IconButton label={`Settings (${shortcutLabel("settings")})`} onClick={() => openSettings()} className="size-10 rounded-[10px]">
         <SIDEBAR_GLYPHS.settings size={20} />
       </IconButton>

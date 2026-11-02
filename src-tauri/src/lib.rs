@@ -12,12 +12,13 @@ use sshee_core::scrub::Cleaning;
 use sshee_core::secrets::PasswordStore;
 use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::session::{self, EventSink};
+use sshee_core::tor::{self, TorStatus};
 use sshee_core::{ErrorCode, Host, HostSource, HostStore, NewHost, OpError, SessionEvent, SessionManager, SessionSpec, SshEnv, Target};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 struct AppState {
     sessions: SessionManager,
@@ -217,6 +218,74 @@ fn close_session(app: AppHandle, state: State<AppState>, pane_id: String, target
             }
         });
     }
+}
+
+/// Where Tor is, and how many server terminals stayed on the old way
+/// because they have no tmux to pick up from.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TorSwitch {
+    status: TorStatus,
+    stayed: usize,
+    /// Something to tell you, such as Tor's state not saved for next time.
+    warning: Option<String>,
+}
+
+/// The ports your servers use, for Tor to have routes ready to.
+fn server_ports(hosts: &mut HostStore) -> Vec<u16> {
+    let mut ports: Vec<u16> = hosts.list().iter().filter_map(|h| h.port).collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+#[tauri::command]
+fn tor_status() -> TorStatus {
+    tor::status()
+}
+
+/// ssh options that send an ssh typed on this computer through Tor too (a
+/// recipe's check), while Tor is on.
+#[tauri::command]
+fn tor_ssh_options() -> Option<Vec<String>> {
+    tor::typed_ssh_options()
+}
+
+/// Turns Tor on or off, then moves what's connected to the new way at once:
+/// terminals in tmux, tunnels, Files and the stats.
+#[tauri::command]
+async fn set_tor(app: AppHandle, on: bool) -> Result<TorSwitch, OpError> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let ports = server_ports(&mut state.hosts.lock().unwrap());
+        // On failure Tor still counts as on: connections fail, none go around it.
+        let warning = tor::set_on(on, ports).err();
+        Ok(TorSwitch { warning, ..reroute(&app) })
+    })
+    .await
+}
+
+/// New Tor routes for every server: for when one turned slow.
+#[tauri::command]
+async fn new_tor_routes(app: AppHandle) -> Result<TorSwitch, OpError> {
+    blocking(move || {
+        tor::new_routes();
+        Ok(reroute(&app))
+    })
+    .await
+}
+
+fn reroute(app: &AppHandle) -> TorSwitch {
+    let state = app.state::<AppState>();
+    sshee_core::shell_pool::forget_all();
+    let stayed = state.sessions.reroute();
+    app.state::<sshee_core::tunnels::TunnelManager>().reroute();
+    // The shared connections left the old way: unless a terminal without
+    // tmux still uses one, they end now rather than linger for minutes.
+    if stayed == 0 {
+        sshee_core::ssh::close_shared(&state.env, !tor::is_on());
+    }
+    TorSwitch { status: tor::status(), stayed, warning: None }
 }
 
 fn ssh_target(state: &AppState, host_id: &str) -> Result<sshee_core::ssh::SshTarget, OpError> {
@@ -783,9 +852,17 @@ pub fn run() {
             }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            let mut hosts = HostStore::new(&data_dir);
+            let handle = app.handle().clone();
+            tor::watch(move |status| {
+                let _ = handle.emit("tor-status", status);
+            });
+            // Before anything connects: with Tor left on, nothing goes around it.
+            // ssh starts this same executable to reach it; see main.rs.
+            tor::init(std::env::current_exe().unwrap_or_default(), server_ports(&mut hosts));
             app.manage(AppState {
                 sessions: SessionManager::new(),
-                hosts: Mutex::new(HostStore::new(&data_dir)),
+                hosts: Mutex::new(hosts),
                 passwords: PasswordStore::default(),
                 host_keys: Arc::new(PendingKeys::default()),
                 transfers: Mutex::default(),
@@ -850,6 +927,10 @@ pub fn run() {
             stop_tunnel,
             local_port_problem,
             pick_local_port,
+            tor_status,
+            tor_ssh_options,
+            set_tor,
+            new_tor_routes,
         ])
         .build(tauri::generate_context!())
         .expect("error while starting SSHeesh")
@@ -860,6 +941,7 @@ pub fn run() {
                 app.state::<AppState>().sessions.close_all();
                 // Tunnels end with the app too; the ones you left on start again next time.
                 app.state::<sshee_core::tunnels::TunnelManager>().stop_all();
+                tor::shutdown();
             }
         });
 }

@@ -5,7 +5,7 @@ import { backend } from "./backend";
 import { arrange, insertAt, movePane, newId, paneIds, removePane, splitAt, visibleTree, type Arrangement, type Dir, type DropZone, type LayoutNode } from "./layout";
 import { quietStorage } from "./persist";
 import { useSettings } from "./settings";
-import type { ContainerRef, Host, HostKeyCheck, SessionState, TargetRef } from "./types";
+import type { ContainerRef, Host, HostKeyCheck, SessionState, TargetRef, TorStatus } from "./types";
 import { isMainWindow } from "./windowInfo";
 import { sameTarget, targetKey, toOpError } from "./types";
 
@@ -119,6 +119,9 @@ interface AppState {
   /** The pane you're on; on the main menu, the one you'll come back to. */
   focused: string;
   sessions: Record<string, SessionState | undefined>;
+  tor: TorStatus;
+  /** While Tor is on: ssh options for an ssh typed on this computer (a recipe's check). */
+  torSsh: string[] | null;
   paletteOpen: boolean;
   addHostOpen: boolean;
   toasts: Toast[];
@@ -432,6 +435,8 @@ export const useStore = create<AppState>()(
       panes: {},
       focused: "",
       sessions: {},
+      tor: { state: "off" },
+      torSsh: null,
       paletteOpen: false,
       addHostOpen: false,
       toasts: [],

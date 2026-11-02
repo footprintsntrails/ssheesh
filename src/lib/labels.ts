@@ -82,6 +82,24 @@ function glyph(icon: PhosphorIcon, pixel: string): ServerGlyph {
   };
 }
 
+/**
+ * An onion, for Tor: Phosphor has none, so it's drawn here on Phosphor's
+ * grid with its bold stroke, to sit beside the others.
+ */
+function Onion({ size = 24, className, style }: { size?: number | string; className?: string; style?: CSSProperties }) {
+  const line = { fill: "none", stroke: "currentColor", strokeWidth: 24, strokeLinecap: "round", strokeLinejoin: "round" } as const;
+  return createElement(
+    "svg",
+    { viewBox: "0 0 256 256", width: size, height: size, "aria-hidden": true, className, style },
+    createElement("path", { ...line, d: "M128 72C96 84 48 112 48 160C48 200 84 228 128 228C172 228 208 200 208 160C208 112 160 84 128 72Z" }),
+    createElement("path", { ...line, d: "M128 72C104 104 96 132 96 162C96 194 108 216 128 228M128 72C152 104 160 132 160 162C160 194 148 216 128 228" }),
+    createElement("path", { ...line, d: "M128 72C124 56 112 44 96 36M128 72C134 54 148 42 164 36" }),
+  );
+}
+
+/** Tor, in the pack you picked. */
+export const TOR_GLYPH = glyph(Onion as unknown as PhosphorIcon, "onion");
+
 /** This computer, in the sidebar and wherever servers are listed. */
 export const LOCAL_GLYPH = glyph(Laptop, "local");
 

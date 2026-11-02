@@ -28,8 +28,9 @@ pub enum SessionEvent {
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SessionState {
     Connecting { attempt: u32 },
-    /// `durable` is true when the shell lives in tmux on the server.
-    Connected { durable: bool },
+    /// `durable` is true when the shell lives in tmux on the server, `tor`
+    /// when the connection goes through Tor.
+    Connected { durable: bool, tor: bool },
     Reconnecting { attempt: u32, retry_in_ms: u64, reason: String },
     /// The connection dropped and automatic reconnecting is off: waiting
     /// for the user to press Reconnect.
@@ -79,6 +80,14 @@ struct Shared {
     auto_reconnect: AtomicBool,
     /// Put to sleep: its connection was let go of on purpose (see `sleep`).
     asleep: AtomicBool,
+    /// A server's terminal, not this computer's.
+    ssh: AtomicBool,
+    /// Its shell lives in tmux on the server (as last connected).
+    durable: AtomicBool,
+    /// This try has connected (not still signing in).
+    connected: AtomicBool,
+    /// Its connection was ended to reconnect another way (see `reroute`).
+    rerouting: AtomicBool,
     wake: Mutex<bool>,
     wake_cv: Condvar,
 }
@@ -141,6 +150,10 @@ impl SessionManager {
             closed: AtomicBool::new(false),
             auto_reconnect: AtomicBool::new(self.auto_reconnect.load(Ordering::SeqCst)),
             asleep: AtomicBool::new(false),
+            ssh: AtomicBool::new(false),
+            durable: AtomicBool::new(false),
+            connected: AtomicBool::new(false),
+            rerouting: AtomicBool::new(false),
             wake: Mutex::new(false),
             wake_cv: Condvar::new(),
         });
@@ -204,6 +217,30 @@ impl SessionManager {
         }
     }
 
+    /// Moves the server terminals onto Tor or off it, after it was turned
+    /// on or off. Each one in tmux, or still signing in, reconnects at once,
+    /// and one in tmux picks up where it was. One without tmux would lose
+    /// what its shell is doing, so it stays as it is until it reconnects by
+    /// itself. Returns how many stayed.
+    pub fn reroute(&self) -> usize {
+        let mut stayed = 0;
+        for s in self.sessions.lock().unwrap().values() {
+            if !s.ssh.load(Ordering::SeqCst) {
+                continue;
+            }
+            // No ssh running right now: its next try already goes the new way.
+            let mut killer = s.killer.lock().unwrap();
+            let Some(k) = killer.as_mut() else { continue };
+            if s.durable.load(Ordering::SeqCst) || !s.connected.load(Ordering::SeqCst) {
+                s.rerouting.store(true, Ordering::SeqCst);
+                let _ = k.kill();
+            } else {
+                stayed += 1;
+            }
+        }
+        stayed
+    }
+
     pub fn close(&self, id: &str) {
         let removed = self.sessions.lock().unwrap().remove(id);
         if let Some(s) = removed {
@@ -233,6 +270,18 @@ struct Exit {
 
 fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
     let is_ssh = matches!(spec.target, Target::Ssh(_));
+    shared.ssh.store(is_ssh, Ordering::SeqCst);
+    // Notes whether it's connected and the shell is in tmux, for `reroute`.
+    let sink: EventSink = {
+        let (inner, shared) = (sink, shared.clone());
+        Arc::new(move |e: SessionEvent| {
+            if let SessionEvent::Status { state: SessionState::Connected { durable, .. } } = &e {
+                shared.durable.store(*durable, Ordering::SeqCst);
+                shared.connected.store(true, Ordering::SeqCst);
+            }
+            inner(e)
+        })
+    };
     let mut attempt = 0u32;
     let mut failures = 0u32;
     let mut ever_ready = false;
@@ -241,7 +290,16 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
             return;
         }
         attempt += 1;
+        shared.connected.store(false, Ordering::SeqCst);
+        shared.durable.store(false, Ordering::SeqCst);
         sink(SessionEvent::Status { state: SessionState::Connecting { attempt } });
+        // A server Tor can't take shouldn't be tried over and over.
+        if let Target::Ssh(t) = &spec.target {
+            if let Some(message) = crate::tor::refusal(t) {
+                sink(SessionEvent::Status { state: SessionState::Failed { message } });
+                return;
+            }
+        }
         let started = Instant::now();
         let exit = match run_once(&shared, &spec, &sink) {
             Ok(exit) => exit,
@@ -252,6 +310,10 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
         };
         if shared.closed.load(Ordering::SeqCst) {
             return;
+        }
+        if shared.rerouting.swap(false, Ordering::SeqCst) {
+            failures = 0;
+            continue;
         }
         if shared.asleep.load(Ordering::SeqCst) {
             sink(SessionEvent::Status { state: SessionState::Asleep });
@@ -277,14 +339,18 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
                 failures = 0;
             }
             failures += 1;
+            // ssh only sees a connection Tor couldn't make close; Tor knows why.
+            let tor_why = match &spec.target {
+                Target::Ssh(t) if !exit.ready => crate::tor::recent_failure_for(t),
+                _ => None,
+            };
+            let reason = tor_why.unwrap_or_else(|| friendly_reason(&line));
             if shared.auto_reconnect.load(Ordering::SeqCst) {
                 let delay = backoff_ms(failures);
-                sink(SessionEvent::Status {
-                    state: SessionState::Reconnecting { attempt: failures, retry_in_ms: delay, reason: friendly_reason(&line) },
-                });
+                sink(SessionEvent::Status { state: SessionState::Reconnecting { attempt: failures, retry_in_ms: delay, reason } });
                 shared.sleep_unless_woken(delay);
             } else {
-                sink(SessionEvent::Status { state: SessionState::Disconnected { reason: friendly_reason(&line) } });
+                sink(SessionEvent::Status { state: SessionState::Disconnected { reason } });
                 shared.wait_for_wake();
             }
             continue;
@@ -385,6 +451,8 @@ pub fn backoff_ms(failures: u32) -> u64 {
 }
 
 fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Result<Exit, String> {
+    // Asked before ssh starts, as its ProxyCommand is chosen then too.
+    let tor = matches!(&spec.target, Target::Ssh(t) if crate::tor::carries(t));
     let size = *shared.size.lock().unwrap();
     let pair = native_pty_system().openpty(size).map_err(|e| format!("Couldn't open a terminal: {e}"))?;
     let mut child = pair.slave.spawn_command(build_command(spec)).map_err(|e| {
@@ -416,13 +484,13 @@ fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Resul
 
     let is_ssh = matches!(spec.target, Target::Ssh(_));
     if !is_ssh {
-        sink(SessionEvent::Status { state: SessionState::Connected { durable: false } });
+        sink(SessionEvent::Status { state: SessionState::Connected { durable: false, tor: false } });
     }
 
     let (tx, rx) = mpsc::channel();
     let reader_sink = sink.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(read_loop(reader, reader_sink));
+        let _ = tx.send(read_loop(reader, reader_sink, tor));
     });
 
     let status = child.wait().map_err(|e| e.to_string())?;
@@ -434,7 +502,7 @@ fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Resul
     Ok(Exit { code: status.exit_code(), tail, ready: ready || !is_ssh })
 }
 
-fn read_loop(mut reader: Box<dyn Read + Send>, sink: EventSink) -> (String, bool) {
+fn read_loop(mut reader: Box<dyn Read + Send>, sink: EventSink, tor: bool) -> (String, bool) {
     let mut utf8 = Utf8Stream::default();
     let mut markers = MarkerScanner::default();
     let mut tail = String::new();
@@ -448,7 +516,7 @@ fn read_loop(mut reader: Box<dyn Read + Send>, sink: EventSink) -> (String, bool
                 let (clean, found) = markers.scan(&text);
                 for m in found {
                     ready = true;
-                    sink(SessionEvent::Status { state: SessionState::Connected { durable: m == Marker::Durable } });
+                    sink(SessionEvent::Status { state: SessionState::Connected { durable: m == Marker::Durable, tor } });
                 }
                 if !clean.is_empty() {
                     tail.push_str(&clean);
@@ -728,7 +796,7 @@ mod tests {
         }));
         let next = || rx.recv_timeout(Duration::from_secs(5)).expect("a status");
         assert_eq!(next(), SessionState::Connecting { attempt: 1 });
-        assert_eq!(next(), SessionState::Connected { durable: false });
+        assert_eq!(next(), SessionState::Connected { durable: false, tor: false });
         m.sleep("p");
         assert_eq!(next(), SessionState::Asleep);
         // Automatic reconnecting is for drops; a session put to sleep waits for you.
@@ -736,7 +804,7 @@ mod tests {
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
         m.reconnect_now("p");
         assert_eq!(next(), SessionState::Connecting { attempt: 2 });
-        assert_eq!(next(), SessionState::Connected { durable: false });
+        assert_eq!(next(), SessionState::Connected { durable: false, tor: false });
         m.close("p");
     }
 

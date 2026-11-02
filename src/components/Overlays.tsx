@@ -21,7 +21,8 @@ import { openRecipes } from "./Recipes";
 import { openTunnels } from "./Tunnels";
 import { useSnippets } from "../lib/snippets";
 import { RECIPES } from "../lib/recipes";
-import { LOCAL_GLYPH, useVisibleHosts, type ServerGlyph } from "../lib/labels";
+import { LOCAL_GLYPH, TOR_GLYPH, useVisibleHosts, type ServerGlyph } from "../lib/labels";
+import { switchTor } from "../lib/tor";
 
 // ---------------------------------------------------------------- command palette
 
@@ -33,7 +34,7 @@ const SETTINGS_SECTIONS: [string, string, string][] = [
   ["appearance", "Appearance", "theme colors accent zoom size"],
   ["terminal", "Terminal", "font cursor colors scheme copy gpu idle afk sleep disconnect"],
   ["layout", "Layout", "tabs side by side sidebar compact vitals reconnect"],
-  ["privacy", "Privacy", "streamer mode metadata exif gps clean uploads"],
+  ["privacy", "Privacy", "tor onion anonymous hide ip address vpn proxy streamer mode metadata exif gps clean uploads"],
   ["updates", "Updates", "version download"],
   ["about", "About", "version license credits"],
 ];
@@ -64,6 +65,7 @@ export function CommandPalette() {
   const arrangePanes = useStore((s) => s.arrangePanes);
   const checkUpdates = useUpdates((u) => u.check);
   const pins = useBookmarks((b) => b.pins);
+  const torOn = useStore((s) => s.tor.state !== "off");
   const names = useNames();
   const compactMode = useSettings((s) => s.compactMode);
   const toggleSidebar = () => {
@@ -301,6 +303,12 @@ export function CommandPalette() {
             label={compactMode !== "off" ? "Turn off compact mode" : "Turn on compact mode"}
             hint={shortcutLabel("compact")}
             onSelect={run(toggleCompact)}
+          />
+          <Item
+            icon={TOR_GLYPH}
+            value="tor onion anonymous hide ip address vpn proxy privacy"
+            label={torOn ? "Turn off Tor" : "Connect through Tor"}
+            onSelect={run(() => void switchTor(!torOn))}
           />
           <Item
             icon={names.on ? Eye : EyeOff}

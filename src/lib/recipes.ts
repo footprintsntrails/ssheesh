@@ -6,6 +6,7 @@
 // Debian 12/13, Ubuntu 22.04/24.04 and Fedora/RHEL 9, and safe to run twice.
 
 import type { Host } from "./types";
+import { typedQuote } from "./format";
 
 /** Debian and Ubuntu (apt), or Fedora, RHEL and its rebuilds (dnf). */
 export type Os = "debian" | "rhel";
@@ -157,10 +158,15 @@ const quoteArg = (s: string) => (/^[\w~./:\\-]+$/.test(s) ? s : `"${s.replace(/"
  * signed in (SSHeesh shares one on macOS and Linux), so it really tests
  * whether logging in works.
  */
-export function sshCommand(host: Host | null, o: SshOptions = {}, windows = false): string {
+export function sshCommand(host: Host | null, o: SshOptions = {}, windows = false, tor: string[] | null = null): string {
   const args = ["ssh"];
   if (o.tty) args.push("-t");
   if (!windows) args.push("-o ControlPath=none");
+  // While Tor is on, this check goes through it too, as SSHeesh's own ssh does.
+  for (let i = 0; tor && i + 1 < tor.length; i += 2) {
+    const quoted = typedQuote(tor[i + 1], windows ? "powershell" : "posix");
+    if (quoted) args.push(`${tor[i]} ${quoted}`);
+  }
   if (o.keyOnly) args.push("-o PreferredAuthentications=publickey");
   if (!host) {
     args.push(o.user ? `${o.user}@localhost` : "localhost");
@@ -180,14 +186,14 @@ export function sshCommand(host: Host | null, o: SshOptions = {}, windows = fals
   return args.join(" ");
 }
 
-export function makeContext({ os, host, windows, values }: { os: Os; host: Host | null; windows: boolean; values: Record<string, string> }): RecipeContext {
+export function makeContext({ os, host, windows, values, tor = null }: { os: Os; host: Host | null; windows: boolean; values: Record<string, string>; tor?: string[] | null }): RecipeContext {
   const hostPort = host?.port ?? 22;
   return {
     os,
     hostPort,
     sshPort: isPort(values.sshPort) ? Number(values.sshPort) : hostPort,
     values,
-    ssh: (o) => sshCommand(host, o, windows),
+    ssh: (o) => sshCommand(host, o, windows, tor),
   };
 }
 
