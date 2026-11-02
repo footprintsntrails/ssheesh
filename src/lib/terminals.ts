@@ -16,11 +16,13 @@ import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scr
 import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { FrameGate, OutputPipeline } from "./output";
+import { ShadowEcho, type EchoPlace } from "./shadowEcho";
 import { findRows, matchPieces, nearestMatch, rowsFromCapture, type FindMatch, type FindRow } from "./termFind";
 import { sleepsNow, wasDown } from "./poll";
 import { maskText, streamerOn, targetName } from "./privacy";
 import { findSecrets, keyLines, keyOpenAfter, looksLikeKeyBody, secretsHidden } from "./secrets";
 import { markHintSeen, useSettings } from "./settings";
+import { addCount, addEcho, type EchoRoute } from "./typingCounts";
 import { fontStack, ICON_FONT, resolveScheme } from "./themes";
 import { useStore, type Attention, type PaneState, type Progress } from "./store";
 import type { ContainerRef, HostKeyCheck, SessionEvent, SessionState, TargetRef, TmuxScroll } from "./types";
@@ -206,6 +208,8 @@ export class TerminalHandle {
   private secrets: SecretMark[] = [];
   private secretsDrawn = "";
   private revealed = new Set<string>();
+  /** Counts how much typing could show at once (Settings → Terminal). It draws nothing. */
+  private shadow: ShadowEcho | null = null;
 
   constructor(
     readonly paneId: string,
@@ -323,9 +327,15 @@ export class TerminalHandle {
       if (this.tmux?.inMode && !NOT_TYPING.test(d)) {
         backend.writeSession(paneId, LEAVE_SCROLL);
         this.setTmux({ ...this.tmux, inMode: false, position: 0 });
+        this.shadow?.reset();
       }
+      this.countKey(d);
       backend.writeSession(paneId, d);
     });
+    this.setShadow(useSettings.getState().countTyping);
+    this.term.onWriteParsed(() => this.shadow?.parsed());
+    this.term.onResize(() => this.shadow?.reset());
+    this.term.buffer.onBufferChange(() => this.shadow?.reset());
     // On Windows the console between us and ssh (ConPTY) answers "which
     // terminal are you?" (DA1) itself. Our answer came on top of it, and the
     // extra one landed in the shell as "61;6;7;21;22;23;24;28;32;42c".
@@ -506,6 +516,50 @@ export class TerminalHandle {
     this.gpu = null;
   }
 
+  /**
+   * Counts this terminal's typing or doesn't, as Settings → Terminal says.
+   * A terminal on this computer has no wait to hide, so it isn't counted.
+   */
+  setShadow(on: boolean) {
+    if (!on || this.target.kind !== "host") {
+      this.shadow?.reset();
+      this.shadow = null;
+    } else if (!this.shadow) {
+      this.shadow = new ShadowEcho(
+        this.term,
+        {
+          count: (place, what) => addCount(this.echoRoute(), place, what),
+          echoTook: (place, ms) => addEcho(this.echoRoute(), place, ms),
+        },
+        () => this.echoPlace(),
+      );
+    }
+  }
+
+  private echoRoute(): EchoRoute {
+    return this.last?.kind === "connected" && this.last.tor ? "tor" : "direct";
+  }
+
+  /** Where a key goes, as far as anyone here knows: the foreground poll is seconds old, and absent on servers with no agent. */
+  private echoPlace(): EchoPlace {
+    const command = useStore.getState().foreground[this.paneId];
+    if (agentRunning(command)) return "agent";
+    if (command && FULL_SCREEN.has(command.toLowerCase())) return "screen";
+    // tmux keeps the terminal on its second screen all the time; without tmux that screen is a full-screen program's.
+    return !this.durable && this.term.buffer.active.type === "alternate" ? "screen" : "line";
+  }
+
+  /**
+   * Only what reaches a signed-in shell counts: a password for ssh itself
+   * goes before "connected". In streamer mode names on screen are masked, so
+   * cells can't be compared, and nothing would be drawn then anyway.
+   */
+  private countKey(d: string) {
+    if (!this.shadow) return;
+    if (this.last?.kind === "connected" && !streamerOn()) this.shadow.key(d);
+    else this.shadow.reset();
+  }
+
   /** You're looking at this terminal right now. */
   private watched(): boolean {
     return document.hasFocus() && document.visibilityState === "visible" && useStore.getState().focused === this.paneId;
@@ -560,6 +614,11 @@ export class TerminalHandle {
         })
         .catch(() => {});
     }, 700);
+  }
+
+  /** Called every few seconds: keys that got no answer are counted and forgotten. */
+  checkShadow() {
+    this.shadow?.tick();
   }
 
   /** Called every few seconds: a long unwatched run that stopped means it's probably done. */
@@ -1189,6 +1248,7 @@ export class TerminalHandle {
       this.noteOutput();
       return;
     }
+    this.shadow?.reset();
     const prev = this.last;
     this.last = e.state;
     if (e.state.kind !== "connecting") this.waking = false;
@@ -1231,6 +1291,7 @@ export class TerminalHandle {
   redraw() {
     if (this.disposed || !this.started) return;
     this.term.reset();
+    this.shadow?.reset();
     const { cols, rows } = this.term;
     backend.resizeSession(this.paneId, cols, Math.max(2, rows - 1));
     setTimeout(() => backend.resizeSession(this.paneId, cols, rows), 80);
@@ -1242,6 +1303,7 @@ export class TerminalHandle {
     window.clearTimeout(this.markTimer);
     window.clearTimeout(this.gpuRelease);
     this.gate.dispose();
+    this.setShadow(false);
     backend.closeSession(this.paneId, this.target, this.sessionKey, endRemote);
     this.term.dispose();
     this.el.remove();
@@ -1296,6 +1358,7 @@ if (typeof window !== "undefined") {
     for (const h of handles.values()) {
       h.checkQuiet(now);
       h.checkIdle(now);
+      h.checkShadow();
     }
   }, 2000);
   // Coming back to the window counts as seeing the focused terminal.
@@ -1308,6 +1371,10 @@ if (typeof window !== "undefined") {
 useSettings.subscribe((s, prev) => {
   if (s.gpuRendering === prev.gpuRendering) return;
   for (const h of handles.values()) h.setGpu(s.gpuRendering);
+});
+useSettings.subscribe((s, prev) => {
+  if (s.countTyping === prev.countTyping) return;
+  for (const h of handles.values()) h.setShadow(s.countTyping);
 });
 useSettings.subscribe((s, prev) => {
   if (s.hideSecrets === prev.hideSecrets) return;

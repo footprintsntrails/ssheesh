@@ -22,6 +22,7 @@ import { startForegroundWatch } from "./lib/agents";
 import { startTorWatch } from "./lib/tor";
 import { startRoleDetection } from "./lib/roles";
 import { useLabels } from "./lib/labels";
+import { useTypingCounts } from "./lib/typingCounts";
 import { isMainWindow, openedFor } from "./lib/windowInfo";
 import { startUpdateChecks, useUpdates } from "./lib/updates";
 import { toggleStreamer, useLearnLocalIdentity } from "./lib/privacy";
@@ -192,6 +193,8 @@ function useSharedAcrossWindows() {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "sshee-settings") void useSettings.persist.rehydrate();
       else if (e.key === "sshee-labels") void useLabels.persist.rehydrate();
+      // Every window counts: each goes on from what another just saved.
+      else if (e.key === "sshee-typing-counts") void useTypingCounts.persist.rehydrate();
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

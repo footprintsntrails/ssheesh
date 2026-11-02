@@ -70,6 +70,8 @@ export interface Settings {
   gpuRendering: boolean;
   /** Selecting text in a terminal copies it. */
   copyOnSelect: boolean;
+  /** Counts how much typing could appear before the server answers. Draws nothing; see typingCounts.ts. */
+  countTyping: boolean;
   terminalPadding: number;
   reconnectMode: ReconnectMode;
   /**
@@ -166,6 +168,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // blocks; Linux's WebKitGTK may have no GPU at all.
   gpuRendering: isWindows || isMac,
   copyOnSelect: true,
+  countTyping: false,
   terminalPadding: 12,
   reconnectMode: "ask",
   idleSleep: 20,

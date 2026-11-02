@@ -34,6 +34,7 @@ import { isMac, isWindows, SHORTCUT_GROUPS, SHORTCUT_NAMES, shortcutLabel } from
 import type { Arrangement } from "../lib/layout";
 import { markHintSeen, useSettings, type Settings, type WelcomeMode, type WelcomePart } from "../lib/settings";
 import { useStore } from "../lib/store";
+import { clearTypingCounts, typingSummary, useTypingCounts, type TypingSummary } from "../lib/typingCounts";
 import {
   ACCENTS,
   APP_THEMES,
@@ -104,6 +105,7 @@ const SEARCH_INDEX: { section: string; label: string; words: string }[] = [
   { section: "terminal", label: "When the connection drops", words: "reconnect disconnect auto ask network" },
   { section: "terminal", label: "Disconnect unused terminals", words: "idle afk sleep disconnect unused away tmux timeout" },
   { section: "terminal", label: "Tell me when a terminal needs me", words: "notification bell alert agent claude codex done attention" },
+  { section: "terminal", label: "Count how much typing could appear instantly", words: "local echo predict latency lag slow tor delay test measure statistics" },
   { section: "terminal", label: "Hide secrets", words: "tokens keys passwords api redact mask privacy streamer env" },
   { section: "terminal", label: "Errors", words: "highlight red error output logs" },
   { section: "terminal", label: "Warnings", words: "highlight yellow warn output logs" },
@@ -449,6 +451,66 @@ export function TerminalPreview({ s }: { s: Settings }) {
   );
 }
 
+function percent(share: number | null): string {
+  return share === null ? "–" : `${Math.round(share * 100)}%`;
+}
+
+function millis(ms: number | null): string {
+  return ms === null ? "–" : ms === Infinity ? "over 3 s" : `up to ${ms} ms`;
+}
+
+const TYPING_ROWS: { label: string; hint?: string; show: (t: TypingSummary) => string }[] = [
+  { label: "Keys counted", show: (t) => t.keys.toLocaleString() },
+  { label: "Typed into an agent", hint: "Agents and full-screen programs like vim wouldn't get instant letters.", show: (t) => percent(t.agentShare) },
+  { label: "Typed into a full-screen program", show: (t) => percent(t.screenShare) },
+  { label: "Could appear at once", hint: "Of what's typed at a command line. The first letters of each line always wait for the server.", show: (t) => percent(t.atOnceShare) },
+  { label: "…on rows that look like a prompt", hint: "Closer to what it could really do, since real letters would need the server to announce its prompts.", show: (t) => percent(t.atPromptShare) },
+  { label: "The guess was right", show: (t) => percent(t.rightShare) },
+  { label: "Half of the replies took", show: (t) => millis(t.echoMedian) },
+  { label: "9 of 10 replies took", show: (t) => millis(t.echoP90) },
+  { label: "Guessed, came back different", show: (t) => t.wrong.toLocaleString() },
+  { label: "Guessed, nothing came back", hint: "These could have been password letters on screen. The reason this is only a count so far.", show: (t) => t.silent.toLocaleString() },
+  { label: "Held back, nothing came back", hint: "Password prompts, and vim's commands too: keys the test rightly wouldn't have shown.", show: (t) => t.heldSilent.toLocaleString() },
+  { label: "Stopped by text to the right", hint: "Suggestions from zsh or fish, or a right-hand prompt.", show: (t) => t.midLine.toLocaleString() },
+  { label: "Trusted a row that reads like a password prompt", hint: "Should stay 0.", show: (t) => t.passwordOpen.toLocaleString() },
+];
+
+/** The counts so far, side by side for Tor and without it. */
+function TypingCountsRows() {
+  const counts = useTypingCounts((c) => c.counts);
+  if (!counts.tor && !counts.direct) return null;
+  const tor = typingSummary(counts.tor);
+  const direct = typingSummary(counts.direct);
+  return (
+    <div className="border-b border-line py-3.5">
+      <table className="w-full text-[12px]">
+        <thead>
+          <tr className="text-left text-[11px] text-fg-3">
+            <th className="pb-1.5 font-normal" />
+            <th className="w-[92px] pb-1.5 text-right font-normal">Through Tor</th>
+            <th className="w-[92px] pb-1.5 text-right font-normal">Direct</th>
+          </tr>
+        </thead>
+        <tbody>
+          {TYPING_ROWS.map((row) => (
+            <tr key={row.label} className="align-top">
+              <td className="py-1 pr-3 text-fg-2">
+                {row.label}
+                {row.hint && <div className="text-[11px] leading-snug text-fg-3">{row.hint}</div>}
+              </td>
+              <td className="py-1 text-right text-fg tabular-nums">{row.show(tor)}</td>
+              <td className="py-1 text-right text-fg tabular-nums">{row.show(direct)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button onClick={clearTypingCounts} className="mt-2 flex items-center gap-1 text-[11.5px] text-fg-3 hover:text-fg-2">
+        <RotateCcw size={11} /> Start the counts over
+      </button>
+    </div>
+  );
+}
+
 function Terminal({ s, set, reset }: SectionProps) {
   const schemes = [["auto", { name: "Match app" }] as const, ...Object.entries(TERMINAL_SCHEMES), [OWN_SCHEME, { name: "Your own" }] as const];
   const own = s.terminalScheme === OWN_SCHEME;
@@ -473,6 +535,7 @@ function Terminal({ s, set, reset }: SectionProps) {
             "cursorBlink",
             "gpuRendering",
             "copyOnSelect",
+            "countTyping",
             "terminalPadding",
             "reconnectMode",
             "idleSleep",
@@ -639,6 +702,13 @@ function Terminal({ s, set, reset }: SectionProps) {
       >
         <Switch label="Tell me when a terminal needs me" checked={s.notifyAttention} onChange={(v) => set({ notifyAttention: v })} />
       </Row>
+      <Row
+        label="Count how much typing could appear instantly"
+        hint="A test for a possible feature: letters showing before the server answers. Nothing changes on screen and nothing leaves this computer. It only keeps counts, not what you type."
+      >
+        <Switch label="Count how much typing could appear instantly" checked={s.countTyping} onChange={(v) => set({ countTyping: v })} />
+      </Row>
+      <TypingCountsRows />
 
       <SubHeading title="Welcome" hint="What a new terminal on a server shows first. The server's notices, like updates waiting or a restart needed, always show." />
       <Row label="Show" stack>
