@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1 — Tor with a wrong clock, files you can paste, a terminal that holds still
+
+- **Tor starts when your computer's clock is off.** With a clock days behind, Tor stopped at 15% for good, and days ahead at 7%, and nothing said why. Tor's relays tell it the time, and once they agree SSHeesh runs Tor by that clock; your computer's clock stays as it is. Tor then starts on its own, which can take up to a minute. A clock more than 7 days ahead still has to be set right, since Tor would otherwise have to accept an old list of relays. While Tor starts, its button and Settings say what holds it up: the clock, no internet, or a network that blocks Tor.
+- **A terminal that doesn't flicker.** An agent with a lot of output (OMP, say) erases the screen and prints it all again, and over a network that arrives in pieces, so you saw empty and half-drawn screens. A burst of output now shows as one picture. What you type still answers at once.
+- **Paste files into Files.** Copy files on your computer, press Ctrl+V (⌘V on a Mac) in Files, and they upload to the folder you're looking at. It's in Files' menus too.
+- **See what's in a folder without going there.** The » beside a folder lists what's inside right there; a file opens in the preview while you stay where you are. The right arrow key opens the list too.
+
 ## 0.10.0 — Tor, in one click
 
 - **Connect through Tor.** The onion above Settings sends everything to your servers through Tor: terminals, files, stats and tunnels. Servers and their logs see a Tor address instead of yours, and your internet provider sees Tor, not which servers you use. Tor is built in, with nothing to install. If Tor can't carry a connection, the connection isn't made: nothing goes around it, not even a name lookup. Turning it on moves terminals in `tmux` over without losing their place. Servers on your own network connect directly; one reached through a jump host or a ProxyCommand of your own in `~/.ssh/config` doesn't connect while Tor is on, since Tor would quietly replace that route.
