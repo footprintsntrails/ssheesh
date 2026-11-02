@@ -12,6 +12,7 @@ on:
       - "crates/sshee-core/src/ssh.rs"
       - "crates/saturating-time/**"
       - "crates/sshee-core/examples/tor_ssh_check.rs"
+      - "crates/sshee-core/examples/tor_toggle.rs"
       - "Cargo.lock"
       - ".github/workflows/tor-check.yml"
 
@@ -31,7 +32,9 @@ jobs:
       - name: The library that hung on Windows
         run: cargo test -p saturating-time
       - name: Build
-        run: cargo build -p sshee-core --release --example tor_ssh_check
+        run: cargo build -p sshee-core --release --example tor_ssh_check --example tor_toggle
+      - name: Turn Tor on and off, and start it afresh
+        run: cargo run -p sshee-core --release --example tor_toggle
       - name: Start Tor and reach a server through it
         shell: bash
         run: |

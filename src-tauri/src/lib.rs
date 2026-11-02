@@ -294,11 +294,7 @@ fn tor_log_path() -> Option<String> {
 /// Starts a Tor that won't start again from nothing.
 #[tauri::command]
 async fn start_tor_afresh() -> Result<(), OpError> {
-    blocking(|| {
-        tor::start_afresh();
-        Ok(())
-    })
-    .await
+    blocking(|| tor::start_afresh().map_err(OpError::failed)).await
 }
 
 /// New Tor routes for every server: for when one turned slow.

@@ -86,6 +86,9 @@ const STALL_NOTE: Duration = Duration::from_secs(20);
 /// With no progress this long, Tor starts over; each time it waits twice as
 /// long, as a very slow network does get there if it's left to.
 const STALL_RESTART: Duration = Duration::from_secs(90);
+/// Left in Tor's folder when Start fresh couldn't delete what it keeps, for the
+/// next time the app opens, when nothing has it open.
+const FRESH_NEXT_TIME: &str = "start-fresh";
 /// The most Tor's log grows to in a run of the app.
 const LOG_LIMIT: u64 = 8 * 1024 * 1024;
 /// How long what `check` found about a server holds.
@@ -186,6 +189,7 @@ fn dir() -> Option<PathBuf> {
 /// as its ProxyCommand, and `ports` the ports your servers use.
 pub fn init(exe: PathBuf, ports: Vec<u16>) {
     let _ = EXE.set(exe);
+    finish_forgetting();
     if dir().is_some_and(|d| d.join("on").exists()) {
         let _ = set_on(true, ports);
     }
@@ -562,23 +566,26 @@ fn set_status_if(e: &Engine, run: u64, s: TorStatus, client: Option<Client>) -> 
 
 fn start(e: &'static Engine) {
     *BROKEN.lock().unwrap() = None;
-    let run = {
-        let mut now = e.status.lock().unwrap();
-        let run = e.run.fetch_add(1, Ordering::SeqCst) + 1;
-        if e.client.lock().unwrap().is_some() {
-            put_status(&mut now, TorStatus::On);
-            return;
-        }
-        put_status(&mut now, TorStatus::Starting { percent: 0, note: None });
-        // Worked out again each start: you may have set your clock right since.
-        e.shift.store(0, Ordering::SeqCst);
-        run
-    };
+    // Held until this start is on record, so `stop` either comes first, which
+    // the next line sees, or finds it and ends it. A start that outlived Off
+    // would tell the app Tor is on while connections go without it.
+    let mut now = e.status.lock().unwrap();
+    if !is_on() {
+        return;
+    }
+    let run = e.run.fetch_add(1, Ordering::SeqCst) + 1;
+    if e.client.lock().unwrap().is_some() {
+        put_status(&mut now, TorStatus::On);
+        return;
+    }
+    put_status(&mut now, TorStatus::Starting { percent: 0, note: None });
+    // Worked out again each start: you may have set your clock right since.
+    e.shift.store(0, Ordering::SeqCst);
     let boot = e.rt.spawn(async move {
         let mut wait = Duration::from_secs(5);
         let mut stall = STALL_RESTART;
         let mut emptied = false;
-        let mut healed = false;
+        let mut healed = Vec::new();
         while e.run.load(Ordering::SeqCst) == run {
             match bootstrap(e, run, stall).await {
                 Ok(client) => {
@@ -589,18 +596,17 @@ fn start(e: &'static Engine) {
                     tracing::warn!(target: "ssheesh", "no progress for {}s: starting over", stall.as_secs());
                     // The first time, without the relay lists it has: they may be what's in the way.
                     if !emptied {
-                        emptied = true;
-                        forget(&["cache"]);
+                        emptied = forget(&["cache"]);
                     }
                     stall = (stall * 2).min(Duration::from_secs(600));
                 }
-                // No retry would help, so it starts from nothing, once.
-                Err(Boot::Damaged(message)) if !healed => {
-                    tracing::warn!(target: "ssheesh", "{message}: starting from nothing");
-                    healed = true;
-                    forget(&["cache", "state"]);
+                // No retry would help, so it gets that folder anew, once. One that can't
+                // be deleted yet waits its turn below, and is tried again.
+                Err(Boot::Damaged(folder, message)) if !healed.contains(&folder) && forget(&[folder]) => {
+                    tracing::warn!(target: "ssheesh", "{message}: got rid of its {folder}");
+                    healed.push(folder);
                 }
-                Err(Boot::Damaged(message) | Boot::Failed(message)) => {
+                Err(Boot::Damaged(_, message) | Boot::Failed(message)) => {
                     if !set_status_if(e, run, TorStatus::Failed { message }, None) {
                         return;
                     }
@@ -630,33 +636,83 @@ fn stop(e: &'static Engine) {
 }
 
 /// Deletes what Tor keeps (`cache`, the lists of relays; `state`, its entry
-/// relays) so that it gets them anew.
-fn forget(what: &[&str]) {
+/// relays) so that it gets them anew, in the order given, stopping at one it
+/// can't. Whether they're gone: on Windows an ended start holds its files open
+/// for minutes, and nothing in a folder with an open file can go.
+fn forget(what: &[&str]) -> bool {
+    dir().is_some_and(|base| forget_in(&base, what))
+}
+
+/// Each folder is moved aside first, so it goes whole or stays whole: Tor
+/// couldn't read half of one.
+fn forget_in(base: &std::path::Path, what: &[&str]) -> bool {
+    what.iter().all(|name| {
+        let going = base.join(format!("{name}{GOING}"));
+        let _ = std::fs::remove_dir_all(&going);
+        match std::fs::rename(base.join(name), &going) {
+            Ok(()) => {
+                let _ = std::fs::remove_dir_all(&going);
+                true
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => {
+                tracing::warn!(target: "ssheesh", "couldn't delete Tor's {name}: {}", e.kind());
+                false
+            }
+        }
+    })
+}
+
+/// What a folder of Tor's is called on its way out.
+const GOING: &str = ".gone";
+
+/// As the app opens, when nothing of Tor's is open: what couldn't be deleted
+/// last time can be now.
+fn finish_forgetting() {
     let Some(base) = dir() else { return };
-    for name in what {
-        let _ = std::fs::remove_dir_all(base.join(name));
+    for name in ["cache", "state"] {
+        let _ = std::fs::remove_dir_all(base.join(format!("{name}{GOING}")));
+    }
+    if base.join(FRESH_NEXT_TIME).exists() && forget_in(&base, &["cache", "state"]) {
+        let _ = std::fs::remove_file(base.join(FRESH_NEXT_TIME));
     }
 }
 
 /// Starts Tor again from nothing, for one that won't start. Only when you ask
 /// for the entry relays to go: anyone able to stall Tor could otherwise make it
 /// keep picking new ones, until it picks theirs.
-pub fn start_afresh() {
-    let Some(e) = ENGINE.get().filter(|_| is_on()) else { return };
-    {
-        let _now = e.status.lock().unwrap();
-        e.run.fetch_add(1, Ordering::SeqCst);
+pub fn start_afresh() -> Result<(), String> {
+    let Some(e) = ENGINE.get().filter(|_| is_on()) else { return Ok(()) };
+    let run = {
+        let mut now = e.status.lock().unwrap();
+        let run = e.run.fetch_add(1, Ordering::SeqCst) + 1;
         if let Some(boot) = e.booting.lock().unwrap().take() {
             boot.abort();
         }
         if e.carrying.load(Ordering::SeqCst) == 0 {
             e.client.lock().unwrap().take();
         }
-    }
-    // An aborted start lets go of Tor's folders as it unwinds.
+        put_status(&mut now, TorStatus::Starting { percent: 0, note: None });
+        run
+    };
+    // An aborted start lets go of Tor's folders as it unwinds, if it can. The
+    // relay lists go first, so the entry relays never go without them.
     std::thread::sleep(Duration::from_millis(300));
-    forget(&["cache", "state"]);
-    start(e);
+    let gone = forget(&["cache", "state"]);
+    if !gone {
+        if let Some(d) = dir() {
+            let _ = std::fs::write(d.join(FRESH_NEXT_TIME), b"");
+        }
+    }
+    // Unless turned off, or started again, in the meantime.
+    if e.run.load(Ordering::SeqCst) == run {
+        start(e);
+    }
+    if gone {
+        Ok(())
+    } else {
+        Err("Tor's files stay in use until SSHeesh closes, so Tor went on with what it has. Open SSHeesh again to start it fresh.".into())
+    }
 }
 
 /// Tor's log, for sending when it won't start.
@@ -696,7 +752,12 @@ fn start_log() {
     }
     let Ok(file) = std::fs::File::create(path) else { return };
     let log = Mutex::new(LimitedLog { file, written: 0 });
-    let what = Targets::new().with_default(LevelFilter::INFO).with_target("tor_dirmgr", LevelFilter::DEBUG).with_target("tor_dirclient", LevelFilter::DEBUG);
+    // Without `tor_guardmgr::guard`'s warnings, which name your entry relay in full.
+    let what = Targets::new()
+        .with_default(LevelFilter::INFO)
+        .with_target("tor_dirmgr", LevelFilter::DEBUG)
+        .with_target("tor_dirclient", LevelFilter::DEBUG)
+        .with_target("tor_guardmgr::guard", LevelFilter::ERROR);
     let layer = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(log);
     if tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer.with_filter(what))).is_ok() {
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -735,8 +796,9 @@ fn tor_config(e: &Engine, shift: u64) -> Result<TorClientConfig, String> {
 enum Boot {
     /// No progress for as long as it's given.
     Stalled,
-    /// What it kept from last time can't be read (a crash, a full disk).
-    Damaged(String),
+    /// What it kept from last time can't be read (a crash, a full disk): the
+    /// folder that's in, and what Tor said.
+    Damaged(&'static str, String),
     Failed(String),
 }
 
@@ -749,8 +811,20 @@ fn make_client(e: &'static Engine) -> Result<Client, Boot> {
         .config(config)
         .bootstrap_behavior(BootstrapBehavior::Manual)
         .create_unbootstrapped()
-        // Most often what it kept is unreadable; a bad setting would fail again, and say so.
-        .map_err(|e| Boot::Damaged(format!("Couldn't start Tor: {e}")))
+        .map_err(|e| boot_error(&e))
+}
+
+/// A failed start. Only what Tor says is unreadable gets deleted, each in its own
+/// folder: its entry relays shouldn't go over a folder's permissions or a full
+/// disk, or over a bad list of relays.
+fn boot_error(err: &arti_client::Error) -> Boot {
+    let message = format!("Couldn't start Tor: {err}");
+    match err.kind() {
+        ErrorKind::PersistentStateCorrupted => Boot::Damaged("state", message),
+        // Tor calls a relay list file that isn't a database a bad setting.
+        ErrorKind::CacheCorrupted | ErrorKind::InvalidConfig => Boot::Damaged("cache", message),
+        _ => Boot::Failed(message),
+    }
 }
 
 async fn bootstrap(e: &'static Engine, run: u64, stall: Duration) -> Result<Client, Boot> {
@@ -760,11 +834,10 @@ async fn bootstrap(e: &'static Engine, run: u64, stall: Duration) -> Result<Clie
     tokio::select! {
         started = client.bootstrap() => {
             started.map_err(|err| match err.kind() {
-                ErrorKind::PersistentStateCorrupted | ErrorKind::CacheCorrupted => Boot::Damaged(format!("Couldn't start Tor: {err}")),
                 ErrorKind::TorAccessFailed | ErrorKind::LocalNetworkError | ErrorKind::TorNetworkTimeout => {
                     Boot::Failed("Can't reach the Tor network. Check your internet connection.".to_string())
                 }
-                _ => Boot::Failed(format!("Couldn't start Tor: {err}")),
+                _ => boot_error(&err),
             })?;
             Ok(client)
         }
@@ -1315,6 +1388,24 @@ fn carry(sock: StdTcpStream) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forgetting_takes_whole_folders() {
+        let base = std::env::temp_dir().join(format!("sshee-tor-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("cache/inner")).unwrap();
+        std::fs::write(base.join("cache/inner/file"), b"x").unwrap();
+        std::fs::create_dir_all(base.join("state")).unwrap();
+        // What an earlier try couldn't finish is out of the way too.
+        std::fs::create_dir_all(base.join("cache.gone/old")).unwrap();
+        assert!(forget_in(&base, &["cache"]));
+        assert!(!base.join("cache").exists() && !base.join("cache.gone").exists());
+        assert!(base.join("state").exists());
+        // Already gone is gone.
+        assert!(forget_in(&base, &["cache", "state"]));
+        assert!(!base.join("state").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn the_door_lets_in_only_its_own_requests() {
