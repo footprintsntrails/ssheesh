@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2 — compact mode that hides again, and links that paste
+
+- **Compact mode's sidebar and top bar go away again.** A quick flick to the window's edge and back could leave one out for good, since it appeared after the pointer had already passed; a drag or leaving the window could too. Now it goes as soon as the pointer is elsewhere, or SSHeesh loses focus. A menu opened from it still keeps it out.
+- **A link copied as a link pastes.** Copy Link in Safari or Telegram puts no plain text on the clipboard, so pasting it into a server's terminal pasted nothing, and Claude Code there said the clipboard belonged to the server. The link goes in now, and rich text pastes as its words. A picture can't be pasted into a server's terminal; SSHeesh says to drag its file there instead.
+
 ## 0.9.1 — Enter after a new folder, and secrets you can see are hidden
 
 - **Enter opens a folder right after you make or rename it.** The new folder was picked, but Enter and the arrows did nothing until you clicked it, because the keyboard stayed with the name field that had gone.
