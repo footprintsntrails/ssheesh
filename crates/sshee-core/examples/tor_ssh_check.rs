@@ -1,22 +1,35 @@
 //! Tor for real, end to end, on the system this runs on: starts SSHeesh's Tor,
 //! then has the system's ssh reach a server through it, with the same options
 //! the app uses. The ProxyCommand is this program, as it's the app in SSHeesh.
-//! Being refused a login proves the connection got all the way there and back.
-//! Fails if Tor doesn't start, or ssh doesn't get there.
+//! Being refused a login proves the connection got all the way there and back,
+//! and the mark the ProxyCommand leaves proves it went through Tor: ssh that
+//! ignored the option would be refused just the same, straight from your address.
+//! Fails if Tor doesn't start, ssh doesn't get there, or ssh goes around Tor.
 //!
-//!   cargo run -p sshee-core --release --example tor_ssh_check -- test.rebex.net
+//!   cargo run -p sshee-core --release --example tor_ssh_check -- test.rebex.net [ssh program…]
 
 use sshee_core::ssh::{common_args, ssh_program, SshEnv, SshTarget};
 use sshee_core::tor::{self, TorStatus};
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::process::{exit, Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn main() {
+    let exe = std::env::current_exe().unwrap();
+    let mark = exe.with_file_name("went-through-tor");
+    if std::env::args().any(|a| a == "--tor-proxy") {
+        std::fs::write(&mark, "").unwrap();
+    }
     if let Some(code) = tor::proxy_main() {
         exit(code);
     }
-    let host = std::env::args().nth(1).unwrap_or_else(|| "test.rebex.net".into());
-    let exe = std::env::current_exe().unwrap();
+    let mut args = std::env::args().skip(1);
+    let host = args.next().unwrap_or_else(|| "test.rebex.net".into());
+    let mut programs: Vec<OsString> = args.map(OsString::from).collect();
+    if programs.is_empty() {
+        programs.push(ssh_program());
+    }
     println!("this program: {}", exe.display());
     let started = Instant::now();
     tor::init(exe, vec![]);
@@ -33,30 +46,41 @@ fn main() {
 
     let target = SshTarget { destination: host.clone(), user: Some("ssheesh-check".into()), ..Default::default() };
     assert!(tor::carries(&target), "this server should go through Tor");
-    let known = std::env::temp_dir().join("ssheesh-check-known-hosts");
-    let _ = std::fs::remove_file(&known);
+    for program in &programs {
+        if !reached(program, &target, &host, &mark) {
+            println!("FAILED: ssh didn't get through");
+            print_log();
+            exit(1);
+        }
+    }
+    tor::set_on(false, vec![]).unwrap();
+}
+
+fn reached(program: &OsStr, target: &SshTarget, host: &str, mark: &Path) -> bool {
+    let version = Command::new(program).arg("-V").output().expect("couldn't start ssh");
+    println!("{}: {}", program.display(), String::from_utf8_lossy(&version.stderr).trim());
     for attempt in 1..=3 {
+        let _ = std::fs::remove_file(mark);
         let begun = Instant::now();
-        let out = Command::new(ssh_program())
-            .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no"])
-            .arg("-o")
-            .arg(format!("UserKnownHostsFile=\"{}\"", known.display()))
-            .args(common_args(&target, &SshEnv::default()))
-            .args(["-T", "--", &host, "true"])
+        let out = Command::new(program)
+            .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"])
+            .args(common_args(target, &SshEnv::default()))
+            .args(["-T", "--", host, "true"])
             .stdin(Stdio::null())
             .output()
             .expect("couldn't start ssh");
         let said = String::from_utf8_lossy(&out.stderr);
         println!("ssh, try {attempt}, {} ms: {}", begun.elapsed().as_millis(), said.trim());
         if said.contains("Permission denied") {
+            if !mark.exists() {
+                println!("FAILED: ssh reached the server without going through Tor");
+                exit(1);
+            }
             println!("OK: reached the server through Tor, and it asked for a login");
-            tor::set_on(false, vec![]).unwrap();
-            exit(0);
+            return true;
         }
     }
-    println!("FAILED: ssh didn't get through");
-    print_log();
-    exit(1);
+    false
 }
 
 fn print_log() {

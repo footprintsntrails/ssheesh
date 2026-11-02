@@ -11,6 +11,7 @@ on:
       - "crates/sshee-core/src/tor.rs"
       - "crates/sshee-core/src/ssh.rs"
       - "crates/saturating-time/**"
+      - "crates/sshee-core/examples/tor_ssh_check.rs"
       - "Cargo.lock"
       - ".github/workflows/tor-check.yml"
 
@@ -38,3 +39,11 @@ jobs:
           cp target/release/examples/tor_ssh_check* "from a folder/with spaces/" 2>/dev/null || true
           cd "from a folder/with spaces"
           ./tor_ssh_check test.rebex.net
+      # Windows' own ssh and the one Git brings read their command lines differently,
+      # and either may be the one SSHeesh finds.
+      - name: With each ssh a Windows computer may have
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd "from a folder/with spaces"
+          ./tor_ssh_check test.rebex.net 'C:\Windows\System32\OpenSSH\ssh.exe' 'C:\Program Files\Git\usr\bin\ssh.exe'
