@@ -49,8 +49,9 @@ export type EchoPlace = "line" | "agent" | "screen";
  * - `waited`: had to wait for its echo: the first on a line, or the gate was shut.
  * - `heldSilent`: of `waited`, nothing ever came back. What the gate protected: password prompts, and vim's commands too.
  * - `midLine`, `unfit`: not guessed, because of text to the right of the cursor; or a wide character, or the last column.
- * - `passwordKeys`: typed on a row that reads like a password prompt.
- * - `passwordOpen`: the gate opened on such a row. Should stay at zero.
+ * - `passwordOpen`: the gate opened on a row that reads like a password prompt. Should stay at zero.
+ *
+ * Keys typed on such a row aren't counted as such: saved, that would be a password's length.
  */
 export type EchoCount =
   | "keys"
@@ -66,7 +67,6 @@ export type EchoCount =
   | "heldSilent"
   | "midLine"
   | "unfit"
-  | "passwordKeys"
   | "passwordOpen";
 
 export interface EchoSink {
@@ -224,7 +224,6 @@ export class ShadowEcho {
       this.lookRow = this.row;
       this.look = rowLook(this.leftOf(this.next));
     }
-    if (this.look === "password") this.sink.count(place, "passwordKeys");
     if (this.pending.length >= MOST_ON_THE_WAY || !oneCell(code) || this.next >= this.screen.cols - 1) {
       this.sink.count(place, "unfit");
       return this.boundary(false);

@@ -279,7 +279,6 @@ describe("a prompt that doesn't echo", () => {
     expect(count("atOnce")).toBe(0);
     expect(count("waited")).toBe(9);
     expect(count("heldSilent")).toBe(9);
-    expect(count("passwordKeys")).toBe(9);
     expect(count("passwordOpen")).toBe(0);
   });
 

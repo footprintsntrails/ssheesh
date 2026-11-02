@@ -1,7 +1,44 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { Terminal } from "@xterm/headless";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GIVE_UP_MS, ShadowEcho } from "./shadowEcho";
 import { addCount, addEcho, clearTypingCounts, echoWithin, typingSummary, useTypingCounts, type EchoTally } from "./typingCounts";
 
 beforeEach(() => clearTypingCounts());
+
+describe("what's saved", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("has nothing labelled as typed at a password prompt", async () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => saved.set(key, value),
+      removeItem: (key: string) => saved.delete(key),
+    });
+    // A store that really saves: the one imported above found no storage.
+    vi.resetModules();
+    const fresh = await import("./typingCounts");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+    const echo = new ShadowEcho(term, { count: (place, what) => fresh.addCount("tor", place, what), echoTook: (place, ms) => fresh.addEcho("tor", place, ms) }, () => "line");
+    await new Promise<void>((done) => term.write("[sudo] password for k: ", done));
+    echo.parsed();
+    for (const key of "hunter2") echo.key(key);
+    vi.advanceTimersByTime(GIVE_UP_MS);
+    echo.tick();
+    vi.useRealTimers();
+    term.dispose();
+    await vi.waitFor(() => expect(saved.get("sshee-typing-counts")).toBeTruthy());
+    const text = saved.get("sshee-typing-counts");
+    expect(text).toContain("heldSilent");
+    expect(text).not.toMatch(/password/i);
+    expect(text).not.toContain("hunter2");
+  });
+});
 
 describe("the counts", () => {
   it("adds up by way of connecting and by place", () => {
