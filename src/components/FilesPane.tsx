@@ -605,13 +605,28 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     changed();
   };
 
+  /**
+   * The name field took the keyboard and is gone now: give it back to the
+   * list, so Enter and the arrows work on what's selected. After the field
+   * has left the page (focusing first would blur it, and its blur finishes
+   * again), and only if you didn't click somewhere else meanwhile.
+   */
+  const keysBackToList = () =>
+    requestAnimationFrame(() => {
+      const list = listRef.current;
+      const at = document.activeElement;
+      if (list && (!at || at === document.body || list.contains(at))) list.focus({ preventScroll: true });
+    });
+
   const finishRename = async (from: string, to: string | null) => {
     setRenaming(null);
+    keysBackToList();
     if (!to || to === from) return;
     try {
       await backend.renamePath(target, joinPath(dir, from), joinPath(dir, to));
       dirCache.forget(tk, joinPath(dir, from));
       setSelected([to]);
+      setAnchor(to);
       changed();
     } catch (e) {
       fail("Couldn't rename", e);
@@ -621,6 +636,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const finishCreate = async (typed: string | null) => {
     const c = creating;
     setCreating(null);
+    keysBackToList();
     if (!typed || !c) return;
     const name = c.kind === "archive" && !/\.(tar\.gz|tgz)$/.test(typed) ? `${typed}.tar.gz` : typed;
     if (listing?.entries.some((e) => e.name === name)) {
@@ -647,6 +663,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         await backend.writeFile(target, full, "");
       }
       setSelected([name]);
+      setAnchor(name);
       changed();
     } catch (e) {
       fail(`Couldn't create ${what}`, e);
