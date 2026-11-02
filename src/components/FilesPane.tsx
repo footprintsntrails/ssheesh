@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronLeft, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, ChevronsRight, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
@@ -18,6 +18,7 @@ import { uploadTo } from "../lib/upload";
 import { openCopyToServer } from "./CopyToServer";
 import { dragFiles, useFileDrag } from "../lib/fileDrag";
 import { track } from "../lib/transfers";
+import { FolderPeek } from "./FolderPeek";
 
 type SortKey = "name" | "size" | "modified";
 
@@ -529,8 +530,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   const fail = (title: string, e: unknown) => toast({ tone: "error", title, body: toOpError(e).message });
 
-  const openPreview = async (entry: FileEntry, lines?: [number, number]) => {
-    const full = joinPath(dir, entry.name);
+  const openPreview = async (entry: FileEntry, lines?: [number, number], folder = dir) => {
+    const full = joinPath(folder, entry.name);
     if (!(await canDiscard())) {
       // Kept: the list goes back to the file that stays open.
       if (preview && preview.path === joinPath(dir, preview.name)) setSelected([preview.name]);
@@ -824,6 +825,29 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   };
   const hoverFolder = (name: string) => pointAt(joinPath(dir, name));
 
+  /** The folder whose ≫ is open, and where its list goes. */
+  const [peek, setPeek] = useState<{ path: string; at: { x: number; y: number } } | null>(null);
+  const closePeek = useCallback((refocus: boolean) => {
+    setPeek(null);
+    if (refocus) listRef.current?.focus({ preventScroll: true });
+  }, []);
+  const togglePeek = (entry: FileEntry, arrow: Element) => {
+    const folder = joinPath(dir, entry.name);
+    if (peek?.path === folder) return closePeek(true);
+    const r = arrow.getBoundingClientRect();
+    setSelected([entry.name]);
+    setAnchor(entry.name);
+    setPeek({ path: folder, at: { x: r.right + 6, y: r.top - 5 } });
+  };
+  // It belongs to where it opened: another folder or a scroll leaves it behind.
+  useEffect(() => setPeek(null), [dir]);
+  useEffect(() => {
+    if (!peek || !listEl) return;
+    const gone = () => setPeek(null);
+    listEl.addEventListener("scroll", gone, { passive: true });
+    return () => listEl.removeEventListener("scroll", gone);
+  }, [peek, listEl]);
+
   const typeahead = useRef({ text: "", at: 0 });
   const onListKey = (e: ReactKeyboardEvent) => {
     if (renaming || creating) return;
@@ -841,7 +865,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     else if (e.key === "ArrowDown") pick(idx + 1);
     else if (e.key === "ArrowUp" && mod) navigate(parentPath(dir));
     else if (e.key === "ArrowUp") pick(idx < 0 ? 0 : idx - 1);
-    else if (e.key === "Enter" && selectedEntries.length === 1) open(selectedEntries[0]);
+    else if (e.key === "ArrowRight" && selectedEntries.length === 1 && selectedEntries[0].kind === "dir") {
+      const name = selectedEntries[0].name;
+      const arrow = listRef.current?.querySelector(`[data-name="${CSS.escape(name)}"] [data-peek-arrow]`);
+      if (arrow) togglePeek(selectedEntries[0], arrow);
+    } else if (e.key === "Enter" && selectedEntries.length === 1) open(selectedEntries[0]);
     else if (e.key === "Backspace" && mod) void remove(selectedEntries);
     else if (e.key === "Delete") void remove(selectedEntries);
     else if (e.key === "Backspace") navigate(parentPath(dir));
@@ -1135,9 +1163,34 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                         isSel ? (focused ? "bg-accent/85 text-on-accent" : "bg-ink/[0.09] text-fg") : "text-fg hover:bg-ink/[0.035]",
                       )}
                     >
-                      <span className="flex min-w-0 items-center gap-2.5">
+                      <span className="flex min-w-0 items-center gap-1">
                         <span className={cn(isSel && focused && "[&_svg]:text-on-accent")}>
                           <EntryIcon entry={entry} />
+                        </span>
+                        {/* A place for it on every row, so names stay in line. */}
+                        <span className="mr-1 size-4 shrink-0">
+                          {entry.kind === "dir" && (
+                            <button
+                              type="button"
+                              data-peek-arrow
+                              tabIndex={-1}
+                              aria-label={`What's in ${entry.name}`}
+                              title="See what's inside without going there"
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePeek(entry, e.currentTarget);
+                              }}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                              className={cn(
+                                "grid size-4 place-items-center rounded-[4px]",
+                                isSel && focused ? "text-on-accent/80 hover:bg-on-accent/15 hover:text-on-accent" : "text-fg-3 hover:bg-ink/[0.1] hover:text-fg",
+                                peek?.path === joinPath(dir, entry.name) && (isSel && focused ? "bg-on-accent/15 text-on-accent" : "bg-ink/[0.1] text-fg"),
+                              )}
+                            >
+                              <ChevronsRight size={13} strokeWidth={2} />
+                            </button>
+                          )}
                         </span>
                         {renaming === entry.name ? (
                           <InlineName initial={entry.name} onDone={(n) => finishRename(entry.name, n)} />
@@ -1355,6 +1408,25 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       </div>
 
       {menu && <ContextMenu menu={menu} items={menuItems(menu.entry)} onClose={() => setMenu(null)} />}
+      {peek && (
+        <FolderPeek
+          key={peek.path}
+          target={target}
+          path={peek.path}
+          at={peek.at}
+          showHidden={showHidden}
+          sorted={(entries) => sortEntries(entries, "name", true)}
+          icon={(entry) => <EntryIcon entry={entry} />}
+          onOpen={(entry) => {
+            const folder = peek.path;
+            setPeek(null);
+            // A file shows here, and you stay where you are.
+            if (entry && entry.kind !== "dir") void openPreview(entry, undefined, folder);
+            else void navigate(entry ? joinPath(folder, entry.name) : folder);
+          }}
+          onClose={closePeek}
+        />
+      )}
     </div>
   );
 }
