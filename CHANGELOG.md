@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.3 — Tor starts on Windows
+
+- **Tor starts on Windows.** Since 0.10.0 it stopped at 15% on every Windows computer, whatever the network or the clock, with one processor core running flat out. A library Tor relies on finds the furthest date a computer's clock can hold by trying ever smaller steps, down to a billionth of a second. Windows' clock counts in steps of a hundred of those, so the smallest ones changed nothing and the search never ended. SSHeesh now carries a corrected copy, and Tor is on within seconds.
+- **Tor says when it's stuck.** "Tor is on" now comes when it is, not when you click. If it isn't connected after 25 seconds, a note says so and why, and the onion gets a red dot. With no progress for 90 seconds it starts over by itself, so a very slow network still gets there, and files left unreadable by a crash or a full disk no longer stop it for good.
+- **A log, and a way to start over.** Settings → Privacy has Show log and Start fresh. The log holds what Tor does, with no addresses or server names in it, so it can be sent to someone. On Windows, Tor's files can stay in use while SSHeesh runs; Start fresh then says so, and finishes the next time you open SSHeesh.
+- **Tor is now tested on real computers.** Each change to it starts Tor on Windows, macOS and Linux, from a folder with spaces in its name, and connects to a server through it, on Windows with both its own ssh and Git's. The test fails if the connection reached the server any other way than through Tor.
+
 ## 0.10.2 — find in the terminal, and a safer paste
 
 - **Find in the terminal.** Ctrl+F (⌘F on a Mac) opens a find bar, as in a browser: matches marked, a count, Enter for the next older one and Shift+Enter for the newer. It looks through everything, not only what's on screen, also the history tmux keeps on the server, and finds what a long line wraps in two. vim, less and other programs that read Ctrl+F keep it, and in Files it's still the filter. The key can be changed in Settings → Keyboard.
