@@ -1,9 +1,9 @@
-import { RefreshCw, Settings } from "lucide-react";
+import { FileText, RefreshCw, Settings } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../lib/format";
 import { TOR_GLYPH } from "../lib/labels";
 import { activePane, useStore } from "../lib/store";
-import { newTorRoutes, switchTor } from "../lib/tor";
+import { newTorRoutes, showTorLog, switchTor } from "../lib/tor";
 import { ContextMenu, type Menu } from "./ContextMenu";
 import { IconButton } from "./ui";
 
@@ -38,14 +38,16 @@ export function TorButton({ size = 20, className }: { size?: number; className?:
         className={cn("relative", className, on && "bg-tor/15 text-tor hover:bg-tor/20 hover:text-tor")}
       >
         <TOR_GLYPH size={size} className={cn(tor.state === "starting" && "animate-pulse")} />
-        {tor.state === "failed" && <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-bad" />}
+        {(tor.state === "failed" || (tor.state === "starting" && tor.note)) && <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-bad" />}
       </IconButton>
       {menu && (
         <ContextMenu
           menu={menu}
           items={[
             { label: on ? "Turn Tor off" : "Turn Tor on", icon: TOR_GLYPH as unknown as typeof Settings, run: () => void switchTor(!on) },
-            { label: "New Tor routes", icon: RefreshCw, run: () => void newTorRoutes(), disabled: tor.state !== "on" },
+            tor.state === "on" || tor.state === "off"
+              ? { label: "New Tor routes", icon: RefreshCw, run: () => void newTorRoutes(), disabled: tor.state !== "on" }
+              : { label: "Show Tor's log", icon: FileText, run: () => void showTorLog() },
             { label: "Tor settings…", icon: Settings, run: () => useStore.getState().openSettings("privacy") },
           ]}
           onClose={() => setMenu(null)}

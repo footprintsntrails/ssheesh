@@ -285,6 +285,22 @@ async fn set_tor(app: AppHandle, on: bool) -> Result<TorSwitch, OpError> {
     .await
 }
 
+/// Where Tor's log is, to show you the file.
+#[tauri::command]
+fn tor_log_path() -> Option<String> {
+    tor::log_path().map(|p| p.display().to_string())
+}
+
+/// Starts a Tor that won't start again from nothing.
+#[tauri::command]
+async fn start_tor_afresh() -> Result<(), OpError> {
+    blocking(|| {
+        tor::start_afresh();
+        Ok(())
+    })
+    .await
+}
+
 /// New Tor routes for every server: for when one turned slow.
 #[tauri::command]
 async fn new_tor_routes(app: AppHandle) -> Result<TorSwitch, OpError> {
@@ -959,6 +975,8 @@ pub fn run() {
             clipboard_files,
             tor_status,
             tor_ssh_options,
+            tor_log_path,
+            start_tor_afresh,
             set_tor,
             new_tor_routes,
         ])

@@ -18,9 +18,11 @@ arti-client = { version = "0.47", default-features = false, features = ["tokio",
 tor-rtcompat = { version = "0.47", default-features = false, features = ["tokio", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
-futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
 # The door's proofs (SHA-256), from the TLS library Tor already uses.
 ring = "0.17"
 # Reads the clock skew Tor reports ("2days 23h 59m").
 humantime = "2"
+# Tor's own account of what it's doing, in a file you can send when it won't start.
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }

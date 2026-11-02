@@ -175,6 +175,9 @@ export interface Backend {
   newTorRoutes(): Promise<TorSwitch>;
   /** While Tor is on: ssh options that send an ssh typed on this computer through it too. */
   torSshOptions(): Promise<string[] | null>;
+  torLogPath(): Promise<string | null>;
+  /** Starts a Tor that won't start again from nothing. */
+  startTorAfresh(): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -361,6 +364,8 @@ async function tauriBackend(): Promise<Backend> {
     setTor: (on) => call("set_tor", { on }),
     newTorRoutes: () => call("new_tor_routes", {}),
     torSshOptions: () => call("tor_ssh_options", {}),
+    torLogPath: () => call("tor_log_path", {}),
+    startTorAfresh: () => call("start_tor_afresh", {}),
   };
 }
 

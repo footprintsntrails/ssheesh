@@ -32,7 +32,6 @@
 use arti_client::config::{BoolOrAuto, Reconfigure, TorClientConfigBuilder};
 use arti_client::status::{BlockageKind, BootstrapStatus};
 use arti_client::{BootstrapBehavior, DataStream, ErrorKind, HasKind, IsolationToken, StreamPrefs, TorClient, TorClientConfig};
-use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -82,6 +81,13 @@ const EARLY_DOCUMENT: Duration = Duration::from_secs(86400);
 /// the date), which is what someone able to lie would want. Beyond this, or
 /// with a clock ahead, SSHeesh says to set the clock.
 const MOST_BEHIND: u64 = 30 * 86400;
+/// With no progress this long, Tor's start says what's known about why.
+const STALL_NOTE: Duration = Duration::from_secs(20);
+/// With no progress this long, Tor starts over; each time it waits twice as
+/// long, as a very slow network does get there if it's left to.
+const STALL_RESTART: Duration = Duration::from_secs(90);
+/// The most Tor's log grows to in a run of the app.
+const LOG_LIMIT: u64 = 8 * 1024 * 1024;
 /// How long what `check` found about a server holds.
 const CHECK_LIFE: Duration = Duration::from_secs(30);
 
@@ -157,6 +163,8 @@ struct Engine {
     ports: Mutex<Vec<u16>>,
     /// Seconds Tor's clock is ahead of this computer's (see `TorClock`).
     shift: Arc<AtomicU64>,
+    /// The start under way. It holds Tor's folders, so a new one can't begin beside it.
+    booting: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 static ON: AtomicBool = AtomicBool::new(false);
@@ -492,6 +500,7 @@ fn engine() -> Result<&'static Engine, String> {
     listener.set_nonblocking(true).map_err(|e| format!("Couldn't start Tor: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     write_door(port, &secret).map_err(|e| format!("Couldn't start Tor: it can't save its files in your home folder ({e})."))?;
+    start_log();
     let e = ENGINE.get_or_init(|| Engine {
         rt,
         client: Mutex::new(None),
@@ -505,6 +514,7 @@ fn engine() -> Result<&'static Engine, String> {
         secret,
         ports: Mutex::default(),
         shift: Arc::new(AtomicU64::new(0)),
+        booting: Mutex::new(None),
     });
     e.rt.spawn(door(e, listener));
     Ok(e)
@@ -531,6 +541,7 @@ fn write_door(port: u16, secret: &str) -> std::io::Result<()> {
 /// stops and a start's progress never cross, and the UI hears them in order.
 fn put_status(now: &mut TorStatus, s: TorStatus) {
     if *now != s {
+        tracing::info!(target: "ssheesh", "status: {s:?}");
         *now = s.clone();
         notify(s);
     }
@@ -563,15 +574,33 @@ fn start(e: &'static Engine) {
         e.shift.store(0, Ordering::SeqCst);
         run
     };
-    e.rt.spawn(async move {
+    let boot = e.rt.spawn(async move {
         let mut wait = Duration::from_secs(5);
+        let mut stall = STALL_RESTART;
+        let mut emptied = false;
+        let mut healed = false;
         while e.run.load(Ordering::SeqCst) == run {
-            match bootstrap(e, run).await {
+            match bootstrap(e, run, stall).await {
                 Ok(client) => {
                     set_status_if(e, run, TorStatus::On, Some(client));
                     return;
                 }
-                Err(message) => {
+                Err(Boot::Stalled) => {
+                    tracing::warn!(target: "ssheesh", "no progress for {}s: starting over", stall.as_secs());
+                    // The first time, without the relay lists it has: they may be what's in the way.
+                    if !emptied {
+                        emptied = true;
+                        forget(&["cache"]);
+                    }
+                    stall = (stall * 2).min(Duration::from_secs(600));
+                }
+                // No retry would help, so it starts from nothing, once.
+                Err(Boot::Damaged(message)) if !healed => {
+                    tracing::warn!(target: "ssheesh", "{message}: starting from nothing");
+                    healed = true;
+                    forget(&["cache", "state"]);
+                }
+                Err(Boot::Damaged(message) | Boot::Failed(message)) => {
                     if !set_status_if(e, run, TorStatus::Failed { message }, None) {
                         return;
                     }
@@ -581,6 +610,9 @@ fn start(e: &'static Engine) {
             }
         }
     });
+    if let Some(old) = e.booting.lock().unwrap().replace(boot) {
+        old.abort();
+    }
 }
 
 fn stop(e: &'static Engine) {
@@ -590,7 +622,86 @@ fn stop(e: &'static Engine) {
     if e.carrying.load(Ordering::SeqCst) == 0 {
         e.client.lock().unwrap().take();
     }
+    // Off means off: a start still trying would go on talking to the network, and hold Tor's folders.
+    if let Some(boot) = e.booting.lock().unwrap().take() {
+        boot.abort();
+    }
     put_status(&mut now, TorStatus::Off);
+}
+
+/// Deletes what Tor keeps (`cache`, the lists of relays; `state`, its entry
+/// relays) so that it gets them anew.
+fn forget(what: &[&str]) {
+    let Some(base) = dir() else { return };
+    for name in what {
+        let _ = std::fs::remove_dir_all(base.join(name));
+    }
+}
+
+/// Starts Tor again from nothing, for one that won't start. Only when you ask
+/// for the entry relays to go: anyone able to stall Tor could otherwise make it
+/// keep picking new ones, until it picks theirs.
+pub fn start_afresh() {
+    let Some(e) = ENGINE.get().filter(|_| is_on()) else { return };
+    {
+        let _now = e.status.lock().unwrap();
+        e.run.fetch_add(1, Ordering::SeqCst);
+        if let Some(boot) = e.booting.lock().unwrap().take() {
+            boot.abort();
+        }
+        if e.carrying.load(Ordering::SeqCst) == 0 {
+            e.client.lock().unwrap().take();
+        }
+    }
+    // An aborted start lets go of Tor's folders as it unwinds.
+    std::thread::sleep(Duration::from_millis(300));
+    forget(&["cache", "state"]);
+    start(e);
+}
+
+/// Tor's log, for sending when it won't start.
+pub fn log_path() -> Option<PathBuf> {
+    dir().map(|d| d.join("tor.log"))
+}
+
+/// A file that stops growing at `LOG_LIMIT`.
+struct LimitedLog {
+    file: std::fs::File,
+    written: u64,
+}
+
+impl Write for LimitedLog {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.written < LOG_LIMIT {
+            self.file.write_all(data)?;
+            self.written += data.len() as u64;
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Starts Tor's log, new for each run of the app. Tor leaves addresses out of
+/// what it logs (its "safe logging"), and SSHeesh adds no server's name, so
+/// the file can be sent to someone.
+fn start_log() {
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+    use tracing_subscriber::layer::{Layer, SubscriberExt};
+    let Some(path) = log_path() else { return };
+    if make_dir().is_err() {
+        return;
+    }
+    let Ok(file) = std::fs::File::create(path) else { return };
+    let log = Mutex::new(LimitedLog { file, written: 0 });
+    let what = Targets::new().with_default(LevelFilter::INFO).with_target("tor_dirmgr", LevelFilter::DEBUG).with_target("tor_dirclient", LevelFilter::DEBUG);
+    let layer = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(log);
+    if tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer.with_filter(what))).is_ok() {
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        tracing::info!(target: "ssheesh", "SSHeesh {} on {} {}, this computer's clock says {now} (seconds since 1970)", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+    }
 }
 
 /// Tor's settings, for a clock moved by `shift` seconds (see `TorClock`).
@@ -620,71 +731,116 @@ fn tor_config(e: &Engine, shift: u64) -> Result<TorClientConfig, String> {
     b.build().map_err(|e| format!("Couldn't start Tor: {e}"))
 }
 
-async fn bootstrap(e: &'static Engine, run: u64) -> Result<Client, String> {
-    // Tor's connections are TLS; the app has one way to do it, set here.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let config = tor_config(e, e.shift.load(Ordering::SeqCst))?;
-    let rt = PreferredRuntime::current().map_err(|e| format!("Couldn't start Tor: {e}"))?;
+/// Why a start ended without Tor.
+enum Boot {
+    /// No progress for as long as it's given.
+    Stalled,
+    /// What it kept from last time can't be read (a crash, a full disk).
+    Damaged(String),
+    Failed(String),
+}
+
+/// A Tor client, not started.
+fn make_client(e: &'static Engine) -> Result<Client, Boot> {
+    let config = tor_config(e, e.shift.load(Ordering::SeqCst)).map_err(Boot::Failed)?;
+    let rt = PreferredRuntime::current().map_err(|e| Boot::Failed(format!("Couldn't start Tor: {e}")))?;
     let clock = TorClock { inner: rt.clone(), shift: e.shift.clone() };
-    let client = TorClient::with_runtime(rt.with_sleep_provider(clock))
+    TorClient::with_runtime(rt.with_sleep_provider(clock))
         .config(config)
         .bootstrap_behavior(BootstrapBehavior::Manual)
         .create_unbootstrapped()
-        .map_err(|e| format!("Couldn't start Tor: {e}"))?;
-    let mut events = client.bootstrap_events();
-    let moving = client.clone();
-    let progress = tokio::spawn(async move {
-        while let Some(s) = events.next().await {
-            if e.run.load(Ordering::SeqCst) != run {
-                break;
-            }
-            let percent = (s.as_frac() * 100.0) as u8;
-            // It's stuck, and relays agree this computer's clock is behind:
-            // give Tor their time, once. A good clock with a working list of
-            // relays never gets here, whatever a relay says.
-            if e.shift.load(Ordering::SeqCst) == 0 && s.blocked().is_some() {
-                if let Some(off) = clock_off(&s.to_string()) {
-                    // A later start begins again from no shift: this one mustn't undo that.
-                    let current = {
-                        let _status = e.status.lock().unwrap();
-                        let current = e.run.load(Ordering::SeqCst) == run;
-                        if current {
-                            e.shift.store(off, Ordering::SeqCst);
-                        }
-                        current
-                    };
-                    if !current {
-                        break;
-                    }
-                    if let Ok(config) = tor_config(e, off) {
-                        let _ = moving.reconfigure(&config, Reconfigure::WarnOnFailures);
-                    }
-                }
-            }
-            let shift = e.shift.load(Ordering::SeqCst);
-            let note = if shift == 0 {
-                holdup(&s)
-            } else {
-                Some(format!(
-                    "Your computer's clock is behind by about {}, so SSHeesh gives Tor the right time. This takes a moment. It's still worth setting your clock right in your system's settings.",
-                    about(shift),
-                ))
-            };
-            if percent < 100 {
-                set_status_if(e, run, TorStatus::Starting { percent, note }, None);
-            }
-        }
-    });
-    let started = client.bootstrap().await;
-    progress.abort();
-    started.map_err(|err| match err.kind() {
-        ErrorKind::TorAccessFailed | ErrorKind::LocalNetworkError | ErrorKind::TorNetworkTimeout => {
-            "Can't reach the Tor network. Check your internet connection.".to_string()
-        }
-        _ => format!("Couldn't start Tor: {err}"),
-    })?;
-    Ok(client)
+        // Most often what it kept is unreadable; a bad setting would fail again, and say so.
+        .map_err(|e| Boot::Damaged(format!("Couldn't start Tor: {e}")))
 }
+
+async fn bootstrap(e: &'static Engine, run: u64, stall: Duration) -> Result<Client, Boot> {
+    // Tor's connections are TLS; the app has one way to do it, set here.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = make_client(e)?;
+    tokio::select! {
+        started = client.bootstrap() => {
+            started.map_err(|err| match err.kind() {
+                ErrorKind::PersistentStateCorrupted | ErrorKind::CacheCorrupted => Boot::Damaged(format!("Couldn't start Tor: {err}")),
+                ErrorKind::TorAccessFailed | ErrorKind::LocalNetworkError | ErrorKind::TorNetworkTimeout => {
+                    Boot::Failed("Can't reach the Tor network. Check your internet connection.".to_string())
+                }
+                _ => Boot::Failed(format!("Couldn't start Tor: {err}")),
+            })?;
+            Ok(client)
+        }
+        () = watch_start(e, run, &client, stall) => Err(Boot::Stalled),
+    }
+}
+
+/// Follows a start: its percent, what holds it up, the clock. Ends if it makes
+/// no progress for `stall`. Asks how it's going every moment rather than
+/// waiting to hear: when nothing's happening, Tor has nothing to say.
+async fn watch_start(e: &'static Engine, run: u64, client: &Client, stall: Duration) {
+    let mut ticks = tokio::time::interval(Duration::from_millis(250));
+    let (mut best, mut moved) = (0u8, Instant::now());
+    loop {
+        ticks.tick().await;
+        if e.run.load(Ordering::SeqCst) != run {
+            return std::future::pending().await;
+        }
+        let s = client.bootstrap_status();
+        let percent = (s.as_frac() * 100.0) as u8;
+        if percent > best {
+            best = percent;
+            moved = Instant::now();
+        }
+        // It's stuck, and relays agree this computer's clock is behind: give
+        // Tor their time, once. A good clock with a working list of relays
+        // never gets here, whatever a relay says.
+        if e.shift.load(Ordering::SeqCst) == 0 && s.blocked().is_some() {
+            if let Some(off) = clock_off(&s.to_string()) {
+                // A later start begins again from no shift: this one mustn't undo that.
+                let current = {
+                    let _status = e.status.lock().unwrap();
+                    let current = e.run.load(Ordering::SeqCst) == run;
+                    if current {
+                        e.shift.store(off, Ordering::SeqCst);
+                    }
+                    current
+                };
+                if !current {
+                    return std::future::pending().await;
+                }
+                if let Ok(config) = tor_config(e, off) {
+                    let _ = client.reconfigure(&config, Reconfigure::WarnOnFailures);
+                }
+                moved = Instant::now();
+            }
+        }
+        let shift = e.shift.load(Ordering::SeqCst);
+        let note = if shift > 0 {
+            Some(format!(
+                "Your computer's clock is behind by about {}, so SSHeesh gives Tor the right time. This takes a moment. It's still worth setting your clock right in your system's settings.",
+                about(shift),
+            ))
+        } else {
+            holdup(&s).or_else(|| (moved.elapsed() >= STALL_NOTE).then(|| stalled_note(percent).to_string()))
+        };
+        if percent < 100 {
+            set_status_if(e, run, TorStatus::Starting { percent, note }, None);
+        }
+        if moved.elapsed() >= stall {
+            return;
+        }
+    }
+}
+
+/// What a start that isn't moving most likely means, by how far it got. Past
+/// 15% or so it's reached Tor, and what it needs next is much more data.
+fn stalled_note(percent: u8) -> &'static str {
+    if percent >= 15 {
+        CANT_GET_LIST
+    } else {
+        "Can't reach the Tor network. Check your internet connection. A VPN, firewall or antivirus can block Tor too: try without them, or on another network."
+    }
+}
+
+const CANT_GET_LIST: &str = "Tor has connected, but the list of its relays isn't getting through. A VPN, firewall or antivirus can do this: try without them, or on another network. A wrong date and time can too.";
 
 /// What holds Tor's start up, in plain words, when Tor knows. A clock that's
 /// off by days is the usual one: Tor then can't trust the list of relays it
@@ -701,7 +857,7 @@ fn holdup(s: &BootstrapStatus) -> Option<String> {
             BlockageKind::Offline => "Can't reach the internet.",
             BlockageKind::Filtering => "Your network seems to block Tor.",
             BlockageKind::CantReachTor => "Can't reach the Tor network.",
-            BlockageKind::CantBootstrap => "Tor can't get the list of its relays yet. If this lasts, check your computer's date and time.",
+            BlockageKind::CantBootstrap => CANT_GET_LIST,
             _ => return None,
         }
         .to_string(),
@@ -1306,6 +1462,13 @@ mod tests {
         assert_eq!(about(86400 + 5 * 3600), "1 day 5 h");
         assert_eq!(about(40 * 60), "1 h");
         assert_eq!(about(5 * 3600), "5 h");
+    }
+
+    #[test]
+    fn a_start_that_isnt_moving_says_what_it_most_likely_is() {
+        assert!(stalled_note(0).contains("Can't reach"));
+        assert!(stalled_note(7).contains("Can't reach"));
+        assert!(stalled_note(15).contains("isn't getting through"));
     }
 
     #[test]

@@ -5913,7 +5913,6 @@ version = "0.10.2"
 dependencies = [
  "arti-client",
  "dirs 6.0.0",
- "futures-util",
  "getrandom 0.3.4",
  "humantime",
  "keyring",
@@ -5924,6 +5923,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tor-rtcompat",
+ "tracing",
+ "tracing-subscriber",
  "zip",
 ]
 

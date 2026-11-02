@@ -5,14 +5,81 @@ import { backend } from "./backend";
 import { useStore } from "./store";
 import { toOpError, type TorStatus } from "./types";
 
+/** How long Tor gets to start before you're told it hasn't, and why. */
+const SLOW_START_MS = 25000;
+
+/** Says "Tor is on" once it really is, after you turned it on. */
+let announceOn = false;
+/** What's been said about Tor not starting, so it's said once. */
+let toldTrouble = "";
+let slowStart: ReturnType<typeof setTimeout> | undefined;
+
+export async function showTorLog(): Promise<void> {
+  const { toast } = useStore.getState();
+  try {
+    const path = await backend.torLogPath();
+    if (path) await backend.revealFiles([path]);
+  } catch (e) {
+    toast({ tone: "error", title: "Couldn't show Tor's log", body: toOpError(e).message });
+  }
+}
+
+function tellTrouble(body: string) {
+  if (toldTrouble === body) return;
+  toldTrouble = body;
+  useStore.getState().toast({
+    tone: "error",
+    title: "Tor isn't connected yet",
+    body: `${body} Your servers wait until it is: SSHeesh won't connect them around Tor.`,
+    action: { label: "Show log", run: () => void showTorLog() },
+  });
+}
+
+/** What the rest of the app does when Tor's status changes. */
+function follow(tor: TorStatus) {
+  if (tor.state !== "starting") {
+    clearTimeout(slowStart);
+    slowStart = undefined;
+  }
+  if (tor.state === "on") {
+    toldTrouble = "";
+    if (announceOn) {
+      announceOn = false;
+      useStore.getState().toast({ tone: "success", title: "Tor is on", body: "Servers see a Tor address instead of yours, and your internet provider doesn't see which servers you use." });
+    }
+  } else if (tor.state === "off") {
+    announceOn = false;
+    toldTrouble = "";
+  } else if (tor.state === "failed") {
+    tellTrouble(tor.message);
+  } else if (slowStart === undefined) {
+    slowStart = setTimeout(() => {
+      const now = useStore.getState().tor;
+      if (now.state === "starting") tellTrouble(now.note ?? "It's taking longer than it should.");
+    }, SLOW_START_MS);
+  }
+}
+
 /** Keeps the store's Tor status current, from the app's start on. */
 export function startTorWatch(): () => void {
   const seen = (tor: TorStatus) => {
     useStore.setState({ tor });
+    follow(tor);
     void backend.torSshOptions().then((torSsh) => useStore.setState({ torSsh }), () => useStore.setState({ torSsh: null }));
   };
   void backend.torStatus().then(seen);
   return backend.onTorStatus(seen);
+}
+
+/** Starts a Tor that won't start again from nothing. */
+export async function startTorAfresh(): Promise<void> {
+  toldTrouble = "";
+  announceOn = true;
+  try {
+    await backend.startTorAfresh();
+  } catch (e) {
+    useStore.getState().toast({ tone: "error", title: "Couldn't start Tor again", body: toOpError(e).message });
+  }
 }
 
 function stayedNote(stayed: number): string {
@@ -25,15 +92,15 @@ function stayedNote(stayed: number): string {
 export async function switchTor(on: boolean): Promise<void> {
   const { toast } = useStore.getState();
   try {
+    announceOn = on;
     const { status, stayed, warning } = await backend.setTor(on);
     useStore.setState({ tor: status });
+    follow(status);
     void backend.torSshOptions().then((torSsh) => useStore.setState({ torSsh }), () => useStore.setState({ torSsh: null }));
     if (warning) toast({ tone: "error", title: on ? "Tor is on for now" : "Tor is off for now", body: warning });
-    toast(
-      on
-        ? { tone: "info", title: "Tor is on", body: `Servers see a Tor address instead of yours, and your internet provider doesn't see which servers you use.${stayedNote(stayed)}` }
-        : { tone: "info", title: "Tor is off", body: `Servers see your own address again.${stayedNote(stayed)}` },
-    );
+    // Turning it on says so when it is (see `follow`): it may take a while, or not happen.
+    if (!on) toast({ tone: "info", title: "Tor is off", body: `Servers see your own address again.${stayedNote(stayed)}` });
+    else if (stayed) toast({ tone: "info", title: "Moving your terminals to Tor", body: stayedNote(stayed).trim() });
   } catch (e) {
     toast({ tone: "error", title: on ? "Couldn't turn Tor on" : "Couldn't turn Tor off", body: toOpError(e).message });
   }

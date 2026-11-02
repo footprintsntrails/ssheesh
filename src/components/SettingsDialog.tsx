@@ -62,7 +62,7 @@ import { ThemeEditor, ThemeImport } from "./ThemeEditor";
 import { ColorButton, OwnAccent } from "./ColorPicker";
 import { useEscapeLayer } from "./Overlays";
 import { Button, Logo, PIXEL_LOGO, PIXEL_LOGO_COLORS, Spinner } from "./ui";
-import { newTorRoutes, switchTor } from "../lib/tor";
+import { newTorRoutes, showTorLog, startTorAfresh, switchTor } from "../lib/tor";
 import { TOR_GLYPH } from "../lib/labels";
 
 const REPO = "https://github.com/footprintsntrails/ssheesh";
@@ -1003,10 +1003,19 @@ function Privacy({ s, set }: SectionProps) {
                 ? "Tor is on. If typing feels slow on a server, pick new routes."
                 : `Tor can't start: ${tor.message} Nothing connects until it does; it keeps trying.`}
           </span>
-          {tor.state === "on" && (
+          {tor.state === "on" ? (
             <Button size="sm" variant="ghost" onClick={() => void newTorRoutes()}>
               New routes
             </Button>
+          ) : (
+            <span className="flex shrink-0 gap-1">
+              <Button size="sm" variant="ghost" onClick={() => void showTorLog()}>
+                Show log
+              </Button>
+              <Button size="sm" variant="ghost" title="Gets all Tor keeps about the network anew, its entry relays too" onClick={() => void startTorAfresh()}>
+                Start fresh
+              </Button>
+            </span>
           )}
         </div>
       )}

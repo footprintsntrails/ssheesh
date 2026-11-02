@@ -881,6 +881,13 @@ export const mockBackend: Backend = {
     }
     setDemoTor({ state: "starting", percent: 5 });
     void (async () => {
+      // A recording or a test sets this to see Tor not getting through.
+      const stuck = (window as unknown as { __demoTorStuck?: string }).__demoTorStuck;
+      if (stuck) {
+        await wait(150);
+        setDemoTor({ state: "starting", percent: 15, note: stuck });
+        return;
+      }
       for (const percent of [30, 65, 90]) {
         await wait(260);
         if (demoTor.state !== "starting") return;
@@ -896,6 +903,10 @@ export const mockBackend: Backend = {
   async torSshOptions() {
     if (demoTor.state === "off") return null;
     return ["-o", "ProxyCommand='/Applications/SSHeesh.app/Contents/MacOS/SSHeesh' --tor-proxy %h %p", "-o", "CanonicalizeHostname=no", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=no"];
+  },
+  torLogPath: async () => "/home/you/.sshee/tor/tor.log",
+  async startTorAfresh() {
+    setDemoTor({ state: "starting", percent: 5 });
   },
   async newTorRoutes() {
     await wait(60);
