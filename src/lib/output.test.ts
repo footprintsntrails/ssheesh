@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OutputPipeline, TextStyle, tokenize } from "./output";
+import { FrameGate, OutputPipeline, TextStyle, tokenize } from "./output";
 import { usePrivacy } from "./privacy";
 import { DEFAULT_SETTINGS, useSettings } from "./settings";
 import { useStore } from "./store";
@@ -173,5 +173,109 @@ describe("TextStyle", () => {
   it("skips a color cut short", () => {
     expect(style("31", "38;5")).toBe("31");
     expect(style("31", "48;2;1;2")).toBe("31");
+  });
+});
+
+describe("FrameGate", () => {
+  const ON = `${ESC}[?2026h`;
+  const OFF = `${ESC}[?2026l`;
+  const ERASE = `${ESC}[H${ESC}[2J`;
+  let written: string[];
+  let gate: FrameGate;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    written = [];
+    gate = new FrameGate((t) => written.push(t));
+  });
+  afterEach(() => {
+    gate.dispose();
+    vi.useRealTimers();
+  });
+
+  it("lets a little output through at once, with nothing around it", () => {
+    gate.push("hello");
+    expect(written).toEqual(["hello"]);
+    vi.advanceTimersByTime(1000);
+    expect(written).toEqual(["hello"]);
+  });
+
+  it("holds the picture through a redraw that comes in pieces", () => {
+    gate.push(`${ERASE}top`);
+    vi.advanceTimersByTime(50);
+    gate.push("middle");
+    vi.advanceTimersByTime(50);
+    gate.push("bottom");
+    expect(written).toEqual([ON, `${ERASE}top`, "middle", "bottom"]);
+    vi.advanceTimersByTime(79);
+    expect(written).not.toContain(OFF);
+    vi.advanceTimersByTime(1);
+    expect(written[written.length - 1]).toBe(OFF);
+  });
+
+  it("draws a screenful that isn't followed by more soon after", () => {
+    const big = "x".repeat(4096);
+    gate.push(big);
+    expect(written).toEqual([ON, big]);
+    vi.advanceTimersByTime(24);
+    expect(written).toEqual([ON, big, OFF]);
+  });
+
+  it("keeps a flood moving", () => {
+    const big = "x".repeat(4096);
+    let offs = 0;
+    for (let t = 0; t < 640; t += 16) {
+      gate.push(big);
+      offs = written.filter((w) => w === OFF).length;
+      vi.advanceTimersByTime(16);
+    }
+    expect(offs).toBeGreaterThanOrEqual(8);
+  });
+
+  it("never holds back the answer to a key", () => {
+    gate.typed();
+    gate.push(`a${ESC}[J`);
+    expect(written).toEqual([`a${ESC}[J`]);
+    vi.advanceTimersByTime(200);
+    gate.push(ERASE);
+    expect(written[1]).toBe(ON);
+  });
+
+  it("follows a program that holds the picture itself", () => {
+    gate.push(`${ON}half`);
+    expect(written).toEqual([ON, "half"]);
+    vi.advanceTimersByTime(1000);
+    expect(written).toEqual([ON, "half"]);
+    gate.push(`rest${OFF}`);
+    expect(written).toEqual([ON, "half", "rest", OFF]);
+  });
+
+  it("isn't ended early by the marks tmux puts around every update", () => {
+    gate.push(`${ON}${ERASE}top${OFF}`);
+    gate.push(`${ON}bottom${OFF}`);
+    expect(written).toEqual([ON, `${ERASE}top`, "bottom"]);
+    vi.advanceTimersByTime(80);
+    expect(written).toEqual([ON, `${ERASE}top`, "bottom", OFF]);
+  });
+
+  it("recognizes a mark a read cut in two", () => {
+    gate.push(`one${ESC}[?20`);
+    expect(written).toEqual(["one"]);
+    gate.push(`26htwo`);
+    expect(written).toEqual(["one", ON, "two"]);
+  });
+
+  it("lets go of the start of an ordinary sequence soon", () => {
+    gate.push(`one${ESC}[`);
+    expect(written).toEqual(["one"]);
+    vi.advanceTimersByTime(24);
+    expect(written).toEqual(["one", `${ESC}[`]);
+  });
+
+  it("forgets a program's hold when the connection drops", () => {
+    gate.push(`${ON}half`);
+    gate.reset();
+    expect(written).toEqual([ON, "half", OFF]);
   });
 });

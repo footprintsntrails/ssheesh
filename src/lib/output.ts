@@ -227,3 +227,125 @@ export class OutputPipeline {
     }
   }
 }
+
+/** Output this long is a screenful or more on its way. */
+const BURST_SIZE = 2048;
+/** Erasing the screen: what draws it again is right behind. */
+const ERASES = /\x1b\[[023]?J/;
+/** A burst is over when nothing has come for this long: a little over the 16 ms a steady stream arrives in. */
+const BURST_QUIET_MS = 24;
+/** The longest the old picture stays while output keeps coming, so a flood still moves. */
+const BURST_MAX_MS = 64;
+/** The same after an erase: better a moment's wait than an empty screen. The pieces of a redraw can be a round trip to the server apart. */
+const ERASED_QUIET_MS = 80;
+const ERASED_MAX_MS = 200;
+/** What you type answers at once: an erase this soon after a key is a prompt redrawing. */
+const TYPED_MS = 150;
+
+const SYNC_ON = "\x1b[?2026h";
+const SYNC_OFF = "\x1b[?2026l";
+const SYNC_MARK = /\x1b\[\?2026([hl])/g;
+
+/** How much of `s`'s end could be the start of a synchronized-output mark cut off by a read. */
+function cutSyncMark(s: string): number {
+  for (let n = Math.min(SYNC_ON.length - 1, s.length); n > 0; n--) {
+    if (s.endsWith(SYNC_ON.slice(0, n))) return n;
+  }
+  return 0;
+}
+
+/**
+ * Shows a burst of output as one picture. A program redrawing its screen
+ * (an agent erasing everything and printing it again, say) reaches us in
+ * several pieces over the network, and drawing each as it comes shows an
+ * empty or half-drawn screen: a terminal that flickers and tears. So while
+ * a burst arrives the terminal keeps the old picture, using its synchronized
+ * output mode (DEC 2026), and draws once the burst is over.
+ *
+ * Programs use that mode too, and tmux around every update, which would end
+ * the wait early. So it's all kept here: the terminal is told to wait while
+ * a burst is arriving or a program asked for it, and their marks go no further.
+ */
+export class FrameGate {
+  /** Holding the picture for a burst. */
+  private holding = false;
+  /** The burst began by erasing the screen. */
+  private erased = false;
+  /** A program asked to hold it (its own mark, not yet ended). */
+  private programHolds = false;
+  /** What's been said to the terminal. */
+  private told = false;
+  private cut = "";
+  private quiet: ReturnType<typeof setTimeout> | undefined;
+  private longest: ReturnType<typeof setTimeout> | undefined;
+  private typedAt = 0;
+
+  constructor(private readonly write: (text: string) => void) {}
+
+  /** You pressed a key: what comes back shows at once. */
+  typed() {
+    this.typedAt = Date.now();
+  }
+
+  push(chunk: string) {
+    let text = this.cut + chunk;
+    this.cut = "";
+    const keep = cutSyncMark(text);
+    if (keep) {
+      this.cut = text.slice(-keep);
+      text = text.slice(0, -keep);
+    }
+    text = text.replace(SYNC_MARK, (_, on: string) => {
+      this.programHolds = on === "h";
+      return "";
+    });
+    const erases = ERASES.test(text) && Date.now() - this.typedAt > TYPED_MS;
+    if (!this.holding && (erases || text.length >= BURST_SIZE)) {
+      this.holding = true;
+      this.longest = setTimeout(() => this.release(), erases ? ERASED_MAX_MS : BURST_MAX_MS);
+    } else if (this.holding && erases && !this.erased) {
+      // A flood that turns into a redraw gets the longer wait.
+      clearTimeout(this.longest);
+      this.longest = setTimeout(() => this.release(), ERASED_MAX_MS);
+    }
+    this.erased ||= erases;
+    // Told to wait before the text, and to draw only after it.
+    if (this.holding || this.programHolds) this.tell();
+    if (text) this.write(text);
+    this.tell();
+    clearTimeout(this.quiet);
+    if (this.holding || this.cut) this.quiet = setTimeout(() => this.release(), this.erased ? ERASED_QUIET_MS : BURST_QUIET_MS);
+  }
+
+  /** The burst is over, or has gone on long enough: draw what's there. */
+  release() {
+    clearTimeout(this.quiet);
+    clearTimeout(this.longest);
+    this.holding = false;
+    this.erased = false;
+    if (this.cut) {
+      const rest = this.cut;
+      this.cut = "";
+      this.write(rest);
+    }
+    this.tell();
+  }
+
+  /** The connection dropped: whatever program asked to hold the picture is gone. */
+  reset() {
+    this.programHolds = false;
+    this.release();
+  }
+
+  dispose() {
+    clearTimeout(this.quiet);
+    clearTimeout(this.longest);
+  }
+
+  private tell() {
+    const hold = this.holding || this.programHolds;
+    if (hold === this.told) return;
+    this.told = hold;
+    this.write(hold ? SYNC_ON : SYNC_OFF);
+  }
+}

@@ -15,7 +15,7 @@ import { findLinks } from "./paths";
 import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
 import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
-import { OutputPipeline } from "./output";
+import { FrameGate, OutputPipeline } from "./output";
 import { sleepsNow, wasDown } from "./poll";
 import { maskText, streamerOn, targetName } from "./privacy";
 import { findSecrets, keyLines, keyOpenAfter, looksLikeKeyBody, secretsHidden } from "./secrets";
@@ -136,8 +136,10 @@ class TerminalHandle {
   private sent = 0;
   private last?: SessionState;
   private pendingCommand?: string;
+  /** Shows a burst of output, such as an agent redrawing its screen, as one picture. */
+  private gate = new FrameGate((text) => this.term.write(text));
   private output = new OutputPipeline(
-    (text) => this.term.write(text),
+    (text) => this.gate.push(text),
     () => drawsOwnScreen(useStore.getState().foreground[this.paneId]),
   );
   /** Start of the current run of output nobody was watching, and the last output. */
@@ -270,6 +272,7 @@ class TerminalHandle {
     });
     this.typeDroppedText();
     this.term.onData((d) => {
+      this.gate.typed();
       // A terminal that let go of its unused connection comes back on a key.
       // That key, and any typed before it's connected again, go nowhere: ssh
       // signing in again would echo them (a password typed ahead, say).
@@ -944,6 +947,7 @@ class TerminalHandle {
     useStore.getState().setSession(this.paneId, e.state);
     if (prev?.kind === "connected" && e.state.kind !== "connected") {
       this.output.flush();
+      this.gate.reset();
       this.term.write(STOP_REPORTS);
     }
     const down = e.state.kind === "reconnecting" || e.state.kind === "disconnected" || e.state.kind === "asleep";
@@ -983,6 +987,7 @@ class TerminalHandle {
     this.disposed = true;
     window.clearTimeout(this.markTimer);
     window.clearTimeout(this.gpuRelease);
+    this.gate.dispose();
     backend.closeSession(this.paneId, this.target, this.sessionKey, endRemote);
     this.term.dispose();
     this.el.remove();
