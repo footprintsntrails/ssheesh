@@ -1,43 +1,104 @@
 import { Terminal } from "@xterm/headless";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GIVE_UP_MS, ShadowEcho } from "./shadowEcho";
-import { addCount, addEcho, clearTypingCounts, echoWithin, typingSummary, useTypingCounts, type EchoTally } from "./typingCounts";
+import { addCount, addEcho, clearTypingCounts, currentCounts, echoWithin, SAVE_EVERY_KEYS, typingSummary, type EchoTally } from "./typingCounts";
 
 beforeEach(() => clearTypingCounts());
 
 describe("what's saved", () => {
+  const NAME = "sshee-typing-counts";
+  /** Longer than a save waits. */
+  const settled = () => new Promise((done) => setTimeout(done, 350));
+  let disk: Map<string, string>;
+
+  /** A store that really saves, as after starting SSHeesh: the one imported above found no storage. */
+  async function startApp() {
+    vi.resetModules();
+    return import("./typingCounts");
+  }
+
+  /** Types at a password prompt, on a real terminal, until the keys are given up on. */
+  async function typePassword(app: Awaited<ReturnType<typeof startApp>>, password: string) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+    const echo = new ShadowEcho(term, { count: (place, what) => app.addCount("tor", place, what), echoTook: (place, ms) => app.addEcho("tor", place, ms) }, () => "line");
+    await new Promise<void>((done) => term.write("[sudo] password for k: ", done));
+    echo.parsed();
+    for (const key of password) echo.key(key);
+    vi.advanceTimersByTime(GIVE_UP_MS);
+    echo.tick();
+    vi.useRealTimers();
+    term.dispose();
+  }
+
+  beforeEach(() => {
+    disk = new Map();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => disk.get(key) ?? null,
+      setItem: (key: string, value: string) => disk.set(key, value),
+      removeItem: (key: string) => disk.delete(key),
+    });
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
-  it("has nothing labelled as typed at a password prompt", async () => {
-    const saved = new Map<string, string>();
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => saved.get(key) ?? null,
-      setItem: (key: string, value: string) => saved.set(key, value),
-      removeItem: (key: string) => saved.delete(key),
-    });
-    // A store that really saves: the one imported above found no storage.
-    vi.resetModules();
-    const fresh = await import("./typingCounts");
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
-    const echo = new ShadowEcho(term, { count: (place, what) => fresh.addCount("tor", place, what), echoTook: (place, ms) => fresh.addEcho("tor", place, ms) }, () => "line");
-    await new Promise<void>((done) => term.write("[sudo] password for k: ", done));
-    echo.parsed();
-    for (const key of "hunter2") echo.key(key);
-    vi.advanceTimersByTime(GIVE_UP_MS);
-    echo.tick();
-    vi.useRealTimers();
-    term.dispose();
-    await vi.waitFor(() => expect(saved.get("sshee-typing-counts")).toBeTruthy());
-    const text = saved.get("sshee-typing-counts");
-    expect(text).toContain("heldSilent");
-    expect(text).not.toMatch(/password/i);
-    expect(text).not.toContain("hunter2");
+  it("doesn't change when a password is typed, so two readings say nothing", async () => {
+    const app = await startApp();
+    for (let i = 0; i < SAVE_EVERY_KEYS; i++) app.addCount("tor", "line", "keys");
+    await settled();
+    const before = disk.get(NAME);
+    expect(before).toContain(`"keys":${SAVE_EVERY_KEYS}`);
+    await typePassword(app, "hunter2");
+    await settled();
+    expect(disk.get(NAME)).toBe(before);
+    // Settings still sees them, while SSHeesh runs.
+    expect(currentOf(app).tor?.line?.heldSilent).toBe(7);
+    expect(currentOf(app).tor?.line?.keys).toBe(SAVE_EVERY_KEYS + 7);
   });
+
+  it("right after starting the counts over, shows nothing of a password", async () => {
+    const app = await startApp();
+    app.clearTypingCounts();
+    await typePassword(app, "hunter2");
+    await settled();
+    expect(disk.get(NAME) ?? "").not.toMatch(/keys|typed|waited|heldSilent/);
+  });
+
+  it("never holds the count of keys that got no answer, nor anything labelled a password", async () => {
+    const app = await startApp();
+    await typePassword(app, "hunter2");
+    for (let i = 0; i < SAVE_EVERY_KEYS; i++) app.addCount("tor", "line", "keys");
+    await settled();
+    const text = disk.get(NAME) ?? "";
+    expect(text).toContain("waited");
+    expect(text).not.toContain("heldSilent");
+    expect(text).not.toMatch(/password|hunter2/i);
+    expect(currentOf(app).tor?.line?.heldSilent).toBe(7);
+  });
+
+  it("isn't written when SSHeesh closes: the last keys go uncounted, and start again from what was saved", async () => {
+    let app = await startApp();
+    for (let i = 0; i < SAVE_EVERY_KEYS + 5; i++) app.addCount("tor", "line", "keys");
+    await typePassword(app, "hunter2");
+    await settled();
+    app = await startApp();
+    await settled();
+    expect(currentOf(app).tor?.line).toEqual({ keys: SAVE_EVERY_KEYS });
+  });
+
+  it("goes on from what another window saved, losing nothing of this one's", async () => {
+    const app = await startApp();
+    app.addCount("tor", "line", "keys");
+    await typePassword(app, "ab");
+    disk.set(NAME, JSON.stringify({ state: { saved: { tor: { line: { keys: 500 } } } }, version: 0 }));
+    await app.useTypingCounts.persist.rehydrate();
+    expect(currentOf(app).tor?.line).toMatchObject({ keys: 503, heldSilent: 2 });
+  });
+
+  const currentOf = (app: Awaited<ReturnType<typeof startApp>>) => app.currentCounts();
 });
 
 describe("the counts", () => {
@@ -46,7 +107,7 @@ describe("the counts", () => {
     addCount("tor", "line", "keys");
     addCount("tor", "agent", "keys");
     addCount("direct", "line", "keys");
-    const { counts } = useTypingCounts.getState();
+    const counts = currentCounts();
     expect(counts.tor?.line?.keys).toBe(2);
     expect(counts.tor?.agent?.keys).toBe(1);
     expect(counts.direct?.line?.keys).toBe(1);
@@ -56,13 +117,26 @@ describe("the counts", () => {
     addCount("tor", "line", "atOnce");
     addEcho("tor", "line", 120);
     const walk = (v: unknown): unknown[] => (typeof v === "object" && v !== null ? Object.values(v).flatMap(walk) : [v]);
-    expect(walk(useTypingCounts.getState().counts).every((v) => typeof v === "number")).toBe(true);
+    expect(walk(currentCounts()).every((v) => typeof v === "number")).toBe(true);
   });
 
   it("clear", () => {
     addCount("tor", "line", "keys");
     clearTypingCounts();
-    expect(useTypingCounts.getState().counts).toEqual({});
+    expect(currentCounts()).toEqual({});
+  });
+
+  it("add up across a save, echo times too, and keep what isn't saved", () => {
+    addEcho("tor", "line", 5);
+    addCount("tor", "line", "heldSilent");
+    for (let i = 0; i < SAVE_EVERY_KEYS; i++) addCount("tor", "line", "keys");
+    addEcho("tor", "line", 5);
+    addEcho("tor", "line", 100);
+    addCount("tor", "line", "keys");
+    const line = currentCounts().tor?.line;
+    expect(line?.keys).toBe(SAVE_EVERY_KEYS + 1);
+    expect(line?.heldSilent).toBe(1);
+    expect(line?.echoes).toEqual([2, 0, 0, 0, 0, 1]);
   });
 });
 
@@ -70,7 +144,7 @@ describe("echo times", () => {
   const echoes = (...ms: number[]) => {
     clearTypingCounts();
     ms.forEach((m) => addEcho("tor", "line", m));
-    return useTypingCounts.getState().counts.tor?.line?.echoes;
+    return currentCounts().tor?.line?.echoes;
   };
 
   it("are kept by slot, with no key's own time", () => {

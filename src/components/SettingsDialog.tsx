@@ -34,7 +34,7 @@ import { isMac, isWindows, SHORTCUT_GROUPS, SHORTCUT_NAMES, shortcutLabel } from
 import type { Arrangement } from "../lib/layout";
 import { markHintSeen, useSettings, type Settings, type WelcomeMode, type WelcomePart } from "../lib/settings";
 import { useStore } from "../lib/store";
-import { clearTypingCounts, typingSummary, useTypingCounts, type TypingSummary } from "../lib/typingCounts";
+import { clearTypingCounts, typingSummary, useCurrentCounts, type TypingSummary } from "../lib/typingCounts";
 import {
   ACCENTS,
   APP_THEMES,
@@ -460,7 +460,7 @@ function millis(ms: number | null): string {
 }
 
 const TYPING_ROWS: { label: string; hint?: string; show: (t: TypingSummary) => string }[] = [
-  { label: "Keys counted", show: (t) => t.keys.toLocaleString() },
+  { label: "Keys counted", hint: "Saved every couple of hundred keys, so the last few are lost when SSHeesh closes.", show: (t) => t.keys.toLocaleString() },
   { label: "Typed into an agent", hint: "Agents and full-screen programs like vim wouldn't get instant letters.", show: (t) => percent(t.agentShare) },
   { label: "Typed into a full-screen program", show: (t) => percent(t.screenShare) },
   { label: "Could appear at once", hint: "Of what's typed at a command line. The first letters of each line always wait for the server.", show: (t) => percent(t.atOnceShare) },
@@ -470,14 +470,14 @@ const TYPING_ROWS: { label: string; hint?: string; show: (t: TypingSummary) => s
   { label: "9 of 10 replies took", show: (t) => millis(t.echoP90) },
   { label: "Guessed, came back different", show: (t) => t.wrong.toLocaleString() },
   { label: "Guessed, nothing came back", hint: "These could have been password letters on screen. The reason this is only a count so far.", show: (t) => t.silent.toLocaleString() },
-  { label: "Held back, nothing came back", hint: "Password prompts, and vim's commands too: keys the test rightly wouldn't have shown.", show: (t) => t.heldSilent.toLocaleString() },
+  { label: "Held back, nothing came back", hint: "Password prompts, and vim's commands too: keys the test rightly wouldn't have shown. Since SSHeesh started: this one is never saved.", show: (t) => t.heldSilent.toLocaleString() },
   { label: "Stopped by text to the right", hint: "Suggestions from zsh or fish, or a right-hand prompt.", show: (t) => t.midLine.toLocaleString() },
   { label: "Trusted a row that reads like a password prompt", hint: "Should stay 0.", show: (t) => t.passwordOpen.toLocaleString() },
 ];
 
 /** The counts so far, side by side for Tor and without it. */
 function TypingCountsRows() {
-  const counts = useTypingCounts((c) => c.counts);
+  const counts = useCurrentCounts();
   if (!counts.tor && !counts.direct) return null;
   const tor = typingSummary(counts.tor);
   const direct = typingSummary(counts.direct);

@@ -1,7 +1,14 @@
-// The counts from shadowEcho.ts, added up and saved on this computer: numbers
-// only, under their own name, with nothing of what was typed or where. Nothing
-// reads them but Settings → Terminal.
+// The counts from shadowEcho.ts, added up: numbers only, with nothing of what
+// was typed or where. Nothing reads them but Settings → Terminal.
+//
+// Saved after every key, they'd tell anyone reading them twice how long a
+// password typed in between was. So new counts stay in memory, and go to this
+// computer's storage together once there are enough keys among them for one
+// password to be lost in. Not when SSHeesh closes, which would give the same
+// thing away: the last few keys just go uncounted. `heldSilent` is never saved:
+// it rises by a password's length whatever else is being typed.
 
+import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { quietStorage } from "./persist";
@@ -15,21 +22,78 @@ export type TypingCounts = Partial<Record<EchoRoute, Partial<Record<EchoPlace, E
 
 const ECHO_MS = [10, 20, 40, 60, 80, 100, 150, 200, 300, 400, 600, 800, 1200, 2000, 3000];
 
+const ROUTES: EchoRoute[] = ["tor", "direct"];
+const PLACES: EchoPlace[] = ["line", "agent", "screen"];
+
+/** How many new keys it takes for the counts to be saved. */
+export const SAVE_EVERY_KEYS = 200;
+
 interface CountsStore {
-  counts: TypingCounts;
+  /** What's in storage, from every window. */
+  saved: TypingCounts;
+  /** This window's since then, in memory only. */
+  fresh: TypingCounts;
 }
 
 export const useTypingCounts = create<CountsStore>()(
-  persist((): CountsStore => ({ counts: {} }), {
+  persist((): CountsStore => ({ saved: {}, fresh: {} }), {
     name: "sshee-typing-counts",
     storage: quietStorage(),
+    partialize: (s) => ({ saved: s.saved }),
   }),
 );
 
+/** Two sets of counts added together, at every level. */
+function addUp<T>(a: T | undefined, b: T | undefined): T {
+  if (a === undefined) return b as T;
+  if (b === undefined) return a;
+  if (typeof a === "number") return (a + (b as number)) as T;
+  if (Array.isArray(a)) {
+    const other = b as number[];
+    return Array.from({ length: Math.max(a.length, other.length) }, (_, i) => (a[i] ?? 0) + (other[i] ?? 0)) as T;
+  }
+  const sum = { ...(a as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(b as Record<string, unknown>)) sum[key] = addUp(sum[key], value);
+  return sum as T;
+}
+
+/** All the counts there are: what's saved and what's new. */
+export function currentCounts(): TypingCounts {
+  const { saved, fresh } = useTypingCounts.getState();
+  return addUp(saved, fresh);
+}
+
+export function useCurrentCounts(): TypingCounts {
+  const saved = useTypingCounts((s) => s.saved);
+  const fresh = useTypingCounts((s) => s.fresh);
+  return useMemo(() => addUp(saved, fresh), [saved, fresh]);
+}
+
+/** Moves what's new into what's saved, all but `heldSilent`. */
+function saveFresh(saved: TypingCounts, fresh: TypingCounts): CountsStore {
+  const going: TypingCounts = {};
+  const staying: TypingCounts = {};
+  for (const route of ROUTES) {
+    for (const place of PLACES) {
+      const tally = fresh[route]?.[place];
+      if (!tally) continue;
+      const { heldSilent, ...rest } = tally;
+      (going[route] ??= {})[place] = rest;
+      if (heldSilent) (staying[route] ??= {})[place] = { heldSilent };
+    }
+  }
+  return { saved: addUp(saved, going), fresh: staying };
+}
+
+function keysIn(counts: TypingCounts): number {
+  return ROUTES.flatMap((route) => PLACES.map((place) => counts[route]?.[place]?.keys ?? 0)).reduce((a, b) => a + b, 0);
+}
+
 function change(route: EchoRoute, place: EchoPlace, patch: (t: EchoTally) => EchoTally) {
-  const { counts } = useTypingCounts.getState();
-  const places = counts[route] ?? {};
-  useTypingCounts.setState({ counts: { ...counts, [route]: { ...places, [place]: patch(places[place] ?? {}) } } });
+  const { saved, fresh } = useTypingCounts.getState();
+  const places = fresh[route] ?? {};
+  const next: TypingCounts = { ...fresh, [route]: { ...places, [place]: patch(places[place] ?? {}) } };
+  useTypingCounts.setState(keysIn(next) < SAVE_EVERY_KEYS ? { fresh: next } : saveFresh(saved, next));
 }
 
 export function addCount(route: EchoRoute, place: EchoPlace, what: EchoCount) {
@@ -48,7 +112,7 @@ export function addEcho(route: EchoRoute, place: EchoPlace, ms: number) {
 }
 
 export function clearTypingCounts() {
-  useTypingCounts.setState({ counts: {} });
+  useTypingCounts.setState({ saved: {}, fresh: {} });
 }
 
 /** The echo time `share` of all echoes came within, by the slot it fell in. Rough on purpose: no key's own time is kept. Above the last slot it's Infinity. */
