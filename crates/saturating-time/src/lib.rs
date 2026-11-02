@@ -88,11 +88,12 @@ pub trait SaturatingTime: internal::SaturatingTime {
     /// // Adding zero to the maximum value will change nothing.
     /// assert!(max.checked_add(Duration::ZERO).is_some());
     ///
-    /// // Adding 1ns to the maximum value will fail.
-    /// assert!(max.checked_add(Duration::new(0, 1)).is_none());
+    /// // Adding 1us to the maximum value will fail.  (Not 1ns: on Windows, whose
+    /// // clock counts in 100ns, that changes nothing and succeeds.)
+    /// assert!(max.checked_add(Duration::from_micros(1)).is_none());
     ///
-    /// // Subtracting 1ns from the maximum value will work of course.
-    /// assert!(max.checked_sub(Duration::new(0, 1)).is_some());
+    /// // Subtracting 1us from the maximum value will work of course.
+    /// assert!(max.checked_sub(Duration::from_micros(1)).is_some());
     /// ```
     fn max_value() -> Self {
         internal::SaturatingTime::max_value()
@@ -119,11 +120,12 @@ pub trait SaturatingTime: internal::SaturatingTime {
     /// // Subtracting a zero from the minimum value will change nothing.
     /// assert!(min.checked_sub(Duration::ZERO).is_some());
     ///
-    /// // Subtracting 1ns from the minimum value will fail.
-    /// assert!(min.checked_sub(Duration::new(0, 1)).is_none());
+    /// // Subtracting 1us from the minimum value will fail.  (Not 1ns: on Windows,
+    /// // whose clock counts in 100ns, that changes nothing and succeeds.)
+    /// assert!(min.checked_sub(Duration::from_micros(1)).is_none());
     ///
-    /// // Adding 1ns to the minimum value will work of course.
-    /// assert!(min.checked_add(Duration::new(0, 1)).is_some());
+    /// // Adding 1us to the minimum value will work of course.
+    /// assert!(min.checked_add(Duration::from_micros(1)).is_some());
     /// ```
     fn min_value() -> Self {
         internal::SaturatingTime::min_value()
