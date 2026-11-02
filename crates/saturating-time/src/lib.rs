@@ -317,8 +317,9 @@ mod tests {
         let max = <T as SaturatingTime>::max_value();
         let min = <T as SaturatingTime>::min_value();
 
-        // This first assertion might not be so portable, maybe remove it if
-        // this becomes a problem.
+        // Not on Windows, whose clock spans about 29,000 years, far less than a
+        // `Duration` can.
+        #[cfg(not(windows))]
         assert_eq!(max.saturating_duration_since(min), Duration::MAX);
         assert_eq!(min.saturating_duration_since(max), Duration::ZERO);
     }
