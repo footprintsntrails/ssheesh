@@ -146,6 +146,7 @@ function Toolbar({ target }: { target: TargetRef | null }) {
   const narrowRail = useSettings((s) => s.sidebarMode === "narrow");
   // The sidebar is away: hidden, or sliding in at the window's edge.
   const sideAway = useSettings((s) => !s.sidebarVisible || compactSidebar(s.compactMode));
+  const compactSide = useSettings((s) => compactSidebar(s.compactMode));
   const topAway = useSettings((s) => compactTabbar(s.compactMode));
   const clearTrafficLights = isMac && (sideAway || sidebarSide === "right");
   // A narrow rail is too thin for the window buttons; they spill over the toolbar.
@@ -161,13 +162,16 @@ function Toolbar({ target }: { target: TargetRef | null }) {
       data-tauri-drag-region
       className={cn("@container flex h-[40px] shrink-0 items-center gap-2", controls ? "pr-0" : "pr-2", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}
     >
-      <IconButton
-        label={`${sidebarVisible ? "Hide" : "Show"} sidebar (${shortcutLabel("sidebar")})`}
-        onClick={() => updateSettings({ sidebarVisible: !sidebarVisible })}
-        className={cn(sidebarSide === "right" && "order-last")}
-      >
-        <SidebarIcon size={15} />
-      </IconButton>
+      {/* In compact mode the sidebar slides in at the window's edge: showing or hiding it does nothing there. */}
+      {!compactSide && (
+        <IconButton
+          label={`${sidebarVisible ? "Hide" : "Show"} sidebar (${shortcutLabel("sidebar")})`}
+          onClick={() => updateSettings({ sidebarVisible: !sidebarVisible })}
+          className={cn(sidebarSide === "right" && "order-last")}
+        >
+          <SidebarIcon size={15} />
+        </IconButton>
+      )}
       {sideAway && (
         <IconButton label="Main menu" onClick={() => useStore.getState().showHome()} active={!target}>
           <House size={15} />
