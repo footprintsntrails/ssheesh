@@ -252,6 +252,10 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     None
 }
 
+/// The most one command may answer with: a server that keeps sending can't
+/// fill this computer's memory. Far more than any listing or history needs.
+const MAX_REPLY: usize = 256 * 1024 * 1024;
+
 /// Reads up to and past `mark`, and returns what came before it. Reads
 /// nothing beyond the mark, which may well arrive split over two reads.
 fn read_to_mark(r: &mut impl BufRead, mark: &[u8], limit: usize) -> Result<Vec<u8>, Broken> {
@@ -282,9 +286,9 @@ fn exchange(shell: &mut Shell, script: &str, mark: &str) -> Result<Reply, Broken
     let r = &mut shell.stdout;
     read_to_mark(r, &start, MAX_NOISE)?;
     rest_of_line(r)?;
-    let out = read_to_mark(r, &end, usize::MAX)?;
+    let out = read_to_mark(r, &end, MAX_REPLY)?;
     let code = rest_of_line(r)?.parse().map_err(|_| Broken::Lost)?;
-    let err = read_to_mark(r, &done, usize::MAX)?;
+    let err = read_to_mark(r, &done, MAX_REPLY)?;
     rest_of_line(r)?;
     Ok(Reply { code, out, err })
 }

@@ -244,7 +244,10 @@ const TYPED_MS = 150;
 
 const SYNC_ON = "\x1b[?2026h";
 const SYNC_OFF = "\x1b[?2026l";
-const SYNC_MARK = /\x1b\[\?2026([hl])/g;
+/** Private modes being set or reset, in any way of writing them: the terminal reads `?25;2026h` and `?02026h` too. */
+const PRIVATE_MODES = /(?:\x1b\[|\x9b)\?([\d;:]*)([hl])/g;
+/** How long the terminal itself holds for a program that never ends its hold. */
+const PROGRAM_HOLD_MS = 1000;
 
 /** How much of `s`'s end could be the start of a synchronized-output mark cut off by a read. */
 function cutSyncMark(s: string): number {
@@ -278,6 +281,7 @@ export class FrameGate {
   private cut = "";
   private quiet: ReturnType<typeof setTimeout> | undefined;
   private longest: ReturnType<typeof setTimeout> | undefined;
+  private programHold: ReturnType<typeof setTimeout> | undefined;
   private typedAt = 0;
 
   constructor(private readonly write: (text: string) => void) {}
@@ -295,9 +299,14 @@ export class FrameGate {
       this.cut = text.slice(-keep);
       text = text.slice(0, -keep);
     }
-    text = text.replace(SYNC_MARK, (_, on: string) => {
+    text = text.replace(PRIVATE_MODES, (whole, modes: string, on: string) => {
+      const list = modes.split(";");
+      const others = list.filter((m) => Number(m) !== 2026);
+      if (others.length === list.length) return whole;
       this.programHolds = on === "h";
-      return "";
+      clearTimeout(this.programHold);
+      if (this.programHolds) this.programHold = setTimeout(() => this.programGaveUp(), PROGRAM_HOLD_MS);
+      return others.length ? whole.replace(modes, others.join(";")) : "";
     });
     const erases = ERASES.test(text) && Date.now() - this.typedAt > TYPED_MS;
     if (!this.holding && (erases || text.length >= BURST_SIZE)) {
@@ -334,12 +343,20 @@ export class FrameGate {
   /** The connection dropped: whatever program asked to hold the picture is gone. */
   reset() {
     this.programHolds = false;
+    clearTimeout(this.programHold);
     this.release();
   }
 
   dispose() {
     clearTimeout(this.quiet);
     clearTimeout(this.longest);
+    clearTimeout(this.programHold);
+  }
+
+  /** A program never ended its hold, and the terminal has stopped waiting by now: keep in step. */
+  private programGaveUp() {
+    this.programHolds = false;
+    if (!this.holding) this.told = false;
   }
 
   private tell() {

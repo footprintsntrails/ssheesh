@@ -104,6 +104,9 @@ export interface FindView {
 /** How long the rows read for a search are good for while output keeps coming. */
 const FIND_ROWS_FOR_MS = 3000;
 
+/** Programs that read Ctrl+F themselves, besides those drawing their own screen; ssh is another server's shell. */
+const KEEP_CTRL_F = new Set(["emacs", "hx", "helix", "micro", "joe", "ne", "ranger", "nnn", "lf", "yazi", "vifm", "tig", "mutt", "neomutt", "weechat", "irssi", "ssh", "tmux", "screen"]);
+
 /** Programs that draw their own screen, besides the agents. */
 const FULL_SCREEN = new Set(["vim", "nvim", "vi", "nano", "less", "man", "htop", "top", "btop", "mc", "lazygit", "k9s", "watch"]);
 
@@ -162,6 +165,9 @@ export class TerminalHandle {
   private findAnchor = 0;
   /** Only the latest search goes on after waiting for the server. */
   private findTicket = 0;
+  /** The read of the server's history on its way, and which opening of the bar it's for. */
+  private findLoad: Promise<FindRow[]> | null = null;
+  private findEpoch = 0;
   private findLayer: HTMLDivElement | null = null;
   /** Shows a burst of output, such as an agent redrawing its screen, as one picture. */
   private gate = new FrameGate((text) => this.term.write(text));
@@ -790,9 +796,14 @@ export class TerminalHandle {
    * no use for it, and do have a lot of output to look through.
    */
   takesFindKey(): boolean {
-    const command = useStore.getState().foreground[this.paneId];
-    if (command && FULL_SCREEN.has(command.toLowerCase())) return false;
-    return !!this.tmux || this.term.buffer.active.type === "normal";
+    const command = useStore.getState().foreground[this.paneId]?.toLowerCase();
+    if (command && (FULL_SCREEN.has(command) || KEEP_CTRL_F.has(command))) return false;
+    return this.findsInTmux() || this.term.buffer.active.type === "normal";
+  }
+
+  /** The history is tmux's. Not just the title saying so: any program can print that. */
+  private findsInTmux(): boolean {
+    return this.durable && !!this.tmux;
   }
 
   findView = (): FindView => this.findNow;
@@ -808,29 +819,30 @@ export class TerminalHandle {
 
   /** Rows up from the bottom of the history that the bottom of the view is. */
   private viewBottom(): number {
-    if (this.tmux) return this.tmux.position;
+    if (this.tmux && this.findsInTmux()) return this.tmux.position;
     const b = this.term.buffer.active;
     return Math.max(0, b.length - b.viewportY - this.term.rows);
   }
 
   /** Opens the find bar, or puts the keyboard back on it. */
   openFind() {
-    const opening = !this.findNow.open;
-    if (opening) {
+    if (!this.findNow.open) {
       this.findAnchor = this.viewBottom();
       this.findRows = null;
     }
     this.tellFind({ open: true, focus: this.findNow.focus + 1 });
-    if (opening && this.findNow.query) void this.setFindQuery(this.findNow.query);
   }
 
+  /** What you typed goes too: it could be a name, with streamer mode on by the next time. */
   closeFind() {
     this.findTicket++;
+    this.findEpoch++;
+    this.findLoad = null;
     this.findRows = null;
     this.findMatches = [];
     this.findLayer?.remove();
     this.findLayer = null;
-    this.tellFind({ open: false, busy: false });
+    this.tellFind({ open: false, busy: false, error: false, query: "", count: 0, at: 0 });
     this.term.focus();
   }
 
@@ -844,21 +856,36 @@ export class TerminalHandle {
   private async loadFindRows(): Promise<FindRow[]> {
     const fresh = this.lastOutput <= this.findRowsAt || Date.now() - this.findRowsAt < FIND_ROWS_FOR_MS;
     if (fresh && this.findRows) return this.findRows;
-    const at = Date.now();
-    let rows: FindRow[];
-    if (this.tmux) {
-      rows = rowsFromCapture(await backend.sessionRows(this.target, this.sessionKey), this.term.cols);
-    } else {
+    if (!this.findsInTmux()) {
       const b = this.term.buffer.active;
-      rows = [];
+      const rows: FindRow[] = [];
       for (let i = 0; i < b.length; i++) {
         const line = b.getLine(i);
         rows.push({ text: line?.translateToString(true) ?? "", wrapped: !!line?.isWrapped });
       }
+      this.findRows = rows;
+      this.findRowsAt = Date.now();
+      return rows;
     }
-    this.findRows = rows;
-    this.findRowsAt = at;
-    return rows;
+    // One read at a time, however fast you type: on Windows each may be a whole new login.
+    if (this.findLoad) return this.findLoad;
+    const at = Date.now();
+    const epoch = this.findEpoch;
+    this.findLoad = backend
+      .sessionRows(this.target, this.sessionKey)
+      .then((text) => {
+        const rows = rowsFromCapture(text, this.term.cols);
+        // The bar was closed meanwhile: the history isn't kept.
+        if (epoch === this.findEpoch) {
+          this.findRows = rows;
+          this.findRowsAt = at;
+        }
+        return rows;
+      })
+      .finally(() => {
+        if (epoch === this.findEpoch) this.findLoad = null;
+      });
+    return this.findLoad;
   }
 
   async setFindQuery(query: string) {
@@ -921,7 +948,7 @@ export class TerminalHandle {
     const bottom = this.viewBottom();
     if (fromBottom >= bottom && fromBottom < bottom + rows) return;
     const wanted = Math.max(0, fromBottom - (rows - 1 - Math.floor(rows / 3)));
-    if (this.tmux) this.scrollTo(this.tmux.history - wanted);
+    if (this.tmux && this.findsInTmux()) this.scrollTo(this.tmux.history - wanted);
     else this.term.scrollToLine(Math.max(0, this.term.buffer.active.length - rows - wanted));
   }
 

@@ -245,10 +245,38 @@ describe("FrameGate", () => {
   it("follows a program that holds the picture itself", () => {
     gate.push(`${ON}half`);
     expect(written).toEqual([ON, "half"]);
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(900);
     expect(written).toEqual([ON, "half"]);
     gate.push(`rest${OFF}`);
     expect(written).toEqual([ON, "half", "rest", OFF]);
+  });
+
+  it("isn't fooled by other ways of writing the mark", () => {
+    for (const mark of [`${ESC}[?02026h`, `${ESC}[?2026;2026h`, "\x9b?2026h"]) {
+      written = [];
+      gate = new FrameGate((t) => written.push(t));
+      gate.push(`${mark}x`);
+      expect(written, mark).toEqual([ON, "x"]);
+      gate.reset();
+    }
+  });
+
+  it("passes on the other modes written with the mark, and leaves the rest alone", () => {
+    gate.push(`${ESC}[?25;2026hx`);
+    expect(written).toEqual([ON, `${ESC}[?25hx`]);
+    gate.reset();
+    written = [];
+    gate.push(`${ESC}[?1049h${ESC}[?12020l`);
+    expect(written).toEqual([`${ESC}[?1049h${ESC}[?12020l`]);
+  });
+
+  it("stops following a program that never ends its hold, as the terminal does", () => {
+    gate.push(`${ON}half`);
+    vi.advanceTimersByTime(1000);
+    written = [];
+    // Bursts are held again.
+    gate.push(ERASE);
+    expect(written).toEqual([ON, ERASE]);
   });
 
   it("isn't ended early by the marks tmux puts around every update", () => {
