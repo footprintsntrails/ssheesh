@@ -822,10 +822,11 @@ class TerminalHandle {
       this.secretLayer = layer;
       screen.appendChild(layer);
     }
-    // The cover is the terminal's own background, so nothing shows through.
+    // The cover is the terminal's own background, so nothing shows through;
+    // its pill and dots are tinted with the accent (index.css).
     const bg = (theme.background ?? "#000000").slice(0, 7);
     this.secretLayer.style.setProperty("--secret-bg", bg);
-    this.secretLayer.style.setProperty("--secret-dot", `color-mix(in srgb, ${theme.foreground ?? "#ffffff"} 55%, ${bg})`);
+    this.secretLayer.style.setProperty("--secret-fg", (theme.foreground ?? "#ffffff").slice(0, 7));
     this.secretLayer.style.setProperty("--secret-cell", `${w}px`);
     const title = streamerOn() ? "Hidden while streaming" : "Hidden secret. Click to show it";
     const marks = document.createDocumentFragment();

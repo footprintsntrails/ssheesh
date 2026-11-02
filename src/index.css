@@ -338,18 +338,43 @@
   z-index: 7;
   pointer-events: none;
 }
+/*
+ * The cover is the terminal's own background, so nothing shows through. On
+ * it a tinted pill with a lock in the first cell and a dot per character
+ * after it, so a secret reads as hidden, not as text that happens to be dots.
+ */
 .term-secret {
+  --secret-ink: color-mix(in srgb, var(--ui-accent) 80%, var(--secret-fg));
+  --secret-tint: color-mix(in srgb, var(--ui-accent) 15%, var(--secret-bg));
   position: absolute;
   pointer-events: auto;
   cursor: pointer;
-  border-radius: 3px;
   background-color: var(--secret-bg);
-  background-image: radial-gradient(circle, var(--secret-dot) 0 1.4px, transparent 1.9px);
-  background-size: var(--secret-cell) 100%;
-  background-repeat: repeat-x;
+}
+.term-secret::after {
+  content: "";
+  position: absolute;
+  inset: 2px 0;
+  box-sizing: border-box;
+  padding-left: var(--secret-cell);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent) 45%, transparent);
+  background:
+    radial-gradient(circle, var(--secret-ink) 0 1.4px, transparent 1.9px) content-box 0 0 / var(--secret-cell) 100% repeat-x,
+    linear-gradient(var(--secret-tint), var(--secret-tint)) border-box;
+}
+.term-secret::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 2px auto 2px 0;
+  width: var(--secret-cell);
+  background-color: var(--secret-ink);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7V5a3 3 0 0 1 6 0v2h.5A1.5 1.5 0 0 1 13 8.5v5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-5A1.5 1.5 0 0 1 4.5 7H5zm1.5 0h3V5a1.5 1.5 0 0 0-3 0v2z'/%3E%3C/svg%3E") center / auto 74% no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7V5a3 3 0 0 1 6 0v2h.5A1.5 1.5 0 0 1 13 8.5v5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-5A1.5 1.5 0 0 1 4.5 7H5zm1.5 0h3V5a1.5 1.5 0 0 0-3 0v2z'/%3E%3C/svg%3E") center / auto 74% no-repeat;
 }
 .term-secret:hover {
-  --secret-dot: var(--ui-accent);
+  --secret-tint: color-mix(in srgb, var(--ui-accent) 28%, var(--secret-bg));
 }
 
 /* Files dragged from one server's Files to another's. */
