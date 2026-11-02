@@ -1,3 +1,7 @@
 [workspace]
-members = ["src-tauri", "crates/sshee-core"]
+members = ["src-tauri", "crates/sshee-core", "crates/saturating-time"]
 resolver = "2"
+
+# Arti's copy never finishes on Windows, which hung Tor at 15%: see its PATCHED.md.
+[patch.crates-io]
+saturating-time = { path = "crates/saturating-time" }

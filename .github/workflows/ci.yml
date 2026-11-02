@@ -40,7 +40,7 @@ jobs:
         run: npm test
 
       - name: Test the core
-        run: cargo test -p sshee-core
+        run: cargo test -p sshee-core -p saturating-time
 
       - name: Build the app
         run: cargo build -p ssheesh

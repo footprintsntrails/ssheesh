@@ -1,0 +1,40 @@
+# Tor on the real systems: it hung on every Windows computer and nothing here
+# could tell. Starts Tor and has the system's ssh reach a server through it, from
+# a folder with a space in its name, as a Windows user's often is.
+name: Tor check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "crates/sshee-core/src/tor.rs"
+      - "crates/sshee-core/src/ssh.rs"
+      - "crates/saturating-time/**"
+      - "Cargo.lock"
+      - ".github/workflows/tor-check.yml"
+
+jobs:
+  check:
+    name: Tor on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: The library that hung on Windows
+        run: cargo test -p saturating-time
+      - name: Build
+        run: cargo build -p sshee-core --release --example tor_ssh_check
+      - name: Start Tor and reach a server through it
+        shell: bash
+        run: |
+          mkdir -p "from a folder/with spaces"
+          cp target/release/examples/tor_ssh_check* "from a folder/with spaces/" 2>/dev/null || true
+          cd "from a folder/with spaces"
+          ./tor_ssh_check test.rebex.net
