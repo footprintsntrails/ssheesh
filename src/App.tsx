@@ -47,6 +47,16 @@ function useShortcuts() {
       }
       const id = matchShortcut(e);
       if (!id) return;
+      if (id === "find") {
+        // A terminal's. In Files it's the filter's, and vim and less read this key themselves.
+        const on = activePane(useStore.getState());
+        const term = on?.kind === "terminal" ? findTerminal(on.id) : undefined;
+        if (!term?.takesFindKey()) return;
+        e.preventDefault();
+        e.stopPropagation();
+        term.openFind();
+        return;
+      }
       // In a text field (not the terminal's own), Ctrl+Shift+Z is redo.
       const field = (e.target as HTMLElement | null)?.closest?.("input, textarea, [contenteditable='true']");
       if (id === "reopenTab" && field && !field.classList.contains("xterm-helper-textarea")) return;

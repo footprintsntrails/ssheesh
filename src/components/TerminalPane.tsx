@@ -1,17 +1,18 @@
-import { ChevronDown, CircleAlert, FileUp, History, RotateCw, ShieldAlert, ShieldQuestion, Wifi, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, CircleAlert, FileUp, History, RotateCw, ShieldAlert, ShieldQuestion, Wifi, X } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "../lib/format";
 import { useStore, type PaneState, type Recap } from "../lib/store";
 import { lineTone } from "../lib/highlight";
 import { useNames } from "../lib/privacy";
 import { maskSecrets } from "../lib/secrets";
 import { useSettings } from "../lib/settings";
-import { getTerminal } from "../lib/terminals";
+import { getTerminal, type TerminalHandle } from "../lib/terminals";
+import { FIND_LIMIT } from "../lib/termFind";
 import { wasDown } from "../lib/poll";
 import { thumb, topForOffset, type ScrollView } from "../lib/scroll";
 import { resolveScheme } from "../lib/themes";
 import type { Fingerprint, HostKeyCheck, SessionState } from "../lib/types";
-import { Button, Face } from "./ui";
+import { Button, Face, IconButton } from "./ui";
 
 function useCountdown(state: SessionState | undefined): number {
   const [left, setLeft] = useState(0);
@@ -276,8 +277,65 @@ function TerminalScrollbar({ pane, top, bottom, right }: { pane: PaneState; top:
   );
 }
 
+/** Ctrl+F in a terminal, as in a browser: at the top right, over the text. */
+function FindBar({ term }: { term: TerminalHandle }) {
+  const view = useSyncExternalStore(term.onFindChange, term.findView);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!view.open) return;
+    input.current?.focus();
+    input.current?.select();
+  }, [view.open, view.focus]);
+  if (!view.open) return null;
+  const nothing = !!view.query && !view.busy && view.count === 0;
+  const count = view.error
+    ? "Couldn't search"
+    : view.busy
+      ? "…"
+      : !view.query
+        ? ""
+        : view.count === 0
+          ? "No results"
+          : `${view.at} of ${view.count >= FIND_LIMIT ? `${FIND_LIMIT}+` : view.count}`;
+  return (
+    <div
+      role="search"
+      className="absolute top-2 right-5 z-20 flex h-9 animate-pop-in items-center gap-1 rounded-[10px] border border-ink/[0.1] bg-raised pr-1 pl-2.5 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.5)]"
+    >
+      <input
+        ref={input}
+        value={view.query}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder="Find in the terminal"
+        aria-label="Find in the terminal"
+        onChange={(e) => void term.setFindQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") term.closeFind();
+          else if (e.key === "Enter") void term.stepFind(e.shiftKey ? 1 : -1);
+          else return;
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        className={cn("w-44 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg-3", nothing && "text-bad")}
+      />
+      <span className="min-w-12 shrink-0 text-right text-[11.5px] text-fg-3 tabular-nums whitespace-nowrap">{count}</span>
+      <IconButton label="Older match (Enter)" disabled={!view.count} onClick={() => void term.stepFind(-1)}>
+        <ChevronUp size={15} />
+      </IconButton>
+      <IconButton label="Newer match (Shift+Enter)" disabled={!view.count} onClick={() => void term.stepFind(1)}>
+        <ChevronDown size={15} />
+      </IconButton>
+      <IconButton label="Close (Esc)" onClick={() => term.closeFind()}>
+        <X size={15} />
+      </IconButton>
+    </div>
+  );
+}
+
 export function TerminalPane({ pane, focused }: { pane: PaneState; focused: boolean }) {
   const box = useRef<HTMLDivElement>(null);
+  const [term, setTerm] = useState<TerminalHandle | null>(null);
   const pad = useSettings((s) => s.terminalPadding);
   const background = useSettings((s) => resolveScheme(s.terminalScheme, s.theme, s.accent).background);
   const state = useStore((s) => s.sessions[pane.id]);
@@ -299,6 +357,7 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
     if (!el) return;
     const h = getTerminal(pane);
     h.mount(el);
+    setTerm(h);
     const ro = new ResizeObserver(() => h.scheduleFit());
     ro.observe(el);
     return () => {
@@ -394,6 +453,8 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
           </div>
         </div>
       )}
+
+      {term && <FindBar term={term} />}
 
       {recap && !recapOpen && !offline && (
         <RecapCard recap={recap} onShow={() => setRecapOpen(true)} onClose={() => setRecap(pane.id, null)} />

@@ -385,6 +385,13 @@ async fn session_history(state: State<'_, AppState>, target: TargetSpec, session
     blocking(move || session::history(&t, &env, &session_key, lines)).await
 }
 
+/// A server terminal's rows as tmux keeps them, for finding text in them.
+#[tauri::command]
+async fn session_rows(state: State<'_, AppState>, target: TargetSpec, session_key: String) -> Result<String, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || session::rows(&t, &env, &session_key)).await
+}
+
 /// Scrolls a server terminal's tmux history to a position (or just reports it).
 #[tauri::command]
 async fn tmux_scroll(state: State<'_, AppState>, target: TargetSpec, session_key: String, position: Option<u32>) -> Result<session::TmuxScroll, OpError> {
@@ -894,6 +901,7 @@ pub fn run() {
             remove_host,
             forget_password,
             session_history,
+            session_rows,
             tmux_scroll,
             check_host_key,
             trust_host_key,

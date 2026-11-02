@@ -70,6 +70,8 @@ export interface Backend {
   trustHostKey(hostId: string): Promise<void>;
   /** Recent scrollback of a durable (tmux) session. */
   sessionHistory(target: TargetRef, sessionKey: string, lines: number): Promise<string>;
+  /** A terminal's rows as tmux keeps them, its history first, for finding text in them. */
+  sessionRows(target: TargetRef, sessionKey: string): Promise<string>;
   /** Scrolls a server terminal's tmux history so `position` lines sit below the screen (0 follows the output again); without one, just reports. */
   tmuxScroll(target: TargetRef, sessionKey: string, position: number | null): Promise<TmuxScroll>;
   /** The portable Windows .exe, which updates by downloading the new one. */
@@ -231,6 +233,7 @@ async function tauriBackend(): Promise<Backend> {
     removeHost: (id) => call("remove_host", { id }),
     forgetPassword: (id) => call("forget_password", { id }),
     sessionHistory: (target, sessionKey, lines) => call("session_history", { target, sessionKey, lines }),
+    sessionRows: (target, sessionKey) => call("session_rows", { target, sessionKey }),
     tmuxScroll: (target, sessionKey, position) => call("tmux_scroll", { target, sessionKey, position }),
     checkHostKey: (hostId, changed) => call("check_host_key", { hostId, changed }),
     localAuth: () => call("local_auth", {}),

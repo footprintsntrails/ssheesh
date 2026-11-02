@@ -49,7 +49,8 @@ export type ShortcutId =
   | "vitals"
   | "zoomPane"
   | "streamer"
-  | "compact";
+  | "compact"
+  | "find";
 
 interface Combo {
   key: string;
@@ -76,6 +77,7 @@ const MAC: Record<ShortcutId, Combo | null> = {
   zoomPane: { key: "enter", shift: true },
   streamer: { key: "h", shift: true },
   compact: { key: "m", shift: true },
+  find: { key: "f" },
 };
 
 const OTHER: Record<ShortcutId, Combo | null> = {
@@ -95,6 +97,8 @@ const OTHER: Record<ShortcutId, Combo | null> = {
   zoomPane: { key: "enter" },
   streamer: { key: "h" },
   compact: { key: "m" },
+  // As in a browser. vim and less keep it: see `takesFindKey`.
+  find: { key: "f", shift: false },
 };
 
 export const SHORTCUT_IDS = Object.keys(OTHER) as ShortcutId[];
@@ -116,11 +120,12 @@ export const SHORTCUT_NAMES: Record<ShortcutId, string> = {
   zoomPane: "Fill the window with a pane",
   streamer: "Streamer mode",
   compact: "Compact mode",
+  find: "Find in the terminal",
 };
 
 /** How Settings → Keyboard groups them. The command bar's second key shows on its row. */
 export const SHORTCUT_GROUPS: { title: string; ids: ShortcutId[] }[] = [
-  { title: "Find and open", ids: ["palette", "addHost", "settings"] },
+  { title: "Find and open", ids: ["palette", "find", "addHost", "settings"] },
   { title: "Tabs and panes", ids: ["newTerminal", "closePane", "reopenTab", "splitRight", "splitDown", "zoomPane", "toggleSplit"] },
   { title: "Show and hide", ids: ["sidebar", "vitals", "compact", "streamer"] },
 ];
@@ -324,7 +329,10 @@ export function reservedReason(k: Keys, mac = isMac, windows = isWindows): strin
  * system keeps them, or another shortcut already has them.
  */
 export function shortcutProblem(id: ShortcutId, k: Keys, mac = isMac, windows = isWindows): string | null {
-  const reserved = reservedReason(k, mac, windows);
+  // Ctrl+F is a terminal program's key, but finding hands it back to the
+  // programs that read it (`takesFindKey`), which no other shortcut can do.
+  const handsBack = id === "find" && sameKeys(k, { key: "f", ctrl: true });
+  const reserved = handsBack ? null : reservedReason(k, mac, windows);
   if (reserved) return reserved;
   for (const other of SHORTCUT_IDS) {
     const has = other === id ? null : shortcutKeys(other, mac);

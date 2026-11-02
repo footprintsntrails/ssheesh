@@ -58,6 +58,14 @@ describe("defaults", () => {
     }
   });
 
+  it("let only finding have Ctrl+F, as it gives the key back to programs that read it", () => {
+    use({});
+    const ctrlF = { key: "f", ctrl: true };
+    expect(shortcutProblem("find", ctrlF, false, false)).toBeNull();
+    expect(shortcutProblem("sidebar", ctrlF, false, false)).not.toBeNull();
+    expect(shortcutProblem("find", { key: "g", ctrl: true }, false, false)).not.toBeNull();
+  });
+
   it("are all listed in Settings, the command bar's second key on its row", () => {
     const listed = SHORTCUT_GROUPS.flatMap((g) => g.ids);
     expect(new Set(listed).size).toBe(listed.length);

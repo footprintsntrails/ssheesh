@@ -630,6 +630,7 @@ export const mockBackend: Backend = {
     // The demo terminals aren't tmux, so they scroll on their own.
     return { inMode: !!position, position: position ?? 0, history: 0, height: 24, limit: 2000 };
   },
+  sessionRows: async () => "",
   async sessionHistory(_target, sessionKey) {
     const s = byKey.get(sessionKey);
     return s ? stripAnsi(s.scrollback).replace(/\r/g, "").replace(/\x08 \x08/g, "") : "";

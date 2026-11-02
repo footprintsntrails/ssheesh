@@ -327,6 +327,23 @@
   border-bottom: 1px dotted color-mix(in srgb, var(--ui-accent) 60%, transparent);
 }
 
+/* What the find bar found in a terminal. */
+.term-find-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.term-find-mark {
+  position: absolute;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ui-warn) 30%, transparent);
+}
+.term-find-mark.current {
+  background: color-mix(in srgb, var(--ui-warn) 60%, transparent);
+  box-shadow: 0 0 0 1px var(--ui-warn);
+}
+
 /* The lines a path asked for ("notes.md:12-40"), marked in the file preview. */
 .lines-band {
   background: color-mix(in srgb, var(--ui-accent) 10%, transparent);

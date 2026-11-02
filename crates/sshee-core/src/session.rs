@@ -705,6 +705,19 @@ pub fn history(target: &Target, env: &SshEnv, key: &str, lines: u32) -> Result<S
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
+/// The rows of a durable session as tmux keeps them, its history first, for
+/// searching. Unlike `history` they aren't joined, so a row's place from the
+/// bottom is where tmux can scroll to.
+pub fn rows(target: &Target, env: &SshEnv, key: &str) -> Result<String, crate::OpError> {
+    let Target::Ssh(t) = target else { return Ok(String::new()) };
+    let script = format!("tmux capture-pane -p -S -{FIND_ROWS} -t {} 2>/dev/null; exit 0", crate::ssh::shell_quote(&session_name(key)));
+    let out = crate::ssh::run_remote_read(t, env, &script)?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The most history searched in a terminal.
+const FIND_ROWS: u32 = 100_000;
+
 #[cfg(test)]
 mod tests {
     use super::*;

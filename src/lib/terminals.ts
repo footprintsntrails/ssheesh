@@ -16,6 +16,7 @@ import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scr
 import { openTerminalLink } from "./terminalLinks";
 import { anchorLines, buildRecap, cursorLine } from "./away";
 import { FrameGate, OutputPipeline } from "./output";
+import { findRows, matchPieces, nearestMatch, rowsFromCapture, type FindMatch, type FindRow } from "./termFind";
 import { sleepsNow, wasDown } from "./poll";
 import { maskText, streamerOn, targetName } from "./privacy";
 import { findSecrets, keyLines, keyOpenAfter, looksLikeKeyBody, secretsHidden } from "./secrets";
@@ -89,6 +90,20 @@ const CLICK_WAIT_MS = 260;
 /** Keys and mouse reports that aren't typing: they don't end scrolling back. */
 const NOT_TYPING = /^\x1b\[(?:<|M|I$|O$)/;
 
+/** The find bar's state. `at` counts from 1 at the oldest; 0 is no match. `focus` goes up to put the keyboard on the bar. */
+export interface FindView {
+  open: boolean;
+  query: string;
+  count: number;
+  at: number;
+  busy: boolean;
+  error: boolean;
+  focus: number;
+}
+
+/** How long the rows read for a search are good for while output keeps coming. */
+const FIND_ROWS_FOR_MS = 3000;
+
 /** Programs that draw their own screen, besides the agents. */
 const FULL_SCREEN = new Set(["vim", "nvim", "vi", "nano", "less", "man", "htop", "top", "btop", "mc", "lazygit", "k9s", "watch"]);
 
@@ -119,7 +134,7 @@ interface SecretMark {
   text: string;
 }
 
-class TerminalHandle {
+export class TerminalHandle {
   readonly term: Terminal;
   readonly el: HTMLDivElement;
   private fit = new FitAddon();
@@ -136,6 +151,18 @@ class TerminalHandle {
   private sent = 0;
   private last?: SessionState;
   private pendingCommand?: string;
+  private findNow: FindView = { open: false, query: "", count: 0, at: 0, busy: false, error: false, focus: 0 };
+  private findListeners = new Set<() => void>();
+  private findRows: FindRow[] | null = null;
+  private findRowsAt = 0;
+  private findMatches: FindMatch[] = [];
+  /** Rows in the history searched, to count a match's place from the bottom. */
+  private findTotal = 0;
+  /** Where the view was when the bar opened: searches start from there. */
+  private findAnchor = 0;
+  /** Only the latest search goes on after waiting for the server. */
+  private findTicket = 0;
+  private findLayer: HTMLDivElement | null = null;
   /** Shows a burst of output, such as an agent redrawing its screen, as one picture. */
   private gate = new FrameGate((text) => this.term.write(text));
   private output = new OutputPipeline(
@@ -268,7 +295,9 @@ class TerminalHandle {
       }
       // App shortcuts win over the terminal. A paste key is left to the
       // browser, which fires the paste event xterm handles.
-      return matchShortcut(e) === null && !isTerminalPaste(e);
+      const shortcut = matchShortcut(e);
+      if (shortcut === "find" && !this.takesFindKey()) return true;
+      return shortcut === null && !isTerminalPaste(e);
     });
     this.typeDroppedText();
     this.term.onData((d) => {
@@ -352,6 +381,7 @@ class TerminalHandle {
     this.term.onRender(({ start, end }) => {
       this.dropLinkMarks(start, end);
       this.markSecrets();
+      this.drawFind();
     });
     // Paths stay faintly underlined, not only under the mouse.
     this.term.onWriteParsed(() => this.markLinksSoon());
@@ -749,6 +779,203 @@ class TerminalHandle {
       this.markWaitSince = 0;
       this.markLinks();
     }, wait);
+  }
+
+  // ---------------------------------------------------------------- find
+
+  /**
+   * Whether Ctrl+F is for the find bar. A program with a screen of its own
+   * that reads this key keeps it: vim, less and the like, known by name
+   * under tmux, and by the terminal's second screen without it. Agents have
+   * no use for it, and do have a lot of output to look through.
+   */
+  takesFindKey(): boolean {
+    const command = useStore.getState().foreground[this.paneId];
+    if (command && FULL_SCREEN.has(command.toLowerCase())) return false;
+    return !!this.tmux || this.term.buffer.active.type === "normal";
+  }
+
+  findView = (): FindView => this.findNow;
+  onFindChange = (fn: () => void): (() => void) => {
+    this.findListeners.add(fn);
+    return () => this.findListeners.delete(fn);
+  };
+
+  private tellFind(patch: Partial<FindView>) {
+    this.findNow = { ...this.findNow, ...patch };
+    this.findListeners.forEach((fn) => fn());
+  }
+
+  /** Rows up from the bottom of the history that the bottom of the view is. */
+  private viewBottom(): number {
+    if (this.tmux) return this.tmux.position;
+    const b = this.term.buffer.active;
+    return Math.max(0, b.length - b.viewportY - this.term.rows);
+  }
+
+  /** Opens the find bar, or puts the keyboard back on it. */
+  openFind() {
+    const opening = !this.findNow.open;
+    if (opening) {
+      this.findAnchor = this.viewBottom();
+      this.findRows = null;
+    }
+    this.tellFind({ open: true, focus: this.findNow.focus + 1 });
+    if (opening && this.findNow.query) void this.setFindQuery(this.findNow.query);
+  }
+
+  closeFind() {
+    this.findTicket++;
+    this.findRows = null;
+    this.findMatches = [];
+    this.findLayer?.remove();
+    this.findLayer = null;
+    this.tellFind({ open: false, busy: false });
+    this.term.focus();
+  }
+
+  /**
+   * The rows to search. A server's history is on the server, so it's read
+   * from there, and again only once something's been printed since. Going
+   * to a match scrolls tmux, which counts as output too, so not more often
+   * than this: stepping through matches shouldn't ask the server each time.
+   * A plain terminal keeps its own.
+   */
+  private async loadFindRows(): Promise<FindRow[]> {
+    const fresh = this.lastOutput <= this.findRowsAt || Date.now() - this.findRowsAt < FIND_ROWS_FOR_MS;
+    if (fresh && this.findRows) return this.findRows;
+    const at = Date.now();
+    let rows: FindRow[];
+    if (this.tmux) {
+      rows = rowsFromCapture(await backend.sessionRows(this.target, this.sessionKey), this.term.cols);
+    } else {
+      const b = this.term.buffer.active;
+      rows = [];
+      for (let i = 0; i < b.length; i++) {
+        const line = b.getLine(i);
+        rows.push({ text: line?.translateToString(true) ?? "", wrapped: !!line?.isWrapped });
+      }
+    }
+    this.findRows = rows;
+    this.findRowsAt = at;
+    return rows;
+  }
+
+  async setFindQuery(query: string) {
+    const ticket = ++this.findTicket;
+    this.tellFind({ query });
+    if (!query) {
+      this.findMatches = [];
+      this.tellFind({ count: 0, at: 0, busy: false });
+      this.drawFind();
+      return;
+    }
+    this.tellFind({ busy: true });
+    try {
+      const rows = await this.loadFindRows();
+      // You've typed on, or closed the bar.
+      if (ticket !== this.findTicket) return;
+      this.findMatches = findRows(rows, query);
+      this.findTotal = rows.length;
+      this.goToMatch(nearestMatch(this.findMatches, rows.length, this.findAnchor));
+      this.tellFind({ busy: false, error: false });
+    } catch {
+      if (ticket === this.findTicket) this.tellFind({ busy: false, error: true, count: 0, at: 0 });
+    }
+  }
+
+  /** Older (`-1`, as Enter does: most of what you're after is further up) or newer (`1`). */
+  async stepFind(by: -1 | 1) {
+    const query = this.findNow.query;
+    if (!query) return;
+    const ticket = ++this.findTicket;
+    const old = this.findMatches[this.findNow.at - 1];
+    // New output moved the rows: from the bottom, the current match is where it was.
+    const place = old ? this.findTotal - 1 - old.row : this.findAnchor;
+    try {
+      const rows = await this.loadFindRows();
+      if (ticket !== this.findTicket) return;
+      if (rows.length !== this.findTotal) {
+        this.findMatches = findRows(rows, query);
+        this.findTotal = rows.length;
+        this.tellFind({ at: nearestMatch(this.findMatches, rows.length, place) + 1 });
+      }
+      const n = this.findMatches.length;
+      if (n) this.goToMatch((this.findNow.at - 1 + by + n) % n);
+      this.tellFind({ busy: false, error: false });
+    } catch {
+      if (ticket === this.findTicket) this.tellFind({ busy: false, error: true });
+    }
+  }
+
+  private goToMatch(index: number) {
+    const match = this.findMatches[index];
+    this.tellFind({ count: this.findMatches.length, at: match ? index + 1 : 0 });
+    if (match) this.showFindRow(this.findTotal - 1 - match.row);
+    this.drawFind();
+  }
+
+  /** Scrolls a row (rows up from the bottom) into view, a third of the way down, unless it's in view. */
+  private showFindRow(fromBottom: number) {
+    const { rows } = this.term;
+    const bottom = this.viewBottom();
+    if (fromBottom >= bottom && fromBottom < bottom + rows) return;
+    const wanted = Math.max(0, fromBottom - (rows - 1 - Math.floor(rows / 3)));
+    if (this.tmux) this.scrollTo(this.tmux.history - wanted);
+    else this.term.scrollToLine(Math.max(0, this.term.buffer.active.length - rows - wanted));
+  }
+
+  /**
+   * Marks the matches on screen, on a layer over the text as the link marks
+   * are, from what's on screen each time the terminal draws: it's tmux that
+   * scrolls, and its screen is all the terminal knows of it.
+   */
+  private drawFind() {
+    if (!this.findNow.open || this.disposed || this.el.parentElement === parking) return;
+    const screen = this.term.element?.querySelector<HTMLElement>(".xterm-screen");
+    if (!screen) return;
+    if (this.findLayer?.parentElement !== screen) {
+      this.findLayer?.remove();
+      this.findLayer = document.createElement("div");
+      this.findLayer.className = "term-find-layer";
+      screen.appendChild(this.findLayer);
+    }
+    const query = this.findNow.query;
+    if (!query) {
+      this.findLayer.replaceChildren();
+      return;
+    }
+    const { cols, rows } = this.term;
+    const w = screen.clientWidth / cols;
+    const h = screen.clientHeight / rows;
+    const buf = this.term.buffer.active;
+    const shown: FindRow[] = [];
+    const cells: number[][] = [];
+    for (let r = 0; r < rows; r++) {
+      const line = buf.getLine(buf.viewportY + r);
+      const row = line ? rowText(line, cols) : { text: "", cells: [] };
+      const text = row.text.trimEnd();
+      // tmux draws a long line row by row, so the terminal may not know it wraps.
+      shown.push({ text, wrapped: !!line?.isWrapped || (r > 0 && shown[r - 1].text.length >= cols) });
+      cells.push(row.cells);
+    }
+    const bottom = this.viewBottom();
+    const current = this.findMatches[this.findNow.at - 1];
+    const currentFromBottom = current ? this.findTotal - 1 - current.row : -1;
+    const marks = document.createDocumentFragment();
+    for (const match of findRows(shown, query)) {
+      const isCurrent = bottom + rows - 1 - match.row === currentFromBottom && match.start === current?.start;
+      for (const piece of matchPieces(shown, match)) {
+        const at = cells[piece.row];
+        const x = at[piece.start] ?? 0;
+        const end = (at[piece.start + piece.length - 1] ?? x) + 1;
+        const mark = document.createElement("span");
+        mark.className = isCurrent ? "term-find-mark current" : "term-find-mark";
+        mark.style.cssText = `left:${x * w}px;top:${piece.row * h}px;width:${(end - x) * w}px;height:${h}px`;
+        marks.appendChild(mark);
+      }
+    }
+    this.findLayer.replaceChildren(marks);
   }
 
   /**

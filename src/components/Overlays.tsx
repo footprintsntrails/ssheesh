@@ -23,6 +23,7 @@ import { useSnippets } from "../lib/snippets";
 import { RECIPES } from "../lib/recipes";
 import { LOCAL_GLYPH, TOR_GLYPH, useVisibleHosts, type ServerGlyph } from "../lib/labels";
 import { switchTor } from "../lib/tor";
+import { findTerminal } from "../lib/terminals";
 
 // ---------------------------------------------------------------- command palette
 
@@ -66,6 +67,10 @@ export function CommandPalette() {
   const checkUpdates = useUpdates((u) => u.check);
   const pins = useBookmarks((b) => b.pins);
   const torOn = useStore((s) => s.tor.state !== "off");
+  const activeTerminal = useStore((s) => {
+    const pane = activePane(s);
+    return pane?.kind === "terminal" ? findTerminal(pane.id) : undefined;
+  });
   const names = useNames();
   const compactMode = useSettings((s) => s.compactMode);
   const toggleSidebar = () => {
@@ -304,6 +309,9 @@ export function CommandPalette() {
             hint={shortcutLabel("compact")}
             onSelect={run(toggleCompact)}
           />
+          {activeTerminal && (
+            <Item icon={Search} value="find search text in terminal output scrollback history" label="Find in the terminal" hint={shortcutLabel("find")} onSelect={run(() => activeTerminal.openFind())} />
+          )}
           <Item
             icon={TOR_GLYPH}
             value="tor onion anonymous hide ip address vpn proxy privacy"
