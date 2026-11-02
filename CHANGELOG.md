@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0 — Tor, in one click
+
+- **Connect through Tor.** The onion above Settings sends everything to your servers through Tor: terminals, files, stats and tunnels. Servers and their logs see a Tor address instead of yours, and your internet provider sees Tor, not which servers you use. Tor is built in, with nothing to install. If Tor can't carry a connection, the connection isn't made: nothing goes around it, not even a name lookup. Turning it on moves terminals in `tmux` over without losing their place. Servers on your own network connect directly; one reached through a jump host or a ProxyCommand of your own in `~/.ssh/config` doesn't connect while Tor is on, since Tor would quietly replace that route.
+- **Fast, for Tor.** Before a server's first connection SSHeesh times a dozen Tor routes to it and keeps the quickest. In our tests a keystroke came back in about 70 ms, against about 115 ms on a random route. If one turns slow, right-click the onion for new routes.
+- **An onion beside the server's name** while Tor is on: green when the terminal goes through Tor, amber when it doesn't yet.
+- **No sidebar button in compact mode.** It did nothing there, since the sidebar slides in at the window's edge.
+
 ## 0.9.2 — compact mode that hides again, and links that paste
 
 - **Compact mode's sidebar and top bar go away again.** A quick flick to the window's edge and back could leave one out for good, since it appeared after the pointer had already passed; a drag or leaving the window could too. Now it goes as soon as the pointer is elsewhere, or SSHeesh loses focus. A menu opened from it still keeps it out.
