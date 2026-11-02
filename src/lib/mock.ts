@@ -866,7 +866,7 @@ export const mockBackend: Backend = {
   },
 
   // The demo has no system clipboard: a test or a recording sets what's "copied".
-  clipboardFiles: async () => (window as unknown as { __demoCopiedFiles?: string[] }).__demoCopiedFiles ?? [],
+  clipboardFiles: async () => (window as unknown as { __demoCopiedFiles?: { path: string; isDir: boolean }[] }).__demoCopiedFiles ?? [],
   torStatus: async () => demoTor,
   onTorStatus(cb) {
     torListeners.add(cb);

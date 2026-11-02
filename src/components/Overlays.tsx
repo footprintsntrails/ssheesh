@@ -426,17 +426,18 @@ export function Modal({ open, onClose, children, width = 420 }: { open: boolean;
 export function ConfirmDialog() {
   const req = useStore((s) => s.confirmRequest);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (req) setTimeout(() => confirmRef.current?.focus(), 0);
+    if (req) setTimeout(() => (req.cancelFirst ? cancelRef : confirmRef).current?.focus(), 0);
   }, [req]);
   return (
     <Modal open={!!req} onClose={() => req?.resolve(false)} width={380}>
       {req && (
         <div className="p-5">
           <h2 className="text-[14.5px] font-semibold text-fg">{req.title}</h2>
-          {req.body && <p className="mt-1.5 text-[12.5px] leading-relaxed text-fg-2">{req.body}</p>}
+          {req.body && <p className="mt-1.5 text-[12.5px] leading-relaxed wrap-anywhere whitespace-pre-line text-fg-2">{req.body}</p>}
           <div className="mt-5 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => req.resolve(false)}>
+            <Button ref={cancelRef} variant="ghost" onClick={() => req.resolve(false)}>
               Cancel
             </Button>
             <Button ref={confirmRef} variant={req.danger ? "danger" : "primary"} onClick={() => req.resolve(true)}>

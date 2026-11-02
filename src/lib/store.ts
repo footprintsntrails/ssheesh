@@ -53,6 +53,8 @@ export interface ConfirmRequest {
   body?: string;
   confirmLabel: string;
   danger?: boolean;
+  /** Enter means no: what it asks about can't be undone and may well be a slip. */
+  cancelFirst?: boolean;
   resolve: (ok: boolean) => void;
 }
 

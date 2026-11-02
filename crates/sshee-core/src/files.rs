@@ -1453,8 +1453,51 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .expect("some free name")
 }
 
+/// A file copied on this computer, as found on the clipboard.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopiedFile {
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// What the clipboard's file list really holds of files somebody copied.
+/// Only full paths: a `file://host/x` comes out relative, and would mean a
+/// file in whatever folder the app runs from. `text` is the clipboard's text
+/// on a Mac, where the list may also be read out of text: a server can put
+/// text there (OSC 52), so `file:///Users/me/.ssh/id_ed25519` printed by it
+/// could otherwise be taken for a file you copied. A file copied in Finder
+/// has its name for text, not its path.
+pub fn copied_files(paths: Vec<PathBuf>, text: Option<&str>) -> Vec<PathBuf> {
+    let paths: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_absolute()).collect();
+    let Some(text) = text.map(str::trim) else { return paths };
+    let said_as_text = text.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) || paths.iter().any(|p| p.as_os_str() == text);
+    if said_as_text {
+        return Vec::new();
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
+    use super::copied_files;
+    use std::path::PathBuf;
+
+    #[test]
+    fn only_files_really_copied_count_as_copied() {
+        let key = PathBuf::from(if cfg!(windows) { r"C:\Users\me\key" } else { "/Users/me/.ssh/id_ed25519" });
+        let list = || vec![key.clone()];
+        // No text with it, as on Windows and Linux; a copy in Finder has the name as text.
+        assert_eq!(copied_files(list(), None), list());
+        assert_eq!(copied_files(list(), Some("id_ed25519")), list());
+        // A server printed it, so it's text that merely reads as a file.
+        assert!(copied_files(list(), Some("file:///Users/me/.ssh/id_ed25519")).is_empty());
+        assert!(copied_files(list(), Some("  FILE:///Users/me/.ssh/id_ed25519\n")).is_empty());
+        assert!(copied_files(list(), Some(key.to_str().unwrap())).is_empty());
+        // Not a full path: file://host/x.
+        assert!(copied_files(vec![PathBuf::from("x/y")], None).is_empty());
+    }
+
     use super::*;
 
     /// Runs the `find_path` script with `sh`, home set to `home`.

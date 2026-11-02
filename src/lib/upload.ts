@@ -3,7 +3,7 @@
 // another. Asks before replacing anything. What goes from this computer to a
 // server loses its metadata first, unless that's turned off in Settings.
 
-import { backend, type TransferHooks } from "./backend";
+import { backend, type CopiedFile, type TransferHooks } from "./backend";
 import { cleaningNote, watchCleaning } from "./cleaning";
 import { dirCache } from "./dirCache";
 import { targetName } from "./privacy";
@@ -55,6 +55,31 @@ function doneBody(dir: string, cleaning: Cleaning | undefined): string {
 }
 
 /** Uploads `paths` into `dir`; true when it went through. */
+/** Private by the look of it: keys, credentials and where they're kept. */
+const PRIVATE = /(^|[\\/])(\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.docker|\.password-store|\.env(\.[^\\/]*)?|\.netrc|\.npmrc|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)[^\\/]*|[^\\/]*\.(pem|key|p12|pfx|kdbx)|credentials[^\\/]*|secrets?(\.[^\\/]*)?)($|[\\/])/i;
+
+/** The most files named when asking; the rest are counted. */
+const NAMED = 6;
+
+/**
+ * What to ask before files on the clipboard go to a server. Dragging or
+ * picking files chooses them there and then; these were copied some time ago,
+ * maybe by another program, and what's sent can't be taken back. So it says
+ * what they are, in full, and where they're going.
+ */
+export function pasteQuestion(files: CopiedFile[], server: string, dir: string, show: (text: string) => string = (t) => t): { title: string; body: string; risky: boolean; confirmLabel: string } {
+  const risky = files.filter((f) => PRIVATE.test(f.path));
+  const named = files.slice(0, NAMED).map((f) => show(f.path) + (f.isDir ? " (folder, with all that's in it)" : ""));
+  if (files.length > NAMED) named.push(`and ${files.length - NAMED} more`);
+  const warning = risky.length ? `\n\nThis looks private: ${risky.slice(0, 3).map((f) => show(f.path)).join(", ")}${risky.length > 3 ? "…" : ""}. Once on the server, it can't be taken back.` : "";
+  return {
+    title: `Upload ${files.length === 1 ? "this" : `these ${files.length} items`} to ${server}?`,
+    body: `${named.join("\n")}\n\nInto ${show(dir)}${warning}`,
+    risky: risky.length > 0,
+    confirmLabel: risky.length ? "Upload anyway" : "Upload",
+  };
+}
+
 export async function uploadTo(target: TargetRef, dir: string, paths: string[]): Promise<boolean> {
   if (!paths.length) return false;
   const label = filesLabel(paths);

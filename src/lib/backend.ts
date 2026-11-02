@@ -6,6 +6,11 @@ import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, Ne
 import { toOpError } from "./types";
 import type { Forward, TorStatus, TorSwitch, TunnelState, WebAppScan } from "./types";
 
+export interface CopiedFile {
+  path: string;
+  isDir: boolean;
+}
+
 export interface DropEvent {
   type: "over" | "drop" | "leave";
   paths: string[];
@@ -116,8 +121,8 @@ export interface Backend {
   uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
   /** Copies `paths`, all in one folder on `from`, into `destDir` on the server `to`; cleaned as an upload when `from` is this computer. */
   copyToServer(from: TargetRef, to: TargetRef, paths: string[], destDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
-  /** The files copied on this computer, by path; empty for anything else on the clipboard. */
-  clipboardFiles(): Promise<string[]>;
+  /** The files copied on this computer; empty for anything else on the clipboard. */
+  clipboardFiles(): Promise<CopiedFile[]>;
   /** Stops an upload or download; its call then fails with code "cancelled". */
   cancelTransfer(id: string): void;
   sessionCwd(target: TargetRef, sessionKey: string): Promise<string>;

@@ -220,15 +220,22 @@ fn close_session(app: AppHandle, state: State<AppState>, pane_id: String, target
     }
 }
 
-/// The files copied on this computer (Ctrl+C in Explorer or Finder), by
-/// path. None for anything else on the clipboard, such as text or a picture.
+/// The files copied on this computer (Ctrl+C in Explorer or Finder). None
+/// for anything else on the clipboard, such as text or a picture.
 #[cfg(desktop)]
 #[tauri::command]
-async fn clipboard_files() -> Result<Vec<String>, OpError> {
+async fn clipboard_files() -> Result<Vec<files::CopiedFile>, OpError> {
     blocking(|| {
         let mut clipboard = arboard::Clipboard::new().map_err(|e| OpError::failed(e.to_string()))?;
-        let files = clipboard.get().file_list().unwrap_or_default();
-        Ok(files.into_iter().map(|p| p.display().to_string()).collect())
+        let paths = clipboard.get().file_list().unwrap_or_default();
+        // Only a Mac may read that list out of text (see `copied_files`).
+        // Elsewhere a copied file's text can be its path, as in GNOME's Files.
+        let text = if cfg!(target_os = "macos") { clipboard.get().text().ok() } else { None };
+        let copied = files::copied_files(paths, text.as_deref());
+        Ok(copied
+            .into_iter()
+            .map(|p| files::CopiedFile { is_dir: p.is_dir(), path: p.display().to_string() })
+            .collect())
     })
     .await
 }

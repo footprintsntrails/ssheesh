@@ -14,11 +14,12 @@ import { Button, IconButton, ResizeHandle, Spinner } from "./ui";
 import { useNames } from "../lib/privacy";
 import { findTerminal } from "../lib/terminals";
 import { pathCrumbs } from "../lib/paths";
-import { uploadTo } from "../lib/upload";
+import { pasteQuestion, uploadTo } from "../lib/upload";
 import { openCopyToServer } from "./CopyToServer";
 import { dragFiles, useFileDrag } from "../lib/fileDrag";
 import { track } from "../lib/transfers";
 import { FolderPeek } from "./FolderPeek";
+import { dialogOpen } from "./Overlays";
 
 type SortKey = "name" | "size" | "modified";
 
@@ -759,9 +760,17 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   /** Files copied on your computer land in the folder you're looking at. */
   const pasteFiles = async () => {
     try {
-      const paths = await backend.clipboardFiles();
-      if (paths.length) await upload(paths);
-      else toast({ tone: "info", title: "No files to paste", body: `Copy files on your computer first, then ${PASTE_KEY} here puts them in this folder.` });
+      const files = await backend.clipboardFiles();
+      if (!files.length) {
+        toast({ tone: "info", title: "No files to paste", body: `Copy files on your computer first, then ${PASTE_KEY} here puts them in this folder.` });
+        return;
+      }
+      // Copied a while ago, maybe by something else, and it's leaving this computer.
+      if (remote) {
+        const { risky, ...question } = pasteQuestion(files, names.target(target), dir, names.text);
+        if (!(await confirm({ ...question, danger: risky, cancelFirst: risky }))) return;
+      }
+      await upload(files.map((f) => f.path));
     } catch (e) {
       fail("Couldn't read the clipboard", e);
     }
@@ -774,13 +783,14 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   const pastedAt = useRef(0);
   useEffect(() => {
     const paste = (e: Event) => {
-      if (useStore.getState().focused !== pane.id || typingSomewhere() || Date.now() - pastedAt.current < 400) return;
+      // A list open over this one shows another folder: what lands where would be anyone's guess.
+      if (useStore.getState().focused !== pane.id || typingSomewhere() || dialogOpen() || peek || Date.now() - pastedAt.current < 400) return;
       pastedAt.current = Date.now();
       e.preventDefault();
       void pasteFiles();
     };
     const onKey = (e: KeyboardEvent) => {
-      if ((isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v") paste(e);
+      if ((isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && !e.repeat && e.key.toLowerCase() === "v") paste(e);
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("paste", paste);
