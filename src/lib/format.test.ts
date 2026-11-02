@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { modified, typedCd, typedQuote, withoutKeys } from "./format";
+import { modified, pastedText, typedCd, typedQuote, withoutKeys } from "./format";
 
 describe("modified", () => {
   afterEach(() => vi.useRealTimers());
@@ -42,6 +42,22 @@ describe("withoutKeys", () => {
   });
   it("keeps tabs, line breaks and ordinary text", () => {
     expect(withoutKeys("one\ttwo\r\nthree\nfour — ✓")).toBe("one\ttwo\nthree\nfour — ✓");
+  });
+});
+
+describe("pastedText", () => {
+  const clip = (types: Record<string, string>) => (type: string) => types[type] ?? "";
+  it("takes plain text first", () => {
+    expect(pastedText(clip({ "text/plain": "hello", "text/html": "<b>hi</b>" }))).toBe("hello");
+  });
+  it("takes a link copied as a link, with no plain text (Copy Link in Safari or Telegram)", () => {
+    expect(pastedText(clip({ "text/uri-list": "# from Safari\r\nhttps://t.me/ssheesh/12\r\n" }))).toBe("https://t.me/ssheesh/12");
+  });
+  it("takes the words of rich text", () => {
+    expect(pastedText(clip({ "text/html": "<p>Run <code>ls&nbsp;-la</code> &amp; see</p><br>done" }))).toBe("Run ls -la & see\ndone");
+  });
+  it("is empty for a picture", () => {
+    expect(pastedText(clip({}))).toBe("");
   });
 });
 

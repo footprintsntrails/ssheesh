@@ -10,7 +10,7 @@ import { Terminal, type IBufferLine } from "@xterm/xterm";
 import { agentRunning } from "./agents";
 import { backend, type WelcomeSpec } from "./backend";
 import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
-import { withoutKeys } from "./format";
+import { pastedText, withoutKeys } from "./format";
 import { findLinks } from "./paths";
 import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
 import { openTerminalLink } from "./terminalLinks";
@@ -203,11 +203,26 @@ class TerminalHandle {
     this.el.addEventListener(
       "paste",
       (e) => {
-        const text = e.clipboardData?.getData("text/plain");
-        if (text === undefined) return;
+        const data = e.clipboardData;
+        if (!data) return;
         e.preventDefault();
         e.stopPropagation();
-        this.term.paste(withoutKeys(text));
+        // A link copied as a link has no plain text, only its own kind.
+        const text = pastedText((type) => data.getData(type));
+        if (text || this.target.kind !== "host") {
+          this.term.paste(withoutKeys(text));
+          return;
+        }
+        // Nothing to paste as text (a picture). Sent anyway, the empty paste
+        // makes Claude Code on the server look at the server's clipboard and
+        // say so; on this computer it's how Claude Code takes a picture.
+        if ([...data.types].some((t) => t === "Files" || t.startsWith("image/"))) {
+          useStore.getState().toast({
+            tone: "info",
+            title: "A picture can't be pasted into a server's terminal",
+            body: "Drag its file onto the terminal instead, and SSHeesh uploads it to the server.",
+          });
+        }
       },
       { capture: true },
     );

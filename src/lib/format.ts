@@ -106,6 +106,29 @@ export function withoutKeys(text: string): string {
   return text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 }
 
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+
+/**
+ * The text in a paste, read by type from the clipboard. Plain text when
+ * there is some; else a link copied as a link (Copy Link in Safari and
+ * Telegram puts no plain text); else the words of rich text. Empty when
+ * there's no text at all, as for a picture.
+ */
+export function pastedText(get: (type: string) => string): string {
+  const plain = get("text/plain");
+  if (plain) return plain;
+  const links = get("text/uri-list")
+    .split(/\r?\n/)
+    .filter((l) => l.trim() && !l.startsWith("#"));
+  if (links.length) return links.join("\n");
+  return get("text/html")
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&(#\d+|[a-z]+);/gi, (m, e: string) => (e[0] === "#" ? String.fromCharCode(Number(e.slice(1))) : (ENTITIES[e.toLowerCase()] ?? m)))
+    .trim();
+}
+
 /**
  * Typed into `shell`: go into `dir`, then run `next` if that worked. Null
  * when `dir` can't be typed (see `typedQuote`). Windows PowerShell 5.1 has
