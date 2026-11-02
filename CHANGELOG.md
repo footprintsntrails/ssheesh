@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.2 — find in the terminal, and a safer paste
+
+- **Find in the terminal.** Ctrl+F (⌘F on a Mac) opens a find bar, as in a browser: matches marked, a count, Enter for the next older one and Shift+Enter for the newer. It looks through everything, not only what's on screen, also the history tmux keeps on the server, and finds what a long line wraps in two. vim, less and other programs that read Ctrl+F keep it, and in Files it's still the filter. The key can be changed in Settings → Keyboard.
+- **Pasting files asks first.** Ctrl+V in Files uploaded what was on the clipboard at once, and that could be something copied long ago, or by another program. It now says what's going and where, in full; what looks private (`.ssh`, `.env`, keys) says so, and Enter there means no. On a Mac, text a server put on the clipboard can no longer pass for a copied file.
+- **Tor's clock moves less.** The correction from 0.10.1 relies on what Tor's relays say, and enough lying ones could misuse it. It now only makes up for a clock that's behind, by up to 30 days, and only when Tor is stuck. A clock further behind, or ahead, gets a message to set it right.
+- **Smaller fixes from a security check.** The terminal's picture holding can't be thrown off by other ways of writing its mark, and a server can't fill this computer's memory through the answer to one command.
+
 ## 0.10.1 — Tor with a wrong clock, files you can paste, a terminal that holds still
 
 - **Tor starts when your computer's clock is off.** With a clock days behind, Tor stopped at 15% for good, and days ahead at 7%, and nothing said why. Tor's relays tell it the time, and once they agree SSHeesh runs Tor by that clock; your computer's clock stays as it is. Tor then starts on its own, which can take up to a minute. A clock more than 7 days ahead still has to be set right, since Tor would otherwise have to accept an old list of relays. While Tor starts, its button and Settings say what holds it up: the clock, no internet, or a network that blocks Tor.
