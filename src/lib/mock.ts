@@ -864,6 +864,8 @@ export const mockBackend: Backend = {
     return pick ?? 49152 + Math.floor(Math.random() * 16000);
   },
 
+  // The demo has no system clipboard: a test or a recording sets what's "copied".
+  clipboardFiles: async () => (window as unknown as { __demoCopiedFiles?: string[] }).__demoCopiedFiles ?? [],
   torStatus: async () => demoTor,
   onTorStatus(cb) {
     torListeners.add(cb);

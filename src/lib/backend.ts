@@ -114,6 +114,8 @@ export interface Backend {
   uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
   /** Copies `paths`, all in one folder on `from`, into `destDir` on the server `to`; cleaned as an upload when `from` is this computer. */
   copyToServer(from: TargetRef, to: TargetRef, paths: string[], destDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
+  /** The files copied on this computer, by path; empty for anything else on the clipboard. */
+  clipboardFiles(): Promise<string[]>;
   /** Stops an upload or download; its call then fails with code "cancelled". */
   cancelTransfer(id: string): void;
   sessionCwd(target: TargetRef, sessionKey: string): Promise<string>;
@@ -282,6 +284,7 @@ async function tauriBackend(): Promise<Backend> {
       call("upload_paths", { target, paths, remoteDir, overwrite, clean, ...progress(hooks) }),
     copyToServer: (from, to, paths, destDir, overwrite, clean, hooks) =>
       call("copy_to_server", { from, to, paths, destDir, overwrite, clean, ...progress(hooks) }),
+    clipboardFiles: () => call("clipboard_files", {}),
     cancelTransfer: (id) => fire("cancel_transfer", { id }),
     sessionCwd: (target, sessionKey) => call("session_cwd", { target, sessionKey }),
     findPath: (target, path, cwd) => call("find_path", { target, path, cwd }),

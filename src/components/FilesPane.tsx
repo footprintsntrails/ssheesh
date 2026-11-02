@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronLeft, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
@@ -43,6 +43,15 @@ interface Preview {
 
 
 /** The text view's padding and line height (p-3, 12px at 1.6), to find a line in it. */
+const PASTE_KEY = isMac ? "⌘V" : "Ctrl+V";
+
+/** The keyboard is with something else: a text field, a terminal or a dialog. */
+function typingSomewhere(): boolean {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable || !!el.closest('.xterm, [role="dialog"]');
+}
+
 const TEXT_PAD = 12;
 const TEXT_LINE = 12 * 1.6;
 
@@ -700,6 +709,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     "sep",
     { label: pins.includes(dir) ? "Remove bookmark" : "Bookmark this folder", icon: Star, run: () => toggleBookmark(tk, dir) },
     ...(remote ? [{ label: "Upload files…", icon: Upload, run: pickAndUpload }] : []),
+    { label: "Paste files", icon: ClipboardPaste, hint: PASTE_KEY, run: () => void pasteFiles() },
     { label: "Refresh", icon: RefreshCw, run: refresh },
   ];
 
@@ -744,6 +754,40 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     const paths = await backend.pickFiles();
     void upload(paths);
   };
+
+  /** Files copied on your computer land in the folder you're looking at. */
+  const pasteFiles = async () => {
+    try {
+      const paths = await backend.clipboardFiles();
+      if (paths.length) await upload(paths);
+      else toast({ tone: "info", title: "No files to paste", body: `Copy files on your computer first, then ${PASTE_KEY} here puts them in this folder.` });
+    } catch (e) {
+      fail("Couldn't read the clipboard", e);
+    }
+  };
+
+  // Listens on the window: the pane may be yours with the list not holding
+  // the keyboard (just opened, or a click on the path bar). A Mac's Edit menu
+  // may take Cmd+V and leave only the paste event; the time keeps one press
+  // from pasting twice where both arrive.
+  const pastedAt = useRef(0);
+  useEffect(() => {
+    const paste = (e: Event) => {
+      if (useStore.getState().focused !== pane.id || typingSomewhere() || Date.now() - pastedAt.current < 400) return;
+      pastedAt.current = Date.now();
+      e.preventDefault();
+      void pasteFiles();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if ((isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v") paste(e);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("paste", paste);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("paste", paste);
+    };
+  });
 
   // Files dropped from the desktop onto this pane (routed by App).
   useEffect(() => {
@@ -821,6 +865,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         { label: "New file", icon: FilePlus, run: () => setCreating({ kind: "file" }) },
         { label: "New folder", icon: FolderPlus, run: () => setCreating({ kind: "folder" }) },
         ...(remote ? [{ label: "Upload files…", icon: Upload, run: pickAndUpload }] : []),
+        { label: "Paste files", icon: ClipboardPaste, hint: PASTE_KEY, run: () => void pasteFiles() },
         { label: "Open in main terminal", icon: CornerDownRight, run: () => mainTerminalHere(dir) },
         { label: "Open new terminal here", icon: SquareTerminal, run: () => terminalHere(dir) },
         "sep",

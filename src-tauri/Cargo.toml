@@ -27,6 +27,9 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
+# Files copied on this computer, for pasting into Files. Already here through
+# the clipboard plugin, which only reads text.
+arboard = { version = "3", default-features = false }
 
 # Snap Layouts for the custom title bar's maximize button.
 [target.'cfg(windows)'.dependencies]

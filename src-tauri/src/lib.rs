@@ -220,6 +220,19 @@ fn close_session(app: AppHandle, state: State<AppState>, pane_id: String, target
     }
 }
 
+/// The files copied on this computer (Ctrl+C in Explorer or Finder), by
+/// path. None for anything else on the clipboard, such as text or a picture.
+#[cfg(desktop)]
+#[tauri::command]
+async fn clipboard_files() -> Result<Vec<String>, OpError> {
+    blocking(|| {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| OpError::failed(e.to_string()))?;
+        let files = clipboard.get().file_list().unwrap_or_default();
+        Ok(files.into_iter().map(|p| p.display().to_string()).collect())
+    })
+    .await
+}
+
 /// Where Tor is, and how many server terminals stayed on the old way
 /// because they have no tmux to pick up from.
 #[derive(Serialize)]
@@ -927,6 +940,8 @@ pub fn run() {
             stop_tunnel,
             local_port_problem,
             pick_local_port,
+            #[cfg(desktop)]
+            clipboard_files,
             tor_status,
             tor_ssh_options,
             set_tor,
