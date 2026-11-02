@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1 — Enter after a new folder, and secrets you can see are hidden
+
+- **Enter opens a folder right after you make or rename it.** The new folder was picked, but Enter and the arrows did nothing until you clicked it, because the keyboard stayed with the name field that had gone.
+- **Hidden secrets look hidden.** A covered token or password was a row of dots in the text's own color and easy to read past; it's now a pill in the accent color with a lock in front, brighter under the pointer. A click still shows it.
+
 ## 0.9.0 — terminals that rest, uploads without a trace
 
 - **Unused terminals let go of their connection.** A terminal on a server with `tmux` that you haven't typed in, and that printed nothing, for 20 minutes disconnects, so nobody holds a connection nobody uses; its shell keeps running on the server. Press any key or Reconnect and it's back, with what happened meanwhile. The key that wakes it isn't typed, and nothing you type reaches the server before it's connected again, so a password typed too early never shows. Pick 15, 20 or 30 minutes, an hour or never in Settings → Terminal. Terminals without tmux, where disconnecting would end the shell, stay connected.
