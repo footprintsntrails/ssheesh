@@ -22,3 +22,5 @@ futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
 # The door's proofs (SHA-256), from the TLS library Tor already uses.
 ring = "0.17"
+# Reads the clock skew Tor reports ("2days 23h 59m").
+humantime = "2"

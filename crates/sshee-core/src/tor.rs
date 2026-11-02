@@ -29,8 +29,9 @@
 //! Each server gets routes of its own, so a Tor exit can't tell that two
 //! servers are used by the same person.
 
-use arti_client::config::{BoolOrAuto, TorClientConfigBuilder};
-use arti_client::{BootstrapBehavior, DataStream, ErrorKind, HasKind, IsolationToken, StreamPrefs, TorClient};
+use arti_client::config::{BoolOrAuto, Reconfigure, TorClientConfigBuilder};
+use arti_client::status::{BlockageKind, BootstrapStatus};
+use arti_client::{BootstrapBehavior, DataStream, ErrorKind, HasKind, IsolationToken, StreamPrefs, TorClient, TorClientConfig};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -43,7 +44,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
-use tor_rtcompat::PreferredRuntime;
+use tor_rtcompat::{CompoundRuntime, PreferredRuntime, RuntimeSubstExt, SleepProvider};
+use std::sync::atomic::AtomicI64;
+use std::time::SystemTime;
 
 /// ssh starts this executable with it as its ProxyCommand; see `proxy_main`.
 pub const PROXY_FLAG: &str = "--tor-proxy";
@@ -69,6 +72,13 @@ const START_WAIT: Duration = Duration::from_secs(45);
 const CONNECT_WAIT: Duration = Duration::from_secs(30);
 /// The first line of a request at the door.
 const HELLO: &str = "SSHEESH-TOR2";
+/// How far outside its dates Arti takes a directory document, by default.
+const EARLY_DOCUMENT: Duration = Duration::from_secs(86400);
+const LATE_DOCUMENT: Duration = Duration::from_secs(3 * 86400);
+/// The furthest ahead a clock is made up for. It takes accepting a list of
+/// relays that much older (see `tor_config`), which someone could replay.
+/// A clock that's behind costs nothing: nobody can sign a list in the future.
+const MOST_AHEAD: u64 = 7 * 86400;
 /// How long what `check` found about a server holds.
 const CHECK_LIFE: Duration = Duration::from_secs(30);
 
@@ -76,15 +86,51 @@ const CHECK_LIFE: Duration = Duration::from_secs(30);
 #[serde(tag = "state", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TorStatus {
     Off,
-    /// Starting, `percent` of the way.
-    Starting { percent: u8 },
+    /// Starting, `percent` of the way; `note` says what holds it up, when
+    /// Tor knows (a clock that's wrong, a network that blocks Tor).
+    Starting { percent: u8, note: Option<String> },
     On,
     /// Couldn't start (no internet, say). It tries again by itself, and
     /// meanwhile nothing connects.
     Failed { message: String },
 }
 
-type Client = Arc<TorClient<PreferredRuntime>>;
+/// Tor's runtime: the usual one, with `TorClock` for the time of day.
+type Rt = CompoundRuntime<PreferredRuntime, TorClock, PreferredRuntime, PreferredRuntime, PreferredRuntime, PreferredRuntime, PreferredRuntime>;
+type Client = Arc<TorClient<Rt>>;
+
+/// The time of day as Tor sees it: this computer's clock, moved by `shift`
+/// seconds when Tor's relays agree it's off by much (see `clock_off`). Tor
+/// can't trust the list of relays, or their certificates, by a clock that's
+/// days off, and wouldn't start; this sets right only Tor's view, not the
+/// computer's clock.
+#[derive(Clone, Debug)]
+struct TorClock {
+    inner: PreferredRuntime,
+    shift: Arc<AtomicI64>,
+}
+
+impl SleepProvider for TorClock {
+    type SleepFuture = <PreferredRuntime as SleepProvider>::SleepFuture;
+
+    fn sleep(&self, duration: Duration) -> Self::SleepFuture {
+        self.inner.sleep(duration)
+    }
+
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+
+    fn wallclock(&self) -> SystemTime {
+        let (now, shift) = (self.inner.wallclock(), self.shift.load(Ordering::SeqCst));
+        let by = Duration::from_secs(shift.unsigned_abs());
+        if shift >= 0 {
+            now + by
+        } else {
+            now.checked_sub(by).unwrap_or(now)
+        }
+    }
+}
 
 struct Route {
     token: IsolationToken,
@@ -112,6 +158,8 @@ struct Engine {
     failure: Mutex<Option<(Instant, String)>>,
     secret: String,
     ports: Mutex<Vec<u16>>,
+    /// Seconds Tor's clock is ahead of this computer's (see `TorClock`).
+    shift: Arc<AtomicI64>,
 }
 
 static ON: AtomicBool = AtomicBool::new(false);
@@ -459,6 +507,7 @@ fn engine() -> Result<&'static Engine, String> {
         failure: Mutex::new(None),
         secret,
         ports: Mutex::default(),
+        shift: Arc::new(AtomicI64::new(0)),
     });
     e.rt.spawn(door(e, listener));
     Ok(e)
@@ -512,7 +561,9 @@ fn start(e: &'static Engine) {
             put_status(&mut now, TorStatus::On);
             return;
         }
-        put_status(&mut now, TorStatus::Starting { percent: 0 });
+        put_status(&mut now, TorStatus::Starting { percent: 0, note: None });
+        // Worked out again each start: you may have set your clock right since.
+        e.shift.store(0, Ordering::SeqCst);
         run
     };
     e.rt.spawn(async move {
@@ -545,11 +596,19 @@ fn stop(e: &'static Engine) {
     put_status(&mut now, TorStatus::Off);
 }
 
-async fn bootstrap(e: &'static Engine, run: u64) -> Result<Client, String> {
-    // Tor's connections are TLS; the app has one way to do it, set here.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+/// Tor's settings, for a clock moved by `shift` seconds (see `TorClock`).
+/// One check in Arti reads the computer's clock whatever the runtime says (is
+/// the list of relays in date, in `DirMgr::netdir`), so with a moved clock
+/// that check has to allow for the difference, on the side it's off.
+fn tor_config(e: &Engine, shift: i64) -> Result<TorClientConfig, String> {
     let base = dir().ok_or("Couldn't start Tor: there's no home folder to keep its files in.")?;
     let mut b = TorClientConfigBuilder::from_directories(base.join("state"), base.join("cache"));
+    let off = Duration::from_secs(shift.unsigned_abs());
+    if shift > 0 {
+        b.directory_tolerance().pre_valid_tolerance(EARLY_DOCUMENT + off);
+    } else if shift < 0 {
+        b.directory_tolerance().post_valid_tolerance(LATE_DOCUMENT + off);
+    }
     {
         let ready = b.preemptive_circuits();
         let ports = ready.initial_predicted_ports();
@@ -564,21 +623,49 @@ async fn bootstrap(e: &'static Engine, run: u64) -> Result<Client, String> {
     }
     b.circuit_timing().max_dirtiness(ROUTE_LIFE);
     b.address_filter().allow_onion_addrs(true);
-    let config = b.build().map_err(|e| format!("Couldn't start Tor: {e}"))?;
-    let client = TorClient::builder()
+    b.build().map_err(|e| format!("Couldn't start Tor: {e}"))
+}
+
+async fn bootstrap(e: &'static Engine, run: u64) -> Result<Client, String> {
+    // Tor's connections are TLS; the app has one way to do it, set here.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let config = tor_config(e, e.shift.load(Ordering::SeqCst))?;
+    let rt = PreferredRuntime::current().map_err(|e| format!("Couldn't start Tor: {e}"))?;
+    let clock = TorClock { inner: rt.clone(), shift: e.shift.clone() };
+    let client = TorClient::with_runtime(rt.with_sleep_provider(clock))
         .config(config)
         .bootstrap_behavior(BootstrapBehavior::Manual)
         .create_unbootstrapped()
         .map_err(|e| format!("Couldn't start Tor: {e}"))?;
     let mut events = client.bootstrap_events();
+    let moving = client.clone();
     let progress = tokio::spawn(async move {
         while let Some(s) = events.next().await {
             if e.run.load(Ordering::SeqCst) != run {
                 break;
             }
             let percent = (s.as_frac() * 100.0) as u8;
+            // Relays agree this computer's clock is off: give Tor their time, once.
+            if e.shift.load(Ordering::SeqCst) == 0 {
+                if let Some(off) = clock_off(&s.to_string()) {
+                    e.shift.store(off, Ordering::SeqCst);
+                    if let Ok(config) = tor_config(e, off) {
+                        let _ = moving.reconfigure(&config, Reconfigure::WarnOnFailures);
+                    }
+                }
+            }
+            let shift = e.shift.load(Ordering::SeqCst);
+            let note = if shift == 0 {
+                holdup(&s)
+            } else {
+                Some(format!(
+                    "Your computer's clock is {} by about {}, so SSHeesh gives Tor the right time. This takes a moment. It's still worth setting your clock right in your system's settings.",
+                    if shift > 0 { "behind" } else { "ahead" },
+                    about(shift.unsigned_abs()),
+                ))
+            };
             if percent < 100 {
-                set_status_if(e, run, TorStatus::Starting { percent }, None);
+                set_status_if(e, run, TorStatus::Starting { percent, note }, None);
             }
         }
     });
@@ -591,6 +678,68 @@ async fn bootstrap(e: &'static Engine, run: u64) -> Result<Client, String> {
         _ => format!("Couldn't start Tor: {err}"),
     })?;
     Ok(client)
+}
+
+/// What holds Tor's start up, in plain words, when Tor knows. A clock that's
+/// off by days is the usual one: Tor then can't trust the list of relays it
+/// gets, and stops at 15% (a clock that's fast, at 7%).
+fn holdup(s: &BootstrapStatus) -> Option<String> {
+    let blocked = s.blocked()?;
+    if let Some((off, _)) = reported_skew(&s.to_string()) {
+        let way = if off > 0 { "behind" } else { "ahead" };
+        return Some(format!("Your computer's clock is {way} by about {}. Tor needs the right date and time: set them in your system's settings, then try again.", about(off.unsigned_abs())));
+    }
+    Some(
+        match blocked.kind() {
+            BlockageKind::ClockSkewed => "Your computer's clock seems wrong. Tor needs the right date and time: set them in your system's settings.",
+            BlockageKind::Offline => "Can't reach the internet.",
+            BlockageKind::Filtering => "Your network seems to block Tor.",
+            BlockageKind::CantReachTor => "Can't reach the Tor network.",
+            BlockageKind::CantBootstrap => "Tor can't get the list of its relays yet. If this lasts, check your computer's date and time.",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+/// How many seconds to move Tor's clock, from what Tor says once its relays
+/// agree on it: "Clock is slow by around 2days 23h 59m 59s (based on 10 recent
+/// observations, with high confidence)" is +259199. Nothing for a guess, a
+/// skew too small to matter, or a clock too far ahead (see `MOST_AHEAD`).
+fn clock_off(said: &str) -> Option<i64> {
+    reported_skew(said)
+        .filter(|(off, sure)| *sure && off.unsigned_abs() >= 30 * 60 && *off >= -(MOST_AHEAD as i64))
+        .map(|(off, _)| off)
+}
+
+/// The skew in what Tor says, in seconds to add (a slow clock is positive),
+/// and whether it's sure. The words can come twice, and after "Clock is
+/// skewed.", which is why every "Clock is" is looked at.
+fn reported_skew(said: &str) -> Option<(i64, bool)> {
+    said.split("Clock is ").skip(1).find_map(|rest| {
+        let (sign, rest) = if let Some(r) = rest.strip_prefix("slow by around ") {
+            (1, r)
+        } else if let Some(r) = rest.strip_prefix("fast by around ") {
+            (-1, r)
+        } else {
+            return None;
+        };
+        let (by, confidence) = rest.split_once(" (")?;
+        let secs = humantime::parse_duration(by.trim()).ok()?.as_secs();
+        Some((sign * secs as i64, confidence.contains("with high confidence")))
+    })
+}
+
+/// A skew in words, to the hour: "3 days", "5 h".
+fn about(secs: u64) -> String {
+    let hours = (secs + 1800) / 3600;
+    match (hours / 24, hours % 24) {
+        (0, h) => format!("{} h", h.max(1)),
+        (1, 0) => "1 day".into(),
+        (d, 0) => format!("{d} days"),
+        (1, h) => format!("1 day {h} h"),
+        (d, h) => format!("{d} days {h} h"),
+    }
 }
 
 /// Lets in the helper's requests. The helper says "SSHEESH-TOR2 <nonce>"; the
@@ -839,6 +988,7 @@ fn explain(lost: Option<Lost>, port: u16) -> String {
             ErrorKind::TorAccessFailed | ErrorKind::LocalNetworkError | ErrorKind::TorNetworkTimeout => {
                 "Can't reach the Tor network. Check your internet connection.".into()
             }
+            ErrorKind::ClockSkew => "Your computer's clock changed, or is too far off for Tor. Turn Tor off and on again; if that doesn't help, set the right date and time in your system's settings.".into(),
             k if format!("{k:?}").starts_with("OnionService") => "That .onion server can't be reached right now.".into(),
             _ => format!("Tor couldn't connect: {}", e.kind()),
         },
@@ -1116,6 +1266,34 @@ mod tests {
         for want in ["ProxyCommand=x %h %p", "CanonicalizeHostname=no", "VerifyHostKeyDNS=no", "CheckHostIP=no"] {
             assert!(o.iter().any(|a| a == want), "{want}");
         }
+    }
+
+    #[test]
+    fn the_clock_moves_only_when_relays_agree() {
+        let stuck = "Stuck at 15%: Can't bootstrap a Tor directory. (Had to reset bootstrapping too many times.). Clock is slow by around 2days 23h 59m 59s (based on 10 recent observations, with high confidence)";
+        assert_eq!(clock_off(stuck), Some(2 * 86400 + 23 * 3600 + 59 * 60 + 59));
+        assert_eq!(clock_off("Stuck at 7%: x. Clock is fast by around 5days (based on 8 recent observations, with high confidence)"), Some(-5 * 86400));
+        assert_eq!(clock_off("Stuck at 15%: x. Clock is slow by around 3days (based on 2 recent observations, with some confidence)"), None);
+        assert_eq!(clock_off("Stuck at 15%: x. Clock is slow by around 3days (based on 1 recent observations, with very little confidence)"), None);
+        assert_eq!(clock_off("Stuck at 15%: x. Clock is slow by around 10m (based on 10 recent observations, with high confidence)"), None);
+        assert_eq!(clock_off("47%: connecting; fetching a consensus"), None);
+        // With expired certificates Tor says "Clock is skewed." first.
+        let skewed = "Stuck at 7%: Clock is skewed. (Clock is fast by around 5days (based on 8 recent observations, with high confidence)). Clock is fast by around 5days (based on 8 recent observations, with high confidence)";
+        assert_eq!(clock_off(skewed), Some(-5 * 86400));
+        assert_eq!(clock_off("Stuck at 7%: Clock is skewed. (relays all seem to be using expired certificates)"), None);
+        // Far behind is fine; too far ahead would mean trusting a list of relays that old.
+        assert_eq!(clock_off("Clock is slow by around 400days (based on 8 recent observations, with high confidence)"), Some(400 * 86400));
+        assert_eq!(clock_off("Clock is fast by around 7days (based on 8 recent observations, with high confidence)"), Some(-7 * 86400));
+        assert_eq!(clock_off("Clock is fast by around 8days (based on 8 recent observations, with high confidence)"), None);
+    }
+
+    #[test]
+    fn a_skew_reads_like_words() {
+        assert_eq!(about(2 * 86400 + 23 * 3600 + 59 * 60 + 59), "3 days");
+        assert_eq!(about(86400), "1 day");
+        assert_eq!(about(86400 + 5 * 3600), "1 day 5 h");
+        assert_eq!(about(40 * 60), "1 h");
+        assert_eq!(about(5 * 3600), "5 h");
     }
 
     #[test]

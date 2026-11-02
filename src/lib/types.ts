@@ -84,8 +84,8 @@ export type SessionState =
   | { kind: "ended"; code: number | null }
   | { kind: "failed"; message: string };
 
-/** SSHeesh's own Tor (Settings → Privacy). Failed: it tries again by itself, and meanwhile nothing connects. */
-export type TorStatus = { state: "off" } | { state: "starting"; percent: number } | { state: "on" } | { state: "failed"; message: string };
+/** SSHeesh's own Tor (Settings → Privacy). Starting: `note` says what holds it up, when Tor knows. Failed: it tries again by itself, and meanwhile nothing connects. */
+export type TorStatus = { state: "off" } | { state: "starting"; percent: number; note?: string | null } | { state: "on" } | { state: "failed"; message: string };
 
 /** Tor just turned on or off; `stayed`: server terminals without tmux left on the old way until they reconnect. */
 export interface TorSwitch {

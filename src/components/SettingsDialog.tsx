@@ -998,7 +998,7 @@ function Privacy({ s, set }: SectionProps) {
           <TOR_GLYPH size={14} className={cn("shrink-0 text-tor", tor.state === "starting" && "animate-pulse")} />
           <span className="flex-1">
             {tor.state === "starting"
-              ? `Tor is starting… ${tor.percent}%`
+              ? `Tor is starting… ${tor.percent}%${tor.note ? `. ${tor.note}` : ""}`
               : tor.state === "on"
                 ? "Tor is on. If typing feels slow on a server, pick new routes."
                 : `Tor can't start: ${tor.message} Nothing connects until it does; it keeps trying.`}

@@ -5915,6 +5915,7 @@ dependencies = [
  "dirs 6.0.0",
  "futures-util",
  "getrandom 0.3.4",
+ "humantime",
  "keyring",
  "portable-pty",
  "ring",
@@ -5930,6 +5931,7 @@ dependencies = [
 name = "ssheesh"
 version = "0.10.0"
 dependencies = [
+ "arboard",
  "dirs 6.0.0",
  "serde",
  "serde_json",

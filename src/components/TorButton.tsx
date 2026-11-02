@@ -21,7 +21,7 @@ export function TorButton({ size = 20, className }: { size?: number; className?:
     tor.state === "off"
       ? "Connect through Tor: servers see a Tor address, not yours"
       : tor.state === "starting"
-        ? `Tor is starting… ${tor.percent}%`
+        ? `Tor is starting… ${tor.percent}%${tor.note ? `. ${tor.note}` : ""}`
         : tor.state === "on"
           ? "Tor is on: servers see a Tor address, not yours. Click to turn it off"
           : `Tor can't start: ${tor.message}`;
