@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.6 — typing can't switch Tor off
+
+- **Typing can't press the Tor button.** After a click on the onion the keyboard stayed on it, so the terminal took no keys, and every space or Enter you typed switched Tor off or on, moving your terminals each time. While it was off they connected from your own address. A click in the sidebar, the top bar or a pane's header now leaves the keyboard where it was.
+- **Dialogs keep your keys away from the server behind them.** Settings opened with its gear now takes the keyboard, and Tab stays inside. When a dialog closes, the keys go to the pane you're on, never to a terminal you've moved away from, where a password could end up in the wrong server's history. Files and Stats take them from a terminal beside them when you move there.
+- **The first "/" in Files' path goes to the top of the disk.** A click on it used to open the field for typing a path.
+- **The window doesn't wait while a terminal's connection closes.**
+
 ## 0.10.5 — type right after Reconnect, and Files that keep up with your keys
 
 - **Typing works right after Reconnect.** The button you pressed took the keyboard with it when it went away, so a terminal that was back took no keys until you clicked it, and looked as if it hadn't reconnected at all. This goes for Reconnect, Now and Try again. The keyboard now stays with the terminal.
