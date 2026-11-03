@@ -132,6 +132,24 @@ jobs:
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
 
+      # A Mac has nothing but its system. A library from the build machine's
+      # Homebrew stops the app from starting everywhere else, while it runs
+      # fine on the build machine. A failure here publishes nothing.
+      - name: The Mac app needs only what every Mac has
+        if: matrix.name == 'macOS'
+        run: |
+          app=$(find target src-tauri/target -path '*/bundle/macos/SSHeesh.app' -prune 2>/dev/null | head -n 1)
+          for arch in arm64 x86_64; do
+            libs=$(otool -arch "$arch" -L "$app/Contents/MacOS/ssheesh" | tail -n +2 | awk '{print $1}')
+            # Every program has this one: without it, the list wasn't read.
+            echo "$libs" | grep -q libSystem || { echo "::error::Couldn't read what the $arch Mac app links"; exit 1; }
+            extra=$(echo "$libs" | grep -vE '^(/System/Library/|/usr/lib/)' || true)
+            if [ -n "$extra" ]; then
+              echo "::error::The $arch Mac app links libraries a Mac doesn't have: $extra"
+              exit 1
+            fi
+          done
+
       # Says in the log which signature the Mac app got.
       - name: Show the macOS signature
         if: matrix.name == 'macOS'

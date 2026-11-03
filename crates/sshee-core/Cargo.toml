@@ -24,6 +24,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time"
 getrandom = "0.3"
 # The door's proofs (SHA-256), from the TLS library Tor already uses.
 ring = "0.17"
+# Inside the app, as Tor's compression needs it: left alone, a Mac build links the
+# build machine's Homebrew copy, and the app won't start on a Mac without one.
+liblzma = { version = "0.4", default-features = false, features = ["static"] }
 # Reads the clock skew Tor reports ("2days 23h 59m").
 humantime = "2"
 # Tor's own account of what it's doing, in a file you can send when it won't start.
