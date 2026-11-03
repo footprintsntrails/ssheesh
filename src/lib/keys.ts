@@ -17,6 +17,15 @@ export function isTerminalPaste(e: KeyboardEvent): boolean {
 }
 
 /**
+ * Alt on its own. On Windows, a key the page doesn't use goes on to the system,
+ * where this one opens the window's menu: nothing shows, but the keys after it
+ * go to that menu until a click. AltGr, which types characters, is another key.
+ */
+export function isAltAlone(e: KeyboardEvent): boolean {
+  return e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+}
+
+/**
  * Copy keys in a terminal outside macOS (where ⌘C just works): Ctrl+Shift+C,
  * and Ctrl+C while text is selected, as in Windows Terminal. Without a
  * selection, Ctrl+C stops the running command as always.

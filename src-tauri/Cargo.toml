@@ -31,6 +31,8 @@ tauri-plugin-window-state = "2"
 # the clipboard plugin, which only reads text.
 arboard = { version = "3", default-features = false }
 
-# Snap Layouts for the custom title bar's maximize button.
+# Snap Layouts for the custom title bar's maximize button, the window's Alt menu,
+# and the keyboard going back to the page. Already here through Tauri.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+webview2-com = "0.39"

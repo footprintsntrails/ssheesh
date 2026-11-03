@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   defaultKeys,
+  isAltAlone,
   keysFromEvent,
   keysLabel,
   matchShortcut,
@@ -209,5 +210,25 @@ describe("conflicts", () => {
 
   it("won't give the command bar the same key twice", () => {
     expect(shortcutProblem("paletteAlt", { key: "l", ctrl: true, shift: true }, false, false)).toMatch(/already opens the command bar/);
+  });
+});
+
+describe("isAltAlone", () => {
+  const key = (k: string, mods: Partial<KeyboardEvent> = {}) => ({ key: k, ctrlKey: false, shiftKey: false, metaKey: false, altKey: false, ...mods }) as KeyboardEvent;
+
+  it("is Alt, pressed or let go, with nothing else held", () => {
+    expect(isAltAlone(key("Alt", { altKey: true }))).toBe(true);
+    expect(isAltAlone(key("Alt"))).toBe(true);
+  });
+
+  it("leaves the keys it comes with alone: Alt+Space's menu, Alt+F4", () => {
+    expect(isAltAlone(key(" ", { altKey: true }))).toBe(false);
+    expect(isAltAlone(key("F4", { altKey: true }))).toBe(false);
+  });
+
+  it("leaves Alt+Shift, which switches the keyboard language, and AltGr, which types", () => {
+    expect(isAltAlone(key("Alt", { altKey: true, shiftKey: true }))).toBe(false);
+    expect(isAltAlone(key("AltGraph", { ctrlKey: true, altKey: true }))).toBe(false);
+    expect(isAltAlone(key("Alt", { ctrlKey: true, altKey: true }))).toBe(false);
   });
 });

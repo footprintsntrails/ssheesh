@@ -12,7 +12,7 @@ import { CommandPalette, ConfirmDialog, dialogOpen, Toasts } from "./components/
 import { Sidebar } from "./components/Sidebar";
 import { EnvStripe, Workspace } from "./components/Workspace";
 import { backend } from "./lib/backend";
-import { matchShortcut, tabStep } from "./lib/keys";
+import { isAltAlone, isWindows, matchShortcut, tabStep } from "./lib/keys";
 import { closeTab, newTab, nextTab, splitPane, toggleSplit } from "./lib/tabs";
 import { cn } from "./lib/format";
 import { applyAppearance, compactSidebar, ONBOARDING_VERSION, toggleCompact, useSettings } from "./lib/settings";
@@ -89,6 +89,31 @@ function useShortcuts() {
     // Capture phase, so shortcuts work even while a terminal has focus.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+}
+
+/** Typing still reaches the terminal after you've switched windows and come back. */
+function useKeyboardStays() {
+  useEffect(() => {
+    const onAlt = (e: KeyboardEvent) => {
+      if (isAltAlone(e)) e.preventDefault();
+    };
+    // What held the keyboard can go away with the window, as compact mode's panels do.
+    const onBack = () => {
+      if (document.activeElement !== document.body || dialogOpen()) return;
+      const pane = activePane(useStore.getState());
+      if (pane) findTerminal(pane.id)?.focus();
+    };
+    if (isWindows) {
+      window.addEventListener("keydown", onAlt, true);
+      window.addEventListener("keyup", onAlt, true);
+    }
+    window.addEventListener("focus", onBack);
+    return () => {
+      window.removeEventListener("keydown", onAlt, true);
+      window.removeEventListener("keyup", onAlt, true);
+      window.removeEventListener("focus", onBack);
+    };
   }, []);
 }
 
@@ -190,6 +215,7 @@ export function App() {
   useEffect(() => startTorWatch(), []);
   useEffect(() => startRoleDetection(), []);
   useShortcuts();
+  useKeyboardStays();
   useFileDrop();
   useLearnLocalIdentity();
   // Colors and spacing are applied again only when one of them changes.

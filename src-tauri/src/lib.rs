@@ -872,6 +872,42 @@ fn press_snap_keys() {
     }
 }
 
+/// Keeps Alt on its own from opening the window's system menu: nothing shows,
+/// but typing goes to that menu until a click. Alt+Space, which opens it on
+/// purpose, still does.
+#[cfg(windows)]
+fn no_menu_on_alt(window: &tauri::Window) {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SC_KEYMENU, WM_SYSCOMMAND};
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+        // lparam is the key that came with Alt; Windows keeps the low 4 bits of wparam for itself.
+        if msg == WM_SYSCOMMAND && wparam & 0xFFF0 == SC_KEYMENU as usize && lparam == 0 {
+            return 0;
+        }
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+    if let Ok(hwnd) = window.hwnd() {
+        // On a window that has it already, this changes nothing.
+        unsafe { SetWindowSubclass(hwnd.0 as HWND, Some(proc), 1, 0) };
+    }
+}
+
+/// Hands the keyboard to the page once the window has focus. The webview is
+/// told as the focus arrives; this tells it again after that's done, so
+/// typing doesn't depend on that first time working.
+#[cfg(windows)]
+fn keyboard_to_page(window: &tauri::Window) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC;
+
+    if let Some(webview) = window.get_webview_window(window.label()) {
+        let _ = webview.with_webview(|w| {
+            let _ = unsafe { w.controller().MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
+        });
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -913,6 +949,16 @@ pub fn run() {
             });
             app.manage(sshee_core::tunnels::TunnelManager::new());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Any window can take the keyboard, those opened later too.
+            #[cfg(windows)]
+            if let tauri::WindowEvent::Focused(true) = event {
+                no_menu_on_alt(window);
+                keyboard_to_page(window);
+            }
+            #[cfg(not(windows))]
+            let _ = (window, event);
         })
         .invoke_handler(tauri::generate_handler![
             list_hosts,
