@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   defaultKeys,
   isAltAlone,
+  isMac,
+  isModLetter,
   keysFromEvent,
   keysLabel,
   matchShortcut,
@@ -230,5 +232,28 @@ describe("isAltAlone", () => {
     expect(isAltAlone(key("Alt", { altKey: true, shiftKey: true }))).toBe(false);
     expect(isAltAlone(key("AltGraph", { ctrlKey: true, altKey: true }))).toBe(false);
     expect(isAltAlone(key("Alt", { ctrlKey: true, altKey: true }))).toBe(false);
+  });
+});
+
+describe("isModLetter", () => {
+  const mod = isMac ? { meta: true } : { ctrl: true };
+
+  it("finds the letter on a layout without Latin letters and with Caps Lock", () => {
+    expect(isModLetter(press("KeyA", mod), "a")).toBe(true);
+    expect(isModLetter(press("KeyA", { ...mod, key: "ф" }), "a")).toBe(true);
+    expect(isModLetter(press("KeyA", { ...mod, key: "A" }), "a")).toBe(true);
+  });
+
+  it("goes by the letter typed where the layout has Latin letters", () => {
+    // AZERTY has its A where QWERTY has Q, and the other way round.
+    expect(isModLetter(press("KeyQ", { ...mod, key: "a" }), "a")).toBe(true);
+    expect(isModLetter(press("KeyA", { ...mod, key: "q" }), "a")).toBe(false);
+  });
+
+  it("leaves other keys and combinations alone", () => {
+    expect(isModLetter(press("KeyA"), "a")).toBe(false);
+    expect(isModLetter(press("KeyA", { ...mod, shift: true }), "a")).toBe(false);
+    expect(isModLetter(press("KeyA", { ...mod, alt: true }), "a")).toBe(false);
+    expect(isModLetter(press("KeyB", mod), "a")).toBe(false);
   });
 });

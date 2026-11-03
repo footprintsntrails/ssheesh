@@ -4,7 +4,7 @@ import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
 import { folderName, useBookmarks } from "../lib/bookmarks";
 import { bytes, cn, joinPath, modified, parentPath, shellOf, typedCd } from "../lib/format";
-import { isMac } from "../lib/keys";
+import { isMac, isModLetter } from "../lib/keys";
 import { useSettings } from "../lib/settings";
 import { useStore, type PaneState } from "../lib/store";
 import { targetKey, toOpError, type DirListing, type FileEntry, type OpError, type TargetRef, type TextFile } from "../lib/types";
@@ -229,7 +229,6 @@ function InlineName({ initial, onDone }: { initial: string; onDone: (name: strin
       value={value}
       onChange={(e) => setValue(e.target.value)}
       onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation();
         if (e.key === "Enter") onDone(value.trim() || null);
@@ -243,6 +242,13 @@ function InlineName({ initial, onDone }: { initial: string; onDone: (name: strin
 }
 
 const EMPTY: string[] = [];
+
+/**
+ * The second click of a pair. Not `dblclick`: that comes only with the second
+ * click the system counts, and clicks kept in one spot count on (3, 4, 5…), so
+ * ".." would go up once and not again until the pointer had moved.
+ */
+const isSecondClick = (e: React.MouseEvent) => e.detail > 0 && e.detail % 2 === 0;
 
 /** Every folder but the top of the disk has one above it. */
 const upRowFor = (dir: string) => dir !== "/" && !/^[A-Za-z]:\/?$/.test(dir);
@@ -800,6 +806,22 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     };
   });
 
+  // On the window too, for the same reason. Beside a preview, whose text can be
+  // selected as well, it's the list's only while the list holds the keyboard.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isModLetter(e, "a") || useStore.getState().focused !== pane.id || typingSomewhere() || dialogOpen() || peek) return;
+      if (preview && !listRef.current?.contains(document.activeElement)) return;
+      e.preventDefault();
+      // An open menu has already said how many files it's for.
+      if (menu) return;
+      setSelected(visible.map((x) => x.name));
+      listRef.current?.focus({ preventScroll: true });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   // Files dropped from the desktop onto this pane (routed by App).
   useEffect(() => {
     const onDrop = (e: Event) => {
@@ -884,8 +906,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     else if (e.key === "Delete") void remove(selectedEntries);
     else if (e.key === "Backspace") navigate(parentPath(dir));
     else if (e.key === "F2" && selectedEntries.length === 1) setRenaming(selectedEntries[0].name);
-    else if (e.key === "a" && mod) setSelected(visible.map((x) => x.name));
-    else if (e.key === "f" && mod) filterRef.current?.focus();
+    else if (isModLetter(e.nativeEvent, "f")) filterRef.current?.focus();
     else if (e.key === "Escape") setSelected([]);
     else if (e.key.length === 1 && !mod && !e.altKey) {
       const t = typeahead.current;
@@ -1109,10 +1130,12 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
                 {upRow && (
                   <div
-                    onDoubleClick={() => navigate(parentPath(dir))}
                     onPointerEnter={() => pointAt(parentPath(dir))}
                     onPointerLeave={() => pointAt(null)}
-                    onClick={() => setSelected([])}
+                    onClick={(e) => {
+                      setSelected([]);
+                      if (isSecondClick(e)) void navigate(parentPath(dir));
+                    }}
                     title="Double-click to go to the folder above"
                     className="mx-1.5 flex h-7 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-fg-2 hover:bg-ink/[0.035]"
                   >
@@ -1158,8 +1181,10 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                       }}
                       onPointerEnter={entry.kind === "dir" ? () => hoverFolder(entry.name) : undefined}
                       onPointerLeave={entry.kind === "dir" ? () => window.clearTimeout(hoverTimer.current) : undefined}
-                      onClick={(e) => click(e, entry)}
-                      onDoubleClick={() => open(entry)}
+                      onClick={(e) => {
+                        click(e, entry);
+                        if (isSecondClick(e)) open(entry);
+                      }}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         if (!selected.includes(entry.name)) {
@@ -1191,7 +1216,6 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                                 e.stopPropagation();
                                 togglePeek(entry, e.currentTarget);
                               }}
-                              onDoubleClick={(e) => e.stopPropagation()}
                               className={cn(
                                 "grid size-4 place-items-center rounded-[4px]",
                                 isSel && focused ? "text-on-accent/80 hover:bg-on-accent/15 hover:text-on-accent" : "text-fg-3 hover:bg-ink/[0.1] hover:text-fg",

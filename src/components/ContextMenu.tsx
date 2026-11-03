@@ -23,6 +23,14 @@ export interface MenuItem {
 export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (MenuItem | "sep")[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: menu.x, y: menu.y });
+  // Whatever held the keyboard gets it back: otherwise it goes away with the menu.
+  const [opener] = useState(() => document.activeElement);
+  useEffect(
+    () => () => {
+      if (document.activeElement === document.body && opener instanceof HTMLElement) opener.focus({ preventScroll: true });
+    },
+    [opener],
+  );
   useEffect(() => {
     const el = ref.current;
     if (el) {
@@ -34,14 +42,16 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
     }
     // The keys are the menu's while it's open: arrows move through it, and
     // nothing (Esc, Enter, Delete) reaches what's behind it, such as a file list.
-    el?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+    // The menu itself holds them, so no row looks chosen before you choose one.
+    if (!el?.contains(document.activeElement)) el?.focus({ preventScroll: true });
     const close = (e: Event) => {
       if (e instanceof KeyboardEvent) {
         const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
         const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
         const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
-        if (step && buttons.length) buttons[(at + step + buttons.length) % buttons.length].focus();
-        else if (e.key === "Enter" && at >= 0) buttons[at].click();
+        const from = at < 0 && step < 0 ? 0 : at;
+        if (step && buttons.length) buttons[(from + step + buttons.length) % buttons.length].focus();
+        else if (e.key === "Enter") buttons[at]?.click();
         else if (e.key !== "Escape" && e.key !== "Delete" && e.key !== "Backspace" && e.key !== "Tab") return;
         e.preventDefault();
         e.stopPropagation();
@@ -64,8 +74,10 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
     <div
       ref={ref}
       role="menu"
+      tabIndex={-1}
       style={{ left: pos.x, top: pos.y }}
-      className="glass fixed z-50 min-w-[200px] animate-fade-in rounded-[11px] p-1"
+      // Its own width, not what's left up to the window's edge: there, its rows would wrap over each other.
+      className="glass fixed z-50 w-max min-w-[200px] max-w-[min(360px,calc(100vw-16px))] animate-fade-in rounded-[11px] p-1 outline-none"
     >
       {items.map((it, i) =>
         it === "sep" ? (
@@ -81,12 +93,12 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
               it.run();
             }}
             className={cn(
-              "flex h-7 w-full items-center gap-2.5 rounded-[7px] px-2 text-left text-[12.5px] disabled:opacity-35",
-              it.danger ? "text-bad hover:bg-bad/15" : "text-fg hover:bg-accent/90 hover:text-on-accent focus-visible:bg-accent/90 focus-visible:text-on-accent",
+              "flex h-7 w-full items-center gap-2.5 rounded-[7px] px-2 text-left text-[12.5px] outline-none disabled:opacity-35",
+              it.danger ? "text-bad hover:bg-bad/15 focus-visible:bg-bad/15" : "text-fg hover:bg-accent/90 hover:text-on-accent focus-visible:bg-accent/90 focus-visible:text-on-accent",
             )}
           >
             <it.icon size={13.5} strokeWidth={1.8} className={cn("shrink-0", it.iconClass ?? "opacity-80")} />
-            <span className="flex-1">{it.label}</span>
+            <span className="min-w-0 flex-1 truncate">{it.label}</span>
             {it.hint && <span className="text-[11px] opacity-50">{it.hint}</span>}
             {it.checked && <Check size={13} strokeWidth={2.2} className="shrink-0" />}
           </button>

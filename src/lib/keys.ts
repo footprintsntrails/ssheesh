@@ -232,6 +232,16 @@ export function keyOf(e: KeyboardEvent): string {
   return CODE_KEYS[e.code] ?? e.key.toLowerCase();
 }
 
+/**
+ * A letter with Ctrl or ⌘: the one the key types, whatever the case, or on a
+ * layout without Latin letters (Russian…) the one at its place on the keyboard.
+ */
+export function isModLetter(e: KeyboardEvent, letter: string): boolean {
+  if (!(isMac ? e.metaKey : e.ctrlKey) || e.shiftKey || e.altKey) return false;
+  const typed = e.key.toLowerCase();
+  return /^[a-z]$/.test(typed) ? typed === letter : keyOf(e) === letter;
+}
+
 export function matches(e: KeyboardEvent, id: ShortcutId): boolean {
   const k = shortcutKeys(id);
   if (!k || keyOf(e) !== k.key) return false;
