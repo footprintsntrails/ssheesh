@@ -337,8 +337,12 @@ fn password_for(t: &SshTarget) -> Arc<PasswordFor> {
 
 /// Builds a non-interactive ssh command that runs `script` with `sh`.
 pub fn remote_command(t: &SshTarget, env: &SshEnv, script: &str) -> Command {
+    command_with(t, env, script, crate::tor::proxy_command_for(t))
+}
+
+fn command_with(t: &SshTarget, env: &SshEnv, script: &str, tor: Option<String>) -> Command {
     let mut cmd = Command::new(ssh_program());
-    cmd.args(common_args(t, env));
+    cmd.args(args(t, env, tor));
     // BatchMode stops ssh from asking anything. With a password we let it ask,
     // and askpass answers the password prompt and refuses everything else.
     match password_env(t, env) {
@@ -370,11 +374,17 @@ pub fn terminal_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
 /// terminal waits behind what's on its way. A key took 1006 ms during a
 /// download and 1350 during an upload that way, against 123 and 126 alone.
 pub fn transfer_command(t: &SshTarget, env: &SshEnv, script: &str) -> Command {
-    let shares = cfg!(unix) && env.control_dir.is_some() && crate::tor::proxy_command_for(t).is_some();
-    if !shares || !signs_in_alone(t, env) {
+    if !transfers_alone(t, env) {
         return remote_command(t, env, script);
     }
-    remote_command(&on_its_own(t), &SshEnv { control_dir: None, ..env.clone() }, script)
+    command_with(&on_its_own(t), &SshEnv { control_dir: None, ..env.clone() }, script, crate::tor::transfer_proxy_command_for(t))
+}
+
+/// Whether `transfer_command` gives `t` a connection of its own, which is what
+/// can then be moved to another route (see `tor::move_transfers`).
+pub fn transfers_alone(t: &SshTarget, env: &SshEnv) -> bool {
+    let shares = cfg!(unix) && env.control_dir.is_some();
+    crate::tor::proxy_command_for(t).is_some() && (!shares || signs_in_alone(t, env))
 }
 
 /// `t` on a connection of its own, whatever your config says about sharing.

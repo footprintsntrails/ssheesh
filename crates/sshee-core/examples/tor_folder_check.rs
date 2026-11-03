@@ -5,6 +5,9 @@
 //! nothing behind. Then the copy is uploaded beside the folder, under a new name,
 //! and fetched back to compare. Fails if any of that doesn't hold.
 //!
+//! A file instead of a folder is downloaded CHECK_TIMES times (1 unless set), on
+//! newly picked routes each time, and says how often it moved off a weak route.
+//!
 //! Set HOME to a folder of its own, so Tor's state isn't yours, and keep the
 //! server's address in the ssh config, not on the command line:
 //!
@@ -39,12 +42,17 @@ fn main() {
     let t = SshTarget { destination: host.clone(), extra_args: vec!["-F".into(), cfg.clone()], ..Default::default() };
     assert!(tor::carries(&t), "this server should go through Tor");
     let target = Target::Ssh(t);
-    let env = SshEnv::default();
+    // With CHECK_SHARING=<folder>, ssh shares connections as the app does on a Mac or Linux.
+    let env = std::env::var_os("CHECK_SHARING").map_or_else(SshEnv::default, |dir| SshEnv::with_control_dir(PathBuf::from(dir)));
     let dest = std::env::temp_dir().join(format!("sshee-folder-check-{}", std::process::id()));
     std::fs::create_dir_all(&dest).unwrap();
 
     for pair in folders.chunks(2) {
         let (remote, local) = (&pair[0], Path::new(&pair[1]));
+        if local.is_file() {
+            check_file(&target, &env, remote, local, &dest);
+            continue;
+        }
         let last: Arc<Mutex<(u64, u64)>> = Arc::default();
         let l = last.clone();
         let xfer = Transfer::new(move |p| *l.lock().unwrap() = (p.done, p.total));
@@ -91,6 +99,28 @@ fn main() {
     std::fs::remove_dir_all(&dest).unwrap();
     tor::set_on(false, vec![]).unwrap();
     println!("ALL OK");
+}
+
+fn check_file(target: &Target, env: &SshEnv, remote: &str, local: &Path, dest: &Path) {
+    let times: u32 = std::env::var("CHECK_TIMES").map_or(1, |n| n.parse().unwrap());
+    let size = local.metadata().unwrap().len();
+    for time in 0..times {
+        tor::new_routes();
+        let moves_before = moves_so_far();
+        let begun = Instant::now();
+        let got = files::download(target, env, remote, false, dest, &Transfer::quiet()).expect("download");
+        let secs = begun.elapsed().as_secs_f64();
+        println!("{remote} #{time}: {secs:.1} s, {:.2} MB/s, moved {} times", size as f64 / secs / 1e6, moves_so_far() - moves_before);
+        let same = Command::new("cmp").arg("--").arg(local).arg(&got).status().expect("cmp");
+        assert!(same.success(), "{remote} didn't arrive as it is");
+        std::fs::remove_file(&got).unwrap();
+    }
+}
+
+/// Moves off weak routes so far, as Tor's log has them.
+fn moves_so_far() -> usize {
+    let log = tor::log_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    log.lines().filter(|l| l.contains("moved off a weak route")).count()
 }
 
 fn tree_size(path: &Path) -> u64 {

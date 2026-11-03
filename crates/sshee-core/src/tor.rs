@@ -27,6 +27,10 @@
 //!   trip about the same (132 ms against 124). A random route, as plain Tor
 //!   has it, took 228-384 ms. Racing routes to the server's first word did worse.
 //! - Keystrokes go out at once, never held back to fill a packet.
+//! - A route's round trip says nothing of what it can carry, so a transfer finds
+//!   out by carrying: a download on a route that's weak over its first seconds
+//!   moves to another, within limits, and the server's later transfers stay there
+//!   (see `files::Opening` and `move_transfers`). Folders also travel compressed.
 //!
 //! Each server gets routes of its own, so a Tor exit can't tell that two
 //! servers are used by the same person.
@@ -52,6 +56,8 @@ use std::time::SystemTime;
 pub const PROXY_FLAG: &str = "--tor-proxy";
 /// The ProxyCommand for a server that mustn't connect while Tor is on, with why.
 const REFUSE_FLAG: &str = "--tor-refuse";
+/// Said after the port by a connection that carries a transfer (`move_transfers`).
+const FILES: &str = "files";
 
 /// Routes timed before a server's first connection. Each one more is a better
 /// chance for a hostile relay to end up on the route, so no more than it takes.
@@ -64,6 +70,11 @@ const ENOUGH: usize = 3;
 const PICK_TIME: Duration = Duration::from_millis(1800);
 /// Routes kept built ahead of time for each port your servers use.
 const READY_ROUTES: usize = 4;
+/// The most a server's transfers move to another route in `KEEP_ROUTE`. Each
+/// move is another draw of relays, and one of them could be someone hostile's,
+/// who could also make a route look weak to bring that about, so this is what
+/// slowing a route down can buy them, on top of the routes a server picks from.
+const MOVES_PER_SERVER: usize = 2;
 /// A route takes no new connections after this (Tor's own default is 10
 /// minutes; each server has routes of its own, so longer gives nothing away).
 const ROUTE_LIFE: Duration = Duration::from_secs(30 * 60);
@@ -170,6 +181,37 @@ impl Route {
     }
 }
 
+/// Where a server's transfers went when they left a weak route, by "host:port".
+#[derive(Default)]
+struct MovedRoutes {
+    routes: HashMap<String, (IsolationToken, Instant)>,
+    lately: HashMap<String, Vec<Instant>>,
+}
+
+impl MovedRoutes {
+    /// The route `key`'s transfers moved to, while it's kept.
+    fn route(&self, key: &str, now: Instant) -> Option<IsolationToken> {
+        self.routes.get(key).filter(|(_, since)| now.duration_since(*since) < KEEP_ROUTE).map(|(token, _)| *token)
+    }
+
+    /// Asked by a transfer that started at `since` on a route that's weak:
+    /// whether its next connection will be on another route. If another
+    /// transfer has already moved since then, it just follows, which costs no draw.
+    fn next(&mut self, key: &str, since: Instant, now: Instant) -> bool {
+        if self.routes.get(key).is_some_and(|(_, at)| *at > since) {
+            return true;
+        }
+        let lately = self.lately.entry(key.to_string()).or_default();
+        lately.retain(|at| now.duration_since(*at) < KEEP_ROUTE);
+        if lately.len() >= MOVES_PER_SERVER {
+            return false;
+        }
+        lately.push(now);
+        self.routes.insert(key.to_string(), (IsolationToken::new(), now));
+        true
+    }
+}
+
 struct Engine {
     rt: tokio::runtime::Runtime,
     client: Mutex<Option<Client>>,
@@ -178,6 +220,8 @@ struct Engine {
     routes: Mutex<HashMap<String, Route>>,
     /// When a server last picked again because its route had turned slow.
     picked_again: Mutex<HashMap<String, Instant>>,
+    /// Where each server's transfers moved to, if they did.
+    moved: Mutex<MovedRoutes>,
     /// One pick at a time per server: connections opened together (a
     /// terminal, Files, the stats) share the route the first one picks.
     picking: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -289,7 +333,33 @@ pub fn set_on(on: bool, ports: Vec<u16>) -> Result<(), String> {
 pub fn new_routes() {
     if let Some(e) = ENGINE.get() {
         e.routes.lock().unwrap().clear();
+        *e.moved.lock().unwrap() = MovedRoutes::default();
     }
+}
+
+/// Moves `t`'s transfers off a route that's shown itself weak: the next
+/// connection `transfer_proxy_command_for` makes goes on another, without
+/// timing it, and later transfers stay on that one while it's kept, as a
+/// route's speed lasts (see `files::Opening`). False if `t` has moved as often
+/// as it may lately, or has nowhere to move to. `since`: when the transfer
+/// asking got its connection.
+pub fn move_transfers(t: &crate::ssh::SshTarget, since: Instant) -> bool {
+    let Some(e) = ENGINE.get().filter(|_| is_on()) else { return false };
+    let found = checked(t);
+    let Some(host) = found.host.filter(|_| found.refusal.is_none()) else { return false };
+    let Way::Tor(name) = way(&host, found.port) else { return false };
+    if name.ends_with(".onion") {
+        return false;
+    }
+    let moved = e.moved.lock().unwrap().next(&route_key(&name, found.port), since, Instant::now());
+    if moved {
+        tracing::info!(target: "ssheesh", "a transfer moved off a weak route");
+    }
+    moved
+}
+
+fn route_key(host: &str, port: u16) -> String {
+    format!("{}:{port}", host.to_ascii_lowercase())
 }
 
 const RECENT: Duration = Duration::from_secs(20);
@@ -375,6 +445,12 @@ pub fn proxy_command_for(t: &crate::ssh::SshTarget) -> Option<String> {
     })
 }
 
+/// `proxy_command_for`, for a connection of its own that carries a transfer.
+pub fn transfer_proxy_command_for(t: &crate::ssh::SshTarget) -> Option<String> {
+    let line = proxy_command_for(t)?;
+    Some(if checked(t).refusal.is_none() { format!("{line} {FILES}") } else { line })
+}
+
 /// Why a server can't go through Tor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Refusal {
@@ -409,6 +485,7 @@ struct Checked {
     at: Instant,
     /// The name or address ssh connects to (`HostName`).
     host: Option<String>,
+    port: u16,
     refusal: Option<Refusal>,
 }
 
@@ -432,10 +509,11 @@ fn checked(t: &crate::ssh::SshTarget) -> Checked {
 fn check(t: &crate::ssh::SshTarget) -> Checked {
     let at = Instant::now();
     let Ok(config) = crate::ssh::ssh_config(t) else {
-        return Checked { at, host: None, refusal: Some(Refusal::Address) };
+        return Checked { at, host: None, port: 22, refusal: Some(Refusal::Address) };
     };
     let get = |c: &str, k: &str| crate::ssh::config_value(c, k).filter(|v| v != "none");
     let host = get(&config, "hostname").unwrap_or_else(|| t.destination.clone());
+    let port = get(&config, "port").and_then(|p| p.parse().ok()).unwrap_or(22);
     let refusal = if !valid_host(&host) {
         Some(Refusal::Address)
     } else if get(&config, "canonicalizepermittedcnames").is_some() {
@@ -445,7 +523,7 @@ fn check(t: &crate::ssh::SshTarget) -> Checked {
         let own = crate::ssh::ssh_config_as_written(t).unwrap_or_default();
         (get(&own, "proxyjump").is_some() || get(&own, "proxycommand").is_some()).then_some(Refusal::Hop)
     };
-    Checked { at, host: Some(host), refusal }
+    Checked { at, host: Some(host), port, refusal }
 }
 
 /// The ProxyCommand for a server that mustn't connect: it says why and fails.
@@ -551,6 +629,7 @@ fn engine() -> Result<&'static Engine, String> {
         status: Mutex::new(TorStatus::Off),
         routes: Mutex::default(),
         picked_again: Mutex::default(),
+        moved: Mutex::default(),
         picking: Mutex::default(),
         carrying: AtomicUsize::new(0),
         run: AtomicU64::new(0),
@@ -1044,9 +1123,9 @@ async fn admit(e: &'static Engine, mut conn: TcpStream) {
         return;
     }
     let Ok(Some(line)) = timeout(Duration::from_secs(5), read_line(&mut conn)).await else { return };
-    let Some((host, port)) = parse_request(&line, &proof(&e.secret, "helper", &nonce)) else { return };
+    let Some((host, port, files)) = parse_request(&line, &proof(&e.secret, "helper", &nonce)) else { return };
     let _carrying = Carrying::new(e);
-    match open(e, &host, port).await {
+    match open(e, &host, port, files).await {
         Ok(mut stream) => {
             if conn.write_all(b"OK\n").await.is_err() {
                 return;
@@ -1093,18 +1172,24 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// "<proof> <host> <port>", with the helper's proof for this nonce.
-fn parse_request(line: &str, expected: &str) -> Option<(String, u16)> {
+/// "<proof> <host> <port>", with the helper's proof for this nonce, and "files"
+/// after them from a connection that carries a transfer.
+fn parse_request(line: &str, expected: &str) -> Option<(String, u16, bool)> {
     let mut parts = line.trim_end_matches('\r').split(' ');
     if !same(parts.next()?, expected) {
         return None;
     }
     let host = parts.next()?;
     let port = parts.next()?.parse().ok()?;
+    let files = match parts.next() {
+        None => false,
+        Some(FILES) => true,
+        Some(_) => return None,
+    };
     if parts.next().is_some() || !valid_host(host) {
         return None;
     }
-    Some((host.to_string(), port))
+    Some((host.to_string(), port, files))
 }
 
 /// A host name or address, nothing a shell or a line could break on.
@@ -1152,12 +1237,20 @@ async fn ready(e: &'static Engine) -> Result<Client, String> {
     }
 }
 
-/// A connection to `host` through Tor, on the server's fastest route.
-async fn open(e: &'static Engine, host: &str, port: u16) -> Result<DataStream, String> {
+/// A connection to `host` through Tor, on the server's fastest route, or for
+/// `files`, the one its transfers moved to.
+async fn open(e: &'static Engine, host: &str, port: u16, files: bool) -> Result<DataStream, String> {
     let client = ready(e).await?;
-    let key = format!("{}:{port}", host.to_ascii_lowercase());
+    let key = route_key(host, port);
     let lane = e.picking.lock().unwrap().entry(key.clone()).or_default().clone();
     let _turn = lane.lock().await;
+    let moved = if files { e.moved.lock().unwrap().route(&key, Instant::now()) } else { None };
+    if let Some(token) = moved {
+        if let Ok(Ok(stream)) = timeout(CONNECT_WAIT, connect(&client, host, port, token)).await {
+            return Ok(stream);
+        }
+        e.moved.lock().unwrap().routes.remove(&key);
+    }
     let kept = e.routes.lock().unwrap().get(&key).filter(|r| r.since.elapsed() < KEEP_ROUTE).map(|r| r.token);
     if let Some(token) = kept {
         let started = Instant::now();
@@ -1292,7 +1385,8 @@ fn explain(lost: Option<Lost>, port: u16) -> String {
 pub fn proxy_main() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        [PROXY_FLAG, host, port] => port.parse::<u16>().map_err(|_| format!("{port} isn't a port")).and_then(|port| proxy(host, port)),
+        [PROXY_FLAG, host, port] => port.parse::<u16>().map_err(|_| format!("{port} isn't a port")).and_then(|port| proxy(host, port, false)),
+        [PROXY_FLAG, host, port, FILES] => port.parse::<u16>().map_err(|_| format!("{port} isn't a port")).and_then(|port| proxy(host, port, true)),
         [PROXY_FLAG, ..] => Err(format!("usage: {PROXY_FLAG} <host> <port>")),
         [REFUSE_FLAG, code] => Err(Refusal::from_code(code).map_or("SSHeesh didn't connect this server through Tor.", Refusal::message).to_string()),
         [REFUSE_FLAG, ..] => Err("SSHeesh didn't connect this server through Tor.".into()),
@@ -1362,10 +1456,10 @@ fn is_near(ip: IpAddr) -> bool {
     }
 }
 
-fn proxy(host: &str, port: u16) -> Result<(), String> {
+fn proxy(host: &str, port: u16, files: bool) -> Result<(), String> {
     let sock = match way(host, port) {
         Way::Near(addrs) => StdTcpStream::connect(&addrs[..]).map_err(|e| format!("Couldn't reach the server on your network: {e}"))?,
-        Way::Tor(name) => through_door(&name, port)?,
+        Way::Tor(name) => through_door(&name, port, files)?,
     };
     let _ = sock.set_nodelay(true);
     carry(sock);
@@ -1373,7 +1467,7 @@ fn proxy(host: &str, port: u16) -> Result<(), String> {
 }
 
 /// Asks the app for a connection through Tor.
-fn through_door(host: &str, port: u16) -> Result<StdTcpStream, String> {
+fn through_door(host: &str, port: u16, files: bool) -> Result<StdTcpStream, String> {
     let not_running = || "Tor isn't running in SSHeesh. Open SSHeesh and try again.".to_string();
     let door = dir().and_then(|d| std::fs::read_to_string(d.join("door")).ok()).ok_or_else(not_running)?;
     let (door_port, secret) = door.trim().split_once(' ').ok_or_else(not_running)?;
@@ -1390,7 +1484,8 @@ fn through_door(host: &str, port: u16) -> Result<StdTcpStream, String> {
     if !same(&answer, &proof(secret, "app", &nonce)) {
         return Err("Something other than SSHeesh answers at Tor's door, so SSHeesh didn't connect. Open SSHeesh and try again.".into());
     }
-    sock.write_all(format!("{} {host} {port}\n", proof(secret, "helper", &nonce)).as_bytes()).map_err(|_| not_running())?;
+    let lane = if files { format!(" {FILES}") } else { String::new() };
+    sock.write_all(format!("{} {host} {port}{lane}\n", proof(secret, "helper", &nonce)).as_bytes()).map_err(|_| not_running())?;
     let _ = sock.set_read_timeout(Some(START_WAIT + CONNECT_WAIT + Duration::from_secs(15)));
     let line = read_line_sync(&mut sock).ok_or_else(not_running)?;
     let _ = sock.set_read_timeout(None);
@@ -1443,6 +1538,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn transfers_move_only_as_often_as_a_server_allows() {
+        let mut moved = MovedRoutes::default();
+        let start = Instant::now();
+        assert!(moved.route("s:22", start).is_none(), "nowhere yet: they use the server's route");
+        let later = |secs| start + Duration::from_secs(secs);
+
+        assert!(moved.next("s:22", start, later(1)));
+        let first = moved.route("s:22", later(1)).unwrap();
+        assert!(moved.next("s:22", later(1), later(2)));
+        let second = moved.route("s:22", later(2)).unwrap();
+        assert_ne!(first, second, "another route each time");
+        assert!(!moved.next("s:22", later(2), later(3)), "that's as often as it may");
+        assert_eq!(moved.route("s:22", later(3)), Some(second), "and it stays on the last one");
+
+        // Each server has its own count and its own routes.
+        assert!(moved.next("other:22", start, later(3)));
+        assert_ne!(moved.route("other:22", later(3)), Some(second));
+
+        // A while later it may again; by then the route has been let go of too.
+        let keep = KEEP_ROUTE.as_secs();
+        assert!(moved.route("s:22", later(2 + keep)).is_none());
+        assert!(moved.next("s:22", later(2 + keep), later(2 + keep)));
+    }
+
+    #[test]
+    fn a_transfer_follows_one_that_already_moved_without_a_new_draw() {
+        let mut moved = MovedRoutes::default();
+        let start = Instant::now();
+        let later = |secs| start + Duration::from_secs(secs);
+        // Two transfers on the same weak route, both started at the start.
+        assert!(moved.next("s:22", start, later(10)));
+        let route = moved.route("s:22", later(10));
+        assert!(moved.next("s:22", start, later(11)));
+        assert_eq!(moved.route("s:22", later(11)), route);
+        assert_eq!(moved.lately["s:22"].len(), 1);
+    }
+
+    #[test]
     fn forgetting_takes_whole_folders() {
         let base = std::env::temp_dir().join(format!("sshee-tor-forget-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -1467,8 +1600,10 @@ mod tests {
         assert_eq!(parse_hello(&format!("{HELLO} {}", "0f".repeat(8))), None);
         assert_eq!(parse_hello(&format!("SSHEESH-TOR1 {nonce}")), None);
         let helper = proof(&secret, "helper", &nonce);
-        assert_eq!(parse_request(&format!("{helper} example.com 22"), &helper), Some(("example.com".into(), 22)));
-        assert_eq!(parse_request(&format!("{helper} 2001:db8::1 2222\r"), &helper), Some(("2001:db8::1".into(), 2222)));
+        assert_eq!(parse_request(&format!("{helper} example.com 22"), &helper), Some(("example.com".into(), 22, false)));
+        assert_eq!(parse_request(&format!("{helper} 2001:db8::1 2222\r"), &helper), Some(("2001:db8::1".into(), 2222, false)));
+        assert_eq!(parse_request(&format!("{helper} example.com 22 files"), &helper), Some(("example.com".into(), 22, true)));
+        assert_eq!(parse_request(&format!("{helper} example.com 22 files more"), &helper), None);
         // The app's proof isn't the helper's, nor another nonce's; a bad port
         // or a name a line could break on is refused.
         assert_eq!(parse_request(&format!("{} example.com 22", proof(&secret, "app", &nonce)), &helper), None);

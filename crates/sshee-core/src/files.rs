@@ -676,11 +676,13 @@ where
 }
 
 /// Waits for a copy while watching for Cancel. Cancelling ends `procs` (ssh,
-/// tar), which also frees a copy stuck on a stalled connection.
-fn wait_copy(xfer: &Transfer, copy: JoinHandle<io::Result<()>>, procs: &mut [&mut Child]) -> Result<io::Result<()>, OpError> {
+/// tar), which also frees a copy stuck on a stalled connection. So does a route
+/// that `opening` finds too weak to stay on, which its `moved` then says.
+fn wait_copy(xfer: &Transfer, copy: JoinHandle<io::Result<()>>, procs: &mut [&mut Child], mut opening: Option<&mut Opening>) -> Result<io::Result<()>, OpError> {
     let mut stopped: Option<Instant> = None;
     loop {
-        if stopped.is_none() && xfer.is_cancelled() {
+        let moving = opening.as_deref_mut().is_some_and(|o| o.moves_on(Instant::now(), xfer.done(), xfer.total.load(Ordering::Relaxed)));
+        if stopped.is_none() && (moving || xfer.is_cancelled()) {
             for p in procs.iter_mut() {
                 let _ = p.kill();
                 let _ = p.wait();
@@ -696,6 +698,83 @@ fn wait_copy(xfer: &Transfer, copy: JoinHandle<io::Result<()>>, procs: &mut [&mu
     }
     xfer.check()?;
     Ok(copy.join().unwrap_or_else(|_| Err(io::Error::other("the copy stopped unexpectedly"))))
+}
+
+/// How long a route gets after the first bytes to settle in, then how long
+/// it's watched. Under `WEAK_ROUTE` over that time, a download moves to another
+/// route, at most `MOVES` times, and only if what's left makes it worth it.
+const OPENING_SKIP: Duration = Duration::from_secs(2);
+const OPENING_WATCH: Duration = Duration::from_secs(8);
+/// Bytes a second, as files.
+const WEAK_ROUTE: f64 = 800_000.0;
+const MOVES: u32 = 2;
+const WORTH_MOVING: u64 = 25_000_000;
+
+/// Watches a download through Tor over its first seconds. A route's speed
+/// lasts, but nothing shows it beforehand: its round trip says little. Measured
+/// on real Tor, for 200 MB, taking turns on routes picked as the app does, left
+/// alone 41% of downloads ran under 0.5 MB/s, and moving by this 15%, at 0.67 more
+/// routes per download. On the routes left alone these seconds matched the whole
+/// (correlation 0.96): under `WEAK_ROUTE`, none reached 2 MB/s.
+struct Opening<'a> {
+    t: &'a SshTarget,
+    moves_left: u32,
+    /// When this go got its connection, and how far along it started.
+    began: Instant,
+    from: u64,
+    first_bytes: Option<Instant>,
+    settled_at: Option<u64>,
+    decided: bool,
+    /// This go ended by moving to another route.
+    moved: bool,
+}
+
+impl<'a> Opening<'a> {
+    fn new(t: &'a SshTarget) -> Self {
+        Self { t, moves_left: MOVES, began: Instant::now(), from: 0, first_bytes: None, settled_at: None, decided: true, moved: false }
+    }
+
+    /// A new go. It's only watched on a connection of its own, as moving means
+    /// a new connection, and only while it can still move.
+    fn start(&mut self, done: u64, alone: bool) {
+        *self = Self { t: self.t, moves_left: self.moves_left, began: Instant::now(), from: done, first_bytes: None, settled_at: None, decided: !alone || self.moves_left == 0, moved: false };
+    }
+
+    /// Whether this go has shown its route to be weak, `done` of `total` along.
+    fn weak(&mut self, now: Instant, done: u64, total: u64) -> bool {
+        if self.decided {
+            return false;
+        }
+        let Some(first) = self.first_bytes else {
+            if done > self.from {
+                self.first_bytes = Some(now);
+            }
+            return false;
+        };
+        let since = now.duration_since(first);
+        let Some(settled) = self.settled_at else {
+            if since >= OPENING_SKIP {
+                self.settled_at = Some(done);
+            }
+            return false;
+        };
+        if since < OPENING_SKIP + OPENING_WATCH {
+            return false;
+        }
+        self.decided = true;
+        let rate = done.saturating_sub(settled) as f64 / OPENING_WATCH.as_secs_f64();
+        rate < WEAK_ROUTE && total.saturating_sub(done) >= WORTH_MOVING
+    }
+
+    /// Whether to leave this route now: it's weak, and Tor has another for it.
+    fn moves_on(&mut self, now: Instant, done: u64, total: u64) -> bool {
+        if !self.weak(now, done, total) || !crate::tor::move_transfers(self.t, self.began) {
+            return false;
+        }
+        self.moves_left -= 1;
+        self.moved = true;
+        true
+    }
 }
 
 /// Collects a process's error output on the side, so a chatty one can't
@@ -1090,6 +1169,7 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         xfer.check()?;
         let base = xfer.done();
         File::create(&scratch)?;
+        let mut opening = Opening::new(t);
         let result = resuming(&[t], env, xfer, || loop {
             let mut have = std::fs::metadata(&scratch)?.len();
             let script = match &ident {
@@ -1102,14 +1182,19 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
             };
             xfer.settle(base + have);
             let file = std::fs::OpenOptions::new().append(true).open(&scratch)?;
+            opening.start(xfer.done(), crate::ssh::transfers_alone(t, env));
             let mut cmd = transfer_command(t, env, &script);
             cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
             let mut ssh = cmd.spawn().map_err(spawn_error)?;
             let errors = drain(ssh.stderr.take());
             let stream = ssh.stdout.take().expect("piped stdout");
             let copy = spawn_copy(stream, file, xfer.clone(), move |x, n| x.set_done(base + have + n));
-            let copied = wait_copy(xfer, copy, &mut [&mut ssh])?;
+            let copied = wait_copy(xfer, copy, &mut [&mut ssh], Some(&mut opening))?;
             let status = ssh.wait()?;
+            if opening.moved {
+                // Goes on from what's here, on another route.
+                continue;
+            }
             if !status.success() {
                 let e = OpError::from_ssh(status.code(), &joined(errors));
                 if e.message == "CHANGED" {
@@ -1140,7 +1225,8 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
     xfer.add_total(remote_size(t, env, remote_path, true));
     xfer.check()?;
     let base = xfer.done();
-    let result = resuming(&[t], env, xfer, || {
+    let mut opening = Opening::new(t);
+    let result = resuming(&[t], env, xfer, || loop {
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch)?;
         xfer.settle(base);
@@ -1151,6 +1237,7 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         // Asked each time: Tor may have been turned on or off since the last try.
         let small = crate::tor::carries(t);
         let pack = if small { pack_small_script } else { pack_script };
+        opening.start(xfer.done(), crate::ssh::transfers_alone(t, env));
         let mut cmd = transfer_command(t, env, &pack(&parent_dir(remote_path), &remote_name));
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut ssh = match cmd.spawn() {
@@ -1167,8 +1254,12 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         // Counted as tar sees it, so the bar stays true however small it travels.
         let moved = move |x: &Transfer, n| x.set_done(base + n);
         let copy = if small { spawn_copy(SmallStream::new(stream), unpack, xfer.clone(), moved) } else { spawn_copy(stream, unpack, xfer.clone(), moved) };
-        let copied = wait_copy(xfer, copy, &mut [&mut ssh, &mut untar])?;
+        let copied = wait_copy(xfer, copy, &mut [&mut ssh, &mut untar], Some(&mut opening))?;
         let (status, unpacked) = (ssh.wait()?, untar.wait()?);
+        if opening.moved {
+            // A tar stream starts over, which is why this happens only near its start.
+            continue;
+        }
         if !status.success() {
             return Err(OpError::from_ssh(status.code(), &joined(errors)));
         }
@@ -1176,7 +1267,7 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
             return Err(OpError::failed(format!("Unpacking failed: {}", joined(unpack_errors).trim())));
         }
         copied?;
-        Ok(())
+        return Ok(());
     })
     .and_then(|()| {
         // The one thing tar put there, under the server's name for it.
@@ -1258,7 +1349,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
                 let input = ssh.stdin.take().expect("piped stdin");
                 let start = base + from;
                 let copy = spawn_copy(source, input, xfer.clone(), move |x, n| x.set_done((start + n).min(base + size)));
-                let copied = wait_copy(xfer, copy, &mut [&mut ssh])?;
+                let copied = wait_copy(xfer, copy, &mut [&mut ssh], None)?;
                 let status = ssh.wait()?;
                 match copied {
                     // The server hanging up early is explained by its exit status.
@@ -1304,7 +1395,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
             format!("{guard}rm -rf -- {s} && mkdir -- {s} && cd -- {s} && {unpack}")
         }
     };
-    let worth_it = shrinks(local_path);
+    let worth_it = crate::tor::carries(t) && shrinks(local_path);
     let parent = local_path.parent().unwrap_or(Path::new("."));
     // The tar stream is a little bigger than the files in it; count in file bytes.
     let scaled = move |n: u64| if tar_size == 0 { 0 } else { (n as u128 * size as u128 / tar_size as u128).min(size as u128) as u64 };
@@ -1343,7 +1434,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
             }
             None => spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + scaled(n))),
         };
-        let copied = wait_copy(xfer, copy, &mut [&mut pack, &mut ssh])?;
+        let copied = wait_copy(xfer, copy, &mut [&mut pack, &mut ssh], None)?;
         let (status, packed) = (ssh.wait()?, pack.wait()?);
         match copied {
             Err(e) if e.kind() != io::ErrorKind::BrokenPipe => return Err(e.into()),
@@ -1481,7 +1572,7 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
         let stream = src.stdout.take().expect("piped stdout");
         let input = dst.stdin.take().expect("piped stdin");
         let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + n.min(cap)));
-        let copied = wait_copy(xfer, copy, &mut [&mut src, &mut dst])?;
+        let copied = wait_copy(xfer, copy, &mut [&mut src, &mut dst], None)?;
         let (packed, unpacked) = (src.wait()?, dst.wait()?);
         match copied {
             Err(e) if e.kind() != io::ErrorKind::BrokenPipe => return Err(e.into()),
@@ -1798,6 +1889,7 @@ mod tests {
         Command::new(bin.join("sh")).arg("-c").arg(pack_small_script(&base.to_string_lossy(), name)).env("PATH", &bin).output().unwrap()
     }
 
+    #[cfg(unix)]
     fn listed_in_tar(stream: impl Read + Send + 'static) -> Vec<String> {
         let mut tar = Command::new("tar").args(["-tf", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
         let input = tar.stdin.take().unwrap();
@@ -1964,6 +2056,76 @@ mod tests {
         assert!(!nowhere.status.success());
         assert!(nowhere.stdout.is_empty());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// An opening watched from now, taking a step every second from `steps`:
+    /// each the bytes that second carried. Whether it found its route weak.
+    fn opening_finds_weak(steps: &[u64], total: u64) -> bool {
+        let t = SshTarget::default();
+        let mut opening = Opening::new(&t);
+        opening.start(0, true);
+        let start = Instant::now();
+        let mut done = 0;
+        steps.iter().enumerate().any(|(second, bytes)| {
+            done += bytes;
+            opening.weak(start + Duration::from_secs(second as u64), done, total)
+        })
+    }
+
+    #[test]
+    fn a_slow_opening_finds_a_route_weak() {
+        assert!(opening_finds_weak(&[300_000; 20], 200_000_000));
+    }
+
+    #[test]
+    fn a_fast_opening_stays() {
+        assert!(!opening_finds_weak(&[2_000_000; 20], 200_000_000));
+    }
+
+    #[test]
+    fn a_route_gets_time_to_settle_in() {
+        // Slow while it gets going, then well above the line.
+        let mut steps = vec![100_000; 3];
+        steps.extend([1_500_000; 17]);
+        assert!(!opening_finds_weak(&steps, 200_000_000));
+    }
+
+    #[test]
+    fn nothing_moves_for_what_would_soon_be_over_anyway() {
+        assert!(!opening_finds_weak(&[300_000; 20], 20_000_000));
+    }
+
+    #[test]
+    fn a_route_is_judged_once_and_not_before_its_first_bytes() {
+        let t = SshTarget::default();
+        let mut opening = Opening::new(&t);
+        opening.start(1_000, true);
+        let start = Instant::now();
+        let at = |s| start + Duration::from_secs(s);
+        // A long wait for the first bytes says nothing about the speed after.
+        assert!(!opening.weak(at(60), 1_000, 200_000_000));
+        assert!(!opening.weak(at(61), 2_000, 200_000_000));
+        assert!(!opening.weak(at(63), 3_000, 200_000_000));
+        assert!(!opening.weak(at(64), 3_000, 200_000_000));
+        assert!(opening.weak(at(71), 4_000, 200_000_000));
+        assert!(!opening.weak(at(72), 4_000, 200_000_000), "once is enough");
+    }
+
+    #[test]
+    fn an_opening_is_only_watched_if_it_can_move() {
+        let t = SshTarget::default();
+        let mut opening = Opening::new(&t);
+        // Sharing the terminal's connection: nothing to move.
+        opening.start(0, false);
+        assert!(opening.decided);
+        // Out of moves.
+        opening.moves_left = 0;
+        opening.start(0, true);
+        assert!(opening.decided);
+        opening.moves_left = 1;
+        opening.start(0, true);
+        assert!(!opening.decided);
+        assert!(!opening.moved, "a new go hasn't moved yet");
     }
 
     fn read_small(stream: Vec<u8>) -> io::Result<Vec<u8>> {

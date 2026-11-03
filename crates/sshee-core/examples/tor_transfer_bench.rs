@@ -12,6 +12,10 @@
 //!       pilot <trials>
 //!       routes <trials> stay,move [<first trial>]
 //!
+//! `routes` alternates staying on the route picked with moving by the rule in RULE_SKIP,
+//! RULE_WINDOW (seconds), RULE_RATE (bytes a second) and RULE_MOVES. Fix the rule from a
+//! `pilot` first: the same runs can't both choose a rule and prove it.
+//!
 //! Words the server's forced command must know: `tar-<set>-<plain|gzip1|zstd1|zstd3|auto>`,
 //! `file-from-<byte>` (a 200 MB file from that byte on), `up-<plain|gzip1|zstd1>`.
 //!
