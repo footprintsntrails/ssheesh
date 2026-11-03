@@ -241,6 +241,8 @@ const ERASED_QUIET_MS = 80;
 const ERASED_MAX_MS = 200;
 /** What you type answers at once: an erase this soon after a key is a prompt redrawing. */
 const TYPED_MS = 150;
+/** The longest a key's answer can take, through Tor at its worst. The first output in this time is the answer. */
+const ANSWER_MS = 3000;
 
 const SYNC_ON = "\x1b[?2026h";
 const SYNC_OFF = "\x1b[?2026l";
@@ -283,12 +285,14 @@ export class FrameGate {
   private longest: ReturnType<typeof setTimeout> | undefined;
   private programHold: ReturnType<typeof setTimeout> | undefined;
   private typedAt = 0;
+  private answerDue = false;
 
   constructor(private readonly write: (text: string) => void) {}
 
   /** You pressed a key: what comes back shows at once. */
   typed() {
     this.typedAt = Date.now();
+    this.answerDue = true;
   }
 
   push(chunk: string) {
@@ -308,7 +312,10 @@ export class FrameGate {
       if (this.programHolds) this.programHold = setTimeout(() => this.programGaveUp(), PROGRAM_HOLD_MS);
       return others.length ? whole.replace(modes, others.join(";")) : "";
     });
-    const erases = ERASES.test(text) && Date.now() - this.typedAt > TYPED_MS;
+    const sinceKey = Date.now() - this.typedAt;
+    const answer = sinceKey <= TYPED_MS || (this.answerDue && sinceKey < ANSWER_MS);
+    if (text) this.answerDue = false;
+    const erases = ERASES.test(text) && !answer;
     if (!this.holding && (erases || text.length >= BURST_SIZE)) {
       this.holding = true;
       this.longest = setTimeout(() => this.release(), erases ? ERASED_MAX_MS : BURST_MAX_MS);

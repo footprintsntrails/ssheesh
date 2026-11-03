@@ -19,11 +19,13 @@
 //! Fast, because a slow route is the difference between typing and waiting:
 //! - Tor starts with the app, from what it saved last time (a fraction of a second).
 //! - Routes to exits that let ssh out are built ahead of time.
-//! - Before a server's first connection, twelve routes to it are timed and
-//!   the fastest is kept; the server's later connections reuse it. Measured
-//!   over many tries, a keystroke's round trip: ~70 ms (110 at worst) this
-//!   way, against ~116 ms (235 at worst) on one random route, as plain Tor
-//!   does. Racing routes to the server's first word did worse (~94 ms).
+//! - Before a server's first connection, six routes to it are each timed three
+//!   times and the fastest on average is kept; the server's later connections
+//!   reuse it. One timing says little about a route: choosing from twelve by
+//!   one timing landed on a route slower than 400 ms in 7 of 30 tries, 4337 ms
+//!   at worst. This way it was 0 of 30, 279 ms at worst, and a usual round
+//!   trip about the same (132 ms against 124). A random route, as plain Tor
+//!   has it, took 228-384 ms. Racing routes to the server's first word did worse.
 //! - Keystrokes go out at once, never held back to fill a packet.
 //!
 //! Each server gets routes of its own, so a Tor exit can't tell that two
@@ -51,11 +53,15 @@ pub const PROXY_FLAG: &str = "--tor-proxy";
 /// The ProxyCommand for a server that mustn't connect while Tor is on, with why.
 const REFUSE_FLAG: &str = "--tor-refuse";
 
-/// Routes timed before a server's first connection.
-const CANDIDATES: usize = 12;
+/// Routes timed before a server's first connection. Each one more is a better
+/// chance for a hostile relay to end up on the route, so no more than it takes.
+const CANDIDATES: usize = 6;
+/// Timings of each route, far enough apart to catch one that stalls now and then.
+const TIMINGS: u32 = 3;
+const TIMING_GAP: Duration = Duration::from_millis(120);
 /// Once this many are timed and this long has passed, the fastest so far wins.
-const ENOUGH: usize = 4;
-const PICK_TIME: Duration = Duration::from_millis(1200);
+const ENOUGH: usize = 3;
+const PICK_TIME: Duration = Duration::from_millis(1800);
 /// Routes kept built ahead of time for each port your servers use.
 const READY_ROUTES: usize = 4;
 /// A route takes no new connections after this (Tor's own default is 10
@@ -65,6 +71,11 @@ const ROUTE_LIFE: Duration = Duration::from_secs(30 * 60);
 /// route lives, so the next connection picks again instead of landing on
 /// whatever route Tor builds next.
 const KEEP_ROUTE: Duration = Duration::from_secs(25 * 60);
+/// Slow connections in a row before a route counts as slow. One says nothing:
+/// routes that were really fast had one in 12 of 259 connections, and three in
+/// a row never. It also keeps a relay from getting a new draw of routes by
+/// holding up one connection.
+const SLOW_IN_A_ROW: u32 = 3;
 /// Longest wait for Tor to start before a connection gives up.
 const START_WAIT: Duration = Duration::from_secs(45);
 const CONNECT_WAIT: Duration = Duration::from_secs(30);
@@ -143,6 +154,20 @@ struct Route {
     since: Instant,
     /// A round trip on it when it was picked.
     ms: u128,
+    /// Slow connections in a row.
+    slow: u32,
+}
+
+impl Route {
+    fn new(token: IsolationToken, ms: u128) -> Self {
+        Self { token, since: Instant::now(), ms, slow: 0 }
+    }
+
+    /// One more connection on it took this long. Whether it has turned slow.
+    fn turned_slow(&mut self, took_ms: u128) -> bool {
+        self.slow = if took_ms > (self.ms * 3).max(300) { self.slow + 1 } else { 0 };
+        self.slow >= SLOW_IN_A_ROW
+    }
 }
 
 struct Engine {
@@ -151,6 +176,8 @@ struct Engine {
     status: Mutex<TorStatus>,
     /// The route each server won, by "host:port".
     routes: Mutex<HashMap<String, Route>>,
+    /// When a server last picked again because its route had turned slow.
+    picked_again: Mutex<HashMap<String, Instant>>,
     /// One pick at a time per server: connections opened together (a
     /// terminal, Files, the stats) share the route the first one picks.
     picking: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -171,6 +198,7 @@ struct Engine {
 }
 
 static ON: AtomicBool = AtomicBool::new(false);
+static HIDE_TYPING: AtomicBool = AtomicBool::new(false);
 static EXE: OnceLock<PathBuf> = OnceLock::new();
 static ENGINE: OnceLock<Engine> = OnceLock::new();
 static MAKING: Mutex<()> = Mutex::new(());
@@ -455,6 +483,18 @@ fn command_line(exe: &str) -> String {
     }
 }
 
+/// Keeps ssh's own hiding of your typing rhythm on through Tor (Settings →
+/// Privacy). Off, a key takes about half as long, and your provider, Tor's
+/// relays and the server's network can see when you press keys, which can show
+/// how long a typed password is and hint at what you typed.
+pub fn set_hide_typing(on: bool) {
+    HIDE_TYPING.store(on, Ordering::Relaxed);
+}
+
+pub(crate) fn hides_typing() -> bool {
+    HIDE_TYPING.load(Ordering::Relaxed)
+}
+
 /// The ssh options for a connection through Tor.
 pub fn ssh_options(proxy_command: &str) -> Vec<String> {
     [
@@ -510,6 +550,7 @@ fn engine() -> Result<&'static Engine, String> {
         client: Mutex::new(None),
         status: Mutex::new(TorStatus::Off),
         routes: Mutex::default(),
+        picked_again: Mutex::default(),
         picking: Mutex::default(),
         carrying: AtomicUsize::new(0),
         run: AtomicU64::new(0),
@@ -1117,13 +1158,19 @@ async fn open(e: &'static Engine, host: &str, port: u16) -> Result<DataStream, S
     let key = format!("{}:{port}", host.to_ascii_lowercase());
     let lane = e.picking.lock().unwrap().entry(key.clone()).or_default().clone();
     let _turn = lane.lock().await;
-    let kept = e.routes.lock().unwrap().get(&key).filter(|r| r.since.elapsed() < KEEP_ROUTE).map(|r| (r.token, r.ms));
-    if let Some((token, ms)) = kept {
+    let kept = e.routes.lock().unwrap().get(&key).filter(|r| r.since.elapsed() < KEEP_ROUTE).map(|r| r.token);
+    if let Some(token) = kept {
         let started = Instant::now();
         if let Ok(Ok(stream)) = timeout(CONNECT_WAIT, connect(&client, host, port, token)).await {
-            // Tor rebuilt the route somewhere slower: pick again next time.
-            if started.elapsed().as_millis() > (ms * 3).max(300) {
-                e.routes.lock().unwrap().remove(&key);
+            // Tor rebuilt the route somewhere slower: pick again next time, but
+            // only once while a route lasts, however often it's held up.
+            let mut routes = e.routes.lock().unwrap();
+            if routes.get_mut(&key).is_some_and(|r| r.turned_slow(started.elapsed().as_millis())) {
+                let mut again = e.picked_again.lock().unwrap();
+                if again.get(&key).is_none_or(|at| at.elapsed() >= KEEP_ROUTE) {
+                    again.insert(key.clone(), Instant::now());
+                    routes.remove(&key);
+                }
             }
             return Ok(stream);
         }
@@ -1137,7 +1184,7 @@ async fn open(e: &'static Engine, host: &str, port: u16) -> Result<DataStream, S
             .await
             .map_err(|_| explain(Some(Lost::TimedOut), port))?
             .map_err(|err| explain(Some(Lost::Tor(err)), port))?;
-        e.routes.lock().unwrap().insert(key, Route { token, since: Instant::now(), ms: 1000 });
+        e.routes.lock().unwrap().insert(key, Route::new(token, 1000));
         return Ok(stream);
     }
     let (token, ms) = pick(&client, host, port).await?;
@@ -1145,7 +1192,7 @@ async fn open(e: &'static Engine, host: &str, port: u16) -> Result<DataStream, S
         .await
         .map_err(|_| explain(Some(Lost::TimedOut), port))?
         .map_err(|err| explain(Some(Lost::Tor(err)), port))?;
-    e.routes.lock().unwrap().insert(key, Route { token, since: Instant::now(), ms });
+    e.routes.lock().unwrap().insert(key, Route::new(token, ms));
     Ok(stream)
 }
 
@@ -1164,26 +1211,32 @@ enum Lost {
 }
 
 /// Opens a connection to the server on `CANDIDATES` new routes at once, so
-/// each is built; then times one more on each, which is one round trip
+/// each is built; then times `TIMINGS` more on each, which is one round trip
 /// through the route and on to the server: what a keystroke waits. The
-/// fastest wins, with its round trip. The server sees each candidate
-/// connect and leave without a word, two from each of a dozen Tor exits.
+/// fastest on average wins, so one stall counts against a route, with its
+/// round trip. The server sees each candidate connect and leave without a
+/// word, four times from each of six Tor exits.
 async fn pick(client: &Client, host: &str, port: u16) -> Result<(IsolationToken, u128), String> {
     let mut candidates = tokio::task::JoinSet::new();
     for _ in 0..CANDIDATES {
         let (client, host) = (client.clone(), host.to_string());
         candidates.spawn(async move {
             let token = IsolationToken::new();
-            let mut timed = None;
-            for _ in 0..2 {
+            let mut timed = 0;
+            for round in 0..=TIMINGS {
+                if round > 1 {
+                    tokio::time::sleep(TIMING_GAP).await;
+                }
                 let started = Instant::now();
                 match timeout(CONNECT_WAIT, connect(&client, &host, port, token)).await {
-                    Ok(Ok(_)) => timed = Some(started.elapsed().as_millis()),
+                    // The first builds the route, which says nothing about using it.
+                    Ok(Ok(_)) if round > 0 => timed += started.elapsed().as_millis(),
+                    Ok(Ok(_)) => {}
                     Ok(Err(err)) => return Err(Lost::Tor(err)),
                     Err(_) => return Err(Lost::TimedOut),
                 }
             }
-            Ok((token, timed.unwrap_or(u128::MAX)))
+            Ok((token, timed / u128::from(TIMINGS)))
         });
     }
     let started = Instant::now();
@@ -1510,6 +1563,18 @@ mod tests {
             assert_eq!(line, "'/Applications/SSHeesh.app/Contents/MacOS/SSHeesh' --tor-proxy %h %p");
             assert_eq!(command_line("/home/me/it's 100%/ssheesh"), r"'/home/me/it'\''s 100%%/ssheesh' --tor-proxy %h %p");
         }
+    }
+
+    #[test]
+    fn a_route_counts_as_slow_only_after_several_slow_connections_in_a_row() {
+        let mut route = Route::new(IsolationToken::new(), 100);
+        assert!(!route.turned_slow(5000), "one slow connection says nothing");
+        assert!(!route.turned_slow(90), "and a normal one starts the count over");
+        assert!(!route.turned_slow(5000));
+        assert!(!route.turned_slow(5000));
+        assert!(route.turned_slow(5000));
+        let mut route = Route::new(IsolationToken::new(), 50);
+        assert!(!route.turned_slow(300) && !route.turned_slow(300) && !route.turned_slow(300), "under 300 ms is never slow");
     }
 
     #[test]

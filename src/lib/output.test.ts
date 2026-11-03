@@ -242,6 +242,23 @@ describe("FrameGate", () => {
     expect(written[1]).toBe(ON);
   });
 
+  it("shows the answer to a key at once from a far-away server too", () => {
+    gate.typed();
+    vi.advanceTimersByTime(400);
+    gate.push(`a${ESC}[J`);
+    expect(written).toEqual([`a${ESC}[J`]);
+    vi.advanceTimersByTime(30);
+    gate.push(ERASE);
+    expect(written[1]).toBe(ON);
+  });
+
+  it("doesn't take output long after a key for its answer", () => {
+    gate.typed();
+    vi.advanceTimersByTime(5000);
+    gate.push(ERASE);
+    expect(written[0]).toBe(ON);
+  });
+
   it("follows a program that holds the picture itself", () => {
     gate.push(`${ON}half`);
     expect(written).toEqual([ON, "half"]);

@@ -900,6 +900,7 @@ export const mockBackend: Backend = {
     })();
     return { status: demoTor, stayed: 0 };
   },
+  async setTorHideTyping() {},
   async torSshOptions() {
     if (demoTor.state === "off") return null;
     return ["-o", "ProxyCommand='/Applications/SSHeesh.app/Contents/MacOS/SSHeesh' --tor-proxy %h %p", "-o", "CanonicalizeHostname=no", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=no"];

@@ -271,6 +271,12 @@ fn tor_ssh_options() -> Option<Vec<String>> {
     tor::typed_ssh_options()
 }
 
+/// Whether ssh hides your typing rhythm through Tor, for connections from now on.
+#[tauri::command]
+fn set_tor_hide_typing(on: bool) {
+    tor::set_hide_typing(on);
+}
+
 /// Turns Tor on or off, then moves what's connected to the new way at once:
 /// terminals in tmux, tunnels, Files and the stats.
 #[tauri::command]
@@ -1017,6 +1023,7 @@ pub fn run() {
             clipboard_files,
             tor_status,
             tor_ssh_options,
+            set_tor_hide_typing,
             tor_log_path,
             start_tor_afresh,
             set_tor,

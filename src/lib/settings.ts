@@ -109,6 +109,8 @@ export interface Settings {
   highlightRules: HighlightRule[];
   /** System notification when a terminal needs you and SSHeesh isn't in front. */
   notifyAttention: boolean;
+  /** Through Tor, ssh keeps hiding your typing rhythm, and a key takes about twice as long. */
+  torHideTyping: boolean;
   /**
    * What a new terminal on a server shows first. "auto": the server's own
    * welcome if it has one, else SSHeesh's; "first": SSHeesh's the first time,
@@ -190,6 +192,7 @@ export const DEFAULT_SETTINGS: Settings = {
   highlightAddresses: false,
   highlightRules: [],
   notifyAttention: true,
+  torHideTyping: false,
   welcomeMode: "auto",
   welcomeParts: ["logo", "system", "usage", "status"],
   welcomeNote: "",

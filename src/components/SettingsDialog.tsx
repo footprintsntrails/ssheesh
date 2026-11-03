@@ -1019,6 +1019,14 @@ function Privacy({ s, set }: SectionProps) {
           )}
         </div>
       )}
+      {tor.state !== "off" && (
+        <Row
+          label="Hide my typing rhythm"
+          hint="Your provider, Tor's relays and the server's network can see when you press keys. That can show how long a typed password is and hint at what you typed, but they can't read it. ssh can hide it by sending keys on a steady beat with fake ones between, but through Tor each key then takes about twice as long. For terminals you open from now on."
+        >
+          <Switch checked={s.torHideTyping} onChange={(v) => set({ torHideTyping: v })} label="Hide my typing rhythm" />
+        </Row>
+      )}
       <Row
         label="Streamer mode"
         hint={`Hides server names, addresses, IPs and user names in the sidebar, titles, stats and terminal output. For streams, screen shares and screenshots. ${shortcutLabel("streamer")} turns it on and off.`}

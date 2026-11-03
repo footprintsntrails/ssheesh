@@ -3,7 +3,7 @@
 
 use crate::error::{ErrorCode, OpError};
 use crate::scrub::{self, CleanCopy, Cleaning};
-use crate::ssh::{remote_command, run_remote, run_remote_read, shell_quote, spawn_error, SshEnv, SshTarget, Target};
+use crate::ssh::{remote_command, run_remote, run_remote_read, shell_quote, spawn_error, transfer_command, SshEnv, SshTarget, Target};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -952,7 +952,7 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
             };
             xfer.settle(base + have);
             let file = std::fs::OpenOptions::new().append(true).open(&scratch)?;
-            let mut cmd = remote_command(t, env, &script);
+            let mut cmd = transfer_command(t, env, &script);
             cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
             let mut ssh = cmd.spawn().map_err(spawn_error)?;
             let errors = drain(ssh.stderr.take());
@@ -998,7 +998,7 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         untar.args(["-xf", "-", "-C"]).arg(&scratch).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut untar);
         let mut untar = untar.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
-        let mut cmd = remote_command(t, env, &pack_script(&parent_dir(remote_path), &remote_name));
+        let mut cmd = transfer_command(t, env, &pack_script(&parent_dir(remote_path), &remote_name));
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut ssh = match cmd.spawn() {
             Ok(ssh) => ssh,
@@ -1096,7 +1096,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
                 xfer.settle(base + from);
                 let mut source = File::open(source)?;
                 source.seek(SeekFrom::Start(from))?;
-                let mut cmd = remote_command(t, env, &upload_file_script(&guard, &s, &d, size, from));
+                let mut cmd = transfer_command(t, env, &upload_file_script(&guard, &s, &d, size, from));
                 cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
                 let mut ssh = cmd.spawn().map_err(spawn_error)?;
                 let errors = drain(ssh.stderr.take());
@@ -1160,7 +1160,7 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
         pack.arg("-C").arg(parent).args(["-cf", "-", "--"]).arg(local_tar_item(local_path, &name)).stdout(Stdio::piped()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut pack);
         let mut pack = pack.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
-        let mut cmd = remote_command(t, env, &script);
+        let mut cmd = transfer_command(t, env, &script);
         cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         let mut ssh = match cmd.spawn() {
             Ok(ssh) => ssh,
@@ -1295,10 +1295,10 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
     // servers answer again, it starts over.
     let result = resuming(&[a, b], env, xfer, || {
         xfer.settle(base);
-        let mut src = remote_command(a, env, &pack);
+        let mut src = transfer_command(a, env, &pack);
         src.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut src = src.spawn().map_err(spawn_error)?;
-        let mut dst = remote_command(b, env, &unpack);
+        let mut dst = transfer_command(b, env, &unpack);
         dst.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         let mut dst = match dst.spawn() {
             Ok(dst) => dst,

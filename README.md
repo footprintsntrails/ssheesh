@@ -14,7 +14,7 @@
 > [!WARNING]
 > **Version 0.10 is an early preview.** Plenty is still missing and things will break. Try it, and [say what's wrong](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
 
-<p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a server's terminal with the log it printed opened beside it, its tabs along the top, and an AI agent that needs you"></p>
+<p align="center"><img src="docs/media/layouts.gif" alt="The same window seven ways: icons with tabs on top, two tabs side by side, side by side with nothing else, the sidebar sliding back at the edge, servers by name with tabs under each, no top bar, and just the terminal"></p>
 
 SSHeesh is a calm window for your servers: their terminals, files, containers and AI agents, laid out like a browser. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each saying whose it is: “Files (web-1)”. It checks your servers' security and frees their disks with one click each, and with one more it hides where you connect from, through Tor.
 
@@ -24,7 +24,7 @@ SSHeesh is a calm window for your servers: their terminals, files, containers an
 
 Press the onion above Settings and everything goes through Tor: terminals, files, stats and tunnels. Your servers and their logs see a Tor address instead of yours, and your internet provider sees Tor, not which servers you use. If Tor can't carry a connection, the connection isn't made: nothing slips around it, not even a name lookup. Tor is built in, so there's nothing to install, and terminals in `tmux` move over without losing their place.
 
-It's also fast, for Tor. Before a server's first connection, SSHeesh times a dozen Tor routes to it and keeps the quickest. In our tests a keystroke came back in about 70 ms that way, against about 115 ms on a random route as Tor would pick, and a login took about a second. Your own connection adds its share.
+It's also fast, for Tor. Before a server's first connection, SSHeesh times six Tor routes to it, three times each, and keeps the quickest. In our tests from a datacenter a keystroke came back in 60 to 100 ms, a login took about a second, and no pick landed on a route slower than 400 ms. Your own connection adds its share. For that speed ssh doesn't hide your typing rhythm under Tor: your provider, Tor's relays and the server's network can see when you press keys, which can show how long a typed password is and hint at what you typed, though they can't read it. Settings → Privacy hides it again, at about twice the delay per key.
 
 <p align="center"><img src="docs/media/tor.gif" alt="who am i shows the server sees your own address; one click on the onion turns Tor on, the terminal moves over in a second, and who am i now shows a Tor address, with an onion beside the server's name"></p>
 
@@ -56,7 +56,7 @@ The shield at the foot of the sidebar looks at password logins, root login, open
 
 Tabs on top or under each server, one tab at a time or several side by side, and a compact mode that hides the sidebar, the tab bar or both until you point at the window's edge. Mix them however you like.
 
-<p align="center"><img src="docs/media/layouts.gif" alt="The same window seven ways: icons with tabs on top, two tabs side by side, side by side with nothing else, the sidebar sliding back at the edge, servers by name with tabs under each, no top bar, and just the terminal"></p>
+<p align="center"><img src="docs/screenshots/workspace.png" alt="SSHeesh: a server's terminal with the log it printed opened beside it, its tabs along the top, and an AI agent that needs you"></p>
 
 ## The idea
 

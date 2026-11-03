@@ -6,7 +6,7 @@
 //! shell lives inside a named tmux session, so the new connection lands back
 //! in the same shell with everything still running.
 
-use crate::ssh::{common_args, durable_command, password_env, session_name, ssh_program, SshEnv, Target};
+use crate::ssh::{durable_command, password_env, session_name, ssh_program, terminal_args, SshEnv, Target};
 use crate::text::{last_meaningful_line, Marker, MarkerScanner, Utf8Stream};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -564,7 +564,7 @@ fn build_command(spec: &SessionSpec) -> CommandBuilder {
         }
         Target::Ssh(t) => {
             let mut c = CommandBuilder::new(ssh_program());
-            c.args(common_args(t, &spec.env));
+            c.args(terminal_args(t, &spec.env));
             c.args(["-tt", "--"]);
             c.arg(&t.destination);
             c.arg(durable_command(&spec.key, spec.run.as_deref(), &spec.welcome));

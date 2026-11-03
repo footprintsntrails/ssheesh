@@ -117,6 +117,14 @@ fn args(t: &SshTarget, env: &SshEnv, tor: Option<String>) -> Vec<String> {
     }
     if let Some(cmd) = &tor {
         a.extend(crate::tor::ssh_options(cmd));
+        // ssh sends keystrokes on a fixed beat, with fake ones between, so
+        // nobody watching the network can time your typing. Through Tor that
+        // nearly doubles what a key takes: 60-81 ms without it against 118-150
+        // with, over three runs, and a slower beat was no better. Settings →
+        // Privacy keeps it on, at that price (see `terminal_args`).
+        if !crate::tor::hides_typing() && knows_keystroke_timing(ssh_version()) {
+            a.extend(["-o".to_string(), "ObscureKeystrokeTiming=no".to_string()]);
+        }
     }
     if let Some(u) = &t.user {
         a.push("-l".into());
@@ -247,18 +255,29 @@ pub fn password_env(t: &SshTarget, env: &SshEnv) -> Option<Vec<(&'static str, St
     Some(askpass_env(program, password, &password_for(t)))
 }
 
-/// Whether this computer's ssh labels a server's questions with the account
-/// (OpenSSH 8.4 on). Asked of `ssh -V` once in a run.
-fn labels_questions() -> bool {
-    static LABELS: OnceLock<bool> = OnceLock::new();
-    *LABELS.get_or_init(|| {
+/// This computer's ssh, asked of `ssh -V` once in a run.
+fn ssh_version() -> Option<(u32, u32)> {
+    static VERSION: OnceLock<Option<(u32, u32)>> = OnceLock::new();
+    *VERSION.get_or_init(|| {
         let mut cmd = Command::new(ssh_program());
         cmd.arg("-V").stdin(Stdio::null()).stdout(Stdio::null());
         hide_console(&mut cmd);
         // ssh -V prints its version to stderr.
         let banner = cmd.output().map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
-        crate::secrets::openssh_version(&banner).is_some_and(|v| v >= (8, 4))
+        crate::secrets::openssh_version(&banner)
     })
+}
+
+/// Whether this computer's ssh labels a server's questions with the account
+/// (OpenSSH 8.4 on).
+fn labels_questions() -> bool {
+    ssh_version().is_some_and(|v| v >= (8, 4))
+}
+
+/// Whether ssh can be told how to send keystrokes (OpenSSH 9.5 on). An older
+/// one won't start over an option it doesn't know.
+fn knows_keystroke_timing(version: Option<(u32, u32)>) -> bool {
+    version.is_some_and(|v| v >= (9, 5))
 }
 
 /// What `ssh -G` resolves for a target with your config: one "key value"
@@ -333,6 +352,56 @@ pub fn remote_command(t: &SshTarget, env: &SshEnv, script: &str) -> Command {
     cmd.args(["-T", "--"]).arg(&t.destination).arg(format!("sh -c {}", shell_quote(script)));
     hide_console(&mut cmd);
     cmd
+}
+
+/// What a terminal connects with. To hide your typing rhythm through Tor it
+/// needs a connection of its own: ssh decides on the beat when a connection
+/// opens, whatever the terminals that share it later ask for, and drops the
+/// beat while anything else, Files say, runs on that connection.
+pub fn terminal_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
+    if crate::tor::hides_typing() && crate::tor::proxy_command_for(t).is_some() {
+        return common_args(&on_its_own(t), &SshEnv { control_dir: None, ..env.clone() });
+    }
+    common_args(t, env)
+}
+
+/// A command that moves a file's worth of data. Through Tor it gets a
+/// connection of its own where it can: on a shared one, every key typed in a
+/// terminal waits behind what's on its way. A key took 1006 ms during a
+/// download and 1350 during an upload that way, against 123 and 126 alone.
+pub fn transfer_command(t: &SshTarget, env: &SshEnv, script: &str) -> Command {
+    let shares = cfg!(unix) && env.control_dir.is_some() && crate::tor::proxy_command_for(t).is_some();
+    if !shares || !signs_in_alone(t, env) {
+        return remote_command(t, env, script);
+    }
+    remote_command(&on_its_own(t), &SshEnv { control_dir: None, ..env.clone() }, script)
+}
+
+/// `t` on a connection of its own, whatever your config says about sharing.
+fn on_its_own(t: &SshTarget) -> SshTarget {
+    let mut alone = t.clone();
+    for opt in ["ControlMaster=no", "ControlPath=none"] {
+        alone.extra_args.push("-o".into());
+        alone.extra_args.push(opt.into());
+    }
+    alone
+}
+
+/// Whether a server lets a new connection in without you. One you signed in
+/// to by typing a code doesn't, and a transfer can only use the connection
+/// you opened. Asked once a server in a run, and only the answer is kept.
+fn signs_in_alone(t: &SshTarget, env: &SshEnv) -> bool {
+    static ANSWERS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let answers = ANSWERS.get_or_init(Mutex::default);
+    let key = format!("{:?} {} {:?} {:?} {:?}", t.user, t.destination, t.port, t.identity_file, t.extra_args);
+    if let Some(known) = answers.lock().unwrap().get(&key) {
+        return *known;
+    }
+    let mut cmd = remote_command(&on_its_own(t), &SshEnv { control_dir: None, ..env.clone() }, "true");
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let alone = cmd.status().is_ok_and(|status| status.success());
+    answers.lock().unwrap().insert(key, alone);
+    alone
 }
 
 /// Runs a script on the server and returns its stdout. Without input it
@@ -412,6 +481,35 @@ pub fn default_control_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transfer_alone_ignores_any_sharing_in_your_config() {
+        let t = SshTarget { destination: "example.invalid".into(), extra_args: vec!["-F".into(), "cfg".into()], ..Default::default() };
+        let a = args(&on_its_own(&t), &SshEnv::default(), None);
+        // The first value ssh hears wins, so these must come before anything from a config.
+        assert_eq!(&a[..6], ["-F", "cfg", "-o", "ControlMaster=no", "-o", "ControlPath=none"]);
+    }
+
+    #[test]
+    fn this_computers_ssh_accepts_what_it_gets_under_tor() {
+        let t = SshTarget { destination: "example.invalid".into(), extra_args: vec!["-F".into(), if cfg!(windows) { "NUL" } else { "/dev/null" }.into()], ..Default::default() };
+        let mut cmd = Command::new(ssh_program());
+        cmd.args(args(&t, &SshEnv::default(), Some("x %h %p".into()))).arg("-G").arg(&t.destination);
+        let Ok(out) = cmd.stdin(Stdio::null()).output() else { return };
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        if knows_keystroke_timing(ssh_version()) {
+            assert!(String::from_utf8_lossy(&out.stdout).to_lowercase().contains("obscurekeystroketiming no"));
+        }
+    }
+
+    #[test]
+    fn only_an_ssh_that_knows_the_option_is_told_how_to_send_keystrokes() {
+        assert!(knows_keystroke_timing(Some((9, 5))));
+        assert!(knows_keystroke_timing(Some((10, 2))));
+        assert!(!knows_keystroke_timing(Some((9, 4))));
+        assert!(!knows_keystroke_timing(Some((8, 1))));
+        assert!(!knows_keystroke_timing(None));
+    }
 
     #[test]
     fn quotes_single_quotes() {

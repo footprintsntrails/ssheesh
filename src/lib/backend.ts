@@ -175,6 +175,8 @@ export interface Backend {
   newTorRoutes(): Promise<TorSwitch>;
   /** While Tor is on: ssh options that send an ssh typed on this computer through it too. */
   torSshOptions(): Promise<string[] | null>;
+  /** Whether ssh hides your typing rhythm through Tor, for connections from now on. */
+  setTorHideTyping(on: boolean): Promise<void>;
   torLogPath(): Promise<string | null>;
   /** Starts a Tor that won't start again from nothing. */
   startTorAfresh(): Promise<void>;
@@ -364,6 +366,7 @@ async function tauriBackend(): Promise<Backend> {
     setTor: (on) => call("set_tor", { on }),
     newTorRoutes: () => call("new_tor_routes", {}),
     torSshOptions: () => call("tor_ssh_options", {}),
+    setTorHideTyping: (on) => call("set_tor_hide_typing", { on }),
     torLogPath: () => call("tor_log_path", {}),
     startTorAfresh: () => call("start_tor_afresh", {}),
   };

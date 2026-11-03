@@ -2,8 +2,15 @@
 // The Rust side (crates/sshee-core/src/tor.rs) does the rest.
 
 import { backend } from "./backend";
+import { useSettings } from "./settings";
 import { useStore } from "./store";
 import { toOpError, type TorStatus } from "./types";
+
+// Said before anything connects, and whenever it changes.
+void backend.setTorHideTyping(useSettings.getState().torHideTyping);
+useSettings.subscribe((s, prev) => {
+  if (s.torHideTyping !== prev.torHideTyping) void backend.setTorHideTyping(s.torHideTyping);
+});
 
 /** How long Tor gets to start before you're told it hasn't, and why. */
 const SLOW_START_MS = 25000;
