@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.4 — a terminal that keeps up through Tor
+
+- **Typing through Tor takes half as long.** ssh sends keys on a steady beat, with fake ones between, to hide your typing rhythm, and through Tor that nearly doubled what a key takes: 118 to 150 ms with it, 60 to 81 ms without, in our tests from a datacenter. Your own connection adds its share. So through Tor it's off now. That means your provider, Tor's relays and the server's network can see when you press keys, which can show how long a typed password is and hint at what you typed, though they can't read it. Settings → Privacy → Hide my typing rhythm keeps the protection, at about twice the delay per key.
+- **No more getting stuck on a bad route.** One timing says almost nothing about a Tor route, so about one pick in four landed on a slow one and stayed there for 25 minutes. SSHeesh now times six routes three times each instead of twelve once: in our tests none of 30 picks was slower than 400 ms, where 7 of 30 were, and the worst went from 4.3 seconds to 0.3. A first connection takes about half a second longer. Fewer routes also means less chance of a hostile relay ending up on yours. One slow connection no longer throws a good route away.
+- **Typing during a transfer.** On macOS and Linux a key could take over a second while a file moved through Tor, waiting behind it on the same connection. A transfer now gets a connection of its own, and a key takes about 125 ms meanwhile.
+- **Folders through Tor travel compressed.** Folders of text arrive over 4 times faster, both ways, with zstd or gzip on the server. Photos and videos go as they are.
+- **A download on a weak route moves.** If a download through Tor starts out slow, it moves to another route, twice at most. Slow downloads went from 41% to 15% in our tests, and the route that worked stays for that server's next ones.
+- **The keyboard stays with the terminal after Alt+Tab.** On Windows the terminal could stop taking keys until you clicked it. Two things could cause that, and both are handled.
+- **See how much typing could appear instantly.** Settings → Terminal can count it, off by default, so we can tell if showing keys before the server answers is worth building. It draws nothing, sends nothing and keeps no text, only totals.
+
 ## 0.10.3 — Tor starts on Windows
 
 - **Tor starts on Windows.** Since 0.10.0 it stopped at 15% on every Windows computer, whatever the network or the clock, with one processor core running flat out. A library Tor relies on finds the furthest date a computer's clock can hold by trying ever smaller steps, down to a billionth of a second. Windows' clock counts in steps of a hundred of those, so the smallest ones changed nothing and the search never ended. SSHeesh now carries a corrected copy, and Tor is on within seconds.
