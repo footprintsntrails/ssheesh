@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.5 — type right after Reconnect, and Files that keep up with your keys
+
+- **Typing works right after Reconnect.** The button you pressed took the keyboard with it when it went away, so a terminal that was back took no keys until you clicked it, and looked as if it hadn't reconnected at all. This goes for Reconnect, Now and Try again. The keyboard now stays with the terminal.
+- **A password when a terminal comes back from idle.** A terminal that had let go of its unused connection threw away every key until it was connected again, so if ssh asked for a password or a passphrase, there was no way to answer. Your keys now reach it. Keys typed before it asks still go nowhere, so a password typed ahead doesn't show on screen.
+- **You can see it trying.** "Reconnecting…" shows when coming back takes more than a moment.
+- **".." works every time.** Double-clicking it went up one folder and then did nothing until you moved the pointer, because clicks in one spot keep counting. Every double-click now counts, on folders and files too.
+- **Ctrl+A in Files, wherever the keyboard is.** It worked only on an English layout, with the file list holding the keyboard. It now also works on other layouts, with Caps Lock, right after a menu closes, and when Files has just opened. In a terminal beside Files it's still the start of the line, and in a text field it selects the text. Ctrl+F in Files works on other layouts too.
+- **Right-click menus that don't overlap.** Opened near the window's edge, a long item wrapped over the ones around it. Menus now keep their width and move away from the edge. No item looks chosen until you choose one, Enter on a menu just opened no longer runs its first item, and arrows and Delete keep working after a menu closes.
+
 ## 0.10.4 — a terminal that keeps up through Tor
 
 - **Typing through Tor takes half as long.** ssh sends keys on a steady beat, with fake ones between, to hide your typing rhythm, and through Tor that nearly doubled what a key takes: 118 to 150 ms with it, 60 to 81 ms without, in our tests from a datacenter. Your own connection adds its share. So through Tor it's off now. That means your provider, Tor's relays and the server's network can see when you press keys, which can show how long a typed password is and hint at what you typed, though they can't read it. Settings → Privacy → Hide my typing rhythm keeps the protection, at about twice the delay per key.
