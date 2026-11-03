@@ -7,6 +7,7 @@ use sshee_core::disk::{self, DiskReport, Usage};
 use sshee_core::fixes;
 use sshee_core::containers::{self, ContainerList, Engine};
 use sshee_core::files::{self, DirListing, TextFile, Transfer};
+use sshee_core::media::{MediaFile, MediaFiles, OpenedMedia};
 use sshee_core::metrics::{self, Metrics};
 use sshee_core::scrub::Cleaning;
 use sshee_core::secrets::PasswordStore;
@@ -28,6 +29,8 @@ struct AppState {
     env: SshEnv,
     /// Uploads and downloads in progress, by the id the UI gave them.
     transfers: Mutex<HashMap<String, Arc<Transfer>>>,
+    /// Photos and videos the preview in Files has open.
+    media: Arc<MediaFiles>,
 }
 
 /// A container a terminal opens into, and what to run there.
@@ -318,6 +321,7 @@ fn reroute(app: &AppHandle) -> TorSwitch {
     sshee_core::shell_pool::forget_all();
     let stayed = state.sessions.reroute();
     app.state::<sshee_core::tunnels::TunnelManager>().reroute();
+    state.media.reroute();
     // The shared connections left the old way: unless a terminal without
     // tmux still uses one, they end now rather than linger for minutes.
     if stayed == 0 {
@@ -467,6 +471,47 @@ async fn rename_path(state: State<'_, AppState>, target: TargetSpec, from: Strin
 async fn delete_path(state: State<'_, AppState>, target: TargetSpec, path: String) -> Result<(), OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
     blocking(move || files::delete(&t, &env, &path)).await
+}
+
+/// Opens a photo or video for the preview, for the page to read until `close_media`.
+#[tauri::command]
+async fn open_media(window: tauri::Window, state: State<'_, AppState>, target: TargetSpec, path: String) -> Result<OpenedMedia, OpError> {
+    let (t, env, media) = (resolve(&state, &target)?, state.env.clone(), state.media.clone());
+    blocking(move || media.add(MediaFile::open(&t, &env, &path)?, window.label())).await
+}
+
+#[tauri::command]
+fn close_media(state: State<AppState>, id: String) {
+    let media = state.media.clone();
+    // It can wait on a connection that's ending: not on the UI thread.
+    std::thread::spawn(move || media.close(&id));
+}
+
+/// A preview's file in the `media` scheme, for a page that isn't allowed its
+/// plain local address (see `sshee_core::media`). Never stored, and never
+/// anything a page could run, should one be pointed at it.
+fn media_response(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response};
+    let id = request.uri().path().trim_start_matches('/');
+    let Some(file) = app.state::<AppState>().media.get(id) else {
+        return Response::builder().status(404).body(Vec::new()).expect("a plain answer");
+    };
+    let range = request.headers().get(header::RANGE).and_then(|v| v.to_str().ok());
+    let Ok(answer) = file.answer(range) else {
+        return Response::builder().status(502).body(Vec::new()).expect("a plain answer");
+    };
+    let mut response = Response::builder()
+        .status(answer.status)
+        .header(header::CONTENT_TYPE, file.mime())
+        .header(header::CONTENT_LENGTH, answer.body.len())
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CONTENT_SECURITY_POLICY, "default-src 'none'; sandbox");
+    if let Some(range) = answer.content_range {
+        response = response.header(header::CONTENT_RANGE, range);
+    }
+    response.body(answer.body).expect("a plain answer")
 }
 
 /// Bytes moved so far and the total (0 when unknown), for the transfers
@@ -902,6 +947,11 @@ fn no_menu_on_alt(window: &tauri::Window) {
 
 pub fn run() {
     tauri::Builder::default()
+        // Off the UI thread: it reads from a server.
+        .register_asynchronous_uri_scheme_protocol("media", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || responder.respond(media_response(&app, &request)));
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -933,6 +983,7 @@ pub fn run() {
                 passwords: PasswordStore::default(),
                 host_keys: Arc::new(PendingKeys::default()),
                 transfers: Mutex::default(),
+                media: Arc::default(),
                 env: SshEnv {
                     // ssh runs this same executable to ask for a password; see main.rs.
                     askpass: std::env::current_exe().ok(),
@@ -943,13 +994,16 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // A page that's gone doesn't say so: what it had open closes here.
+            if let (tauri::WindowEvent::Destroyed, Some(state)) = (event, window.try_state::<AppState>()) {
+                let (media, label) = (state.media.clone(), window.label().to_string());
+                std::thread::spawn(move || media.close_for_window(&label));
+            }
             // Any window can take the keyboard, those opened later too.
             #[cfg(windows)]
             if let tauri::WindowEvent::Focused(true) = event {
                 no_menu_on_alt(window);
             }
-            #[cfg(not(windows))]
-            let _ = (window, event);
         })
         .invoke_handler(tauri::generate_handler![
             list_hosts,
@@ -978,6 +1032,8 @@ pub fn run() {
             rename_path,
             archive_paths,
             delete_path,
+            open_media,
+            close_media,
             download_path,
             upload_paths,
             copy_to_server,
@@ -1023,6 +1079,7 @@ pub fn run() {
                 app.state::<AppState>().sessions.close_all();
                 // Tunnels end with the app too; the ones you left on start again next time.
                 app.state::<sshee_core::tunnels::TunnelManager>().stop_all();
+                app.state::<AppState>().media.close_all();
                 tor::shutdown();
             }
         });

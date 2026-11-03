@@ -83,7 +83,7 @@ Tabs on top or under each server, one tab at a time or several side by side, and
 - **One bar for everything.** Ctrl+Shift+L (⌘L) finds servers, folders, commands and settings, and says which server a command runs on.
 - **Your keys.** Every shortcut is listed in Settings → Keyboard, and you can change any of them.
 - **Server icons that mean something.** SSHeesh sees what a server runs (a website, a database, Docker) and picks its icon; each server gets a color of its own. Right-click a server for 30 more, in lines or pixels, in any color.
-- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads (a download opens its folder with the file picked out), its Docker containers, stats, web apps opened through your SSH login, and step-by-step recipes for the usual jobs, whose steps run in the terminal with **Run**.
+- **Everything about a server, in its tabs:** a quick file manager with bookmarks, uploads and downloads (a download opens its folder with the file picked out) that shows photos and plays videos where they are, its Docker containers, stats, web apps opened through your SSH login, and step-by-step recipes for the usual jobs, whose steps run in the terminal with **Run**.
 
 ## Install
 

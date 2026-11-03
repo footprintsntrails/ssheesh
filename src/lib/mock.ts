@@ -3,6 +3,7 @@
 
 import type { Backend, TransferHooks } from "./backend";
 import pkg from "../../package.json";
+import { mediaKind } from "./media";
 import type { Cleaning, Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile, TorStatus } from "./types";
 import type { WebApp } from "./types";
 
@@ -650,6 +651,14 @@ export const mockBackend: Backend = {
     if (name.endsWith(".gz")) return { path, content: null, binary: true, size: 48_211_332 };
     return { path, content: textFiles[name] ?? `# ${name}\n\nSample content from the demo backend.\n`, binary: false, size: 1843 };
   },
+  async openMedia(_t, path) {
+    await wait(120);
+    // A drawn picture stands in for a photo; a video has nothing to play, and says so.
+    const picture = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#d97757"/><stop offset="1" stop-color="#3b5bdb"/></linearGradient></defs><rect width="1200" height="800" fill="url(#g)"/></svg>')}`;
+    const url = mediaKind(path) === "image" ? picture : "data:video/mp4,";
+    return { id: path, size: 2_483_122, url, fallback: url };
+  },
+  closeMedia() {},
   async writeFile(_t, path) {
     await wait(200);
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";

@@ -110,6 +110,9 @@ export interface Backend {
 
   listDir(target: TargetRef, path: string): Promise<DirListing>;
   readFile(target: TargetRef, path: string): Promise<TextFile>;
+  /** Opens a photo or video for the preview; `url` is where a page reads it, until `closeMedia`. */
+  openMedia(target: TargetRef, path: string): Promise<OpenedMedia>;
+  closeMedia(id: string): void;
   writeFile(target: TargetRef, path: string, content: string): Promise<void>;
   makeDir(target: TargetRef, path: string): Promise<void>;
   renamePath(target: TargetRef, from: string, to: string): Promise<void>;
@@ -182,10 +185,18 @@ export interface Backend {
   startTorAfresh(): Promise<void>;
 }
 
+export interface OpenedMedia {
+  id: string;
+  size: number;
+  url: string;
+  /** The same file through the app's own scheme, in case a system won't let the page use `url`. */
+  fallback: string;
+}
+
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 async function tauriBackend(): Promise<Backend> {
-  const { invoke, Channel } = await import("@tauri-apps/api/core");
+  const { invoke, Channel, convertFileSrc } = await import("@tauri-apps/api/core");
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
   const dialog = await import("@tauri-apps/plugin-dialog");
   const updater = await import("@tauri-apps/plugin-updater");
@@ -287,6 +298,11 @@ async function tauriBackend(): Promise<Backend> {
 
     listDir: (target, path) => call("list_dir", { target, path }),
     readFile: (target, path) => call("read_file", { target, path }),
+    async openMedia(target, path) {
+      const file = await call<Omit<OpenedMedia, "fallback">>("open_media", { target, path });
+      return { ...file, fallback: convertFileSrc(file.id, "media") };
+    },
+    closeMedia: (id) => fire("close_media", { id }),
     writeFile: (target, path, content) => call("write_file", { target, path, content }),
     makeDir: (target, path) => call("make_dir", { target, path }),
     renamePath: (target, from, to) => call("rename_path", { target, from, to }),

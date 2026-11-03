@@ -134,7 +134,7 @@ fn sort_entries(entries: &mut [FileEntry]) {
     entries.sort_by_cached_key(|e| (e.kind != FileKind::Dir, e.name.to_lowercase()));
 }
 
-fn resolve_local(path: &str) -> PathBuf {
+pub(crate) fn resolve_local(path: &str) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
     if path.is_empty() || path == "~" {
         home

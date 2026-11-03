@@ -1,7 +1,8 @@
 // Runs the app on real Windows with the real mouse and keyboard. Fails if the
 // window's focus keeps moving by itself, or a typed command doesn't reach the
 // shell: the browser tests and Linux can't see either. The debug port is only
-// used to find the first screen's button, then it's let go of.
+// used to find the first screen's button, then it's let go of until the keys
+// are done with, for the check of the preview.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -121,6 +122,45 @@ await phase("alt-tab", MAX_ALT_TAB, async () => {
   if (reached < 10) problems.push(`after Alt+Tab only ${reached} of 10 typed commands reached the shell`);
 });
 
+// The preview in Files, both ways a page can read a file: Windows' web view has
+// its own rules about pages reading from this computer, and the app needs one to work.
+const media = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise((r) => (media.onopen = r));
+const showing = (path, tag) => `(async () => {
+  const { invoke, convertFileSrc } = window.__TAURI_INTERNALS__;
+  let file;
+  try { file = await invoke("open_media", { target: { kind: "local" }, path: ${JSON.stringify(path)} }); }
+  catch (e) { return { missing: String(e?.message ?? e) }; }
+  const shows = (src) => new Promise((done) => {
+    const el = document.createElement(${JSON.stringify(tag)});
+    const finish = (how) => { el.remove(); done(how); };
+    setTimeout(() => finish("timed out"), 15000);
+    el.onerror = () => finish("failed");
+    if (el.tagName === "IMG") el.onload = () => finish(el.naturalWidth > 0 ? "ok" : "failed");
+    else {
+      el.muted = true;
+      el.preload = "auto";
+      el.onloadedmetadata = () => { el.currentTime = el.duration / 2; };
+      el.onseeked = () => finish(el.videoWidth > 0 ? "ok" : "failed");
+    }
+    el.src = src;
+    document.body.append(el);
+  });
+  return { local: await shows(file.url), scheme: await shows(convertFileSrc(file.id, "media")) };
+})()`;
+for (const [name, tag] of [["sample.png", "img"], ["sample.webm", "video"]]) {
+  const shown = await new Promise((res) => {
+    media.onmessage = (e) => res(JSON.parse(e.data).result?.result?.value);
+    const expression = showing(join(import.meta.dirname, "media", name), tag);
+    media.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }));
+    setTimeout(() => res({}), 45000);
+  });
+  console.log(`${name}: ${JSON.stringify(shown)}`);
+  // A published version from before the preview has nothing to check.
+  if (!shown?.missing && shown?.local !== "ok" && shown?.scheme !== "ok") problems.push(`${name} can't be shown either way: ${JSON.stringify(shown)}`);
+}
+media.close();
+
 writeFileSync(stop, "");
 await sleep(300);
 other.kill();
@@ -129,5 +169,5 @@ if (problems.length) {
   console.log(`FAIL:\n${problems.join("\n")}`);
   process.exit(1);
 }
-console.log("OK: focus stays put, keys arrive");
+console.log("OK: focus stays put, keys arrive, the preview shows");
 process.exit(0);

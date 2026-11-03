@@ -78,7 +78,7 @@ export const THEME_COLORS: { key: ThemeColorKey; cssVar: string; group: string; 
     alpha: true,
   },
   { key: "fileCode", cssVar: "--ui-file-code", group: "Files", label: "Code", hint: "Scripts, configs and .env files in the file manager.", alpha: true },
-  { key: "fileImage", cssVar: "--ui-file-image", group: "Files", label: "Images", hint: "Pictures and icons.", alpha: true },
+  { key: "fileImage", cssVar: "--ui-file-image", group: "Files", label: "Images", hint: "Pictures, icons and videos.", alpha: true },
   { key: "fileArchive", cssVar: "--ui-file-archive", group: "Files", label: "Archives", hint: "Zip, tar and other packed files.", alpha: true },
 ];
 

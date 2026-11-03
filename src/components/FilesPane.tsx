@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronLeft, ChevronsRight, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, ChevronsRight, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FileVideoCamera, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
@@ -18,7 +18,9 @@ import { pasteQuestion, uploadTo } from "../lib/upload";
 import { openCopyToServer } from "./CopyToServer";
 import { dragFiles, useFileDrag } from "../lib/fileDrag";
 import { track } from "../lib/transfers";
+import { mediaKind, SVG, type MediaKind } from "../lib/media";
 import { FolderPeek } from "./FolderPeek";
+import { MediaPreview } from "./MediaPreview";
 import { dialogOpen } from "./Overlays";
 
 type SortKey = "name" | "size" | "modified";
@@ -41,6 +43,8 @@ interface Preview {
   source: boolean;
   /** Lines to show and mark, first and last: from a path like "notes.md:12-40". */
   lines?: [number, number];
+  /** A photo or video: shown as that, not read as text. */
+  media: MediaKind | null;
 }
 
 
@@ -59,7 +63,6 @@ const TEXT_LINE = 12 * 1.6;
 
 const CODE = /\.(js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|c|h|cc|cpp|hpp|php|json|ya?ml|toml|ini|conf|cfg|env|sql|html?|css|scss|lua|swift|vue|svelte|xml|dockerfile)$/i;
 const TEXT = /\.(md|txt|log|csv|rst)$/i;
-const IMAGE = /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif|heic)$/i;
 const ARCHIVE = /\.(zip|tar|gz|tgz|bz2|xz|7z|rar|zst|deb|rpm)$/i;
 const SCRIPT = /\.(sh|bash|zsh|fish)$/i;
 /** Files the preview shows formatted, with a switch to their text. */
@@ -87,7 +90,9 @@ function EntryIcon({ entry }: { entry: FileEntry }) {
   if (SCRIPT.test(n)) return <FileTerminal {...common} className="shrink-0 text-ok/80" />;
   if (CODE.test(n) || n === "Dockerfile" || n.startsWith(".env")) return <FileCode {...common} className="shrink-0 text-[var(--ui-file-code)]" />;
   if (TEXT.test(n)) return <FileText {...common} className="shrink-0 text-fg-2" />;
-  if (IMAGE.test(n)) return <FileImage {...common} className="shrink-0 text-[var(--ui-file-image)]" />;
+  const media = mediaKind(n);
+  if (media === "image") return <FileImage {...common} className="shrink-0 text-[var(--ui-file-image)]" />;
+  if (media === "video") return <FileVideoCamera {...common} className="shrink-0 text-[var(--ui-file-image)]" />;
   if (ARCHIVE.test(n)) return <FileArchive {...common} className="shrink-0 text-[var(--ui-file-archive)]" />;
   return <File {...common} className="shrink-0 text-fg-3" />;
 }
@@ -553,7 +558,9 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       if (preview && preview.path === joinPath(dir, preview.name)) setSelected([preview.name]);
       return;
     }
-    setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false, lines });
+    const media = mediaKind(entry.name);
+    setPreview({ name: entry.name, path: full, file: null, draft: "", saving: false, source: false, lines, media });
+    if (media && !SVG.test(entry.name)) return;
     if (MARKDOWN.test(entry.name)) void loadMarkdownView().catch(() => {});
     try {
       const file = await backend.readFile(target, full);
@@ -907,6 +914,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       setSelected([entry.name]);
       setAnchor(entry.name);
       scrollToRow(visible.indexOf(entry));
+      // Photos go by as you move through the list.
+      if (preview?.media && !preview.source && entry.kind !== "dir" && mediaKind(entry.name)) void openPreview(entry);
     };
     if (e.altKey && e.key === "ArrowLeft") goBack();
     else if (e.altKey && e.key === "ArrowRight") goForward();
@@ -1352,7 +1361,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 </span>
               )}
               <span className="flex-1" />
-              {markdown && (
+              {(markdown || SVG.test(preview.name)) && (
                 <div role="tablist" aria-label="Show the file" className="flex h-6 shrink-0 items-center rounded-[7px] bg-ink/[0.045] p-[2px] ring-1 ring-inset ring-ink/[0.06]">
                   {(["Preview", "Source"] as const).map((v) => {
                     const on = (v === "Source") === preview.source;
@@ -1362,7 +1371,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                         type="button"
                         role="tab"
                         aria-selected={on}
-                        title={v === "Preview" ? "Show it formatted" : "Show the text, to edit it"}
+                        title={v === "Preview" ? "Show how it looks" : "Show the text, to edit it"}
                         onClick={() => setPreview((p) => p && { ...p, source: v === "Source" })}
                         className={cn(
                           "flex h-5 items-center rounded-[5px] px-2 text-[11.5px] font-medium transition-colors",
@@ -1404,7 +1413,16 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                 Read-only: this file isn't UTF-8 text, so saving it here would change the characters it couldn't read.
               </p>
             )}
-            {!preview.file ? (
+            {preview.media && !preview.source ? (
+              <MediaPreview
+                key={preview.path}
+                target={target}
+                path={preview.path}
+                name={preview.name}
+                kind={preview.media}
+                onDownload={remote ? () => download([{ name: preview.name, path: preview.path, isDir: false }]) : undefined}
+              />
+            ) : !preview.file ? (
               <PreviewLoading />
             ) : preview.file.content == null ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
