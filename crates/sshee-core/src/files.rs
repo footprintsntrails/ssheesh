@@ -843,13 +843,15 @@ fn pack_script(parent: &str, name: &str) -> String {
 ///
 /// There's no `pipefail` in sh, so tar's exit status comes back around the
 /// compressor through fd 4: a file tar can't read still fails the download.
+/// `find` has no `--`, so a name goes to it as `./name`: bare, a folder called
+/// `-delete` would be its orders, and it would delete what's around that folder.
 fn pack_small_script(parent: &str, name: &str) -> String {
     format!(
         r#"cd -- {p} || exit 1; {items}
 z= k=t
 if command -v zstd >/dev/null 2>&1; then z='{ZSTD_PACK}' k=z; elif command -v gzip >/dev/null 2>&1; then z='{GZIP_PACK}' k=g; fi
 if [ -n "$z" ]; then
-sample() {{ find "$@" -type f 2>/dev/null | head -n {SAMPLE_FILES} | while IFS= read -r f; do head -c {SAMPLE_EACH} -- "$f" 2>/dev/null; done; }}
+sample() {{ for n in "$@"; do find "./$n" -type f 2>/dev/null; done | head -n {SAMPLE_FILES} | while IFS= read -r f; do head -c {SAMPLE_EACH} -- "$f" 2>/dev/null; done; }}
 a=$(sample "$@" | wc -c); b=$(sample "$@" | $z 2>/dev/null | wc -c)
 if ! [ "$b" -gt 0 ] 2>/dev/null || [ $((b * 10)) -ge $((a * 9)) ]; then z= k=t; fi
 fi
@@ -1921,6 +1923,32 @@ mod tests {
             .collect();
         std::fs::write(base.join("noise/photo.jpg"), noise).unwrap();
         base
+    }
+
+    /// `find` reads a name starting with `-`, `!` or `(` as what to do, and
+    /// `-delete` as deleting all it can reach from where it stands.
+    #[cfg(unix)]
+    #[test]
+    fn a_small_stream_takes_a_folder_named_like_an_action_for_a_folder() {
+        for (i, name) in ["-delete", "!", "(", "-exec"].into_iter().enumerate() {
+            let base = std::env::temp_dir().join(format!("sshee-small-named-{i}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(base.join(name)).unwrap();
+            std::fs::create_dir_all(base.join("deep")).unwrap();
+            std::fs::write(base.join(name).join("notes.txt"), "line\n".repeat(50_000)).unwrap();
+            std::fs::write(base.join("beside.txt"), "kept").unwrap();
+            std::fs::write(base.join("deep/below.txt"), "kept").unwrap();
+            let packed = pack_small_with(&base, name, &["gzip"]);
+            for kept in ["beside.txt", "deep/below.txt"] {
+                assert!(base.join(kept).exists(), "packing {name} removed {kept}");
+            }
+            assert!(base.join(name).join("notes.txt").exists(), "packing {name} removed what it packs");
+            assert!(packed.status.success(), "{name}: {}", String::from_utf8_lossy(&packed.stderr));
+            assert_eq!(packed.stdout[0], b'g', "{name} should be sampled and shrink");
+            let listed = listed_in_tar(SmallStream::new(io::Cursor::new(packed.stdout)));
+            assert!(listed.contains(&format!("{name}/notes.txt")), "{name}: {listed:?}");
+            std::fs::remove_dir_all(&base).unwrap();
+        }
     }
 
     #[cfg(unix)]

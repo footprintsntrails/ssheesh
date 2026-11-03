@@ -46,17 +46,22 @@ fn main() {
 
     let target = SshTarget { destination: host.clone(), user: Some("ssheesh-check".into()), ..Default::default() };
     assert!(tor::carries(&target), "this server should go through Tor");
+    // A transfer's route, the way a transfer asks for it: the first value ssh hears wins.
+    let files = tor::transfer_proxy_command_for(&target).expect("this server should go through Tor");
+    let as_transfer = ["-o".to_string(), format!("ProxyCommand={files}")];
     for program in &programs {
-        if !reached(program, &target, &host, &mark) {
-            println!("FAILED: ssh didn't get through");
-            print_log();
-            exit(1);
+        for first in [&[][..], &as_transfer[..]] {
+            if !reached(program, &target, &host, &mark, first) {
+                println!("FAILED: ssh didn't get through");
+                print_log();
+                exit(1);
+            }
         }
     }
     tor::set_on(false, vec![]).unwrap();
 }
 
-fn reached(program: &OsStr, target: &SshTarget, host: &str, mark: &Path) -> bool {
+fn reached(program: &OsStr, target: &SshTarget, host: &str, mark: &Path, first: &[String]) -> bool {
     let version = Command::new(program).arg("-V").output().expect("couldn't start ssh");
     println!("{}: {}", program.display(), String::from_utf8_lossy(&version.stderr).trim());
     for attempt in 1..=3 {
@@ -64,6 +69,7 @@ fn reached(program: &OsStr, target: &SshTarget, host: &str, mark: &Path) -> bool
         let begun = Instant::now();
         let out = Command::new(program)
             .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"])
+            .args(first)
             .args(common_args(target, &SshEnv::default()))
             .args(["-T", "--", host, "true"])
             .stdin(Stdio::null())
