@@ -208,10 +208,22 @@ pub const SCROLL_TITLE: &str = "sshee-scroll #{pane_in_mode} #{scroll_position} 
 
 /// How long tmux waits for the rest of a key sequence, in ms. Short, so Esc
 /// in vim or an agent doesn't lag. On Windows the console between SSHeesh
-/// and ssh (ConPTY) passes a terminal reply or a mouse report on in pieces,
-/// and over Wi-Fi the pieces can arrive more than 10 ms apart: tmux gave up
-/// halfway, and the rest landed in the shell as text ("61;6;7;…c", "32;29;29M").
-const ESCAPE_TIME_MS: u32 = if cfg!(windows) { 100 } else { 10 };
+/// and ssh (ConPTY) passes a mouse report on in pieces, and over Wi-Fi the
+/// pieces can arrive more than 10 ms apart: tmux gave up halfway, and the rest
+/// landed in the shell as text ("32;29;29M"). Through Tor they can be further
+/// apart still, and a key takes longer than this anyway.
+fn escape_time_ms(through_console: bool) -> u32 {
+    match (through_console, crate::tor::is_on()) {
+        (true, true) => 300,
+        (true, false) => 100,
+        (false, _) => 10,
+    }
+}
+
+/// How long tmux waits for the answers it asks its terminal for as it attaches,
+/// and for how long after attaching it waits that long.
+const ANSWERS_MS: u32 = 3000;
+const ANSWERS_SECONDS: u32 = 5;
 
 /// The remote command for an interactive session. If tmux exists on the
 /// server, the shell lives inside a named tmux session that outlives the
@@ -226,8 +238,26 @@ const ESCAPE_TIME_MS: u32 = if cfg!(windows) { 100 } else { 10 };
 /// own copy) reaching your clipboard. With tmux 3.2+ it also reports where
 /// you've scrolled to, and binds a key (ESC [ 9006 ~, which no keyboard
 /// sends) that leaves scrolling, so typing goes back to the prompt.
+///
+/// On Windows that console also answers tmux's "which terminal are you?" itself,
+/// a character at a time. tmux gives an answer half a second, and through Tor
+/// it can take longer: the rest landed in the shell as text, as here with
+/// "61;6;7;21;22;23;24;28;32;42c0;10;1c". So for the first seconds after
+/// attaching, when these answers come, it waits longer (see `ANSWERS_MS`).
 pub fn durable_command(key: &str, run: Option<&[String]>, welcome: &crate::welcome::Welcome) -> String {
+    durable_command_for(key, run, welcome, cfg!(windows))
+}
+
+fn durable_command_for(key: &str, run: Option<&[String]>, welcome: &crate::welcome::Welcome, through_console: bool) -> String {
     let name = session_name(key);
+    let usual = escape_time_ms(through_console);
+    let escape_time = if through_console {
+        // From a job, not `run-shell -d`: that one is dropped if this client goes first,
+        // and every other terminal on the server would be left with the long wait.
+        format!(r#"set-option -s escape-time {ANSWERS_MS} \; run-shell -b 'sleep {ANSWERS_SECONDS}; tmux set-option -s escape-time {usual}'"#)
+    } else {
+        format!("set-option -s escape-time {usual}")
+    };
     // With a command: tmux runs it as the session's only window; without
     // tmux it's exec'd directly. Without one: the login shell, after the
     // welcome message. tmux runs a session's command with the login shell,
@@ -243,7 +273,7 @@ pub fn durable_command(key: &str, run: Option<&[String]>, welcome: &crate::welco
         }
     };
     let script = format!(
-        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; set-option -s escape-time {ESCAPE_TIME_MS} \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
+        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; {escape_time} \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
     );
     format!("sh -c {}", shell_quote(&script))
 }
@@ -409,9 +439,26 @@ fn signs_in_alone(t: &SshTarget, env: &SshEnv) -> bool {
     }
     let mut cmd = remote_command(&on_its_own(t), &SshEnv { control_dir: None, ..env.clone() }, "true");
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    let alone = cmd.status().is_ok_and(|status| status.success());
+    let alone = succeeds_within(cmd, std::time::Duration::from_secs(90));
     answers.lock().unwrap().insert(key, alone);
     alone
+}
+
+/// Whether a command succeeds in time. A server that never lets it finish doesn't keep it here.
+fn succeeds_within(mut cmd: Command, limit: std::time::Duration) -> bool {
+    let Ok(mut child) = cmd.spawn() else { return false };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 /// Runs a script on the server and returns its stdout. Without input it
@@ -491,6 +538,97 @@ pub fn default_control_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A terminal's real command in real tmux, with "which terminal are you?"
+    /// answered as Windows' console does: a character at a time, too slowly for
+    /// tmux's usual half a second, as happens through Tor.
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_answer_from_windows_console_stays_out_of_the_shell() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+        // Without tmux there's nothing to check.
+        if !Command::new("tmux").arg("-V").output().is_ok_and(|o| o.status.success()) {
+            return;
+        }
+        // Short: a tmux socket's path has a limit, the temp folder's name doesn't.
+        let dir = PathBuf::from(format!("/tmp/sshee-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", &durable_command_for("ask", None, &Default::default(), true)]);
+        cmd.env("TMUX_TMPDIR", &dir);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("SHELL", "/bin/sh");
+        cmd.env_remove("TMUX");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (said, heard) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 || said.send(chunk[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut writer = pair.master.take_writer().unwrap();
+        let tmux = |args: &[&str]| {
+            let out = Command::new("tmux").env("TMUX_TMPDIR", &dir).args(args).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        // Waits for the question.
+        let (mut all, start) = (Vec::new(), Instant::now());
+        while !all.windows(3).any(|w| w == b"\x1b[c") && start.elapsed() < Duration::from_secs(5) {
+            if let Ok(chunk) = heard.recv_timeout(Duration::from_millis(100)) {
+                all.extend(chunk);
+            }
+        }
+        assert!(all.windows(3).any(|w| w == b"\x1b[c"), "tmux didn't ask: {:?}", String::from_utf8_lossy(&all));
+        for byte in b"\x1b[?61;6;7;21;22;23;24;28;32;42c\x1b[>0;10;1c" {
+            writer.write_all(&[*byte]).unwrap();
+            writer.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        let screen = tmux(&["capture-pane", "-p"]);
+        // Afterwards Esc is quick again, whichever way things went.
+        std::thread::sleep(Duration::from_secs(u64::from(ANSWERS_SECONDS) + 1));
+        let escape_time = tmux(&["show-options", "-s", "escape-time"]);
+        let _ = child.kill();
+        let _ = child.wait();
+        tmux(&["kill-server"]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!screen.contains("61;6;7") && !screen.contains("0;10;1c"), "landed in the shell: {screen}");
+        assert_eq!(escape_time.trim(), format!("escape-time {}", escape_time_ms(true)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_never_finishes_is_given_up_on() {
+        let sh = |script: &str| {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", script]);
+            cmd
+        };
+        let limit = std::time::Duration::from_millis(200);
+        assert!(succeeds_within(sh("true"), limit * 10));
+        assert!(!succeeds_within(sh("false"), limit * 10));
+        let start = std::time::Instant::now();
+        assert!(!succeeds_within(sh("exec sleep 30"), limit));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn only_windows_waits_longer_for_answers() {
+        let welcome = Default::default();
+        assert!(durable_command_for("k", None, &welcome, true).contains(&format!("escape-time {ANSWERS_MS}")));
+        let elsewhere = durable_command_for("k", None, &welcome, false);
+        assert!(elsewhere.contains("escape-time 10 ") && !elsewhere.contains("run-shell"), "{elsewhere}");
+    }
 
     #[test]
     fn a_transfer_alone_ignores_any_sharing_in_your_config() {
