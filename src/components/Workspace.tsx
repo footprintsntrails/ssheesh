@@ -18,7 +18,7 @@ import { TabStrip, toolItems } from "./Tabs";
 import { VitalsBar } from "./StatsPane";
 import { EdgeReveal } from "./EdgeReveal";
 import { useCustomTitleBar, WindowControls } from "./WindowControls";
-import { EnvChip, IconButton } from "./ui";
+import { EnvChip, IconButton, keepKeyboard } from "./ui";
 import { RecipeAside } from "./Recipes";
 import { ServerToolButton } from "./Sidebar";
 import { SIDEBAR_GLYPHS } from "../lib/labels";
@@ -162,6 +162,7 @@ function Toolbar({ target }: { target: TargetRef | null }) {
   return (
     <header
       data-tauri-drag-region
+      onMouseDown={keepKeyboard}
       className={cn("@container flex h-[40px] shrink-0 items-center gap-2", controls ? "pr-0" : "pr-2", clearTrafficLights ? "pl-[80px]" : nudgeForRail ? "pl-[24px]" : "pl-2")}
     >
       {/* In compact mode the sidebar slides in at the window's edge: showing or hiding it does nothing there. */}

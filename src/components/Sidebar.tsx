@@ -13,7 +13,7 @@ import { HostIcon } from "./HostIcon";
 import { LookPopover } from "./LookPicker";
 import { ConfigNotice } from "./ConfigImport";
 import { LoadLine, RailCard, RailLoad } from "./ServerLoad";
-import { AppLogo, EnvChip, Face, healthOf, IconButton, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
+import { AppLogo, EnvChip, Face, healthOf, IconButton, keepKeyboard, ResizeHandle, Spinner, type Health, type Mood } from "./ui";
 import { SidebarTabs } from "./Tabs";
 import { TorButton } from "./TorButton";
 import { newTab } from "../lib/tabs";
@@ -609,6 +609,7 @@ export function Sidebar() {
   return (
     <aside
       aria-label="Servers"
+      onMouseDown={keepKeyboard}
       style={{ width }}
       className={cn("relative flex shrink-0 flex-col border-line", side === "left" ? "border-r" : "border-l")}
     >

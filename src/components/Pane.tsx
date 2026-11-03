@@ -19,7 +19,7 @@ import { StatsPane } from "./StatsPane";
 import { TerminalPane } from "./TerminalPane";
 import { dragPane, tabLabel } from "./Tabs";
 import { closeTab, showFiles, splitPane, toOwnTab } from "../lib/tabs";
-import { EnvChip, Face, IconButton, moodOf } from "./ui";
+import { EnvChip, Face, IconButton, keepKeyboard, moodOf } from "./ui";
 
 /** "Needs you" when a program is waiting, "Went quiet" when a long run stopped. */
 function AttentionPill({ id }: { id: string }) {
@@ -130,6 +130,7 @@ function PaneHeader({ pane, focused }: { pane: PaneState; focused: boolean }) {
   return (
     <div
       onPointerDown={startDrag}
+      onMouseDown={keepKeyboard}
       onDoubleClick={(e) => !tabs && !(e.target as HTMLElement).closest("button") && toggleZoom(pane.id)}
       data-hint={pane.kind === "terminal" ? "terminal" : undefined}
       title={tabs ? "Drag onto the page to show it beside another tab" : "Drag to move, onto the tab list to make it a tab again; double-click to fill the window"}

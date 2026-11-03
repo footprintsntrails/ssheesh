@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type MouseEvent, type ReactNode } from "react";
 import { cn } from "../lib/format";
 import { ENV_LABELS, type EnvLabel } from "../lib/labels";
 import { useSettings } from "../lib/settings";
@@ -26,6 +26,15 @@ export function Button({ variant = "secondary", size = "md", className, ...rest 
       )}
     />
   );
+}
+
+/**
+ * For the app's frame: pressing anything there but a text field leaves the
+ * keyboard where it was. Left on a button, every space or Enter typed next
+ * would press that button again, and on Tor's that switches Tor off.
+ */
+export function keepKeyboard(e: MouseEvent) {
+  if (!(e.target as HTMLElement).closest("input, textarea, select")) e.preventDefault();
 }
 
 export function IconButton({

@@ -496,7 +496,10 @@ fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Resul
     let status = child.wait().map_err(|e| e.to_string())?;
     // Dropping the pty master lets the reader see EOF (needed on Windows).
     *shared.writer.lock().unwrap() = None;
-    *shared.master.lock().unwrap() = None;
+    // Closed outside the lock: on Windows that can take a while, and the
+    // window's own thread takes this lock for a resize.
+    let master = shared.master.lock().unwrap().take();
+    drop(master);
     *shared.killer.lock().unwrap() = None;
     let (tail, ready) = rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
     Ok(Exit { code: status.exit_code(), tail, ready: ready || !is_ssh })
