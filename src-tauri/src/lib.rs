@@ -900,20 +900,6 @@ fn no_menu_on_alt(window: &tauri::Window) {
     }
 }
 
-/// Hands the keyboard to the page once the window has focus. The webview is
-/// told as the focus arrives; this tells it again after that's done, so
-/// typing doesn't depend on that first time working.
-#[cfg(windows)]
-fn keyboard_to_page(window: &tauri::Window) {
-    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC;
-
-    if let Some(webview) = window.get_webview_window(window.label()) {
-        let _ = webview.with_webview(|w| {
-            let _ = unsafe { w.controller().MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) };
-        });
-    }
-}
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -961,7 +947,6 @@ pub fn run() {
             #[cfg(windows)]
             if let tauri::WindowEvent::Focused(true) = event {
                 no_menu_on_alt(window);
-                keyboard_to_page(window);
             }
             #[cfg(not(windows))]
             let _ = (window, event);
