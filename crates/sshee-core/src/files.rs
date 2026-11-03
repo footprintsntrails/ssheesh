@@ -753,6 +753,156 @@ fn pack_script(parent: &str, name: &str) -> String {
     format!("cd -- {} || exit 1; {}; tar -cf - -- \"$@\"", shell_quote(parent), tar_items(&shell_quote(name)))
 }
 
+/// `pack_script` for a connection through Tor, where room is short and the
+/// server's time isn't: the tar stream goes compressed, by zstd or else gzip,
+/// unless a little of each of the first files says it won't shrink, as photos
+/// and video won't. A folder like that travels as it always has, as a compressor
+/// that can't help only stands in the way. The stream's first letter says how:
+/// z, g, or t for not at all. Compressing here rather than with ssh's own
+/// `Compression` keeps the folder out of what other channels on a shared
+/// connection send, which is what that option's weakness needs.
+///
+/// There's no `pipefail` in sh, so tar's exit status comes back around the
+/// compressor through fd 4: a file tar can't read still fails the download.
+fn pack_small_script(parent: &str, name: &str) -> String {
+    format!(
+        r#"cd -- {p} || exit 1; {items}
+z= k=t
+if command -v zstd >/dev/null 2>&1; then z='{ZSTD_PACK}' k=z; elif command -v gzip >/dev/null 2>&1; then z='{GZIP_PACK}' k=g; fi
+if [ -n "$z" ]; then
+sample() {{ find "$@" -type f 2>/dev/null | head -n {SAMPLE_FILES} | while IFS= read -r f; do head -c {SAMPLE_EACH} -- "$f" 2>/dev/null; done; }}
+a=$(sample "$@" | wc -c); b=$(sample "$@" | $z 2>/dev/null | wc -c)
+if ! [ "$b" -gt 0 ] 2>/dev/null || [ $((b * 10)) -ge $((a * 9)) ]; then z= k=t; fi
+fi
+printf %s "$k"
+[ -n "$z" ] || exec tar -cf - -- "$@"
+exec 3>&1
+s=$( {{ {{ tar -cf - -- "$@"; echo $? >&4; }} | $z >&3; }} 4>&1 )
+exit "${{s:-1}}""#,
+        p = shell_quote(parent),
+        items = tar_items(&shell_quote(name)),
+    )
+}
+
+const ZSTD_PACK: &str = "zstd -3 -T1 -q -c";
+const GZIP_PACK: &str = "gzip -1";
+/// How many files `pack_small_script` tries, and how much of each.
+const SAMPLE_FILES: usize = 64;
+const SAMPLE_EACH: usize = 16 * 1024;
+
+/// The tar stream out of what `pack_small_script` sends. The letter is read
+/// with the stream, so on the copy's thread, where Stop can free it.
+struct SmallStream<R> {
+    from: Option<R>,
+    tar: Option<Box<dyn Read + Send>>,
+}
+
+impl<R> SmallStream<R> {
+    fn new(from: R) -> Self {
+        Self { from: Some(from), tar: None }
+    }
+}
+
+impl<R: Read + Send + 'static> Read for SmallStream<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(mut from) = self.from.take() {
+            let mut kind = [0u8];
+            match from.read_exact(&mut kind) {
+                // Nothing came at all: how ssh ended says why.
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(0),
+                other => other?,
+            }
+            self.tar = Some(match kind[0] {
+                b'z' => Box::new(zstd::stream::read::Decoder::new(from)?),
+                b'g' => Box::new(flate2::read::GzDecoder::new(from)),
+                b't' => Box::new(from),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "The server sent something other than the folder.")),
+            });
+        }
+        self.tar.as_mut().map_or(Ok(0), |tar| tar.read(buf))
+    }
+}
+
+/// A compressor a server can undo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Squeeze {
+    Zstd,
+    Gzip,
+}
+
+/// Which compressor the server's answer to `SQUEEZE_SCRIPT` says it has.
+const SQUEEZE_SCRIPT: &str = "if command -v zstd >/dev/null 2>&1; then echo z; elif command -v gzip >/dev/null 2>&1; then echo g; fi";
+
+fn squeeze_from(answer: &[u8]) -> Option<Squeeze> {
+    match String::from_utf8_lossy(answer).trim() {
+        "z" => Some(Squeeze::Zstd),
+        "g" => Some(Squeeze::Gzip),
+        _ => None,
+    }
+}
+
+impl Squeeze {
+    /// `unpack` (a tar command reading its input) for a stream compressed this
+    /// way. Fails if either fails, as a stream cut short can look like a tar
+    /// stream that just ended.
+    fn unpack_script(self, unpack: &str) -> String {
+        let undo = match self {
+            Squeeze::Zstd => "zstd -dc -q",
+            Squeeze::Gzip => "gzip -dc",
+        };
+        format!(r#"{{ exec 3>&1; z=$( {{ {{ {undo}; echo $? >&4; }} | {unpack} >&3; }} 4>&1 ) || exit 1; [ "$z" = 0 ]; }}"#)
+    }
+
+    /// What `from` reads as, compressed this way.
+    fn stream(self, from: impl Read + Send + 'static) -> io::Result<Box<dyn Read + Send>> {
+        Ok(match self {
+            Squeeze::Zstd => Box::new(zstd::stream::read::Encoder::new(from, 3)?),
+            Squeeze::Gzip => Box::new(flate2::read::GzEncoder::new(from, flate2::Compression::fast())),
+        })
+    }
+}
+
+/// Whether a little of each of the first files under `path` shrinks: what
+/// `pack_small_script` asks of a folder on a server.
+fn shrinks(path: &Path) -> bool {
+    fn gather(dir: &Path, sample: &mut Vec<u8>, left: &mut usize) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if *left == 0 {
+                return;
+            }
+            let Ok(meta) = entry.path().symlink_metadata() else { continue };
+            if meta.is_dir() {
+                gather(&entry.path(), sample, left);
+            } else if meta.is_file() {
+                *left -= 1;
+                if let Ok(file) = File::open(entry.path()) {
+                    let _ = file.take(SAMPLE_EACH as u64).read_to_end(sample);
+                }
+            }
+        }
+    }
+    let (mut sample, mut left) = (Vec::new(), SAMPLE_FILES);
+    gather(path, &mut sample, &mut left);
+    zstd::stream::encode_all(&sample[..], 3).is_ok_and(|small| small.len() * 10 < sample.len() * 9)
+}
+
+/// Counts what passes on its way to being compressed: what a transfer's bar
+/// shows is the files, not how small they travel.
+struct Counted<R, F> {
+    from: R,
+    count: u64,
+    moved: F,
+}
+
+impl<R: Read, F: FnMut(u64)> Read for Counted<R, F> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.from.read(buf)?;
+        self.count += n as u64;
+        (self.moved)(self.count);
+        Ok(n)
+    }
+}
+
 /// What a local file or folder holds: bytes of file content, and the size of
 /// the tar stream that carries it (a 512-byte header per entry, content
 /// padded to 512, two empty blocks at the end, all padded to 10 KiB). The
@@ -998,7 +1148,10 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         untar.args(["-xf", "-", "-C"]).arg(&scratch).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
         crate::ssh::hide_console(&mut untar);
         let mut untar = untar.spawn().map_err(|e| OpError::failed(format!("Couldn't run tar on this computer: {e}")))?;
-        let mut cmd = transfer_command(t, env, &pack_script(&parent_dir(remote_path), &remote_name));
+        // Asked each time: Tor may have been turned on or off since the last try.
+        let small = crate::tor::carries(t);
+        let pack = if small { pack_small_script } else { pack_script };
+        let mut cmd = transfer_command(t, env, &pack(&parent_dir(remote_path), &remote_name));
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut ssh = match cmd.spawn() {
             Ok(ssh) => ssh,
@@ -1011,7 +1164,9 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         let (errors, unpack_errors) = (drain(ssh.stderr.take()), drain(untar.stderr.take()));
         let stream = ssh.stdout.take().expect("piped stdout");
         let unpack = untar.stdin.take().expect("piped stdin");
-        let copy = spawn_copy(stream, unpack, xfer.clone(), move |x, n| x.set_done(base + n));
+        // Counted as tar sees it, so the bar stays true however small it travels.
+        let moved = move |x: &Transfer, n| x.set_done(base + n);
+        let copy = if small { spawn_copy(SmallStream::new(stream), unpack, xfer.clone(), moved) } else { spawn_copy(stream, unpack, xfer.clone(), moved) };
         let copied = wait_copy(xfer, copy, &mut [&mut ssh, &mut untar])?;
         let (status, unpacked) = (ssh.wait()?, untar.wait()?);
         if !status.success() {
@@ -1141,16 +1296,23 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
         xfer.cleaned(|c| c.folders += 1);
     }
     let unpack = if clean { "tar -xmof -" } else { "tar -xf -" };
-    let script = if overwrite {
-        format!("cd -- {} && {unpack}", shell_quote(remote_dir))
-    } else {
-        format!("{guard}rm -rf -- {s} && mkdir -- {s} && cd -- {s} && {unpack}")
+    let script_for = |squeeze: Option<Squeeze>| {
+        let unpack = squeeze.map_or(unpack.to_string(), |how| how.unpack_script(unpack));
+        if overwrite {
+            format!("cd -- {} && {unpack}", shell_quote(remote_dir))
+        } else {
+            format!("{guard}rm -rf -- {s} && mkdir -- {s} && cd -- {s} && {unpack}")
+        }
     };
+    let worth_it = shrinks(local_path);
     let parent = local_path.parent().unwrap_or(Path::new("."));
     // The tar stream is a little bigger than the files in it; count in file bytes.
     let scaled = move |n: u64| if tar_size == 0 { 0 } else { (n as u128 * size as u128 / tar_size as u128).min(size as u128) as u64 };
     let result = resuming(&[t], env, xfer, || {
         xfer.settle(base);
+        // Asked each time: Tor may have been turned on or off since the last try.
+        let squeeze = if worth_it && crate::tor::carries(t) { run_remote(t, env, SQUEEZE_SCRIPT, None).ok().and_then(|answer| squeeze_from(&answer)) } else { None };
+        let script = script_for(squeeze);
         let mut pack = Command::new(crate::ssh::program("tar"));
         if clean && cfg!(target_os = "macos") {
             // The Mac's tar brings extended attributes along, as ._ files
@@ -1173,7 +1335,14 @@ pub fn upload(target: &Target, env: &SshEnv, local_path: &Path, remote_dir: &str
         let (errors, pack_errors) = (drain(ssh.stderr.take()), drain(pack.stderr.take()));
         let stream = pack.stdout.take().expect("piped stdout");
         let input = ssh.stdin.take().expect("piped stdin");
-        let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + scaled(n)));
+        let copy = match squeeze {
+            Some(how) => {
+                let bar = xfer.clone();
+                let counted = Counted { from: stream, count: 0, moved: move |n| bar.set_done(base + scaled(n)) };
+                spawn_copy(how.stream(counted)?, input, xfer.clone(), |_, _| {})
+            }
+            None => spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + scaled(n))),
+        };
         let copied = wait_copy(xfer, copy, &mut [&mut pack, &mut ssh])?;
         let (status, packed) = (ssh.wait()?, pack.wait()?);
         match copied {
@@ -1613,6 +1782,233 @@ mod tests {
         let kb: u64 = String::from_utf8_lossy(&du.stdout).split_whitespace().next().unwrap().parse().unwrap();
         assert!(kb > 0);
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Runs `pack_small_script` as a server would, with only `tools` on its PATH
+    /// besides what it needs anyway.
+    #[cfg(unix)]
+    fn pack_small_with(base: &Path, name: &str, tools: &[&str]) -> std::process::Output {
+        let bin = base.join(format!("bin-{}", tools.join("-")));
+        std::fs::create_dir_all(&bin).unwrap();
+        for tool in ["tar", "head", "wc", "sh", "find"].iter().chain(tools) {
+            let found = Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().unwrap();
+            let path = String::from_utf8_lossy(&found.stdout).trim().to_string();
+            let _ = std::os::unix::fs::symlink(path, bin.join(tool));
+        }
+        Command::new(bin.join("sh")).arg("-c").arg(pack_small_script(&base.to_string_lossy(), name)).env("PATH", &bin).output().unwrap()
+    }
+
+    fn listed_in_tar(stream: impl Read + Send + 'static) -> Vec<String> {
+        let mut tar = Command::new("tar").args(["-tf", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let input = tar.stdin.take().unwrap();
+        let copy = spawn_copy(stream, input, Transfer::quiet(), |_, _| {});
+        let listed = tar.wait_with_output().unwrap();
+        copy.join().unwrap().unwrap();
+        assert!(listed.status.success());
+        String::from_utf8_lossy(&listed.stdout).lines().map(str::to_string).collect()
+    }
+
+    /// Text that shrinks well, and noise that doesn't, in folders of their own.
+    #[cfg(unix)]
+    fn small_stream_folders(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("sshee-small-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("text")).unwrap();
+        std::fs::create_dir_all(base.join("noise")).unwrap();
+        let text: String = (0..200_000).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(base.join("text/notes.txt"), text).unwrap();
+        // A simple generator is enough: nothing a compressor can use.
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let noise: Vec<u8> = (0..3_000_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 32) as u8
+            })
+            .collect();
+        std::fs::write(base.join("noise/photo.jpg"), noise).unwrap();
+        base
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_small_stream_uses_what_the_server_has() {
+        let base = small_stream_folders("tools");
+        for (tools, letter) in [(&["zstd", "gzip"][..], b'z'), (&["gzip"][..], b'g'), (&[][..], b't')] {
+            if tools.iter().any(|tool| Command::new(tool).arg("--version").output().is_err()) {
+                continue;
+            }
+            let packed = pack_small_with(&base, "text", tools);
+            assert!(packed.status.success(), "{}", String::from_utf8_lossy(&packed.stderr));
+            assert_eq!(packed.stdout[0], letter, "with {tools:?}");
+            let size = packed.stdout.len();
+            assert!((letter == b't') == (size > 1_000_000), "{size} bytes with {tools:?}");
+            let listed = listed_in_tar(SmallStream::new(io::Cursor::new(packed.stdout)));
+            assert_eq!(listed, ["text/", "text/notes.txt"]);
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_small_stream_spares_gzip_what_wont_shrink() {
+        let base = small_stream_folders("noise");
+        let packed = pack_small_with(&base, "noise", &["gzip"]);
+        assert!(packed.status.success());
+        assert_eq!(packed.stdout[0], b't');
+        assert!(packed.stdout.len() > 3_000_000);
+        let listed = listed_in_tar(SmallStream::new(io::Cursor::new(packed.stdout)));
+        assert_eq!(listed, ["noise/", "noise/photo.jpg"]);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_small_stream_is_decided_by_many_files_not_the_first_big_one() {
+        let base = small_stream_folders("mixed");
+        let mixed = base.join("mixed");
+        std::fs::create_dir_all(&mixed).unwrap();
+        // A big file that won't shrink, wherever tar happens to come to it, among many that will.
+        std::fs::copy(base.join("noise/photo.jpg"), mixed.join("a.mp4")).unwrap();
+        for i in 0..20 {
+            let text: String = (0..2000).map(|l| format!("{i} line {l}\n")).collect();
+            std::fs::write(mixed.join(format!("note{i}.txt")), text).unwrap();
+        }
+        assert!(shrinks(&mixed));
+        let packed = pack_small_with(&base, "mixed", &["gzip"]);
+        assert!(packed.status.success());
+        assert_eq!(packed.stdout[0], b'g');
+        let listed = listed_in_tar(SmallStream::new(io::Cursor::new(packed.stdout)));
+        assert_eq!(listed.len(), 22);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn this_computer_judges_a_folder_as_a_server_does() {
+        let base = small_stream_folders("judge");
+        assert!(shrinks(&base.join("text")));
+        assert!(!shrinks(&base.join("noise")));
+        let empty = base.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(!shrinks(&empty), "nothing to gain from an empty folder");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_servers_answer_says_which_compressor_it_has() {
+        assert_eq!(squeeze_from(b"z\n"), Some(Squeeze::Zstd));
+        assert_eq!(squeeze_from(b"g\n"), Some(Squeeze::Gzip));
+        assert_eq!(squeeze_from(b""), None);
+        assert_eq!(squeeze_from(b"Welcome to the server!\n"), None);
+    }
+
+    /// Runs what `upload` would on the server, with `stream` as its input, in `dir`.
+    #[cfg(unix)]
+    fn unpack_with(how: Squeeze, dir: &Path, stream: &[u8]) -> bool {
+        let script = format!("cd -- {} && {}", shell_quote(&dir.to_string_lossy()), how.unpack_script("tar -xf -"));
+        let mut sh = Command::new("sh").arg("-c").arg(script).stdin(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let mut input = sh.stdin.take().unwrap();
+        let stream = stream.to_vec();
+        let writing = std::thread::spawn(move || {
+            let _ = input.write_all(&stream);
+        });
+        let status = sh.wait().unwrap();
+        writing.join().unwrap();
+        status.success()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_upload_squeezed_on_this_computer_unpacks_on_the_server() {
+        let base = small_stream_folders("upload");
+        let tar = Command::new("tar").arg("-C").arg(&base).args(["-cf", "-", "text"]).output().unwrap().stdout;
+        for how in [Squeeze::Zstd, Squeeze::Gzip] {
+            let tool = if how == Squeeze::Zstd { "zstd" } else { "gzip" };
+            if Command::new(tool).arg("--version").output().is_err() {
+                continue;
+            }
+            let count = Arc::new(AtomicU64::new(0));
+            let seen = count.clone();
+            let counted = Counted { from: io::Cursor::new(tar.clone()), count: 0, moved: move |n| seen.store(n, Ordering::Relaxed) };
+            let mut small = Vec::new();
+            how.stream(counted).unwrap().read_to_end(&mut small).unwrap();
+            assert!(small.len() < tar.len() / 2, "{how:?}: {} of {}", small.len(), tar.len());
+            assert_eq!(count.load(Ordering::Relaxed), tar.len() as u64, "the bar counts the files, not how small they travel");
+
+            let dir = base.join(format!("up-{tool}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            assert!(unpack_with(how, &dir, &small), "{how:?}");
+            assert_eq!(std::fs::read(dir.join("text/notes.txt")).unwrap(), std::fs::read(base.join("text/notes.txt")).unwrap());
+
+            // Cut off midway: not taken for a whole upload, even if tar is content with what it got.
+            let cut = base.join(format!("cut-{tool}"));
+            std::fs::create_dir_all(&cut).unwrap();
+            assert!(!unpack_with(how, &cut, &small[..small.len() / 2]), "{how:?}");
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_small_stream_still_fails_when_tar_does() {
+        let base = small_stream_folders("fails");
+        // What it packs is fine, and so gets compressed, but for one thing that isn't there.
+        let script = pack_small_script(&base.to_string_lossy(), "text").replace("-- \"$@\"", "-- \"$@\" missing");
+        let gone = Command::new("sh").arg("-c").arg(script).output().unwrap();
+        assert!(!gone.status.success(), "tar's failure must not vanish behind the compressor");
+        assert!(matches!(gone.stdout[0], b'z' | b'g'));
+        let nowhere = pack_small_script(&base.join("nowhere").to_string_lossy(), "text");
+        let nowhere = Command::new("sh").arg("-c").arg(nowhere).output().unwrap();
+        assert!(!nowhere.status.success());
+        assert!(nowhere.stdout.is_empty());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    fn read_small(stream: Vec<u8>) -> io::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        SmallStream::new(io::Cursor::new(stream)).read_to_end(&mut out)?;
+        Ok(out)
+    }
+
+    fn gzipped(data: &[u8]) -> Vec<u8> {
+        let mut gz = flate2::write::GzEncoder::new(vec![b'g'], flate2::Compression::fast());
+        gz.write_all(data).unwrap();
+        gz.finish().unwrap()
+    }
+
+    fn zstded(data: &[u8]) -> Vec<u8> {
+        let mut out = vec![b'z'];
+        out.extend(zstd::stream::encode_all(data, 3).unwrap());
+        out
+    }
+
+    #[test]
+    fn a_small_stream_comes_back_as_it_was() {
+        let data: Vec<u8> = (0..300_000u32).flat_map(|i| (i % 251).to_le_bytes()).collect();
+        assert_eq!(read_small(gzipped(&data)).unwrap(), data);
+        assert_eq!(read_small(zstded(&data)).unwrap(), data);
+        let mut plain = vec![b't'];
+        plain.extend(&data);
+        assert_eq!(read_small(plain).unwrap(), data);
+    }
+
+    #[test]
+    fn a_small_stream_cut_short_is_an_error() {
+        let data: Vec<u8> = (0..300_000u32).flat_map(|i| (i % 251).to_le_bytes()).collect();
+        for mut stream in [gzipped(&data), zstded(&data)] {
+            stream.truncate(stream.len() / 2);
+            assert!(read_small(stream).is_err());
+        }
+    }
+
+    #[test]
+    fn a_small_stream_with_nothing_or_nonsense_says_so() {
+        // ssh ended before the server sent a thing: how it ended tells why.
+        assert_eq!(read_small(Vec::new()).unwrap(), Vec::<u8>::new());
+        // A login script that prints something, say.
+        assert_eq!(read_small(b"Welcome!".to_vec()).unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
     #[cfg(unix)]
