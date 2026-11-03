@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.8 — photos and videos in Files, and a Mac app that needs no Homebrew
+
+- **Photos and videos open in Files.** Open one and it's in the preview, on a server or on this computer. Pictures show at once, and a video plays and jumps to any place without the whole file coming first, through Tor too. With a photo open, the arrow keys go through the rest of the folder. An SVG keeps its Source tab, to edit it. What this computer can't decode says so and offers the download. With Tor on, a video made to send a player to the internet, around Tor, isn't played.
+- **The Mac app starts on any Mac.** Since 0.10.0 the Apple Silicon app needed a library from Homebrew, which was there because the machine that builds it has it, and without it the app couldn't start. It's inside the app now, and a release no longer goes out if the Mac app needs anything a Mac doesn't have.
+- **No more "61;6;7;21;22;23;24;28;32;42c0;10;1c" at the prompt on Windows.** Windows' console answers tmux's question about the terminal a character at a time, and through Tor or on a bad connection that took longer than tmux waits for. For the first seconds after connecting, when these answers come, it now waits longer; after that Esc is quick again. Mouse clicks get more time through Tor too.
+
 ## 0.10.7 — the window doesn't freeze on Windows
 
 - **The window no longer freezes on Windows.** Since 0.10.4 it could start passing the keyboard back and forth inside itself, hundreds of times a second: the terminal blinked, keys went nowhere and some clicks did nothing, with Tor on or off. A change made for Alt+Tab caused it, and it's gone. If a terminal ever stops taking keys after Alt+Tab, tell us.
