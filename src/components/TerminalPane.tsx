@@ -12,6 +12,7 @@ import { wasDown } from "../lib/poll";
 import { thumb, topForOffset, type ScrollView } from "../lib/scroll";
 import { resolveScheme } from "../lib/themes";
 import type { Fingerprint, HostKeyCheck, SessionState } from "../lib/types";
+import { dialogOpen } from "./Overlays";
 import { Button, Face, IconButton } from "./ui";
 
 function useCountdown(state: SessionState | undefined): number {
@@ -373,6 +374,15 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused, pane.id]);
 
+  // The button you pressed (Reconnect, Try again, Trust…) goes away with the
+  // state it was for, and the keyboard would go with it: the terminal would
+  // be back and typing into it would do nothing until a click.
+  const kind = state?.kind;
+  useEffect(() => {
+    if (focused && document.activeElement === document.body && !dialogOpen()) getTerminal(pane).focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+
   const reconnectMode = useSettings((s) => s.reconnectMode);
   const idleSleep = useSettings((s) => s.idleSleep);
   const updateSettings = useSettings((s) => s.update);
@@ -450,6 +460,19 @@ export function TerminalPane({ pane, focused }: { pane: PaneState; focused: bool
             <Button size="sm" onClick={() => getTerminal(pane).reconnectNow()}>
               <RotateCw size={12.5} /> Now
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Your press has an answer on screen. Only past a moment: a quick return shouldn't flash. */}
+      {state?.kind === "connecting" && state.attempt > 1 && (
+        <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center px-3">
+          <div className="glass flex max-w-full animate-pop-in items-center gap-3 rounded-[14px] px-3 py-2 [animation-delay:400ms] [animation-fill-mode:backwards]">
+            <span className="relative flex size-2 shrink-0">
+              <span className="absolute inset-0 animate-ping rounded-full bg-warn opacity-60" />
+              <span className="relative size-2 rounded-full bg-warn" />
+            </span>
+            <div className="truncate text-[12.5px] font-medium text-fg">Reconnecting…</div>
           </div>
         </div>
       )}

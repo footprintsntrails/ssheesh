@@ -313,8 +313,8 @@ export class TerminalHandle {
     this.term.onData((d) => {
       this.gate.typed();
       // A terminal that let go of its unused connection comes back on a key.
-      // That key, and any typed before it's connected again, go nowhere: ssh
-      // signing in again would echo them (a password typed ahead, say).
+      // That key, and any typed before ssh has anything to say, go nowhere:
+      // ssh signing in again would echo them (a password typed ahead, say).
       if (this.last?.kind === "asleep") {
         if (!NOT_TYPING.test(d)) this.reconnectNow();
         return;
@@ -1244,6 +1244,8 @@ export class TerminalHandle {
   private onEvent(e: SessionEvent) {
     if (this.disposed) return;
     if (e.type === "output") {
+      // Coming back, ssh speaks only to ask (a password, a passphrase): the keys are for that now.
+      this.waking = false;
       this.output.push(e.data);
       this.noteOutput();
       return;
