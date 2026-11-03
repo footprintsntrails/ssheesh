@@ -1127,6 +1127,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                   setListEl(el);
                 }}
                 tabIndex={0}
+                data-takes-keys
                 onKeyDown={onListKey}
                 onClick={(e) => e.target === e.currentTarget && setSelected([])}
                 onContextMenu={(e) => {

@@ -13,7 +13,7 @@ import { closeTab, showFiles, showTab, splitPane, toggleSplit } from "../lib/tab
 import { useTour } from "../lib/tour";
 import { useUpdates } from "../lib/updates";
 import { targetKey, type TargetRef } from "../lib/types";
-import { Button, Kbd, useKeysInside } from "./ui";
+import { Button, dialogOpen, Kbd, useKeysInside } from "./ui";
 import { TransferCards } from "./Transfers";
 import { openServerTool } from "./ServerTools";
 import { newSnippet, openSnippets, runSnippet } from "./Snippets";
@@ -375,30 +375,12 @@ export function useEscapeLayer(open: boolean, onClose: () => void) {
 }
 
 /** Focusable controls inside `box`, in order, that are on screen. */
-function focusables(box: HTMLElement): HTMLElement[] {
-  return [...box.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
-}
-
-/** A dialog is open: the app's shortcuts and the terminal behind it wait. */
-export function dialogOpen(): boolean {
-  return !!document.querySelector('[role="dialog"][aria-modal]');
-}
+export { dialogOpen };
 
 export function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
   useEscapeLayer(open, onClose);
   const box = useRef<HTMLDivElement>(null);
-  // Focus starts inside and Tab stays there.
-  useKeysInside(open, box);
-  const trap = (e: React.KeyboardEvent) => {
-    if (e.key !== "Tab" || !box.current) return;
-    const items = focusables(box.current);
-    if (!items.length) return e.preventDefault();
-    const [first, last] = [items[0], items[items.length - 1]];
-    if (e.shiftKey ? document.activeElement === first || document.activeElement === box.current : document.activeElement === last) {
-      e.preventDefault();
-      (e.shiftKey ? last : first).focus();
-    }
-  };
+  const trap = useKeysInside(open, box);
   if (!open) return null;
   // On top of everything already open, Settings included: the last one opened sits highest.
   return createPortal(

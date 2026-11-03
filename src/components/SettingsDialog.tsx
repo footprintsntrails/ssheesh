@@ -1330,7 +1330,7 @@ export function SettingsDialog() {
   };
 
   const box = useRef<HTMLDivElement>(null);
-  useKeysInside(open, box);
+  const trap = useKeysInside(open, box);
   if (!open) return null;
   const props: SectionProps = { s, set: s.update, reset: s.reset };
 
@@ -1342,6 +1342,7 @@ export function SettingsDialog() {
         aria-modal
         aria-label="Settings"
         tabIndex={-1}
+        onKeyDown={trap}
         onMouseDown={(e) => e.stopPropagation()}
         className="glass relative flex h-[min(620px,calc(100vh-48px))] w-[min(820px,100%)] animate-pop-in overflow-hidden outline-none rounded-[18px]"
       >

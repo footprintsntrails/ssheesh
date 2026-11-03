@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { cn } from "../lib/format";
 import { ENV_LABELS, type EnvLabel } from "../lib/labels";
 import { useSettings } from "../lib/settings";
+import { activePane, useStore } from "../lib/store";
+import { findTerminal } from "../lib/terminals";
 import type { SessionState } from "../lib/types";
 
 type ButtonProps = ComponentProps<"button"> & {
@@ -37,9 +39,27 @@ export function keepKeyboard(e: MouseEvent) {
   if (!(e.target as HTMLElement).closest("input, textarea, select")) e.preventDefault();
 }
 
+/** A dialog is open: the app's shortcuts and the terminal behind it wait. */
+export function dialogOpen(): boolean {
+  return !!document.querySelector('[role="dialog"][aria-modal]');
+}
+
+/** The keys go to the pane you're on: its terminal, or the list in Files. */
+export function keysToActivePane() {
+  const pane = activePane(useStore.getState());
+  if (!pane || dialogOpen()) return;
+  if (pane.kind === "terminal") findTerminal(pane.id)?.focus();
+  else document.querySelector<HTMLElement>(`[data-pane-id="${CSS.escape(pane.id)}"] [data-takes-keys]`)?.focus({ preventScroll: true });
+}
+
+function focusables(box: HTMLElement): HTMLElement[] {
+  return [...box.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+}
+
 /**
  * For a dialog: while open it has the keys, not a terminal behind it, where
- * typing would run on a server. Closed, they go back to what had them.
+ * typing would run on a server, and Tab stays inside. Closed, they go back.
+ * Returns what its box does with a key.
  */
 export function useKeysInside(open: boolean, box: RefObject<HTMLElement | null>) {
   // Asked while drawing: by the effect, a field in the dialog may have taken them.
@@ -53,12 +73,26 @@ export function useKeysInside(open: boolean, box: RefObject<HTMLElement | null>)
     // A frame later: the command bar's dialog lets go of them only after it has closed.
     return () => {
       requestAnimationFrame(() => {
+        if (document.activeElement !== document.body) return;
         const back = opener.current;
-        if (document.activeElement === document.body && back instanceof HTMLElement) back.focus({ preventScroll: true });
+        // Never to a terminal from memory: you may have moved on, and a password
+        // meant for this server would land in another's history.
+        if (back instanceof HTMLElement && back.isConnected && !back.closest(".xterm")) back.focus({ preventScroll: true });
+        else keysToActivePane();
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  return (e: KeyboardEvent) => {
+    if (e.key !== "Tab" || !box.current) return;
+    const items = focusables(box.current);
+    if (!items.length) return e.preventDefault();
+    const [first, last] = [items[0], items[items.length - 1]];
+    if (e.shiftKey ? document.activeElement === first || document.activeElement === box.current : document.activeElement === last) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
+  };
 }
 
 export function IconButton({

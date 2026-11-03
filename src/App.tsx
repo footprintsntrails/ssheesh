@@ -9,6 +9,7 @@ import { findTerminal } from "./lib/terminals";
 import { shellOf, typedQuote } from "./lib/format";
 import { EdgeReveal } from "./components/EdgeReveal";
 import { CommandPalette, ConfirmDialog, dialogOpen, Toasts } from "./components/Overlays";
+import { keysToActivePane } from "./components/ui";
 import { Sidebar } from "./components/Sidebar";
 import { EnvStripe, Workspace } from "./components/Workspace";
 import { backend } from "./lib/backend";
@@ -101,9 +102,7 @@ function useKeyboardStays() {
     };
     // What held the keyboard can go away with the window, as compact mode's panels do.
     const onBack = () => {
-      if (document.activeElement !== document.body || dialogOpen()) return;
-      const pane = activePane(useStore.getState());
-      if (pane) findTerminal(pane.id)?.focus();
+      if (document.activeElement === document.body) keysToActivePane();
     };
     if (isWindows) {
       window.addEventListener("keydown", onAlt, true);
