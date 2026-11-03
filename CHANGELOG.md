@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.7 — the window doesn't freeze on Windows
+
+- **The window no longer freezes on Windows.** Since 0.10.4 it could start passing the keyboard back and forth inside itself, hundreds of times a second: the terminal blinked, keys went nowhere and some clicks did nothing, with Tor on or off. A change made for Alt+Tab caused it, and it's gone. If a terminal ever stops taking keys after Alt+Tab, tell us.
+- **Real Windows checks this from now on.** Changes to the window and the terminal now run the app on a real Windows computer, with a real mouse and keyboard, before they can ship.
+
 ## 0.10.6 — typing can't switch Tor off
 
 - **Typing can't press the Tor button.** After a click on the onion the keyboard stayed on it, so the terminal took no keys, and every space or Enter you typed switched Tor off or on, moving your terminals each time. While it was off they connected from your own address. A click in the sidebar, the top bar or a pane's header now leaves the keyboard where it was.
