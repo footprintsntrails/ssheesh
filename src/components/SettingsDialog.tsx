@@ -27,7 +27,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { backend } from "../lib/backend";
 import { ago, cn } from "../lib/format";
 import { isMac, isWindows, SHORTCUT_GROUPS, SHORTCUT_NAMES, shortcutLabel } from "../lib/keys";
@@ -62,7 +62,7 @@ import { ShortcutsEditor } from "./ShortcutsEditor";
 import { ThemeEditor, ThemeImport } from "./ThemeEditor";
 import { ColorButton, OwnAccent } from "./ColorPicker";
 import { useEscapeLayer } from "./Overlays";
-import { Button, Logo, PIXEL_LOGO, PIXEL_LOGO_COLORS, Spinner } from "./ui";
+import { Button, Logo, PIXEL_LOGO, PIXEL_LOGO_COLORS, Spinner, useKeysInside } from "./ui";
 import { newTorRoutes, showTorLog, startTorAfresh, switchTor } from "../lib/tor";
 import { TOR_GLYPH } from "../lib/labels";
 
@@ -1329,17 +1329,21 @@ export function SettingsDialog() {
     );
   };
 
+  const box = useRef<HTMLDivElement>(null);
+  useKeysInside(open, box);
   if (!open) return null;
   const props: SectionProps = { s, set: s.update, reset: s.reset };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6 animate-fade-in" onMouseDown={close}>
       <div
+        ref={box}
         role="dialog"
         aria-modal
         aria-label="Settings"
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
-        className="glass relative flex h-[min(620px,calc(100vh-48px))] w-[min(820px,100%)] animate-pop-in overflow-hidden rounded-[18px]"
+        className="glass relative flex h-[min(620px,calc(100vh-48px))] w-[min(820px,100%)] animate-pop-in overflow-hidden outline-none rounded-[18px]"
       >
         <nav className="flex w-[190px] shrink-0 flex-col gap-0.5 border-r border-line p-2.5">
           <div className="px-2 pt-1.5 pb-2 text-[12px] font-semibold text-fg-3">Settings</div>

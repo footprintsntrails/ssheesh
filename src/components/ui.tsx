@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { cn } from "../lib/format";
 import { ENV_LABELS, type EnvLabel } from "../lib/labels";
 import { useSettings } from "../lib/settings";
@@ -35,6 +35,30 @@ export function Button({ variant = "secondary", size = "md", className, ...rest 
  */
 export function keepKeyboard(e: MouseEvent) {
   if (!(e.target as HTMLElement).closest("input, textarea, select")) e.preventDefault();
+}
+
+/**
+ * For a dialog: while open it has the keys, not a terminal behind it, where
+ * typing would run on a server. Closed, they go back to what had them.
+ */
+export function useKeysInside(open: boolean, box: RefObject<HTMLElement | null>) {
+  // Asked while drawing: by the effect, a field in the dialog may have taken them.
+  const opener = useRef<Element | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current) opener.current = document.activeElement;
+  wasOpen.current = open;
+  useEffect(() => {
+    if (!open) return;
+    if (box.current && !box.current.contains(document.activeElement)) box.current.focus({ preventScroll: true });
+    // A frame later: the command bar's dialog lets go of them only after it has closed.
+    return () => {
+      requestAnimationFrame(() => {
+        const back = opener.current;
+        if (document.activeElement === document.body && back instanceof HTMLElement) back.focus({ preventScroll: true });
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 }
 
 export function IconButton({

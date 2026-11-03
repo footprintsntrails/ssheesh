@@ -1,5 +1,5 @@
 import { Activity, BellRing, Box, Check, Columns2, Ellipsis, FolderOpen, Maximize2, Minimize2, PictureInPicture2, RotateCw, Rows2, SquareTerminal, X } from "lucide-react";
-import { memo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ContextMenu, type Menu } from "./ContextMenu";
 import type { DropZone } from "../lib/layout";
 import { cn } from "../lib/format";
@@ -262,6 +262,12 @@ export const PaneView = memo(function PaneView({ id }: { id: string }) {
   const drop = useStore((s) => (s.dropTarget?.paneId === id ? s.dropTarget.zone : null));
   const terminalBg = useSettings((s) => resolveScheme(s.terminalScheme, s.theme, s.accent).background);
   const dragging = useStore((s) => s.dragPane === id);
+  // You're on a pane with no keyboard to hand over: a terminal beside it mustn't keep typing in the background.
+  const kind = pane?.kind;
+  useEffect(() => {
+    const at = document.activeElement;
+    if (focused && kind !== "terminal" && at instanceof HTMLElement && at.closest(".xterm")) at.blur();
+  }, [focused, kind]);
   if (!pane) return null;
 
   return (

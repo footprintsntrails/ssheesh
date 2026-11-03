@@ -889,6 +889,13 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     return () => listEl.removeEventListener("scroll", gone);
   }, [peek, listEl]);
 
+  // You're on this pane now: the keys come along, also from a terminal beside it.
+  useEffect(() => {
+    const at = document.activeElement;
+    if (focused && !preview && (at === document.body || at?.closest(".xterm"))) listRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused]);
+
   const typeahead = useRef({ text: "", at: 0 });
   const onListKey = (e: ReactKeyboardEvent) => {
     if (renaming || creating) return;

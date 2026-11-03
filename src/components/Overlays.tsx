@@ -13,7 +13,7 @@ import { closeTab, showFiles, showTab, splitPane, toggleSplit } from "../lib/tab
 import { useTour } from "../lib/tour";
 import { useUpdates } from "../lib/updates";
 import { targetKey, type TargetRef } from "../lib/types";
-import { Button, Kbd } from "./ui";
+import { Button, Kbd, useKeysInside } from "./ui";
 import { TransferCards } from "./Transfers";
 import { openServerTool } from "./ServerTools";
 import { newSnippet, openSnippets, runSnippet } from "./Snippets";
@@ -57,6 +57,8 @@ function Item({ onSelect, icon: Icon, label, hint, value }: { onSelect: () => vo
 export function CommandPalette() {
   const open = useStore((s) => s.paletteOpen);
   const setOpen = useStore((s) => s.setPaletteOpen);
+  // Its own dialog takes the keys when it opens; closing, it would drop them.
+  useKeysInside(open, useRef(null));
   const hosts = useVisibleHosts();
   // On the main menu nothing is on screen to split, close or run commands in.
   const focused = useStore(activePane) ?? undefined;
@@ -385,10 +387,8 @@ export function dialogOpen(): boolean {
 export function Modal({ open, onClose, children, width = 420 }: { open: boolean; onClose: () => void; children: React.ReactNode; width?: number }) {
   useEscapeLayer(open, onClose);
   const box = useRef<HTMLDivElement>(null);
-  // Keys go to the dialog, not to a terminal behind it: focus starts inside and Tab stays there.
-  useEffect(() => {
-    if (open && box.current && !box.current.contains(document.activeElement)) box.current.focus({ preventScroll: true });
-  }, [open]);
+  // Focus starts inside and Tab stays there.
+  useKeysInside(open, box);
   const trap = (e: React.KeyboardEvent) => {
     if (e.key !== "Tab" || !box.current) return;
     const items = focusables(box.current);
