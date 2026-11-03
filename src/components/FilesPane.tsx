@@ -111,6 +111,9 @@ function sortEntries(list: FileEntry[], key: SortKey, asc: boolean): FileEntry[]
   });
 }
 
+/** The start of a path: the top of the disk, the home folder, or a drive. */
+const isRootCrumb = (label: string) => label === "/" || label === "~" || label.endsWith(":");
+
 /**
  * Always-visible path. Each folder in it is a button that goes there; a
  * click on the current folder or the free space after it turns the bar
@@ -153,10 +156,10 @@ function AddressBar({ path, onGo, onPoint }: { path: string; onGo: (p: string) =
         >
           {crumbs.map((c, i) => {
             const last = i === crumbs.length - 1;
-            const root = i === 0 && (c.label === "/" || c.label === "~" || c.label.endsWith(":"));
+            const root = i === 0 && isRootCrumb(c.label);
             return (
               <span key={c.path} className="flex shrink-0 items-center">
-                {i > 0 && !(i === 1 && crumbs[0].label === "/") && <span className="px-px text-fg-3/60">/</span>}
+                {i > 0 && !(i === 1 && isRootCrumb(crumbs[0].label)) && <span className="px-px text-fg-3/60">/</span>}
                 <button
                   type="button"
                   onPointerEnter={last ? undefined : () => onPoint(c.path)}
@@ -170,11 +173,17 @@ function AddressBar({ path, onGo, onPoint }: { path: string; onGo: (p: string) =
                   className={cn(
                     "flex h-[22px] items-center rounded-[5px] px-1 hover:bg-ink/[0.08]",
                     last ? "font-medium text-fg" : "text-fg-2 hover:text-fg",
+                    root && !last && "pr-0",
                   )}
                 >
                   {root && c.label === "/" ? <HardDrive size={13} className="text-fg-3" aria-label="Top of the disk" /> : root && c.label === "~" ? <House size={13} className="text-fg-3" aria-label="Home folder" /> : names.text(c.label)}
+                  {/* The first slash looks like the way to the top, so it is one. */}
+                  {root && !last && (
+                    <span aria-hidden className="ml-1 px-px text-fg-3/60">
+                      /
+                    </span>
+                  )}
                 </button>
-                {i === 0 && c.label === "/" && crumbs.length > 1 && <span className="px-px text-fg-3/60">/</span>}
               </span>
             );
           })}
