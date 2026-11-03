@@ -1,0 +1,76 @@
+# Runs the real app on real Windows: the keyboard, and a window whose focus stays
+# put. A loop in the window's focus (0.10.4 to 0.10.6) took every key and some
+# clicks, and showed in no test that ran elsewhere. Asked by hand, it can check a
+# published version instead of building this commit.
+name: Window check
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "A published version to check instead, such as v0.10.7"
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/**"
+      - "src/App.tsx"
+      - "src/components/TerminalPane.tsx"
+      - "src/lib/terminals.ts"
+      - "Cargo.lock"
+      - ".github/window-check/**"
+      - ".github/workflows/window-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Keys and focus on Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !inputs.version }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ !inputs.version }}
+      - name: Build the app
+        if: ${{ !inputs.version }}
+        shell: pwsh
+        run: |
+          npm ci
+          npx tauri build --no-bundle
+          New-Item -ItemType Directory -Force C:\app | Out-Null
+          Copy-Item target\release\ssheesh.exe C:\app\SSHeesh.exe
+      - name: Get the published version
+        if: ${{ inputs.version }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$env:VERSION" --repo "$env:GITHUB_REPOSITORY" --pattern SSHeesh.exe --dir C:\app
+      - name: Build the window tool
+        shell: pwsh
+        run: |
+          & C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Core.dll /out:C:\app\win.exe .github\window-check\win.cs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Open the web view's debug port
+        shell: pwsh
+        run: |
+          $flags = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222"
+          $key = "HKLM:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name "SSHeesh.exe" -Value $flags -Force | Out-Null
+      - name: Run it and watch its window
+        shell: pwsh
+        run: node .github\window-check\check.mjs C:\app\SSHeesh.exe C:\app\win.exe C:\out
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: window-check
+          path: C:\out
