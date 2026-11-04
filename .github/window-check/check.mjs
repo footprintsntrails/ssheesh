@@ -182,11 +182,13 @@ win("layout", "00000419");
 await sleep(1000);
 await inPage(`(() => {
   window.__keys = [];
+  window.__pastes = [];
   addEventListener("keydown", (e) => {
     if (e.key.length !== 1) return;
     const r = { key: e.key, code: e.code, keyCode: e.keyCode };
     setTimeout(() => { r.took = e.defaultPrevented; window.__keys.push(r); });
   }, true);
+  addEventListener("paste", (e) => window.__pastes.push(e.clipboardData.getData("text/plain").length), true);
 })()`);
 for (const keys of [["ctrl", "43"], ["ctrl", "4C"], ["ctrl", "shift", "4C"]]) {
   win("press", ...keys);
@@ -201,7 +203,23 @@ else {
   for (const p of pressed) if (!p.took) problems.push(`on a Russian layout nothing took ${p.code}: ${JSON.stringify(p)}`);
   win("click", ox + 550, oy + 400);
   await sleep(500);
-  if (!(await pastedByWindows())) problems.push("on a Russian layout, a Ctrl+V pressed the way clipboard history does pasted nothing");
+  // The app's part is the paste reaching the terminal instead of ^V. Whether
+  // PowerShell then acts on Latin text under a Russian layout is PowerShell's.
+  const ctrlV = async (name, ...how) => {
+    await inPage("window.__keys.length = 0; window.__pastes.length = 0");
+    spawnSync("powershell", ["-NoProfile", "-Command", "Set-Clipboard -Value 'pasted-on-russian'"]);
+    win("press", "ctrl", ...how, "56");
+    await sleep(1000);
+    win("shot", join(out, `russian-${name}.png`));
+    const seen = await inPage("({ keys: window.__keys, pastes: window.__pastes })");
+    console.log(`on a Russian layout, Ctrl+V ${name}: ${JSON.stringify(seen)}`);
+    if (seen?.pastes?.length !== 1 || seen.pastes[0] !== "pasted-on-russian".length) problems.push(`on a Russian layout, Ctrl+V ${name} didn't paste: ${JSON.stringify(seen)}`);
+    if (seen?.keys?.some((k) => k.took)) problems.push(`on a Russian layout, Ctrl+V ${name} went to the terminal as a key: ${JSON.stringify(seen)}`);
+    win("press", "1B");
+    await sleep(300);
+  };
+  await ctrlV("by hand");
+  await ctrlV("from Windows", "noplace");
 }
 page.close();
 
