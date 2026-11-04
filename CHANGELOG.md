@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.9 — Win+V, and shortcuts on every keyboard layout
+
+- **Win+V pastes into terminals.** Windows' clipboard history pastes by pressing Ctrl+V for you, with a key that has no place on the keyboard. The terminal took that for a plain Ctrl+V and sent it to the server, where programs answered in their own way: OMP with "Clipboard here belongs to the SSH host". It counts as a paste now, on any layout.
+- **Shortcuts follow the letters on your keyboard.** On German, French and other layouts with Latin letters, a shortcut's letter was wherever a US keyboard has it: on a French keyboard, the key marked Z closed a tab. Now it's the key marked with that letter. Layouts without Latin letters, such as Russian, still go by the key's place. A shortcut you set yourself on such a keyboard may need setting again.
+- **Saving and pasting in Files on a Russian layout.** Ctrl+S (⌘S on a Mac) did nothing there, and Ctrl+V only worked through a fallback, if it worked. Both work now.
+- **Ctrl keys in terminals on Linux on a Russian layout.** Ctrl+C, Ctrl+L, Alt+B and the like sent nothing, and Ctrl+Shift+V didn't paste. They work now.
+
 ## 0.10.8 — photos and videos in Files, and a Mac app that needs no Homebrew
 
 - **Photos and videos open in Files.** Open one and it's in the preview, on a server or on this computer. Pictures show at once, and a video plays and jumps to any place without the whole file coming first, through Tor too. With a photo open, the arrow keys go through the rest of the folder. An SVG keeps its Source tab, to edit it. What this computer can't decode says so and offers the download. With Tor on, a video made to send a player to the internet, around Tor, isn't played.

@@ -5907,7 +5907,7 @@ dependencies = [
 
 [[package]]
 name = "sshee-core"
-version = "0.10.8"
+version = "0.10.9"
 dependencies = [
  "arti-client",
  "dirs 6.0.0",
@@ -5931,7 +5931,7 @@ dependencies = [
 
 [[package]]
 name = "ssheesh"
-version = "0.10.8"
+version = "0.10.9"
 dependencies = [
  "arboard",
  "dirs 6.0.0",
