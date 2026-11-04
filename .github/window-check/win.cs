@@ -38,6 +38,8 @@ static class Win {
   [DllImport("user32")] static extern bool TranslateMessage(ref MSG m);
   [DllImport("user32")] static extern IntPtr DispatchMessage(ref MSG m);
   [DllImport("user32")] static extern bool SetProcessDPIAware();
+  [DllImport("user32", CharSet = CharSet.Unicode)] static extern IntPtr LoadKeyboardLayout(string id, uint f);
+  [DllImport("user32")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
 
   static string Cls(IntPtr h) { var s = new StringBuilder(128); GetClassName(h, s, 128); return s.ToString(); }
   static string Title(IntPtr h) { var s = new StringBuilder(128); GetWindowText(h, s, 128); return s.ToString(); }
@@ -140,6 +142,25 @@ static class Win {
         return 0;
       }
       case "newterm": { Key(0x11, false); Key(0x10, false); Tap(0x54); Key(0x10, true); Key(0x11, true); return 0; }
+      case "press": {
+        bool ctrl = a.Contains("ctrl"), shift = a.Contains("shift"), noPlace = a.Contains("noplace");
+        Action<byte, bool> press = (vk, up) => { if (noPlace) keybd_event(vk, 0, up ? 2u : 0u, UIntPtr.Zero); else Key(vk, up); };
+        byte key = Convert.ToByte(a[a.Length - 1], 16);
+        if (ctrl) press(0x11, false);
+        if (shift) press(0x10, false);
+        press(key, false); Thread.Sleep(15); press(key, true); Thread.Sleep(15);
+        if (shift) press(0x10, true);
+        if (ctrl) press(0x11, true);
+        return 0;
+      }
+      case "layout": {
+        // As the language bar asks for it: of the window that has the keys.
+        IntPtr layout = LoadKeyboardLayout(a[1], 1);
+        var info = new GUITHREADINFO(); info.cb = Marshal.SizeOf(typeof(GUITHREADINFO));
+        if (GetGUIThreadInfo(0, ref info) && info.focus != IntPtr.Zero) PostMessage(info.focus, 0x50, IntPtr.Zero, layout);
+        PostMessage(GetForegroundWindow(), 0x50, IntPtr.Zero, layout);
+        return 0;
+      }
       case "shot": {
         var b = System.Windows.Forms.Screen.PrimaryScreen.Bounds;
         using (var bmp = new Bitmap(b.Width, b.Height))

@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   defaultKeys,
   isAltAlone,
   isMac,
+  isMacClear,
   isModLetter,
+  isTerminalPaste,
+  keyOf,
   keysFromEvent,
   keysLabel,
   matchShortcut,
+  missingKeyCode,
   pauseShortcuts,
   reservedReason,
   setShortcutSource,
@@ -14,16 +18,18 @@ import {
   SHORTCUT_IDS,
   shortcutKeys,
   shortcutProblem,
+  terminalCopyKey,
   type Keys,
   type ShortcutOverrides,
 } from "./keys";
 
 /** A keydown as the browser would send it. */
-function press(code: string, mods: { ctrl?: boolean; meta?: boolean; alt?: boolean; shift?: boolean; key?: string } = {}): KeyboardEvent {
+function press(code: string, mods: { ctrl?: boolean; meta?: boolean; alt?: boolean; shift?: boolean; key?: string; keyCode?: number } = {}): KeyboardEvent {
   const key = mods.key ?? (code.startsWith("Key") ? code.slice(3).toLowerCase() : code);
   return {
     code,
     key,
+    keyCode: mods.keyCode ?? 65,
     ctrlKey: !!mods.ctrl,
     metaKey: !!mods.meta,
     altKey: !!mods.alt,
@@ -232,6 +238,109 @@ describe("isAltAlone", () => {
     expect(isAltAlone(key("Alt", { altKey: true, shiftKey: true }))).toBe(false);
     expect(isAltAlone(key("AltGraph", { ctrlKey: true, altKey: true }))).toBe(false);
     expect(isAltAlone(key("Alt", { ctrlKey: true, altKey: true }))).toBe(false);
+  });
+});
+
+describe("keys on other layouts", () => {
+  const both = { ctrl: true, shift: true };
+
+  it("find the letter marked on the key where the layout has Latin letters", () => {
+    // A German keyboard swaps Z and Y; a French one swaps Z and W, and A and Q.
+    expect(matchShortcut(press("KeyY", { ...both, key: "Z" }))).toBe("reopenTab");
+    expect(matchShortcut(press("KeyZ", { ...both, key: "Y" }))).toBeNull();
+    expect(matchShortcut(press("KeyW", { ...both, key: "Z" }))).toBe("reopenTab");
+    expect(matchShortcut(press("KeyZ", { ...both, key: "W" }))).toBe("closePane");
+    // Dvorak moves the letters onto other keys altogether.
+    expect(matchShortcut(press("KeyP", { ...both, key: "L" }))).toBe("palette");
+    expect(matchShortcut(press("Comma", { ...both, key: "W" }))).toBe("closePane");
+  });
+
+  it("go by the key's place on a layout without them", () => {
+    for (const [code, key, letter] of [
+      ["KeyL", "Д", "l"],
+      ["KeyL", "д", "l"],
+      ["KeyW", "Ц", "w"],
+      ["KeyL", "Λ", "l"],
+      ["KeyI", "ı", "i"],
+    ]) expect(keyOf(press(code, { key }))).toBe(letter);
+    expect(keyOf(press("Comma", { ctrl: true, key: "б" }))).toBe(",");
+    expect(matchShortcut(press("Comma", { ctrl: true, key: "б" }))).toBe("settings");
+  });
+
+  it("keep digits and other keys by their place", () => {
+    expect(keyOf(press("Digit1", { key: "&" }))).toBe("1");
+    expect(keyOf(press("Comma", { shift: true, key: "<" }))).toBe(",");
+    expect(keyOf(press("Enter", { key: "Enter" }))).toBe("enter");
+  });
+
+  it("record the letter marked on the key", () => {
+    expect(keysFromEvent(press("KeyY", { ...both, key: "Z" }))).toEqual({ key: "z", ctrl: true, shift: true });
+    expect(keysFromEvent(press("KeyL", { ...both, key: "Д" }))).toEqual({ key: "l", ctrl: true, shift: true });
+  });
+
+  it("copy, paste and clear the same way", () => {
+    if (isMac) {
+      expect(isMacClear(press("KeyK", { meta: true, key: "л" }))).toBe(true);
+      expect(isMacClear(press("KeyV", { meta: true, key: "k" }))).toBe(true);
+      return;
+    }
+    expect(terminalCopyKey(press("KeyC", { ctrl: true, key: "с" }))).toBe("ctrl-c");
+    expect(terminalCopyKey(press("KeyC", { ...both, key: "С" }))).toBe("ctrl-shift-c");
+    // Dvorak's C is at QWERTY's I, and what's at QWERTY's C types J.
+    expect(terminalCopyKey(press("KeyI", { ctrl: true, key: "c" }))).toBe("ctrl-c");
+    expect(terminalCopyKey(press("KeyC", { ctrl: true, key: "j" }))).toBeNull();
+    expect(isTerminalPaste(press("KeyV", { ...both, key: "М" }))).toBe(true);
+    expect(isTerminalPaste(press("Period", { ...both, key: "V" }))).toBe(true);
+    expect(isTerminalPaste(press("KeyV", { ...both, key: "K" }))).toBe(false);
+  });
+});
+
+describe("a key Windows presses by itself", () => {
+  // Clipboard history's Ctrl+V has no place on the keyboard (no code).
+  const byWindows = (key: string, keyCode: number, mods = {}) => press("", { ctrl: true, key, keyCode, ...mods });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("is still the letter it stands for", () => {
+    expect(keyOf(byWindows("v", 86))).toBe("v");
+    expect(keyOf(byWindows("м", 86))).toBe("v");
+    expect(keyOf(press("", { key: "Enter", keyCode: 13 }))).toBe("enter");
+  });
+
+  it("pastes on Windows, on any layout", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    vi.resetModules();
+    const windows = await import("./keys");
+    expect(windows.isTerminalPaste(byWindows("v", 86))).toBe(true);
+    expect(windows.isTerminalPaste(byWindows("м", 86))).toBe(true);
+    expect(windows.isModLetter(byWindows("м", 86), "v")).toBe(true);
+    // Only that key, and only with Ctrl alone.
+    expect(windows.isTerminalPaste(byWindows("с", 67))).toBe(false);
+    expect(windows.isTerminalPaste(byWindows("м", 86, { alt: true }))).toBe(false);
+    expect(windows.isTerminalPaste(byWindows("м", 86, { meta: true }))).toBe(false);
+  });
+});
+
+describe("missingKeyCode", () => {
+  // What WebKit on Linux says for keys on a layout without Latin letters.
+  const none = { keyCode: 0 };
+
+  it("gives Ctrl and Alt combinations the code of the key's place", () => {
+    expect(missingKeyCode(press("KeyC", { ...none, ctrl: true, key: "с" }))).toBe(67);
+    expect(missingKeyCode(press("KeyB", { ...none, alt: true, key: "и" }))).toBe(66);
+    expect(missingKeyCode(press("BracketLeft", { ...none, ctrl: true, key: "х" }))).toBe(219);
+    expect(missingKeyCode(press("Backslash", { ...none, ctrl: true, key: "\\" }))).toBe(220);
+  });
+
+  it("leaves typing alone, and whatever already has a code", () => {
+    expect(missingKeyCode(press("KeyC", { ...none, key: "с" }))).toBeNull();
+    expect(missingKeyCode(press("KeyC", { ...none, shift: true, key: "С" }))).toBeNull();
+    expect(missingKeyCode(press("KeyC", { ...none, meta: true, key: "с" }))).toBeNull();
+    expect(missingKeyCode(press("KeyC", { keyCode: 67, ctrl: true, key: "с" }))).toBeNull();
+    expect(missingKeyCode(press("F13", { ...none, ctrl: true, key: "F13" }))).toBeNull();
   });
 });
 

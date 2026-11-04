@@ -59,6 +59,8 @@ export interface Backend {
    * selections and programs' own copies, which webviews often refuse.
    */
   writeClipboard(text: string): Promise<void>;
+  /** The text on the system clipboard, for a paste key the web view doesn't act on. */
+  readClipboard(): Promise<string>;
 
   listHosts(): Promise<Host[]>;
   addHost(input: NewHost): Promise<AddedHost>;
@@ -270,6 +272,10 @@ async function tauriBackend(): Promise<Backend> {
     async writeClipboard(text) {
       const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
+    },
+    async readClipboard() {
+      const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
+      return readText();
     },
     async setZoom(scale) {
       const { getCurrentWebview } = await import("@tauri-apps/api/webview");

@@ -812,7 +812,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       void pasteFiles();
     };
     const onKey = (e: KeyboardEvent) => {
-      if ((isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && !e.repeat && e.key.toLowerCase() === "v") paste(e);
+      if (isModLetter(e, "v") && !e.repeat) paste(e);
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("paste", paste);
@@ -1335,7 +1335,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             style={{ width: previewWidth }}
             // Saving works from the formatted view too, after an edit in Source.
             onKeyDown={(e) => {
-              if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "s") {
+              if (isModLetter(e.nativeEvent, "s")) {
                 e.preventDefault();
                 void savePreview();
               }

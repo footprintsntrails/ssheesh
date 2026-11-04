@@ -703,6 +703,9 @@ export const mockBackend: Backend = {
   async writeClipboard(text) {
     await navigator.clipboard.writeText(text);
   },
+  readClipboard() {
+    return navigator.clipboard.readText();
+  },
   cancelTransfer(id) {
     fakeCancels.get(id)?.();
   },

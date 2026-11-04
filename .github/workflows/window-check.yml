@@ -17,6 +17,7 @@ on:
       - "src/App.tsx"
       - "src/components/TerminalPane.tsx"
       - "src/lib/terminals.ts"
+      - "src/lib/keys.ts"
       - "crates/sshee-core/src/media.rs"
       - "Cargo.lock"
       - ".github/window-check/**"

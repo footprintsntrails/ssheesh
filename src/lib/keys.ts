@@ -7,11 +7,12 @@ export const isWindows = typeof navigator !== "undefined" && /Windows/.test(navi
 
 /**
  * Ctrl+V pastes in a terminal on Windows, as in Windows Terminal, instead of
- * sending ^V. Clipboard history (Win+V) pastes by pressing Ctrl+V for you.
- * Ctrl+Shift+V pastes too.
+ * sending ^V. Clipboard history (Win+V) pastes by pressing Ctrl+V for you, with
+ * a key that has no place on the keyboard, so keyCode counts too: it's what the
+ * terminal would send ^V by. Ctrl+Shift+V pastes too.
  */
 export function isTerminalPaste(e: KeyboardEvent): boolean {
-  if (isMac || !e.ctrlKey || e.altKey || e.metaKey || e.code !== "KeyV") return false;
+  if (isMac || !e.ctrlKey || e.altKey || e.metaKey || (keyOf(e) !== "v" && e.keyCode !== 86)) return false;
   // Ctrl+Shift+V everywhere else, as in Linux terminals.
   return isWindows || e.shiftKey;
 }
@@ -31,7 +32,7 @@ export function isAltAlone(e: KeyboardEvent): boolean {
  * selection, Ctrl+C stops the running command as always.
  */
 export function terminalCopyKey(e: KeyboardEvent): "ctrl-c" | "ctrl-shift-c" | null {
-  if (isMac || !e.ctrlKey || e.altKey || e.metaKey || e.code !== "KeyC") return null;
+  if (isMac || !e.ctrlKey || e.altKey || e.metaKey || keyOf(e) !== "c") return null;
   return e.shiftKey ? "ctrl-shift-c" : "ctrl-c";
 }
 
@@ -141,7 +142,7 @@ export const SHORTCUT_GROUPS: { title: string; ids: ShortcutId[] }[] = [
 
 /** A key and the modifiers held with it. Settings stores your own shortcuts this way. */
 export interface Keys {
-  /** The key by its place on the keyboard: "k", "5", ",", "enter", "f5", "up"… */
+  /** The key, as `keyOf` names it: "k", "5", ",", "enter", "f5", "up"… */
   key: string;
   ctrl?: boolean;
   meta?: boolean;
@@ -225,21 +226,53 @@ const CODE_KEYS: Record<string, string> = {
   ArrowRight: "right",
 };
 
-/** The key pressed, by its place on the keyboard, so other layouts (Russian, German…) work too. */
+/**
+ * The key pressed. A Latin letter is the one the key types, so Z is the key
+ * marked Z on a German or French keyboard too. On a layout without them
+ * (Russian, Greek…) it's the letter at its place on the keyboard, and so is
+ * everything else: what a digit or a comma types differs too much between layouts.
+ */
 export function keyOf(e: KeyboardEvent): string {
+  const typed = e.key?.toLowerCase() ?? "";
+  if (/^[a-z]$/.test(typed)) return typed;
   const m = /^(?:Key([A-Z])|Digit(\d)|(F\d{1,2}))$/.exec(e.code ?? "");
   if (m) return (m[1] ?? m[2] ?? m[3]).toLowerCase();
-  return CODE_KEYS[e.code] ?? e.key.toLowerCase();
+  // A key Windows presses by itself has no place, and may not type a Latin letter.
+  if (!e.code && e.keyCode >= 65 && e.keyCode <= 90) return String.fromCharCode(e.keyCode + 32);
+  return CODE_KEYS[e.code] ?? typed;
 }
 
-/**
- * A letter with Ctrl or ⌘: the one the key types, whatever the case, or on a
- * layout without Latin letters (Russian…) the one at its place on the keyboard.
- */
+/** A letter with Ctrl or ⌘ and nothing else, on any layout. */
 export function isModLetter(e: KeyboardEvent, letter: string): boolean {
   if (!(isMac ? e.metaKey : e.ctrlKey) || e.shiftKey || e.altKey) return false;
-  const typed = e.key.toLowerCase();
-  return /^[a-z]$/.test(typed) ? typed === letter : keyOf(e) === letter;
+  return keyOf(e) === letter;
+}
+
+// The keyCode each of these has where a browser fills it in.
+const PLACE_KEY_CODES: Record<string, number> = {
+  Semicolon: 186,
+  Equal: 187,
+  Comma: 188,
+  Minus: 189,
+  Period: 190,
+  Slash: 191,
+  Backquote: 192,
+  BracketLeft: 219,
+  Backslash: 220,
+  BracketRight: 221,
+  Quote: 222,
+};
+
+/**
+ * The keyCode a Ctrl or Alt combination should have had, or null if it has one
+ * or doesn't need it. WebKit on Linux says 0 for keys on a layout without Latin
+ * letters, and xterm goes by keyCode, so Ctrl+C and Alt+B would send nothing.
+ * It also means that browser won't paste on Ctrl+Shift+V by itself.
+ */
+export function missingKeyCode(e: KeyboardEvent): number | null {
+  if (e.keyCode !== 0 || e.metaKey || !(e.ctrlKey || e.altKey)) return null;
+  const letter = /^Key([A-Z])$/.exec(e.code ?? "");
+  return letter ? letter[1].charCodeAt(0) : (PLACE_KEY_CODES[e.code] ?? null);
 }
 
 export function matches(e: KeyboardEvent, id: ShortcutId): boolean {
@@ -258,7 +291,7 @@ export function matchShortcut(e: KeyboardEvent): ShortcutId | null {
 
 /** ⌘K on a Mac: clear the terminal, as Terminal, iTerm2 and Ghostty do. */
 export function isMacClear(e: KeyboardEvent): boolean {
-  return isMac && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyK";
+  return isMac && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && keyOf(e) === "k";
 }
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "AltGraph", "Meta", "OS", "Super", "Hyper", "Fn", "CapsLock"]);

@@ -1,6 +1,6 @@
 import { Activity, FolderOpen, Plus, SquareTerminal } from "lucide-react";
 import { useEffect } from "react";
-import { shortcutLabel } from "../lib/keys";
+import { keyOf, shortcutLabel } from "../lib/keys";
 import { useStore, type PaneState } from "../lib/store";
 import { useNames } from "../lib/privacy";
 import type { TargetRef } from "../lib/types";
@@ -32,7 +32,7 @@ export function EmptyPane({ pane, focused }: { pane: PaneState; focused: boolean
     if (!focused) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement)?.closest("input,textarea")) return;
-      const n = Number(e.key);
+      const n = Number(keyOf(e));
       if (n >= 1 && n <= targets.length) {
         e.preventDefault();
         openIn("terminal", targets[n - 1].target, { from: pane.id });

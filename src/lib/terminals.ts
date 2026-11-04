@@ -9,7 +9,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type IBufferLine } from "@xterm/xterm";
 import { agentRunning } from "./agents";
 import { backend, type WelcomeSpec } from "./backend";
-import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, terminalCopyKey } from "./keys";
+import { isMac, isMacClear, isTerminalNewline, isTerminalPaste, isWindows, matchShortcut, missingKeyCode, terminalCopyKey } from "./keys";
 import { pastedText, withoutKeys } from "./format";
 import { findLinks } from "./paths";
 import { parseScrollTitle, tmuxPosition, tmuxView, type ScrollView } from "./scroll";
@@ -267,6 +267,8 @@ export class TerminalHandle {
     );
     this.setGpu(useSettings.getState().gpuRendering);
     this.term.attachCustomKeyEventHandler((e) => {
+      const keyCode = missingKeyCode(e);
+      if (keyCode !== null) Object.defineProperty(e, "keyCode", { value: keyCode });
       const copy = terminalCopyKey(e);
       if (copy) {
         const text = this.term.getSelection();
@@ -307,6 +309,16 @@ export class TerminalHandle {
       // browser, which fires the paste event xterm handles.
       const shortcut = matchShortcut(e);
       if (shortcut === "find" && !this.takesFindKey()) return true;
+      if (keyCode !== null && isTerminalPaste(e)) {
+        if (e.type === "keydown") {
+          e.preventDefault();
+          void backend.readClipboard().then(
+            (text) => text && this.term.paste(withoutKeys(text)),
+            () => {},
+          );
+        }
+        return false;
+      }
       return shortcut === null && !isTerminalPaste(e);
     });
     this.typeDroppedText();

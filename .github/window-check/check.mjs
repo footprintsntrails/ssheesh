@@ -2,7 +2,7 @@
 // window's focus keeps moving by itself, or a typed command doesn't reach the
 // shell: the browser tests and Linux can't see either. The debug port is only
 // used to find the first screen's button, then it's let go of until the keys
-// are done with, for the check of the preview.
+// are done with, for the checks of the preview and of a Russian layout.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -124,8 +124,14 @@ await phase("alt-tab", MAX_ALT_TAB, async () => {
 
 // The preview in Files, both ways a page can read a file: Windows' web view has
 // its own rules about pages reading from this computer, and the app needs one to work.
-const media = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((r) => (media.onopen = r));
+const page = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise((r) => (page.onopen = r));
+const inPage = (expression) =>
+  new Promise((res) => {
+    page.onmessage = (e) => res(JSON.parse(e.data).result?.result?.value);
+    page.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }));
+    setTimeout(() => res(undefined), 45000);
+  });
 const showing = (path, tag) => `(async () => {
   const { invoke, convertFileSrc } = window.__TAURI_INTERNALS__;
   let file;
@@ -149,17 +155,55 @@ const showing = (path, tag) => `(async () => {
   return { local: await shows(file.url), scheme: await shows(convertFileSrc(file.id, "media")) };
 })()`;
 for (const [name, tag] of [["sample.png", "img"], ["sample.webm", "video"]]) {
-  const shown = await new Promise((res) => {
-    media.onmessage = (e) => res(JSON.parse(e.data).result?.result?.value);
-    const expression = showing(join(import.meta.dirname, "media", name), tag);
-    media.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }));
-    setTimeout(() => res({}), 45000);
-  });
+  const shown = (await inPage(showing(join(import.meta.dirname, "media", name), tag))) ?? {};
   console.log(`${name}: ${JSON.stringify(shown)}`);
   // A published version from before the preview has nothing to check.
   if (!shown?.missing && shown?.local !== "ok" && shown?.scheme !== "ok") problems.push(`${name} can't be shown either way: ${JSON.stringify(shown)}`);
 }
-media.close();
+
+// Clipboard history pastes by pressing Ctrl+V itself, with a key that has no place
+// on the keyboard. The panel can't be driven from here, so this is that key press.
+async function pastedByWindows() {
+  const name = `m${++n}.txt`;
+  spawnSync("powershell", ["-NoProfile", "-Command", `Set-Clipboard -Value 'echo x > ${join(marks, name)}'`]);
+  win("press", "ctrl", "noplace", "56");
+  await sleep(800);
+  win("press", "0D");
+  for (let i = 0; i < 20 && !existsSync(join(marks, name)); i++) await sleep(500);
+  return existsSync(join(marks, name));
+}
+win("click", ox + 550, oy + 400);
+await sleep(500);
+if (!(await pastedByWindows())) problems.push("a Ctrl+V pressed the way clipboard history does pasted nothing");
+
+// A Russian layout, with real keys. A press the app or the terminal acts on is
+// taken from the browser: Ctrl+C, Ctrl+L, and Ctrl+Shift+L for the command bar.
+win("layout", "00000419");
+await sleep(1000);
+await inPage(`(() => {
+  window.__keys = [];
+  addEventListener("keydown", (e) => {
+    if (e.key.length !== 1) return;
+    const r = { key: e.key, code: e.code, keyCode: e.keyCode };
+    setTimeout(() => { r.took = e.defaultPrevented; window.__keys.push(r); });
+  }, true);
+})()`);
+for (const keys of [["ctrl", "43"], ["ctrl", "4C"], ["ctrl", "shift", "4C"]]) {
+  win("press", ...keys);
+  await sleep(700);
+}
+win("shot", join(out, "russian.png"));
+win("press", "1B");
+const pressed = (await inPage("window.__keys")) ?? [];
+console.log(`on a Russian layout: ${JSON.stringify(pressed)}`);
+if (pressed.length !== 3 || !pressed.every((p) => /^[а-яё]$/i.test(p.key))) console.log("Can't tell about a Russian layout: the keys didn't type Russian letters");
+else {
+  for (const p of pressed) if (!p.took) problems.push(`on a Russian layout nothing took ${p.code}: ${JSON.stringify(p)}`);
+  win("click", ox + 550, oy + 400);
+  await sleep(500);
+  if (!(await pastedByWindows())) problems.push("on a Russian layout, a Ctrl+V pressed the way clipboard history does pasted nothing");
+}
+page.close();
 
 writeFileSync(stop, "");
 await sleep(300);
