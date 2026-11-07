@@ -374,6 +374,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     const show = (l: DirListing) => {
       setListing(l);
       setError(null);
+      // Done the moment it shows, not after the load: a folder shown by its
+      // full name ("~" as /home/you) changes `path`, and the effect that
+      // change runs ends this one before the load could say it finished.
+      // The loading line then ran for good, redrawing the window nonstop.
+      setLoading(false);
       visit(tk, l.path);
       if (l.path !== path) {
         skipFetch.current = l.path;
@@ -387,7 +392,6 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     // A file to pick out may be newer than a listing from a moment ago.
     if (cached && !force && !pane.reveal && Date.now() - cached.at < FRESH_MS) {
       show(cached.listing);
-      setLoading(false);
       return;
     }
     setLoading(true);
@@ -396,6 +400,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       .then((l) => alive && show(l))
       .catch((e) => {
         if (!alive) return;
+        setLoading(false);
         const err = toOpError(e);
         setError(err);
         // Offline, this folder as it was stays on screen, under a note that
@@ -404,8 +409,7 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         const offline = err.code === "network" || err.code === "auth" || err.code === "hostKey";
         if (cached && !offline) dirCache.forget(tk, path);
         setListing((l) => (offline && l && (l === cached?.listing || l.path === path) ? l : null));
-      })
-      .finally(() => alive && setLoading(false));
+      });
     return () => {
       alive = false;
     };
