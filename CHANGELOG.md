@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.10 — Files that let your computer rest
+
+- **Files doesn't keep the window busy.** A new Files tab kept its loading line and refresh icon going after the folder had shown, and while that tab was on screen the window redrew without a pause: on a test machine SSHeesh used four to six times the processor it needs. Over a day that can make a laptop warm and everything slower, until a restart. The line now stops as soon as the folder is there.
+
 ## 0.10.9 — Win+V, and shortcuts on every keyboard layout
 
 - **Win+V pastes into terminals.** Windows' clipboard history pastes by pressing Ctrl+V for you, with a key that has no place on the keyboard. The terminal took that for a plain Ctrl+V and sent it to the server, where programs answered in their own way: OMP with "Clipboard here belongs to the SSH host". It counts as a paste now, on any layout.
