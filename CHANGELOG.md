@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.11 — unpack archives, other servers from +, and your XPipe servers
+
+- **Unpack archives in Files.** Right-click a .zip, .tar.gz or other archive and pick Unpack. What's inside lands in a folder named after it, or as itself when it's a single folder, and nothing already there is replaced. Works with .zip, .tar (gz, bz2, xz, zst), .7z, .rar and single .gz files; if the server has nothing that opens one, SSHeesh says what to install.
+- **Open a tab on another server from +.** Below a terminal and Files for the server you're on, the + menu lists your other servers: pick one for a terminal or Files there.
+- **Bring your servers over from XPipe.** In Add a server, Import from XPipe lists the servers XPipe has on this computer; tick the ones you want. Passwords stay in XPipe, so a server that needs one asks the first time. Servers reached through a jump host can't come along yet.
+
 ## 0.10.10 — Files that let your computer rest
 
 - **Files doesn't keep the window busy.** A new Files tab kept its loading line and refresh icon going after the folder had shown, and while that tab was on screen the window redrew without a pause: on a test machine SSHeesh used four to six times the processor it needs. Over a day that can make a laptop warm and everything slower, until a restart. The line now stops as soon as the folder is there.
