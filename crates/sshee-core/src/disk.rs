@@ -277,27 +277,29 @@ impl Found {
                 });
             }
         };
+        // Docker's prunes ask "[y/N]" first; run for you, nobody answers and
+        // nothing goes, so they're told yes: you said yes to Run already.
         if let Some(d) = docker {
             let images = match d.unused_images {
                 Some(1) => "Removes the one image no container uses; it downloads again when needed.".to_string(),
                 Some(n) => format!("Removes the {n} images no container uses; they download again when needed."),
                 None => "Removes images no container uses; they download again when needed.".to_string(),
             };
-            add("docker-images", "Unused Docker images", &images, format!("{dk} image prune -a"), d.images_reclaimable);
+            add("docker-images", "Unused Docker images", &images, format!("{dk} image prune -a -f"), d.images_reclaimable);
             // -a, because the reclaimable figure counts all unused cache,
             // not only the dangling part a plain prune removes.
             add(
                 "docker-build-cache",
                 "Docker build cache",
                 "Removes files Docker kept to speed up image builds; the next build just takes a little longer.",
-                format!("{dk} builder prune -a"),
+                format!("{dk} builder prune -a -f"),
                 d.build_cache_reclaimable,
             );
             add(
                 "docker-containers",
                 "Stopped containers",
                 "Removes containers that aren't running; their images and volumes stay, so they can be created again.",
-                format!("{dk} container prune"),
+                format!("{dk} container prune -f"),
                 d.containers_reclaimable,
             );
         }
@@ -708,6 +710,19 @@ cgroup_root              10240         0     10240   0% /sys/fs/cgroup
     }
 
     #[test]
+    fn docker_cleanups_dont_ask_y_n() {
+        // They run with nobody there to answer: Docker's "[y/N]" read no
+        // answer as no, and nothing was removed. Run comes after a yes in SSHeesh.
+        let r = report_of(&format!("@@who@@\nroot\n@@df@@\n{GNU_DF}@@mounts@@\n{MOUNTS}@@docker@@\n{DOCKER_ROWS}@@docker-via@@\ndirect\n"));
+        let docker: Vec<_> = r.cleanups.iter().filter(|c| c.command.contains("docker")).collect();
+        assert_eq!(docker.len(), 3);
+        for c in docker {
+            assert!(c.command.ends_with(" -f"), "{}", c.command);
+            assert_eq!(crate::fixes::asks_before(&c.command), None);
+        }
+    }
+
+    #[test]
     fn counts_only_what_an_image_prune_frees() {
         let rows = r#"[{"Containers":"2","ID":"a","SharedSize":"80MB","Size":"1.2GB","UniqueSize":"1.12GB"},{"Containers":"0","ID":"b","SharedSize":"1.1GB","Size":"1.3GB","UniqueSize":"200MB"},{"Containers":0,"ID":"c","SharedSize":"0B","Size":"50MB","UniqueSize":"50MB"},{"Containers":"N/A","ID":"d","UniqueSize":"9GB"}]"#;
         assert_eq!(unused_images(&[rows]), Some((2, 250_000_000)));
@@ -754,7 +769,7 @@ cgroup_root              10240         0     10240   0% /sys/fs/cgroup
         let journal = &r.cleanups[1];
         assert_eq!(journal.command, "journalctl --vacuum-size=200M");
         assert_eq!(journal.bytes, Some((3 << 29) - 200 * MIB));
-        assert_eq!(r.cleanups[2].command, "docker image prune -a");
+        assert_eq!(r.cleanups[2].command, "docker image prune -a -f");
         assert_eq!(r.cleanups[3].bytes, Some(240 * MIB));
         assert!(r.cleanups[3].command.starts_with("find /var/log -type f"));
         assert_eq!(r.cleanups[4].command, "apt-get clean");
@@ -787,7 +802,7 @@ cgroup_root              10240         0     10240   0% /sys/fs/cgroup
         assert!(r.as_root);
         assert_eq!(r.journal, None);
         let images = r.cleanups.iter().find(|c| c.id == "docker-images").unwrap();
-        assert_eq!(images.command, "sudo docker image prune -a");
+        assert_eq!(images.command, "sudo docker image prune -a -f");
         let dnf = r.cleanups.iter().find(|c| c.id == "dnf-cache").unwrap();
         assert_eq!(dnf.command, "sudo dnf clean all");
         assert_eq!(dnf.bytes, Some(130000 * 1024));
