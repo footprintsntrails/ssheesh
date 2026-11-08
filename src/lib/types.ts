@@ -52,6 +52,26 @@ export interface ConnectionTest {
   message: string | null;
 }
 
+/** A connection saved in XPipe, as the Add server form would take it. */
+export interface XpipeServer {
+  name: string;
+  /** `user@host:port`. */
+  address: string;
+  identityFile: string | null;
+  /** XPipe has a password for it, which can't come along. */
+  hadPassword: boolean;
+}
+
+export interface XpipeScan {
+  /** XPipe's vault is on this computer. */
+  found: boolean;
+  servers: XpipeServer[];
+  /** Encrypted entries only XPipe can read. */
+  locked: number;
+  /** Reached through a jump server, which SSHeesh can't set yet. */
+  throughJump: number;
+}
+
 export interface AddedHost {
   host: Host;
   /** Set when the password couldn't go into the keychain. */

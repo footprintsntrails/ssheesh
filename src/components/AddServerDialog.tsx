@@ -15,6 +15,7 @@ import { LookIcon } from "./HostIcon";
 import { LookGrid, OwnHostColor } from "./LookPicker";
 import { Modal, useEscapeLayer } from "./Overlays";
 import { Button } from "./ui";
+import { useHasXpipe, useXpipeImport } from "./XpipeImport";
 
 const inputClass =
   "h-9 w-full min-w-0 rounded-[9px] bg-ink/[0.05] px-3 text-[13px] text-fg outline-none ring-1 ring-inset ring-ink/[0.08] placeholder:text-fg-3/70 focus:ring-2 focus:ring-accent/70";
@@ -149,6 +150,7 @@ function TestResult({ test, busy, onTrust }: { test: ConnectionTest | null; busy
 
 export function AddHostDialog() {
   const open = useStore((s) => s.addHostOpen);
+  const hasXpipe = useHasXpipe(open);
   const setOpen = useStore((s) => s.setAddHostOpen);
   const loadHosts = useStore((s) => s.loadHosts);
   const openIn = useStore((s) => s.openIn);
@@ -314,7 +316,24 @@ export function AddHostDialog() {
       <form onSubmit={submit} className="flex max-h-[calc(84vh-24px)] flex-col">
         <div className="px-5 pt-5">
           <h2 className="text-[15px] font-semibold text-fg">Add a server</h2>
-          <p className="mt-1 text-[12.5px] text-fg-3">Servers in ~/.ssh/config are already in your list.</p>
+          <p className="mt-1 text-[12.5px] text-fg-3">
+            Servers in ~/.ssh/config are already in your list.
+            {hasXpipe && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => {
+                    setOpen(false);
+                    useXpipeImport.getState().show();
+                  }}
+                >
+                  Import from XPipe
+                </button>
+              </>
+            )}
+          </p>
         </div>
 
         <div className="mt-4 flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-4 [mask-image:linear-gradient(to_bottom,black_calc(100%_-_20px),transparent)]">

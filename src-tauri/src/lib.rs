@@ -461,6 +461,19 @@ async fn archive_paths(state: State<'_, AppState>, target: TargetSpec, dir: Stri
     blocking(move || files::archive(&t, &env, &dir, &names, &archive)).await
 }
 
+/// SSH connections saved in XPipe on this computer, to import.
+#[tauri::command]
+async fn xpipe_servers() -> Result<sshee_core::xpipe::XpipeScan, OpError> {
+    blocking(|| Ok(sshee_core::xpipe::scan(&sshee_core::xpipe::vaults()))).await
+}
+
+/// Unpacks an archive next to itself; says the name of what it made.
+#[tauri::command]
+async fn extract_archive(state: State<'_, AppState>, target: TargetSpec, dir: String, name: String) -> Result<String, OpError> {
+    let (t, env) = (resolve(&state, &target)?, state.env.clone());
+    blocking(move || files::extract(&t, &env, &dir, &name)).await
+}
+
 #[tauri::command]
 async fn rename_path(state: State<'_, AppState>, target: TargetSpec, from: String, to: String) -> Result<(), OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
@@ -1031,6 +1044,8 @@ pub fn run() {
             make_dir,
             rename_path,
             archive_paths,
+            extract_archive,
+            xpipe_servers,
             delete_path,
             open_media,
             close_media,

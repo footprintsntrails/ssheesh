@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from "react";
 import { AddHostDialog } from "./components/AddServerDialog";
 import { ConfigImportDialog } from "./components/ConfigImport";
+import { XpipeImportDialog } from "./components/XpipeImport";
 import { Hints } from "./components/Hints";
 import { useWindowFrame } from "./components/WindowControls";
 import { WhatsNew } from "./components/WhatsNew";
@@ -270,6 +271,7 @@ export function App() {
       <CommandPalette />
       <AddHostDialog />
       <ConfigImportDialog />
+      <XpipeImportDialog />
       <WhatsNew />
       <UploadDialog />
       <CopyToServer />

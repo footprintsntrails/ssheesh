@@ -2,7 +2,7 @@
 // Tauri (Rust); in a plain browser it's a demo backend with sample data, so
 // the interface can be designed and screenshotted without servers.
 
-import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, Checkup, DiskReport, DiskUsage, TmuxScroll, RunOutcome } from "./types";
+import type { ContainerList, ContainerRef, DirListing, Engine, Host, Metrics, NewHost, SessionEvent, TargetRef, TextFile, AddedHost, HostKeyCheck, LocalAuth, ConnectionTest, TransferProgress, PaneInfo, XpipeScan, Checkup, DiskReport, DiskUsage, TmuxScroll, RunOutcome } from "./types";
 import { toOpError } from "./types";
 import type { Forward, TorStatus, TorSwitch, TunnelState, WebAppScan } from "./types";
 
@@ -64,6 +64,8 @@ export interface Backend {
 
   listHosts(): Promise<Host[]>;
   addHost(input: NewHost): Promise<AddedHost>;
+  /** SSH connections saved in XPipe on this computer, to import. */
+  xpipeServers(): Promise<XpipeScan>;
   removeHost(id: string): Promise<void>;
   /** Keys in ~/.ssh and key agents running on this computer. */
   localAuth(): Promise<LocalAuth>;
@@ -120,6 +122,8 @@ export interface Backend {
   renamePath(target: TargetRef, from: string, to: string): Promise<void>;
   /** Packs `names` from `dir` into `dir/archive` (.tar.gz). */
   archivePaths(target: TargetRef, dir: string, names: string[], archive: string): Promise<void>;
+  /** Unpacks the archive `name` in `dir` beside it; resolves to the name of what it made. */
+  extractArchive(target: TargetRef, dir: string, name: string): Promise<string>;
   deletePath(target: TargetRef, path: string): Promise<void>;
   downloadPath(target: TargetRef, path: string, isDir: boolean, hooks: TransferHooks): Promise<string>;
   /** With `clean`, files lose their metadata (location, camera, author…) on the way to a server. */
@@ -253,6 +257,7 @@ async function tauriBackend(): Promise<Backend> {
     revealFiles: (paths) => opener.revealItemInDir(paths),
     listHosts: () => call("list_hosts"),
     addHost: (input) => call("add_host", { input }),
+    xpipeServers: () => call("xpipe_servers"),
     removeHost: (id) => call("remove_host", { id }),
     forgetPassword: (id) => call("forget_password", { id }),
     sessionHistory: (target, sessionKey, lines) => call("session_history", { target, sessionKey, lines }),
@@ -313,6 +318,7 @@ async function tauriBackend(): Promise<Backend> {
     makeDir: (target, path) => call("make_dir", { target, path }),
     renamePath: (target, from, to) => call("rename_path", { target, from, to }),
     archivePaths: (target, dir, names, archive) => call("archive_paths", { target, dir, names, archive }),
+    extractArchive: (target, dir, name) => call("extract_archive", { target, dir, name }),
     deletePath: (target, path) => call("delete_path", { target, path }),
     downloadPath: (target, path, isDir, hooks) => call("download_path", { target, path, isDir, ...progress(hooks) }),
     uploadPaths: (target, paths, remoteDir, overwrite, clean, hooks) =>

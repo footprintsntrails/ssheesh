@@ -1,10 +1,11 @@
-import { ArrowUp, ChevronLeft, ChevronsRight, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FileVideoCamera, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, ChevronsRight, ClipboardPaste, ChevronRight, CornerLeftUp, Copy, CornerDownRight, Download, Ellipsis, Eye, File, FileArchive, FileCode, FileImage, FileVideoCamera, FilePlus, FileTerminal, FileText, Folder, FolderPlus, HardDrive, House, Link, PackageOpen, Pencil, Plus, RefreshCw, Search, Send, SquareTerminal, Star, Trash, Upload, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { backend } from "../lib/backend";
 import { dirCache } from "../lib/dirCache";
 import { folderName, useBookmarks } from "../lib/bookmarks";
 import { bytes, cn, joinPath, modified, parentPath, shellOf, typedCd } from "../lib/format";
-import { isMac, isModLetter } from "../lib/keys";
+import { isMac, isModLetter, isWindows } from "../lib/keys";
+import { canUnpack } from "../lib/archives";
 import { useSettings } from "../lib/settings";
 import { useStore, type PaneState } from "../lib/store";
 import { targetKey, toOpError, type DirListing, type FileEntry, type OpError, type TargetRef, type TextFile } from "../lib/types";
@@ -709,6 +710,22 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     }
   };
 
+  /** Unpacks an archive next to itself, then picks out what came out. */
+  const unpack = async (name: string) => {
+    setBusy(`Unpacking ${name}…`);
+    try {
+      const made = await backend.extractArchive(target, dir, name);
+      toast({ tone: "success", title: `Unpacked ${name}`, body: `Into “${made}”` });
+      setSelected([made]);
+      setAnchor(made);
+      changed();
+    } catch (e) {
+      fail(`Couldn't unpack ${name}`, e);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   /** Archive the selection, or everything in this folder when nothing's selected. */
   const archiveItem = (): MenuItem => {
     const names = selectedEntries.length ? selectedEntries.map((e) => e.name) : visible.map((e) => e.name);
@@ -981,7 +998,10 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
       ...(!many
         ? [
             { label: "Rename", icon: Pencil, run: () => setRenaming(entry.name), hint: "F2" },
-            { label: `Archive “${entry.name}”`, icon: FileArchive, run: () => setCreating({ kind: "archive", names: [entry.name] }) },
+            // An archive is unpacked, not packed again.
+            entry.kind === "file" && canUnpack(entry.name, !remote && isWindows)
+              ? { label: `Unpack “${entry.name}”`, icon: PackageOpen, run: () => void unpack(entry.name) }
+              : { label: `Archive “${entry.name}”`, icon: FileArchive, run: () => setCreating({ kind: "archive", names: [entry.name] }) },
             { label: "Copy path", icon: Copy, run: () => copyPath(full) },
             ...(entry.kind === "dir"
               ? [{ label: pins.includes(full) ? "Remove bookmark" : "Add to bookmarks", icon: Star, run: () => toggleBookmark(tk, full) }]

@@ -5,7 +5,7 @@ import type { Backend, TransferHooks } from "./backend";
 import pkg from "../../package.json";
 import { mediaKind } from "./media";
 import type { Cleaning, Container, DirListing, FileEntry, Host, Metrics, SessionEvent, TargetRef, TextFile, TorStatus } from "./types";
-import type { WebApp } from "./types";
+import type { WebApp, XpipeScan } from "./types";
 
 /** The demo pretends the next patch version is out. */
 const NEXT_VERSION = pkg.version.replace(/\d+$/, (n) => String(Number(n) + 1));
@@ -459,6 +459,19 @@ export const mockBackend: Backend = {
     hosts.push(h);
     return { host: h, warning: null };
   },
+  async xpipeServers(): Promise<XpipeScan> {
+    await wait(150);
+    return {
+      found: true,
+      servers: [
+        { name: "prod-api", address: "deploy@203.0.113.24", identityFile: null, hadPassword: false },
+        { name: "staging", address: "deploy@203.0.113.31:2222", identityFile: "~/.ssh/staging", hadPassword: false },
+        { name: "backup-box", address: "root@198.51.100.40", identityFile: null, hadPassword: true },
+      ],
+      locked: 1,
+      throughJump: 2,
+    };
+  },
   async setZoom() {},
   isPortable: async () => false,
   async notify(title, body) {
@@ -668,6 +681,15 @@ export const mockBackend: Backend = {
   async archivePaths(_t, dir, _names, archive) {
     await wait(700);
     tree[dir] = [...(tree[dir] ?? []), file(archive, 18 * 2 ** 20, 0)];
+  },
+  async extractArchive(_t, folder, name) {
+    await wait(600);
+    const base = name.replace(/(\.tar)?\.[^.]+$/i, "") || "archive";
+    let made = base;
+    for (let i = 2; tree[folder]?.some((e) => e.name === made); i++) made = `${base} ${i}`;
+    tree[folder] = [...(tree[folder] ?? []), dir(made, 0)];
+    tree[`${folder === "/" ? "" : folder}/${made}`] = [file("README.md", 1200, 3600), dir("src", 3600)];
+    return made;
   },
   async makeDir(_t, path) {
     await wait(120);

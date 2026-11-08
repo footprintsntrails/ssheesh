@@ -436,6 +436,243 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
     }
 }
 
+/// What an archive unpacks with, told by the end of its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Packed {
+    Zip,
+    /// .tar, compressed or not: tar finds out which itself.
+    Tar,
+    /// One file squeezed by gzip, bzip2, xz or zstd (`access.log.gz`).
+    Squeezed(&'static str),
+    SevenZip,
+    Rar,
+}
+
+/// Name endings Files unpacks, longest first. The interface's list
+/// (`src/lib/archives.ts`) must match.
+const PACKED: &[(&str, Packed)] = &[
+    (".tar.gz", Packed::Tar),
+    (".tar.bz2", Packed::Tar),
+    (".tar.xz", Packed::Tar),
+    (".tar.zst", Packed::Tar),
+    (".tgz", Packed::Tar),
+    (".tbz2", Packed::Tar),
+    (".tbz", Packed::Tar),
+    (".txz", Packed::Tar),
+    (".tzst", Packed::Tar),
+    (".tar", Packed::Tar),
+    (".zip", Packed::Zip),
+    (".gz", Packed::Squeezed("gzip")),
+    (".bz2", Packed::Squeezed("bzip2")),
+    (".xz", Packed::Squeezed("xz")),
+    (".zst", Packed::Squeezed("zstd")),
+    (".7z", Packed::SevenZip),
+    (".rar", Packed::Rar),
+];
+
+/// The kind of archive `name` is, and its name without the ending.
+fn packed(name: &str) -> Option<(Packed, &str)> {
+    let lower = name.to_ascii_lowercase();
+    PACKED
+        .iter()
+        .find(|(end, _)| lower.len() > end.len() && lower.ends_with(end))
+        // ASCII endings matched ASCII bytes, so the cut falls between characters.
+        .map(|(end, kind)| (*kind, &name[..name.len() - end.len()]))
+}
+
+/// The tools that can unpack `kind`, as shell that runs the first one the
+/// computer has and leaves its exit code in `s`; none at all prints
+/// `notool <what to install>`.
+fn unpack_shell(kind: Packed) -> String {
+    let seven = |x: &str| (x.to_string(), format!(r#"run {x} x -y "-o$t" "$a"; s=$?"#));
+    let bsdtar = || ("bsdtar".to_string(), r#"run bsdtar -xf "$a" -C "$t"; s=$?"#.to_string());
+    let (tools, install): (Vec<(String, String)>, &str) = match kind {
+        Packed::Zip => (
+            vec![
+                // unzip says 1 when it skipped something unsafe, such as a "../" path.
+                ("unzip".into(), r#"run unzip -q -o "$a" -d "$t"; s=$?; [ $s -eq 1 ] && s=0"#.into()),
+                (
+                    "python3".into(),
+                    r#"run python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$a" "$t"; s=$?"#.into(),
+                ),
+                bsdtar(),
+                seven("7z"),
+                seven("7za"),
+            ],
+            "unzip",
+        ),
+        // Run as root, GNU tar would give the files the owners written in the archive.
+        Packed::Tar => (
+            vec![(
+                "tar".into(),
+                r#"if tar --version 2>/dev/null | grep -q GNU; then run tar --no-same-owner -xf "$a" -C "$t"; else run tar -xf "$a" -C "$t"; fi; s=$?"#.into(),
+            )],
+            "tar",
+        ),
+        Packed::Squeezed(tool) => (vec![(tool.into(), format!(r#"err=$({tool} -dc <"$a" 2>&1 >"$t/$b"); s=$?"#))], tool),
+        Packed::SevenZip => (vec![seven("7z"), seven("7za"), seven("7zz"), bsdtar()], "p7zip-full"),
+        Packed::Rar => (
+            vec![("unrar".into(), r#"run unrar x -idq -y "$a" "$t/"; s=$?"#.into()), seven("7z"), bsdtar()],
+            "unrar",
+        ),
+    };
+    let mut out = String::from("s=\n");
+    for (i, (tool, run)) in tools.iter().enumerate() {
+        out += &format!("{} have {tool}; then {run}\n", if i == 0 { "if" } else { "elif" });
+    }
+    out += &format!("fi\n[ -n \"$s\" ] || {{ echo 'notool {install}'; exit 0; }}\n");
+    out
+}
+
+/// Shell that unpacks `name` in `dir` into a hidden folder beside it, so a
+/// failure leaves nothing behind. What came out then takes the archive's
+/// name, or, when it's a single file or folder, comes out under its own.
+/// Nothing that's there is replaced: a taken name gets a number. Prints
+/// `ok <name>`, `notool <what>`, `empty`, `nodir`, `nofile` or
+/// `failed <why>`, always with exit code 0, so a tool's words can't pass for
+/// the connection's.
+fn extract_script(dir: &str, name: &str, kind: Packed, base: &str) -> String {
+    format!(
+        r#"cd -- {dir} 2>/dev/null || {{ echo nodir; exit 0; }}
+a=./{name} b={base}
+[ -f "$a" ] || {{ echo nofile; exit 0; }}
+t=$(mktemp -d ./.ssheesh-unpack.XXXXXX 2>&1) || {{ printf 'failed %s\n' "$t"; exit 0; }}
+trap '[ -n "$t" ] && rm -rf -- "$t"' EXIT
+# mktemp's folder is private (700); this one may become the folder you keep,
+# and a web server must be able to read it, so it gets what mkdir would give.
+chmod "$(printf '%o' $((0777 & ~0$(umask))))" "$t"
+have() {{ command -v "$1" >/dev/null 2>&1; }}
+run() {{ err=$("$@" 2>&1 >/dev/null </dev/null); }}
+{unpack}if [ "$s" -ne 0 ]; then
+  w=$(printf '%s\n' "$err" | sed '/^[[:space:]]*$/d' | tail -n 1)
+  printf 'failed %s\n' "${{w:-exit code $s}}"; exit 0
+fi
+n=0
+for e in "$t"/* "$t"/.[!.]* "$t"/..?*; do {{ [ -e "$e" ] || [ -L "$e" ]; }} || continue; n=$((n+1)); one=$e; done
+[ $n -eq 0 ] && {{ echo empty; exit 0; }}
+free() {{
+  c=$1 i=2
+  while [ -e "$c" ] || [ -L "$c" ]; do
+    case "$2$1" in f?*.*) c="${{1%.*}} $i.${{1##*.}}" ;; *) c="$1 $i" ;; esac
+    i=$((i+1))
+  done
+  printf '%s' "$c"
+}}
+if [ $n -eq 1 ]; then
+  k=f; [ -d "$one" ] && [ ! -L "$one" ] && k=d
+  d=$(free "${{one##*/}}" $k)
+  mv -- "$one" "./$d" || {{ echo 'failed Could not move it out of the temporary folder.'; exit 0; }}
+else
+  d=$(free "$b" d)
+  mv -- "$t" "./$d" || {{ echo 'failed Could not name the folder.'; exit 0; }}
+  t=
+fi
+printf 'ok %s\n' "$d"
+"#,
+        dir = shell_quote(dir),
+        name = shell_quote(name),
+        base = shell_quote(if base.is_empty() { "archive" } else { base }),
+        unpack = unpack_shell(kind),
+    )
+}
+
+/// What `extract_script` printed, as the name it made or the reason it didn't.
+fn extract_outcome(out: &[u8], name: &str) -> Result<String, OpError> {
+    let text = String::from_utf8_lossy(out);
+    let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim_end();
+    let (word, rest) = line.split_once(' ').unwrap_or((line, ""));
+    match word {
+        "ok" if !rest.is_empty() => Ok(rest.to_string()),
+        "nodir" | "nofile" => Err(OpError::new(ErrorCode::NotFound, "That file or folder doesn't exist anymore.")),
+        "empty" => Err(OpError::failed(format!("{name} is empty: there was nothing to unpack."))),
+        "notool" => Err(OpError::failed(format!(
+            "The computer it's on can't unpack {name}: nothing there opens it. Installing {rest} would do it, for example with sudo apt install {rest}."
+        ))),
+        "failed" if rest.contains("Permission denied") || rest.contains("Read-only file system") => {
+            Err(OpError::failed("You can't write to this folder, so the archive can't be unpacked here."))
+        }
+        // The window's title already says it couldn't unpack; this says why.
+        "failed" => Err(OpError::failed(rest.to_string())),
+        _ => Err(OpError::failed(format!("Couldn't unpack {name}."))),
+    }
+}
+
+/// Unpacks the archive `name` in `dir` next to itself and says what it made:
+/// a folder named after the archive, or the one file or folder it held.
+pub fn extract(target: &Target, env: &SshEnv, dir: &str, name: &str) -> Result<String, OpError> {
+    let (kind, base) = packed(name).ok_or_else(|| OpError::failed(format!("{name} isn't an archive Files can unpack.")))?;
+    match ssh_only(target) {
+        Some(t) => extract_outcome(&run_remote(t, env, &extract_script(dir, name, kind, base), None)?, name),
+        None => extract_here(&resolve_local(dir), name, kind, base),
+    }
+}
+
+#[cfg(unix)]
+fn extract_here(dir: &Path, name: &str, kind: Packed, base: &str) -> Result<String, OpError> {
+    let script = extract_script(&dir.to_string_lossy(), name, kind, base);
+    extract_outcome(&crate::ssh::run_local(&script)?, name)
+}
+
+/// Windows has no sh, but its tar (10 and newer) reads .zip and .tar.
+#[cfg(windows)]
+fn extract_here(base_dir: &Path, name: &str, kind: Packed, base: &str) -> Result<String, OpError> {
+    if !matches!(kind, Packed::Zip | Packed::Tar) {
+        return Err(OpError::failed(format!("On Windows, Files unpacks .zip and .tar archives. {name} needs another app, or unpack it on a server.")));
+    }
+    if !base_dir.join(name).is_file() {
+        return Err(OpError::new(ErrorCode::NotFound, "That file or folder doesn't exist anymore."));
+    }
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let tmp = base_dir.join(format!(".ssheesh-unpack.{}-{stamp}", std::process::id()));
+    std::fs::create_dir(&tmp)?;
+    let mut cmd = Command::new(crate::ssh::program("tar"));
+    cmd.arg("-xf").arg(base_dir.join(name)).arg("-C").arg(&tmp);
+    crate::ssh::hide_console(&mut cmd);
+    let out = cmd.output();
+    let result = match out {
+        Ok(o) if o.status.success() => place_unpacked(base_dir, &tmp, base),
+        Ok(o) => Err(OpError::failed(format!("Couldn't unpack {name}: {}", crate::text::last_meaningful_line(&String::from_utf8_lossy(&o.stderr))))),
+        Err(e) => Err(OpError::failed(format!("Couldn't unpack {name}: {e}"))),
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+/// `extract_script`'s ending for Windows: moves what `tmp` holds into `dir`
+/// and says under what name.
+#[cfg(any(windows, test))]
+fn place_unpacked(dir: &Path, tmp: &Path, base: &str) -> Result<String, OpError> {
+    let inside: Vec<_> = std::fs::read_dir(tmp)?.collect::<Result<_, _>>()?;
+    let (from, wanted, is_file) = match inside.as_slice() {
+        [] => return Err(OpError::failed("The archive is empty: there was nothing to unpack.")),
+        [one] => (one.path(), one.file_name().to_string_lossy().into_owned(), !one.path().is_dir()),
+        _ => (tmp.to_path_buf(), if base.is_empty() { "archive".to_string() } else { base.to_string() }, false),
+    };
+    let name = free_name(dir, &wanted, is_file);
+    std::fs::rename(&from, dir.join(&name))?;
+    Ok(name)
+}
+
+/// `wanted`, or the first of "wanted 2", "wanted 3"… not taken in `dir`; for a
+/// file the number goes before its extension.
+#[cfg(any(windows, test))]
+fn free_name(dir: &Path, wanted: &str, is_file: bool) -> String {
+    let split = match wanted.rfind('.') {
+        Some(i) if is_file && i > 0 => Some((&wanted[..i], &wanted[i..])),
+        _ => None,
+    };
+    let mut name = wanted.to_string();
+    let mut i = 2;
+    while dir.join(&name).symlink_metadata().is_ok() {
+        name = match split {
+            Some((stem, ext)) => format!("{stem} {i}{ext}"),
+            None => format!("{wanted} {i}"),
+        };
+        i += 1;
+    }
+    name
+}
+
 pub fn delete(target: &Target, env: &SshEnv, path: &str) -> Result<(), OpError> {
     let trimmed = path.trim().trim_end_matches('/');
     if trimmed.is_empty() || trimmed == "~" || trimmed == "/" || !trimmed.contains('/') {
@@ -2493,5 +2730,240 @@ mod tests {
         for p in ["/", "", "~", "relative"] {
             assert!(delete(&Target::Local, &env, p).is_err());
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unpack_tests {
+    use super::{extract_outcome, extract_script, free_name, packed, place_unpacked, Packed};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// A fresh folder for one test.
+    fn folder(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sshee-unpack-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Makes `dir/name` as a zip holding `entries` (path, text), with Python's zipfile.
+    fn zip(dir: &Path, name: &str, entries: &[(&str, &str)]) {
+        let code = "import sys, zipfile\nz = zipfile.ZipFile(sys.argv[1], 'w')\nfor i in range(2, len(sys.argv), 2): z.writestr(sys.argv[i], sys.argv[i + 1])\nz.close()";
+        let mut cmd = Command::new("python3");
+        cmd.arg("-c").arg(code).arg(dir.join(name));
+        for (path, text) in entries {
+            cmd.arg(path).arg(text);
+        }
+        assert!(cmd.status().unwrap().success());
+    }
+
+    /// Runs the script for `name` in `dir` with `path` as PATH, and returns its last line.
+    fn unpack_with(dir: &Path, name: &str, path: Option<&str>) -> String {
+        let (kind, base) = packed(name).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(extract_script(&dir.to_string_lossy(), name, kind, base));
+        if let Some(p) = path {
+            cmd.env("PATH", p);
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn unpack(dir: &Path, name: &str) -> String {
+        unpack_with(dir, name, None)
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    fn read(path: PathBuf) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn archives_are_told_by_their_ending() {
+        assert_eq!(packed("site.zip"), Some((Packed::Zip, "site")));
+        assert_eq!(packed("Site.ZIP"), Some((Packed::Zip, "Site")));
+        assert_eq!(packed("backup 2.tar.gz"), Some((Packed::Tar, "backup 2")));
+        assert_eq!(packed("a.tgz"), Some((Packed::Tar, "a")));
+        assert_eq!(packed("a.tar"), Some((Packed::Tar, "a")));
+        assert_eq!(packed("access.log.gz"), Some((Packed::Squeezed("gzip"), "access.log")));
+        assert_eq!(packed("db.sql.zst"), Some((Packed::Squeezed("zstd"), "db.sql")));
+        assert_eq!(packed("фото.zip"), Some((Packed::Zip, "фото")));
+        assert_eq!(packed("x.7z"), Some((Packed::SevenZip, "x")));
+        assert_eq!(packed(".zip"), None);
+        assert_eq!(packed("notes.txt"), None);
+        assert_eq!(packed("zip"), None);
+    }
+
+    #[test]
+    fn a_zip_of_many_things_gets_a_folder_named_after_it() {
+        if Command::new("python3").arg("-V").output().is_err() {
+            return;
+        }
+        let dir = folder("many");
+        zip(&dir, "github-agency-vps.zip", &[("README.md", "hi"), ("src/app.js", "x"), (".env.example", "A=1")]);
+        assert_eq!(unpack(&dir, "github-agency-vps.zip"), "ok github-agency-vps");
+        let out = dir.join("github-agency-vps");
+        assert_eq!(names(&out), [".env.example", "README.md", "src"]);
+        assert_eq!(read(out.join("src/app.js")), "x");
+        // The archive stays, and no hidden folder is left behind.
+        assert_eq!(names(&dir), ["github-agency-vps", "github-agency-vps.zip"]);
+        // Again: the name is taken, so it gets a number.
+        assert_eq!(unpack(&dir, "github-agency-vps.zip"), "ok github-agency-vps 2");
+        assert_eq!(read(dir.join("github-agency-vps 2/README.md")), "hi");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_new_folder_gets_the_usual_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        if Command::new("python3").arg("-V").output().is_err() {
+            return;
+        }
+        let dir = folder("mode");
+        zip(&dir, "pack.zip", &[("a", "1"), ("b", "2")]);
+        assert_eq!(unpack(&dir, "pack.zip"), "ok pack");
+        // What mkdir makes here, under the same umask: not the 700 of a temporary folder.
+        assert!(Command::new("sh").arg("-c").arg(format!("mkdir {}", super::shell_quote(&dir.join("plain").to_string_lossy()))).status().unwrap().success());
+        let mode = |p: PathBuf| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(dir.join("pack")), mode(dir.join("plain")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_zip_holding_one_folder_doesnt_nest_it() {
+        if Command::new("python3").arg("-V").output().is_err() {
+            return;
+        }
+        let dir = folder("one");
+        zip(&dir, "site.zip", &[("site/index.html", "<p>"), ("site/css/a.css", "b{}")]);
+        assert_eq!(unpack(&dir, "site.zip"), "ok site");
+        assert_eq!(read(dir.join("site/index.html")), "<p>");
+        std::fs::write(dir.join("site/mine.txt"), "keep").unwrap();
+        assert_eq!(unpack(&dir, "site.zip"), "ok site 2");
+        assert_eq!(read(dir.join("site/mine.txt")), "keep");
+        assert_eq!(names(&dir), ["site", "site 2", "site.zip"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nothing_escapes_the_folder() {
+        if Command::new("python3").arg("-V").output().is_err() {
+            return;
+        }
+        let dir = folder("escape");
+        let inner = dir.join("in");
+        std::fs::create_dir(&inner).unwrap();
+        zip(&inner, "evil.zip", &[("../escaped.txt", "no"), ("/abs.txt", "no"), ("fine.txt", "yes")]);
+        assert!(unpack(&inner, "evil.zip").starts_with("ok "));
+        assert!(!dir.join("escaped.txt").exists());
+        assert!(!Path::new("/abs.txt").exists() || read(PathBuf::from("/abs.txt")) != "no");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tarballs_and_single_squeezed_files_unpack() {
+        let dir = folder("tar");
+        let src = dir.join("proj");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), "a").unwrap();
+        std::fs::write(dir.join("b.txt"), "b").unwrap();
+        assert!(Command::new("tar").current_dir(&dir).args(["-czf", "both.tar.gz", "proj", "b.txt"]).status().unwrap().success());
+        std::fs::remove_dir_all(&src).unwrap();
+        std::fs::remove_file(dir.join("b.txt")).unwrap();
+        assert_eq!(unpack(&dir, "both.tar.gz"), "ok both");
+        assert_eq!(read(dir.join("both/proj/a.txt")), "a");
+        assert_eq!(read(dir.join("both/b.txt")), "b");
+
+        std::fs::write(dir.join("access.log"), "old").unwrap();
+        assert!(Command::new("sh").current_dir(&dir).arg("-c").arg("printf 'GET /\\n' | gzip > access.log.gz").status().unwrap().success());
+        assert_eq!(unpack(&dir, "access.log.gz"), "ok access 2.log");
+        assert_eq!(read(dir.join("access 2.log")), "GET /\n");
+        assert_eq!(read(dir.join("access.log")), "old");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_broken_archive_says_why_and_leaves_nothing() {
+        let dir = folder("broken");
+        std::fs::write(dir.join("bad.tar.gz"), "not an archive").unwrap();
+        let out = unpack(&dir, "bad.tar.gz");
+        assert!(out.starts_with("failed "), "{out}");
+        let why = extract_outcome(out.as_bytes(), "bad.tar.gz").unwrap_err().message;
+        assert!(!why.is_empty() && !why.starts_with("failed"), "{why}");
+        assert_eq!(names(&dir), ["bad.tar.gz"]);
+        assert_eq!(unpack(&dir, "gone.zip"), "nofile");
+        assert_eq!(unpack(&dir.join("nowhere"), "x.zip"), "nodir");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_zip_says_so() {
+        if Command::new("python3").arg("-V").output().is_err() {
+            return;
+        }
+        let dir = folder("empty");
+        zip(&dir, "nothing.zip", &[]);
+        assert_eq!(unpack(&dir, "nothing.zip"), "empty");
+        assert_eq!(names(&dir), ["nothing.zip"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_computer_without_unzip_is_told_what_to_install() {
+        if Command::new("python3").arg("-V").output().is_err() {
+            return;
+        }
+        let dir = folder("notool");
+        zip(&dir, "a.zip", &[("x", "y")]);
+        // Only what the script needs besides an unpacker.
+        let bin = dir.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        for tool in ["sh", "mktemp", "chmod", "rm", "mv", "sed", "tail", "grep"] {
+            let found = Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().unwrap();
+            let path = String::from_utf8_lossy(&found.stdout).trim().to_string();
+            std::os::unix::fs::symlink(path, bin.join(tool)).unwrap();
+        }
+        let out = unpack_with(&dir, "a.zip", Some(&bin.to_string_lossy()));
+        assert_eq!(out, "notool unzip");
+        let msg = extract_outcome(out.as_bytes(), "a.zip").unwrap_err().message;
+        assert!(msg.contains("Installing unzip"), "{msg}");
+        assert_eq!(names(&dir), ["a.zip", "bin"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn outcomes_read_as_plain_words() {
+        assert_eq!(extract_outcome(b"ok my site 2\n", "x.zip").unwrap(), "my site 2");
+        assert!(extract_outcome(b"failed mktemp: failed to create directory: Permission denied\n", "x.zip")
+            .unwrap_err()
+            .message
+            .contains("can't write to this folder"));
+        assert!(extract_outcome(b"", "x.zip").is_err());
+        assert!(extract_outcome(b"ok\n", "x.zip").is_err());
+    }
+
+    #[test]
+    fn windows_placement_matches_the_script() {
+        let dir = folder("place");
+        let tmp = dir.join(".tmp");
+        std::fs::create_dir_all(tmp.join("site")).unwrap();
+        std::fs::create_dir(dir.join("site")).unwrap();
+        assert_eq!(place_unpacked(&dir, &tmp, "pack").unwrap(), "site 2");
+        std::fs::write(tmp.join("a.txt"), "").unwrap();
+        std::fs::write(tmp.join("b.txt"), "").unwrap();
+        assert_eq!(place_unpacked(&dir, &tmp, "pack").unwrap(), "pack");
+        assert!(dir.join("pack/a.txt").exists());
+        assert_eq!(free_name(&dir, "notes.txt", true), "notes.txt");
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        assert_eq!(free_name(&dir, "notes.txt", true), "notes 2.txt");
+        assert_eq!(free_name(&dir, "v1.2", false), "v1.2");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

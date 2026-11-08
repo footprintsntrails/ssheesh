@@ -26,6 +26,7 @@ mod text;
 pub mod tor;
 pub mod tunnels;
 pub mod welcome;
+pub mod xpipe;
 
 pub use error::{ErrorCode, OpError};
 pub use hosts::{Host, HostSource, HostStore, NewHost};

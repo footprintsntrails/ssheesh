@@ -355,10 +355,12 @@ export function useVisibleHosts(): Host[] {
   const hosts = useStore((s) => s.hosts);
   const hidden = useLabels((s) => s.hidden);
   const seen = useLabels((s) => s.configSeen);
-  return useMemo(
-    () => hosts.filter((h) => !hidden.includes(h.id) && (h.source !== "sshConfig" || seen.includes(h.id))),
-    [hosts, hidden, seen],
-  );
+  return useMemo(() => visibleHosts(hosts, hidden, seen), [hosts, hidden, seen]);
+}
+
+/** `useVisibleHosts` outside a component: the sidebar's list, as it is now. */
+export function visibleHosts(hosts = useStore.getState().hosts, hidden = useLabels.getState().hidden, seen = useLabels.getState().configSeen): Host[] {
+  return hosts.filter((h) => !hidden.includes(h.id) && (h.source !== "sshConfig" || seen.includes(h.id)));
 }
 
 /** ~/.ssh/config servers you haven't decided about yet. */

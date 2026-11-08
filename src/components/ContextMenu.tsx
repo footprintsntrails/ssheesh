@@ -1,5 +1,5 @@
 import { Check, File } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "../lib/format";
 
 export interface Menu {
@@ -17,6 +17,8 @@ export interface MenuItem {
   /** Shows a check mark: the item is a choice that's currently on. */
   checked?: boolean;
   iconClass?: string;
+  /** Drawn in place of `icon`, such as a server's own icon. */
+  glyph?: ReactNode;
 }
 
 /** Right-click menu: frosted, keyboard-dismissable, kept inside the window. */
@@ -77,14 +79,16 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
       tabIndex={-1}
       style={{ left: pos.x, top: pos.y }}
       // Its own width, not what's left up to the window's edge: there, its rows would wrap over each other.
-      className="glass fixed z-50 w-max min-w-[200px] max-w-[min(360px,calc(100vw-16px))] animate-fade-in rounded-[11px] p-1 outline-none"
+      // A long list (many servers) scrolls rather than running off the window.
+      className="glass fixed z-50 max-h-[calc(100vh-16px)] w-max min-w-[200px] max-w-[min(360px,calc(100vw-16px))] animate-fade-in overflow-y-auto rounded-[11px] p-1 outline-none"
     >
       {items.map((it, i) =>
         it === "sep" ? (
           <div key={i} className="mx-2 my-1 h-px bg-ink/[0.07]" />
         ) : (
           <button
-            key={it.label}
+            // Two servers may share a name.
+            key={`${i}:${it.label}`}
             role={it.checked === undefined ? "menuitem" : "menuitemcheckbox"}
             aria-checked={it.checked}
             disabled={it.disabled}
@@ -97,7 +101,7 @@ export function ContextMenu({ menu, items, onClose }: { menu: Menu; items: (Menu
               it.danger ? "text-bad hover:bg-bad/15 focus-visible:bg-bad/15" : "text-fg hover:bg-accent/90 hover:text-on-accent focus-visible:bg-accent/90 focus-visible:text-on-accent",
             )}
           >
-            <it.icon size={13.5} strokeWidth={1.8} className={cn("shrink-0", it.iconClass ?? "opacity-80")} />
+            {it.glyph ?? <it.icon size={13.5} strokeWidth={1.8} className={cn("shrink-0", it.iconClass ?? "opacity-80")} />}
             <span className="min-w-0 flex-1 truncate">{it.label}</span>
             {it.hint && <span className="text-[11px] opacity-50">{it.hint}</span>}
             {it.checked && <Check size={13} strokeWidth={2.2} className="shrink-0" />}

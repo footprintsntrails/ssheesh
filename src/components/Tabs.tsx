@@ -5,7 +5,7 @@
 // closes it, right-click for more. Ctrl+Tab goes to the next. What tabs do
 // lives in lib/tabs.ts.
 
-import { Activity, BookOpen, Box, Cable, Check, Columns2, Copy, FolderOpen, Moon, Plus, Rows2, SquareTerminal, X, type LucideIcon } from "lucide-react";
+import { Activity, BookOpen, Box, Cable, Check, ChevronLeft, Columns2, Copy, FolderOpen, Moon, Plus, Rows2, Server, SquareTerminal, X, type LucideIcon } from "lucide-react";
 import { Fragment, memo, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { agentRunning, agentShort } from "../lib/agents";
@@ -19,6 +19,8 @@ import { allTabs, currentScreen, screenOf, sideBySide, tabsOn, useSideBySide, us
 import { targetKey, type TargetRef } from "../lib/types";
 import { AgentIcon } from "./AgentIcons";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { HostIcon } from "./HostIcon";
+import { visibleHosts } from "../lib/labels";
 import { openRecipes } from "./Recipes";
 import { openTunnels } from "./Tunnels";
 
@@ -49,6 +51,43 @@ export function TabIcon({ pane, command, size = 13.5, className }: { pane: Pick<
   if (agent) return <AgentIcon id={agent} size={size} />;
   const Icon = pane.container ? Box : KIND[pane.kind].icon;
   return <Icon size={size} strokeWidth={1.9} className={cn("shrink-0", className)} />;
+}
+
+type Items = (MenuItem | "sep")[];
+
+/**
+ * The "+" menu: a terminal or Files for the machine on screen, then every
+ * other one, in the sidebar's order. Picking one shows the same two for it,
+ * in the same place; `show` puts a list there.
+ */
+export function newTabItems(target: TargetRef, name: (t: TargetRef) => string, show: (items: Items) => void): Items {
+  const others: TargetRef[] = [
+    ...(target.kind === "local" ? [] : [{ kind: "local" } as TargetRef]),
+    ...visibleHosts()
+      .filter((h) => target.kind !== "host" || h.id !== target.hostId)
+      .map((h): TargetRef => ({ kind: "host", hostId: h.id })),
+  ];
+  const own = toolItems(target).slice(0, 2);
+  if (!others.length) return own;
+  const forOther = (t: TargetRef): Items => [
+    { label: "Back", icon: ChevronLeft, run: () => show(newTabItems(target, name, show)) },
+    "sep",
+    { label: `New terminal on ${name(t)}`, icon: SquareTerminal, run: () => newTab("terminal", t) },
+    { label: `Files on ${name(t)}`, icon: FolderOpen, run: () => showFiles(t) },
+  ];
+  return [
+    ...own,
+    "sep",
+    ...others.map(
+      (t): MenuItem => ({
+        label: name(t),
+        icon: Server,
+        glyph: <HostIcon hostId={t.kind === "host" ? t.hostId : undefined} local={t.kind === "local"} size={13.5} className="shrink-0" />,
+        hint: "›",
+        run: () => show(forOther(t)),
+      }),
+    ),
+  ];
 }
 
 /** The tools for a machine, as one menu: from the address chip and right-clicks. */
@@ -425,6 +464,7 @@ const StripTab = memo(function StripTab({ id, split, several, props }: { id: str
  */
 export function TabStrip({ target }: { target: TargetRef | null }) {
   const { shown, tabProps, setMenu, menuEl } = useTabList((s) => allTabs(s).map((p) => p.id), "x");
+  const names = useNames();
   const split = useSideBySide(useStore(currentScreen));
   // With tabs of more than one machine, each says whose it is, and a line
   // stands between one machine's and the next.
@@ -478,7 +518,8 @@ export function TabStrip({ target }: { target: TargetRef | null }) {
         title={`New tab (${shortcutLabel("newTerminal")} for a terminal)`}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
-          setMenu({ x: r.left, y: r.bottom + 4, items: toolItems(target).slice(0, 2) });
+          const show = (items: Items) => setMenu({ x: r.left, y: r.bottom + 4, items });
+          show(newTabItems(target, names.target, show));
         }}
         className="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-fg-3 hover:bg-ink/[0.06] hover:text-fg"
       >
