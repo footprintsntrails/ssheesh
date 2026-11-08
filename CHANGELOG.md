@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.12 — Docker cleanups that clean
+
+- **Docker cleanups do their job.** Unused images, build cache and stopped containers in the disk window asked Docker's "[y/N]" with nobody there to answer, so nothing was removed, or a terminal waited for you to type y. They now go ahead once you press Run.
+
 ## 0.10.11 — unpack archives, other servers from +, and your XPipe servers
 
 - **Unpack archives in Files.** Right-click a .zip, .tar.gz or other archive and pick Unpack. What's inside lands in a folder named after it, or as itself when it's a single folder, and nothing already there is replaced. Works with .zip, .tar (gz, bz2, xz, zst), .7z, .rar and single .gz files; if the server has nothing that opens one, SSHeesh says what to install.
