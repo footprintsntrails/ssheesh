@@ -698,9 +698,20 @@ export const mockBackend: Backend = {
   },
   async renamePath(_t, from, to) {
     await wait(120);
-    const parent = from.slice(0, from.lastIndexOf("/")) || "/";
-    const e = tree[parent]?.find((x) => x.name === from.split("/").pop());
-    if (e) e.name = to.split("/").pop()!;
+    const up = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
+    const name = (p: string) => p.split("/").pop()!;
+    if (tree[up(to)]?.some((x) => x.name === name(to))) throw { code: "exists", message: "Something with that name already exists here." };
+    const e = tree[up(from)]?.find((x) => x.name === name(from));
+    if (!e) return;
+    // A rename, or a move into another folder.
+    tree[up(from)] = tree[up(from)].filter((x) => x !== e);
+    tree[up(to)] = [...(tree[up(to)] ?? []), { ...e, name: name(to) }];
+    // A folder takes what's in it along.
+    for (const key of Object.keys(tree)) {
+      if (key !== from && !key.startsWith(`${from}/`)) continue;
+      tree[to + key.slice(from.length)] = tree[key];
+      delete tree[key];
+    }
   },
   async deletePath(_t, path) {
     await wait(120);

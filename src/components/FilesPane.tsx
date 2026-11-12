@@ -418,6 +418,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
   }, [tk, path, reload]);
 
   const dir = listing?.path ?? path;
+  /** The folder row dragged files would move into; null when it's this whole pane, or nothing. */
+  const moveDrop = fileDrop?.kind === "move" && fileDrop.dir !== dir ? fileDrop.dir : null;
   const refresh = useCallback(() => {
     forced.current = true;
     setReload((n) => n + 1);
@@ -615,6 +617,64 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
         else fail(`Couldn't download ${e.name}`, err);
       }
     }
+  };
+
+  /**
+   * Moves `names` from this folder into `to` on the same machine. Nothing
+   * there is replaced: a name that's taken stays where it was. Undo moves
+   * back what went.
+   */
+  const moveInto = async (names: string[], to: string) => {
+    const from = dir;
+    const moved: string[] = [];
+    const taken: string[] = [];
+    setBusy(`Moving ${names.length === 1 ? names[0] : `${names.length} items`}…`);
+    try {
+      for (const n of names) {
+        try {
+          await backend.renamePath(target, joinPath(from, n), joinPath(to, n));
+          dirCache.forget(tk, joinPath(from, n));
+          moved.push(n);
+        } catch (e) {
+          if (toOpError(e).code !== "exists") throw e;
+          taken.push(n);
+        }
+      }
+    } catch (e) {
+      fail("Couldn't move", e);
+    } finally {
+      setBusy(null);
+    }
+    const where = folderName(to) || to;
+    const undo = async () => {
+      for (const n of moved) await backend.renamePath(target, joinPath(to, n), joinPath(from, n)).catch((e) => fail(`Couldn't move ${n} back`, e));
+      dirCache.changed(tk, from);
+      dirCache.changed(tk, to);
+    };
+    if (moved.length) {
+      toast({
+        tone: taken.length ? "info" : "success",
+        title: `Moved ${moved.length === 1 ? moved[0] : `${moved.length} items`} to ${where}`,
+        body: taken.length ? `${taken.join(", ")} stayed: ${taken.length === 1 ? "that name is" : "those names are"} taken there.` : undefined,
+        action: { label: "Undo", run: () => void undo() },
+      });
+    } else if (taken.length) {
+      toast({ tone: "error", title: "Nothing moved", body: `${where} already has ${taken.join(", ")}.` });
+    }
+    setSelected([]);
+    dirCache.changed(tk, from);
+    dirCache.changed(tk, to);
+  };
+
+  /** Files dragged out of the window: asks first, since letting go there is easy to do by accident. */
+  const downloadDragged = async (entries: FileEntry[]) => {
+    const what = entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} items`;
+    const ok = await confirm({
+      title: `Download ${what} to this computer?`,
+      body: `From ${names.target(target)}, into your Downloads folder.`,
+      confirmLabel: "Download",
+    });
+    if (ok) await download(entries.map((x) => ({ name: x.name, path: joinPath(dir, x.name), isDir: x.kind === "dir" })));
   };
 
   const upload = async (paths: string[]) => {
@@ -1187,7 +1247,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                       if (isSecondClick(e)) void navigate(parentPath(dir));
                     }}
                     title="Double-click to go to the folder above"
-                    className="mx-1.5 flex h-7 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-fg-2 hover:bg-ink/[0.035]"
+                    data-folder={parentPath(dir)}
+                    className={cn(
+                      "mx-1.5 flex h-7 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-fg-2 hover:bg-ink/[0.035]",
+                      moveDrop === parentPath(dir) && "bg-accent/15 ring-1 ring-inset ring-accent/70",
+                    )}
                   >
                     <CornerLeftUp size={15} strokeWidth={1.7} className="text-fg-3" />
                     ..
@@ -1223,11 +1287,19 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                       key={entry.name}
                       data-name={entry.name}
                       data-folder={entry.kind === "dir" ? joinPath(dir, entry.name) : undefined}
-                      // Dragged onto another server's Files beside this one, it's copied there.
+                      // Dragged onto a folder here it moves there, onto another server's
+                      // Files it's copied there, and let go outside the window it downloads.
                       onPointerDown={(e) => {
                         if (renaming === entry.name || e.shiftKey || e.metaKey || e.ctrlKey) return;
-                        const names = selectedSet.has(entry.name) ? selectedEntries.map((x) => x.name) : [entry.name];
-                        dragFiles(e, target, names.map((n) => joinPath(dir, n)));
+                        const picked = selectedSet.has(entry.name) ? selectedEntries : [entry];
+                        dragFiles(
+                          e,
+                          { from: target, dir, paths: picked.map((x) => joinPath(dir, x.name)) },
+                          {
+                            move: (to) => void moveInto(picked.map((x) => x.name), to),
+                            download: () => void downloadDragged(picked),
+                          },
+                        );
                       }}
                       onPointerEnter={entry.kind === "dir" ? () => hoverFolder(entry.name) : undefined}
                       onPointerLeave={entry.kind === "dir" ? () => window.clearTimeout(hoverTimer.current) : undefined}
@@ -1246,6 +1318,8 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                       className={cn(
                         "mx-1.5 grid h-7 grid-cols-[minmax(0,1fr)_68px] items-center gap-3 rounded-md px-2.5 text-[13px] @md:grid-cols-[minmax(0,1fr)_68px_118px] @2xl:grid-cols-[minmax(0,1fr)_68px_90px_118px]",
                         isSel ? (focused ? "bg-accent/85 text-on-accent" : "bg-ink/[0.09] text-fg") : "text-fg hover:bg-ink/[0.035]",
+                        // The folder dragged files would move into.
+                        entry.kind === "dir" && moveDrop === joinPath(dir, entry.name) && "bg-accent/15 ring-1 ring-inset ring-accent/70",
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-1">
@@ -1332,11 +1406,11 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
             )}
           </div>
 
-          {fileDrop && (
+          {fileDrop && !moveDrop && (
             <div className="pointer-events-none absolute inset-1.5 z-20 flex items-center justify-center rounded-[10px] border-2 border-dashed border-accent/60 bg-accent/[0.07]">
               <div className="glass rounded-xl px-4 py-3 text-center">
                 <Send size={18} className="mx-auto text-accent" />
-                <p className="mt-1.5 text-[13px] font-medium text-fg">Drop to copy to {names.target(target)}</p>
+                <p className="mt-1.5 text-[13px] font-medium text-fg">{fileDrop.kind === "move" ? "Drop to move here" : `Drop to copy to ${names.target(target)}`}</p>
                 <p className="mt-0.5 max-w-[260px] truncate font-mono text-[11px] text-fg-3">{names.text(fileDrop.dir)}</p>
               </div>
             </div>
