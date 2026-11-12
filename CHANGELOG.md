@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.13 — drag files into a folder, or out to download
+
+- **Drag files onto a folder to move them.** Select files in Files and drag them onto a folder in the same list, onto “..” for the folder above, or onto the same server's other Files tab. Nothing there is replaced: a name that's taken stays put and SSHeesh says so, and Undo in the note moves everything back.
+- **Drag files out of the window to download them.** Let go past the window's edge and SSHeesh asks whether to download; they land in your Downloads folder.
+
 ## 0.10.12 — Docker cleanups that clean
 
 - **Docker cleanups do their job.** Unused images, build cache and stopped containers in the disk window asked Docker's "[y/N]" with nobody there to answer, so nothing was removed, or a terminal waited for you to type y. They now go ahead once you press Run.
