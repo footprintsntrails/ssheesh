@@ -718,10 +718,12 @@ export const mockBackend: Backend = {
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";
     tree[parent] = (tree[parent] ?? []).filter((x) => x.name !== path.split("/").pop());
   },
-  async downloadPath(_t, path, _isDir, hooks) {
+  async downloadPath(_t, path, _isDir, hooks, dir) {
     await fakeTransfer(hooks, 48 * 1024 * 1024);
-    return `~/Downloads/${path.split("/").pop()}`;
+    return `${dir ?? "~/Downloads"}/${path.split("/").pop()}`;
   },
+  // ?drop=<folder>: pretends that folder is under the pointer outside the window.
+  dropFolder: async () => new URLSearchParams(location.search).get("drop"),
   async uploadPaths(_t, _paths, _dir, _overwrite, clean, hooks) {
     await fakeTransfer(hooks, 23 * 1024 * 1024, clean ? DEMO_CLEANING : undefined);
   },

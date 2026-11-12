@@ -125,7 +125,10 @@ export interface Backend {
   /** Unpacks the archive `name` in `dir` beside it; resolves to the name of what it made. */
   extractArchive(target: TargetRef, dir: string, name: string): Promise<string>;
   deletePath(target: TargetRef, path: string): Promise<void>;
-  downloadPath(target: TargetRef, path: string, isDir: boolean, hooks: TransferHooks): Promise<string>;
+  /** Into Downloads, or into `dir`: a folder on this computer the files were dragged onto. */
+  downloadPath(target: TargetRef, path: string, isDir: boolean, hooks: TransferHooks, dir?: string): Promise<string>;
+  /** The folder on this computer under the pointer (the desktop, a file manager's window), or null where it can't be told. */
+  dropFolder(): Promise<string | null>;
   /** With `clean`, files lose their metadata (location, camera, author…) on the way to a server. */
   uploadPaths(target: TargetRef, paths: string[], remoteDir: string, overwrite: boolean, clean: boolean, hooks: TransferHooks): Promise<void>;
   /** Copies `paths`, all in one folder on `from`, into `destDir` on the server `to`; cleaned as an upload when `from` is this computer. */
@@ -320,7 +323,8 @@ async function tauriBackend(): Promise<Backend> {
     archivePaths: (target, dir, names, archive) => call("archive_paths", { target, dir, names, archive }),
     extractArchive: (target, dir, name) => call("extract_archive", { target, dir, name }),
     deletePath: (target, path) => call("delete_path", { target, path }),
-    downloadPath: (target, path, isDir, hooks) => call("download_path", { target, path, isDir, ...progress(hooks) }),
+    downloadPath: (target, path, isDir, hooks, dir) => call("download_path", { target, path, isDir, dir: dir ?? null, ...progress(hooks) }),
+    dropFolder: () => call("drop_folder"),
     uploadPaths: (target, paths, remoteDir, overwrite, clean, hooks) =>
       call("upload_paths", { target, paths, remoteDir, overwrite, clean, ...progress(hooks) }),
     copyToServer: (from, to, paths, destDir, overwrite, clean, hooks) =>

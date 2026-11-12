@@ -8,6 +8,7 @@ pub mod agents;
 pub mod checkup;
 pub mod containers;
 pub mod disk;
+pub mod drop_folder;
 pub mod error;
 pub mod files;
 pub mod fixes;

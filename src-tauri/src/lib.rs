@@ -570,18 +570,32 @@ fn downloads_dir() -> PathBuf {
     dirs::download_dir().filter(|d| *d != home).unwrap_or_else(|| home.join("Downloads"))
 }
 
-/// Saves a server file or folder into Downloads; returns the local path.
+/// The folder on this computer under the pointer right now (the desktop, a
+/// file manager's window), for files let go there. None where it can't be told.
+#[tauri::command]
+async fn drop_folder() -> Result<Option<String>, OpError> {
+    blocking(|| Ok(sshee_core::drop_folder::folder_under_pointer().filter(|d| d.is_dir()).map(|d| d.display().to_string()))).await
+}
+
+/// Saves a server file or folder into Downloads, or into `dir` (a folder you
+/// dragged it onto); returns the local path. Nothing there is replaced.
 #[tauri::command]
 async fn download_path(
     state: State<'_, AppState>,
     target: TargetSpec,
     path: String,
     is_dir: bool,
+    dir: Option<String>,
     transfer_id: String,
     on_progress: Channel<TransferProgress>,
 ) -> Result<String, OpError> {
     let (t, env) = (resolve(&state, &target)?, state.env.clone());
-    run_transfer(&state, transfer_id, on_progress, move |xfer| files::download(&t, &env, &path, is_dir, &downloads_dir(), &xfer)).await
+    let dest = match dir.map(PathBuf::from) {
+        Some(d) if d.is_absolute() && d.is_dir() => d,
+        Some(_) => return Err(OpError::new(sshee_core::error::ErrorCode::NotFound, "That folder isn't there anymore.")),
+        None => downloads_dir(),
+    };
+    run_transfer(&state, transfer_id, on_progress, move |xfer| files::download(&t, &env, &path, is_dir, &dest, &xfer)).await
 }
 
 /// Uploads files and folders into `remote_dir`; with `clean`, files lose
@@ -1050,6 +1064,7 @@ pub fn run() {
             open_media,
             close_media,
             download_path,
+            drop_folder,
             upload_paths,
             copy_to_server,
             cancel_transfer,

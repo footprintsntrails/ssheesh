@@ -19,6 +19,8 @@ on:
       - "src/lib/terminals.ts"
       - "src/lib/keys.ts"
       - "crates/sshee-core/src/media.rs"
+      - "crates/sshee-core/src/drop_folder.rs"
+      - "crates/sshee-core/examples/drop_folder_check.rs"
       - "Cargo.lock"
       - ".github/window-check/**"
       - ".github/workflows/window-check.yml"
@@ -50,6 +52,12 @@ jobs:
           npx tauri build --no-bundle
           New-Item -ItemType Directory -Force C:\app | Out-Null
           Copy-Item target\release\ssheesh.exe C:\app\SSHeesh.exe
+      # Files dragged out of the window download into the folder under the
+      # pointer: a real Explorer window and the real desktop say which.
+      - name: The folder under the pointer
+        if: ${{ !inputs.version }}
+        shell: pwsh
+        run: cargo run -p sshee-core --release --example drop_folder_check
       - name: Get the published version
         if: ${{ inputs.version }}
         shell: pwsh

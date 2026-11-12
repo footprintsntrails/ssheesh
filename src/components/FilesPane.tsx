@@ -605,11 +605,12 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
 
   // Progress for both shows on a card in the corner, with a Stop button.
   // The note that it's done opens its folder, with the file picked out.
-  const download = async (items: { name: string; path: string; isDir: boolean }[]) => {
+  /** Into Downloads, or into `into`: a folder on this computer. */
+  const download = async (items: { name: string; path: string; isDir: boolean }[], into?: string) => {
     if (!remote || items.length === 0) return;
     for (const e of items) {
       try {
-        const at = await track("download", e.name, (hooks) => backend.downloadPath(target, e.path, e.isDir, hooks));
+        const at = await track("download", e.name, (hooks) => backend.downloadPath(target, e.path, e.isDir, hooks, into));
         const show = () => void backend.revealFiles([at]).catch((err) => fail("Couldn't open the folder", err));
         toast({ tone: "success", title: `Downloaded ${e.name}`, body: at, action: { label: "Show in folder", run: show } });
       } catch (err) {
@@ -666,15 +667,24 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
     dirCache.changed(tk, to);
   };
 
-  /** Files dragged out of the window: asks first, since letting go there is easy to do by accident. */
+  /**
+   * Files let go outside the window. Where the computer can say which folder
+   * is under the pointer (the desktop, a folder's window), they go there;
+   * otherwise into Downloads. It asks first, since letting go out there is
+   * easy to do by accident, and says where they'll land.
+   */
   const downloadDragged = async (entries: FileEntry[]) => {
+    // Asked at once: the pointer moves on while the question is up.
+    const into = await backend.dropFolder().catch(() => null);
     const what = entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} items`;
+    // A folder on this computer: on Windows its parts are split by "\".
+    const place = into ? into.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || into : "Downloads";
     const ok = await confirm({
-      title: `Download ${what} to this computer?`,
-      body: `From ${names.target(target)}, into your Downloads folder.`,
+      title: `Download ${what} to ${place}?`,
+      body: into ? `From ${names.target(target)}, into ${into}. Nothing there is replaced.` : `From ${names.target(target)}, into your Downloads folder.`,
       confirmLabel: "Download",
     });
-    if (ok) await download(entries.map((x) => ({ name: x.name, path: joinPath(dir, x.name), isDir: x.kind === "dir" })));
+    if (ok) await download(entries.map((x) => ({ name: x.name, path: joinPath(dir, x.name), isDir: x.kind === "dir" })), into ?? undefined);
   };
 
   const upload = async (paths: string[]) => {
@@ -1294,8 +1304,9 @@ export function FilesPane({ pane, target, focused }: { pane: PaneState; target: 
                         const picked = selectedSet.has(entry.name) ? selectedEntries : [entry];
                         dragFiles(
                           e,
-                          { from: target, dir, paths: picked.map((x) => joinPath(dir, x.name)) },
+                          { from: target, dir, paths: picked.map((x) => joinPath(dir, x.name)), folder: entry.kind === "dir" },
                           {
+                            lands: isWindows ? "Over the desktop or a folder's window it lands there; anywhere else, in Downloads." : "It lands in your Downloads folder.",
                             move: (to) => void moveInto(picked.map((x) => x.name), to),
                             download: () => void downloadDragged(picked),
                           },

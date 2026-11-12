@@ -5925,6 +5925,7 @@ dependencies = [
  "tor-rtcompat",
  "tracing",
  "tracing-subscriber",
+ "windows",
  "zip",
  "zstd",
 ]
