@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.14 — files land where you drop them
+
+- **On Windows, files dragged out land in the folder you drop them on.** Let go over the desktop or an Explorer window and they download there; the question names the folder first. Anywhere else, and on macOS and Linux, they still go to Downloads. Nothing already there is replaced.
+- **A card flies with the files you drag.** A folder or a file, a count when there are several, and what letting go will do. Past the window's edge the window says so and the pointer turns into a folder with an arrow.
+
 ## 0.10.13 — drag files into a folder, or out to download
 
 - **Drag files onto a folder to move them.** Select files in Files and drag them onto a folder in the same list, onto “..” for the folder above, or onto the same server's other Files tab. Nothing there is replaced: a name that's taken stays put and SSHeesh says so, and Undo in the note moves everything back.
