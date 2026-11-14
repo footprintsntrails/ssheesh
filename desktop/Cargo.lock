@@ -5824,7 +5824,7 @@ dependencies = [
 
 [[package]]
 name = "ssheesh-preview"
-version = "0.0.1"
+version = "1.0.0-canary"
 dependencies = [
  "dirs",
  "indexmap 2.14.2",

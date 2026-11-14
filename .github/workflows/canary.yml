@@ -100,3 +100,54 @@ jobs:
           name: ssheesh-preview-${{ matrix.name }}
           path: preview
           retention-days: 14
+
+  # One pre-release named "SSHeesh 1.0.0 canary" under the tag `canary`, replaced by every
+  # green push. The tag doesn't start with `v`, so release.yml never runs for it, and a
+  # pre-release is never GitHub's "latest": 0.10's updater (releases/latest/download/latest.json)
+  # and the README's download link keep pointing at 0.10.
+  publish:
+    name: Pre-release for testing
+    needs: build
+    if: github.ref == 'refs/heads/canary'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ssheesh-preview-*
+          path: dl
+
+      # Artifacts lose the executable bit; tar keeps it for Linux and macOS.
+      - name: Pack each system's build
+        run: |
+          mkdir -p up
+          chmod +x dl/ssheesh-preview-Linux/ssheesh-preview dl/ssheesh-preview-macOS/ssheesh-preview
+          tar -C dl/ssheesh-preview-Linux -czf up/ssheesh-1.0.0-canary-linux-x64.tar.gz ssheesh-preview
+          tar -C dl/ssheesh-preview-macOS -czf up/ssheesh-1.0.0-canary-macos-arm64.tar.gz ssheesh-preview
+          (cd dl/ssheesh-preview-Windows && zip -q ../../up/ssheesh-1.0.0-canary-windows-x64.zip ssheesh-preview.exe)
+          ls -la up
+
+      - name: Replace the canary pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          short="${GITHUB_SHA::7}"
+          cat > notes.md <<NOTES
+          A test build of SSHeesh 1.0, the app rewritten in Rust. Built from \`$short\` (run ${{ github.run_number }}). It is replaced by every new canary build; nothing here updates itself yet.
+
+          It keeps its own folder (\`~/.sshee-preview\`) and its own keychain entries, so it runs beside 0.10 and changes nothing of it. To try it without any real server, start it with \`--demo\`.
+
+          **Windows:** unzip and run \`ssheesh-preview.exe\`. The build is not signed yet: on the blue SmartScreen window choose "More info", then "Run anyway".
+
+          **macOS (Apple Silicon):** \`tar xzf ssheesh-1.0.0-canary-macos-arm64.tar.gz\`, then \`xattr -d com.apple.quarantine ssheesh-preview\` and \`./ssheesh-preview\`.
+
+          **Linux (x64):** \`tar xzf ssheesh-1.0.0-canary-linux-x64.tar.gz && ./ssheesh-preview\`. It needs Vulkan (Mesa's driver works).
+          NOTES
+          gh release delete canary --yes --cleanup-tag || true
+          gh release create canary up/* \
+            --target "$GITHUB_SHA" \
+            --title "SSHeesh 1.0.0 canary ($short)" \
+            --notes-file notes.md \
+            --prerelease --latest=false

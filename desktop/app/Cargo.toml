@@ -1,6 +1,6 @@
 [package]
 name = "ssheesh-preview"
-version = "0.0.1"
+version = "1.0.0-canary"
 description = "SSHeesh Preview: the 1.0 window on Rune, beside the released app"
 edition.workspace = true
 license.workspace = true
