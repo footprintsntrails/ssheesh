@@ -249,6 +249,10 @@ fn a_tab_is_named_after_its_agent_and_shows_it_working() {
     assert!(tree.contains("Terminal (Claude Code), web-staging"), "{tree}");
     // The backend was told which servers have a connected terminal to ask.
     assert_eq!(w.world.lock().unwrap().agents_on.last().unwrap(), &["web-staging"]);
+    // The screen it draws as it opens isn't work (tmux redraws on attach).
+    w.feed(agent, "> Apply migration 0042.\r\n");
+    assert!(!w.agent().working(agent));
+    w.wait(2.5);
     // Output comes: the working mark; it stops: the mark goes.
     w.feed(agent, "● Reading migrations/0042_orders_index.sql\r\n");
     assert!(w.agent().working(agent));
@@ -285,7 +289,7 @@ fn a_bell_says_needs_you_and_hands_a_safe_notification_to_the_backend() {
     w.rt.update(|s, tx| {
         s.focus_tab(agent, tx);
         s.show_home(tx);
-        s.screens.agent.streaming = true;
+        s.toggle_streamer(tx);
     });
     w.feed(agent, "\x07");
     assert_eq!(w.world.lock().unwrap().notified.last().unwrap().1, "Server 3 needs you");
@@ -495,7 +499,7 @@ fn the_agent_stopped_asking_while_the_card_was_open() {
 #[test]
 fn while_streaming_the_card_shows_no_question_and_no_answers() {
     let (mut w, agent, _) = Window::asking_on(DB, 3);
-    w.rt.update(|s, _| s.screens.agent.streaming = true);
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
     w.rest_on_tab(agent);
     let tree = w.tree();
     assert!(tree.contains("Its question is hidden while streaming."), "{tree}");

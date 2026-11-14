@@ -21,6 +21,10 @@
 //!   text after its last line break). Escape sequences (arrows, reports, paste brackets) aren't.
 //! - `cols`/`rows`: the size the fixture was made for; the pane opens at the size its window
 //!   holds (`--size`), and a difference is said on stderr.
+//! - `"durable": true` beside `events` plays a shell in tmux on a server. Then `drop: "why"`
+//!   loses the connection, and `back: { "history": "…", "away_min": 41 }` brings it back: the
+//!   history is what tmux would say it holds (the lines on screen at the drop, then the new
+//!   ones), for "while you were away".
 //! - Anything else in an event (`mark`, notes) is ignored: marks belong in Rune's `--script`.
 //!
 //! `--replay-out` records JSON lines with the pane's clock: `{"t":…,"write":"…"}` (the bytes as
@@ -47,6 +51,10 @@ const HISTORY: usize = 10_000;
 pub enum Step {
     Out(Vec<u8>),
     Echo(bool),
+    /// The connection drops, saying why.
+    Drop(String),
+    /// It comes back: tmux's history from then on, and how long it was away, in ms.
+    Back { history: String, away_ms: Option<u64> },
 }
 
 /// A fixture, read and filled.
@@ -54,6 +62,8 @@ pub enum Step {
 pub struct Fixture {
     pub size: Option<Size>,
     pub steps: Vec<(f64, Step)>,
+    /// The shell is in tmux on a server.
+    pub durable: bool,
 }
 
 /// A made-up secret of GitHub's token shape (`ghp_` and 36 letters and digits), different for
@@ -104,10 +114,15 @@ impl Fixture {
                 steps.push((t, Step::Out(bytes)));
             } else if let Some(on) = e["echo"].as_bool() {
                 steps.push((t, Step::Echo(on)));
+            } else if let Some(why) = e["drop"].as_str() {
+                steps.push((t, Step::Drop(why.to_owned())));
+            } else if let Some(history) = e["back"]["history"].as_str() {
+                let away_ms = e["back"]["away_min"].as_u64().map(|m| m * 60_000);
+                steps.push((t, Step::Back { history: history.to_owned(), away_ms }));
             }
         }
         steps.sort_by(|x, y| x.0.total_cmp(&y.0));
-        Ok(Fixture { size, steps })
+        Ok(Fixture { size, steps, durable: value["durable"].as_bool().unwrap_or(false) })
     }
 }
 
@@ -190,6 +205,9 @@ pub struct ReplayLink {
     clock: Cell<f64>,
     now: Cell<Option<Instant>>,
     bytes: Cell<u64>,
+    status: Option<StatusSink>,
+    /// tmux's history since the session last came back.
+    history: RefCell<Option<(String, Option<u64>)>>,
 }
 
 impl ReplayLink {
@@ -203,6 +221,8 @@ impl ReplayLink {
             clock: Cell::new(0.0),
             now: Cell::new(None),
             bytes: Cell::new(0),
+            status: None,
+            history: RefCell::new(None),
         }
     }
 
@@ -230,9 +250,11 @@ impl TermLink for ReplayLink {
         if let Some(want) = self.fixture.size.filter(|s| *s != size) {
             eprintln!("replay: the fixture was made for {}×{}; the window holds {}×{}", want.cols, want.rows, size.cols, size.rows);
         }
+        // (The history stays the terminal's own either way: no tmux reports here.)
         model.connected(false, HISTORY);
         self.model = Some(model);
-        status(LinkStatus::Connected { durable: false });
+        status(LinkStatus::Connected { durable: self.fixture.durable });
+        self.status = Some(status);
         self.record(json!({ "open": [size.cols, size.rows] }));
     }
 
@@ -280,6 +302,17 @@ impl TermLink for ReplayLink {
                     self.feed(&bytes);
                 }
                 Step::Echo(on) => self.echo.borrow_mut().on = on,
+                Step::Drop(note) => {
+                    if let Some(status) = &self.status {
+                        status(LinkStatus::Reconnecting { note });
+                    }
+                }
+                Step::Back { history, away_ms } => {
+                    *self.history.borrow_mut() = Some((history, away_ms));
+                    if let Some(status) = &self.status {
+                        status(LinkStatus::Connected { durable: self.fixture.durable });
+                    }
+                }
             }
         }
         None
@@ -291,6 +324,17 @@ impl TermLink for ReplayLink {
 
     fn note_copy(&self, text: &str) {
         self.record(json!({ "copy": text }));
+    }
+
+    /// Only the history a fixture's `back` gave: a replay has no tmux to scroll or search.
+    fn ask(&self, ask: super::overlays::Ask, done: super::overlays::Answer) -> bool {
+        match (ask, self.history.borrow().clone()) {
+            (super::overlays::Ask::History { .. }, Some((text, away_ms))) => {
+                done(Some(super::overlays::Reply::History { text, away_ms }));
+                true
+            }
+            _ => false,
+        }
     }
 }
 

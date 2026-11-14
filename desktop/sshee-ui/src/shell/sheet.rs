@@ -86,7 +86,8 @@ pub fn view(t: &'static Theme) -> El {
         status_item(t, "Down", "1.6 MB/s", false).key("s-down"),
         status_tor(t, Some(84)),
     ];
-    let icons: Vec<El> = Icon::ALL.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
+    let icons: Vec<El> = Icon::SIGNS.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
+    let server_icons: Vec<El> = sshee_app::labels::HOST_ICONS.iter().map(|(id, _)| icon(Icon::for_server(id), theme::ICON_RAIL, t.l2on)).collect();
     let mut page = col()
         .key("sheet")
         .w_full()
@@ -100,7 +101,8 @@ pub fn view(t: &'static Theme) -> El {
         .child(line(t, "l-buttons", "Button, chip, logo", buttons))
         .child(line(t, "l-menu", "Popover and menu", vec![question]))
         .child(line(t, "l-status", "Status bar", status))
-        .child(line(t, "l-icons", "Icons", icons));
+        .child(line(t, "l-icons", "Icons", icons))
+        .child(line(t, "l-server-icons", "Server icons", server_icons));
     // An agent's card in its states (below the fold of a window of the usual size).
     for (key, label, cards) in crate::screens::agent::sheet(t) {
         page = page.child(line(t, key, label, cards));

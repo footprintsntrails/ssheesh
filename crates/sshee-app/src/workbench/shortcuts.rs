@@ -28,23 +28,44 @@ pub enum Shortcut {
     StepTab(i32),
     /// The tab at this place in the row, 1 to 9.
     JumpToTab(usize),
+    /// Find in the terminal. `always`: pressed in a way no program in a terminal reads (⌘F,
+    /// Ctrl+Shift+F), so the find bar opens whatever runs there. Ctrl+F alone is also vim's
+    /// and less's "page down": the terminal decides who gets it (`sshee_term::find::takes_find_key`).
+    Find { always: bool },
+    /// Streamer mode: names, addresses and secrets hidden everywhere, or shown again.
+    Streamer,
+    /// Two tabs side by side, or one at a time.
+    SideBySide,
+    /// The command palette; `PaletteAlt` is its second shortcut off a Mac (0.10's `paletteAlt`).
+    Palette,
+    PaletteAlt,
+    /// "Add a server".
+    AddServer,
     /// The list of agents on every server, the waiting ones first (new in 1.0).
     Agents,
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 5] = [
+const NAMED: [(Shortcut, &str); 11] = [
     (Shortcut::Agents, "agents"),
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
     (Shortcut::ReopenTab, "reopenTab"),
     (Shortcut::ToggleSidebar, "sidebar"),
+    (Shortcut::Find { always: false }, "find"),
+    (Shortcut::Streamer, "streamer"),
+    (Shortcut::SideBySide, "toggleSplit"),
+    (Shortcut::Palette, "palette"),
+    (Shortcut::PaletteAlt, "paletteAlt"),
+    (Shortcut::AddServer, "addHost"),
 ];
 
 impl Shortcut {
     /// Its id in 0.10's settings (`shortcuts`), for the ones Settings can change.
     pub fn id(self) -> Option<&'static str> {
-        NAMED.iter().find(|(s, _)| *s == self).map(|(_, id)| *id)
+        // However find was pressed, it's one shortcut in Settings.
+        let this = if let Shortcut::Find { .. } = self { Shortcut::Find { always: false } } else { self };
+        NAMED.iter().find(|(s, _)| *s == this).map(|(_, id)| *id)
     }
 }
 
@@ -72,6 +93,15 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         // Elsewhere Ctrl+Shift+T is a new tab, as in Windows Terminal; Z undoes a close.
         Shortcut::ReopenTab => (if mac { "t" } else { "z" }, true),
         Shortcut::ToggleSidebar => ("b", false),
+        // As in a browser: ⌘F, and Ctrl+F without Shift elsewhere.
+        Shortcut::Find { .. } => return Some(if mac { keys("f", false, true, false) } else { keys("f", true, false, false) }),
+        Shortcut::Streamer => ("h", true),
+        Shortcut::SideBySide => ("s", true),
+        // ⌘K clears the terminal on a Mac, so the palette has one shortcut there.
+        Shortcut::Palette => ("l", false),
+        Shortcut::PaletteAlt if mac => return None,
+        Shortcut::PaletteAlt => ("k", false),
+        Shortcut::AddServer => ("n", true),
         // ⌘A selects all on a Mac, so the agents take ⌘⇧A there.
         Shortcut::Agents => ("a", true),
         Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
@@ -102,8 +132,16 @@ pub fn match_shortcut(p: &Pressed, mac: bool, changed: &IndexMap<String, Option<
             None => default_keys(shortcut, mac),
         };
         if keys.is_some_and(|k| same(&k, p)) {
-            return Some(shortcut);
+            return Some(match shortcut {
+                // ⌘F is nobody else's; a bare Ctrl+letter is also a program's key.
+                Shortcut::Find { .. } => Shortcut::Find { always: p.meta || p.shift || p.alt },
+                other => other,
+            });
         }
+    }
+    // Find with Shift, off a Mac: the chord no program reads, so it always opens the bar.
+    if !mac && p.key == "f" && p.ctrl && p.shift && !p.alt && !p.meta && !matches!(changed.get("find"), Some(None)) {
+        return Some(Shortcut::Find { always: true });
     }
     // A tab by its number: the digit key at its place, whatever the layout types there.
     let digit = p.key.parse::<usize>().ok().filter(|n| (1..=9).contains(n) && p.key.len() == 1)?;
@@ -207,5 +245,48 @@ mod tests {
         assert_eq!(default_keys(Shortcut::ReopenTab, true), Some(keys("t", false, true, true)));
         assert_eq!(default_keys(Shortcut::ReopenTab, false), Some(keys("z", true, false, true)));
         assert_eq!(default_keys(Shortcut::JumpToTab(1), true), None);
+        assert_eq!(Shortcut::Find { always: true }.id(), Some("find"));
+        assert_eq!(Shortcut::Streamer.id(), Some("streamer"));
+        assert_eq!(Shortcut::SideBySide.id(), Some("toggleSplit"));
+    }
+
+    #[test]
+    fn find_streamer_mode_and_side_by_side_keep_0_10s_keys() {
+        // A Mac: ⌘F, ⌘⇧H, ⌘⇧S.
+        assert_eq!(hit("f", "m", true), Some(Shortcut::Find { always: true }));
+        assert_eq!(hit("h", "ms", true), Some(Shortcut::Streamer));
+        assert_eq!(hit("s", "ms", true), Some(Shortcut::SideBySide));
+        // ⌘H hides the app and ⌘S is nothing here; Ctrl+F is the shell's on a Mac.
+        assert_eq!(hit("h", "m", true), None);
+        assert_eq!(hit("s", "m", true), None);
+        assert_eq!(hit("f", "c", true), None);
+        // Elsewhere: Ctrl+F as in a browser (the terminal may leave it to vim or less), and
+        // Ctrl+Shift+F, which no program reads.
+        assert_eq!(hit("f", "c", false), Some(Shortcut::Find { always: false }));
+        assert_eq!(hit("f", "cs", false), Some(Shortcut::Find { always: true }));
+        assert_eq!(hit("h", "cs", false), Some(Shortcut::Streamer));
+        assert_eq!(hit("s", "cs", false), Some(Shortcut::SideBySide));
+        // Ctrl+H is Backspace and Ctrl+S stops output: the terminal's.
+        assert_eq!(hit("h", "c", false), None);
+        assert_eq!(hit("s", "c", false), None);
+        // Find turned off in Settings is off with Shift too.
+        let mut changed = IndexMap::new();
+        changed.insert("find".to_owned(), None);
+        assert_eq!(match_shortcut(&press("f", "c"), false, &changed), None);
+        assert_eq!(match_shortcut(&press("f", "cs"), false, &changed), None);
+    }
+
+    #[test]
+    fn the_palette_and_add_a_server_keep_0_10s_keys() {
+        assert_eq!(hit("l", "cs", false), Some(Shortcut::Palette));
+        assert_eq!(hit("k", "cs", false), Some(Shortcut::PaletteAlt));
+        assert_eq!(hit("n", "cs", false), Some(Shortcut::AddServer));
+        assert_eq!(hit("l", "m", true), Some(Shortcut::Palette));
+        assert_eq!(hit("n", "ms", true), Some(Shortcut::AddServer));
+        // ⌘K clears the terminal on a Mac; Ctrl+L and Ctrl+K are the shell's everywhere.
+        assert_eq!(hit("k", "m", true), None);
+        assert_eq!(hit("l", "c", false), None);
+        assert_eq!(hit("k", "c", true), None);
+        assert_eq!((Shortcut::Palette.id(), Shortcut::PaletteAlt.id(), Shortcut::AddServer.id()), (Some("palette"), Some("paletteAlt"), Some("addHost")));
     }
 }

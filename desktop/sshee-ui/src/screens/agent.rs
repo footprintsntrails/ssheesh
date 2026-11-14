@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use rune::{canvas, col, el, row, spacer, text, text_input, Align, Cx, El, Key, KeyEvent, LineCap, Mods, Shape, Side, TextEdit, Tx};
 use sshee_app::agents::answer::{Card, Did, Outcome, Press, RowLook, Scene, Stroke};
-use sshee_app::agents::{server_shown, waited, AgentKind, AgentRow, AgentState, Agents, Standing};
+use sshee_app::agents::{waited, AgentKind, AgentRow, AgentState, Agents, Standing};
 use sshee_app::workbench::{Link, Server, ServerKey, Tab, TabId, TabKind};
 use sshee_term::attention::{AttentionKind, QUIET_MS};
 use sshee_term::present::Look;
@@ -51,6 +51,9 @@ const HOVER_CLOSE_MS: u64 = 300;
 const TYPING_HOLD_MS: u64 = 1_000;
 /// The window's clock starts here, so "two minutes ago" at the start is still a time.
 const CLOCK_START_MS: u64 = 3_600_000;
+/// A terminal's screen as it is drawn when its session opens (tmux redrawing it on attach, a
+/// replay's first screen) isn't an agent at work: output this soon after the first is ignored.
+const OPENING_MS: u64 = 2_000;
 /// The most of a command or a change a card shows.
 const CONTEXT_LINES: usize = 8;
 
@@ -63,8 +66,6 @@ fn ms(clock: f64) -> u64 {
 pub struct State {
     /// Every terminal's agent and attention.
     pub agents: Agents,
-    /// Streamer mode: a card shows no question, a notification no names.
-    pub streaming: bool,
     /// Settings: tell me when a terminal needs me.
     pub notify: bool,
     /// The card under a tab, when one is open.
@@ -89,6 +90,8 @@ pub struct State {
     readings: HashMap<TabId, (u64, Reading)>,
     /// The frames each pane had taken at the last poll: more since means output came.
     frames: HashMap<TabId, u64>,
+    /// When each pane drew its first frame.
+    first_frame: HashMap<TabId, u64>,
     /// The tabs drawn with the working mark.
     working: HashSet<TabId>,
     /// When output last came anywhere, for the "went quiet" check.
@@ -103,7 +106,6 @@ impl Default for State {
     fn default() -> Self {
         State {
             agents: Agents::default(),
-            streaming: false,
             notify: true,
             card: None,
             keyboard: false,
@@ -116,6 +118,7 @@ impl Default for State {
             left_at: None,
             readings: HashMap::new(),
             frames: HashMap::new(),
+            first_frame: HashMap::new(),
             working: HashSet::new(),
             last_output: None,
             asking: Vec::new(),
@@ -130,6 +133,7 @@ impl State {
         self.agents.retain(open);
         self.readings.retain(|id, _| open(*id));
         self.frames.retain(|id, _| open(*id));
+        self.first_frame.retain(|id, _| open(*id));
         self.working.retain(|id| open(*id));
         if self.card.as_ref().is_some_and(|c| !open(c.tab)) {
             self.card = None;
@@ -160,10 +164,28 @@ impl State {
         self.list.is_some()
     }
 
-    /// How text from a terminal may be shown outside it: secrets always dotted.
-    fn look(&self) -> Look {
-        Look { streaming: self.streaming, hide_secrets: true, ..Look::default() }
+    /// Something of the agents' holds the keyboard over the window: the card that took it,
+    /// or the list. Nothing behind it gets a key (`States::any_open`).
+    pub fn holds_keyboard(&self) -> bool {
+        self.has_keyboard() || self.list.is_some()
     }
+
+    /// Puts the card and the list away, without a word to the terminal: something else opens
+    /// over the window (`States::close_all`).
+    pub fn close(&mut self) {
+        self.card = None;
+        self.keyboard = false;
+        self.focus_card = false;
+        self.list = None;
+        self.left_at = None;
+        self.hover = None;
+    }
+}
+
+/// A tab's machine as the window may draw it: "Server 2" while streaming (`Shell::server_shown`).
+fn server_name(s: &Shell, tab: &Tab) -> String {
+    let name = s.bench.server(&tab.server).map_or("Unknown server", |sv| sv.name.as_str());
+    s.server_shown(&tab.server, name).into_owned()
 }
 
 /// A tab that has been waiting since before the window opened (a demo's scene): every tab
@@ -193,8 +215,9 @@ pub(crate) fn asked(s: &mut Shell, id: TabId, clock: f64) {
 /// Marks the tab, and hands the system notification to the backend when one is due.
 fn attention(s: &mut Shell, id: TabId, kind: AttentionKind, said: Option<String>, now: u64) {
     let on_screen = s.bench.active_id() == Some(id);
+    // Secrets always dotted, and names too while streaming.
+    let look = s.look();
     let st = &mut s.screens.agent;
-    let look = st.look();
     let at = standing(s.window_focused, on_screen, st.notify, &look);
     let note = st.agents.ask(&mut s.bench, id, kind, said, now, &at);
     if let (Some(note), Some(tab)) = (note, s.bench.tab(id).cloned()) {
@@ -212,6 +235,10 @@ pub(crate) fn foreground(s: &mut Shell, server: &str, running: &[(String, String
         .collect();
     for (id, command) in tabs {
         s.screens.agent.agents.set_foreground(&mut s.bench, id, command.as_deref());
+        // The terminal hears it too: whether Ctrl+F is the program's or the find bar's.
+        if let Some(pane) = s.panes.get_mut(&id) {
+            pane.set_foreground(command);
+        }
     }
 }
 
@@ -255,7 +282,7 @@ pub(crate) fn settled(s: &mut Shell, _tx: &mut Tx) {
 fn reading_of(s: &mut Shell, tab: TabId) -> Reading {
     let unseen = Reading::Unsure(Unsure::Unseen);
     // While streaming a card shows nothing of the terminal, so it reads nothing.
-    if s.screens.agent.streaming {
+    if s.streaming() {
         return unseen;
     }
     let Some(agent) = s.bench.tab(tab).and_then(AgentKind::of) else { return unseen };
@@ -331,6 +358,9 @@ fn open_card(s: &mut Shell, tab: TabId, keyboard: bool, tx: &mut Tx) {
     let reading = reading_of(s, tab);
     let prod = s.bench.tab(tab).and_then(|t| s.bench.server(&t.server)).is_some_and(Server::is_prod);
     let typed_before = s.pane(tab).and_then(|p| p.typed_at());
+    if keyboard {
+        s.screens.close_all();
+    }
     let st = &mut s.screens.agent;
     st.card = Some(Card::open(tab, agent.name(), prod, &reading, now));
     st.keyboard = keyboard;
@@ -352,8 +382,8 @@ fn close_card(s: &mut Shell, tx: &mut Tx) {
     st.left_at = None;
     // The pointer may still rest on the tab: it has to leave and come back to open it again.
     st.hover = None;
-    if had_keyboard && s.active_pane().is_some() {
-        tx.focus("term", false);
+    if had_keyboard {
+        s.settle(tx);
     }
     tx.instant();
 }
@@ -475,9 +505,8 @@ pub(crate) fn toggle_list(s: &mut Shell, tx: &mut Tx) {
     if s.screens.agent.list.is_some() {
         return close_list(s, tx);
     }
+    s.screens.close_all();
     let st = &mut s.screens.agent;
-    st.card = None;
-    st.keyboard = false;
     // The longest wait is first, and chosen.
     st.list = Some(0);
     tx.focus("agents", false);
@@ -486,10 +515,7 @@ pub(crate) fn toggle_list(s: &mut Shell, tx: &mut Tx) {
 
 fn close_list(s: &mut Shell, tx: &mut Tx) {
     s.screens.agent.list = None;
-    if s.active_pane().is_some() {
-        tx.focus("term", false);
-    }
-    tx.instant();
+    s.settle(tx);
 }
 
 /// Return or a click on a row: a waiting agent's card with the keyboard, else its tab.
@@ -542,25 +568,23 @@ pub(crate) fn poll(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
         st.now = now;
         for (id, pane) in &s.panes {
             let seen = st.frames.insert(*id, pane.frames);
-            if seen.is_some_and(|n| n != pane.frames) {
+            if pane.frames > 0 {
+                st.first_frame.entry(*id).or_insert(now);
+            }
+            let opening = st.first_frame.get(id).is_none_or(|at| now < at + OPENING_MS);
+            if seen.is_some_and(|n| n != pane.frames) && !opening {
                 st.agents.output(*id, now, focused && active == Some(*id));
                 st.last_output = Some(now);
             }
         }
     }
 
-    // A tab that says "Needs you" without a terminal yet gets one, so its question can be read.
-    let unseen: Vec<TabId> = s.bench.tabs().iter().filter(|t| t.needs_you && t.agent.is_some() && t.kind == TabKind::Terminal && !s.panes.contains_key(&t.id)).map(|t| t.id).collect();
-    for id in unseen {
-        s.open_unseen(id);
-    }
-
     // Long runs that went quiet while nobody looked.
     if let Some(last) = s.screens.agent.last_output {
         if now >= last + QUIET_MS {
+            let look = s.look();
             let st = &mut s.screens.agent;
             st.last_output = None;
-            let look = st.look();
             let notify = st.notify;
             let quiet = st.agents.check_quiet(&mut s.bench, now, |id| standing(focused, active == Some(id), notify, &look));
             for (id, note) in quiet {
@@ -681,7 +705,7 @@ fn code_box(t: &Theme, lines: &[String]) -> El {
         .py(8.0)
         .radius(theme::RADIUS_ROW)
         .fill(t.code)
-        .child(text(shown.join("\n")).font(theme::CODE).color(t.l1).wrap())
+        .child(text(shown.join("\n")).font(theme::CODE.lh(17.0)).color(t.l1).wrap())
 }
 
 /// The field the answer in your own words is written in.
@@ -742,16 +766,17 @@ struct Show<'a> {
 
 fn card_view(s: &Shell, card: &Card, tab: &Tab, t: &'static Theme) -> El {
     let st = &s.screens.agent;
-    let look = st.look();
+    let look = s.look();
+    let streaming = s.streaming();
     // Who asks, and where. The folder is the terminal's word, so it's made safe like any.
-    let server = server_shown(&s.bench, tab, st.streaming);
-    let folder = s.pane(card.tab).and_then(|p| p.cwd()).filter(|_| !st.streaming).map(|f| look.safe_text(f));
+    let server = server_name(s, tab);
+    let folder = s.pane(card.tab).and_then(|p| p.cwd()).filter(|_| !streaming).map(|f| look.safe_text(f));
     let place = match folder {
         Some(folder) => format!("on {server}, in {folder}"),
         None => format!("on {server}"),
     };
     let waited = st.agents.waiting_since(card.tab).map(|since| waited(since, st.now));
-    card_el(t, &Show { key: "agent-card", card, place, waited, keyboard: st.keyboard, streaming: st.streaming, words: &st.words, under: Some(card.tab) })
+    card_el(t, &Show { key: "agent-card", card, place, waited, keyboard: st.keyboard, streaming, words: &st.words, under: Some(card.tab) })
 }
 
 fn card_el(t: &'static Theme, show: &Show) -> El {
@@ -931,7 +956,9 @@ fn list_view(s: &Shell, chosen: usize, t: &'static Theme, cx: &mut Cx<Shell>) ->
     let mut list = col().key("agents-rows").w_full().px(6.0).pb(6.0).role("menu");
     for (i, r) in rows.iter().enumerate() {
         let tab = r.tab;
-        let server = s.bench.tab(tab).map_or_else(|| r.server.clone(), |t| server_shown(&s.bench, t, st.streaming));
+        let server = s.bench.tab(tab).map_or_else(|| r.server.clone(), |t| server_name(s, t));
+        // A tab named after a folder may hold a name streamer mode hides.
+        let r = &AgentRow { label: s.text_shown(&r.label).into_owned(), ..r.clone() };
         list = list.child(agent_row(t, r, &server, i == chosen, st.now).key(format!("agent-{}", tab.0)).on_press_tx(move |s: &mut Shell, tx| pick(s, tab, tx)));
     }
     if rows.is_empty() {

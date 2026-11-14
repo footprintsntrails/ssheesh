@@ -129,10 +129,11 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
         Some(close) => e.hover_group().child(icon_or_close(t, spec.icon, icon_ink, close)),
         None => e.child(icon(spec.icon, theme::ICON, icon_ink)),
     };
-    let mut name = text(spec.name).key("name").font(theme::TAB_NAME).color(name_ink).single_line();
+    // The name fades out at its end in any tab narrower than its words: a crowded row, or a
+    // tab the row holds at its width while the pointer is over it.
+    let name = text(spec.name).key("name").font(theme::TAB_NAME).color(name_ink).single_line().truncate_fade().shrink();
     if compact {
         e = e.shrink().min_w(theme::ICON + 16.0);
-        name = name.truncate_fade().shrink();
     }
     e = e.child(name);
     if let Some(server) = spec.server {

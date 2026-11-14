@@ -9,7 +9,11 @@
 //! - the logo is 0.10's (`Logo()` in src/components/ui.tsx): a terminal window making a `>_<`
 //!   face;
 //! - the server and the stats line are drawn here in the same manner (the design has no
-//!   symbol for a server without a look of its own, nor for a Stats tab).
+//!   symbol for a server without a look of its own, nor for a Stats tab);
+//! - the rest of 0.10's thirty server icons (`HOST_ICONS` in src/lib/labels.ts: cloud, house,
+//!   network, storage and so on) and the few signs menus and forms need (a check mark, a
+//!   pencil, a bin) are drawn here too, on the same 16-unit grid with the same round-ended
+//!   line, from plain shapes: none is copied from an icon set.
 //!
 //! An icon's line stays [`theme::ICON_LINE`] points whatever its size, as the design's
 //! `non-scaling-stroke` does.
@@ -51,6 +55,61 @@ pub enum Icon {
     Server,
     /// A Stats tab.
     Stats,
+    /// Up and down: the find bar's older and newer match, a list that opens.
+    ChevronUp,
+    ChevronDown,
+    /// Streamer mode: names and secrets are shown, or (the eye struck through) hidden.
+    Eye,
+    EyeOff,
+    /// Two tabs side by side.
+    SideBySide,
+    // ---- the rest of the server icons, by what the server is for
+    Cloud,
+    /// Home, and the main menu in a list.
+    House,
+    /// Network: three boxes joined.
+    Router,
+    /// Storage: a disk drive.
+    Drive,
+    /// Compute: a chip.
+    Cpu,
+    /// VPN: a padlock on the icon grid ([`Icon::Lock`] is the small one over a secret).
+    Padlock,
+    Rocket,
+    Bot,
+    /// AI: a four-pointed spark (an agent at work is [`Icon::Agent`]).
+    Sparkle,
+    Git,
+    Mail,
+    Chat,
+    Shop,
+    /// Passwords, and signing in with a key.
+    Key,
+    /// Monitoring.
+    Chart,
+    Game,
+    Film,
+    Music,
+    Camera,
+    /// Smart home.
+    Wifi,
+    /// Workstation.
+    Desktop,
+    /// Containers.
+    Cube,
+    // ---- signs for menus and forms
+    /// A row that is on.
+    Check,
+    /// Rename.
+    Pencil,
+    /// Remove.
+    Bin,
+    /// Bring a closed tab back.
+    Reopen,
+    /// Icon and colour.
+    Swatch,
+    /// Back to the page before.
+    Back,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -69,9 +128,12 @@ use Piece::{Oval, Path, Rect};
 /// The window frame the sidebar toggle and the terminal share.
 const WINDOW: Piece = Rect(1.8, 2.8, 12.4, 10.4, 2.4);
 
+/// An eye's outline, for streamer mode's two states.
+const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8-3.7 4.2-6.4 4.2S3.1 10.8 1.6 8z");
+
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 19] = [
+    pub const ALL: [Icon; 52] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -91,6 +153,65 @@ impl Icon {
         Icon::Gear,
         Icon::Server,
         Icon::Stats,
+        Icon::ChevronUp,
+        Icon::ChevronDown,
+        Icon::Eye,
+        Icon::EyeOff,
+        Icon::SideBySide,
+        Icon::Cloud,
+        Icon::House,
+        Icon::Router,
+        Icon::Drive,
+        Icon::Cpu,
+        Icon::Padlock,
+        Icon::Rocket,
+        Icon::Bot,
+        Icon::Sparkle,
+        Icon::Git,
+        Icon::Mail,
+        Icon::Chat,
+        Icon::Shop,
+        Icon::Key,
+        Icon::Chart,
+        Icon::Game,
+        Icon::Film,
+        Icon::Music,
+        Icon::Camera,
+        Icon::Wifi,
+        Icon::Desktop,
+        Icon::Cube,
+        Icon::Check,
+        Icon::Pencil,
+        Icon::Bin,
+        Icon::Reopen,
+        Icon::Swatch,
+        Icon::Back,
+    ];
+
+    /// The signs that aren't a server's icon, for the component sheet.
+    pub const SIGNS: [Icon; 22] = [
+        Icon::ChevronUp,
+        Icon::ChevronDown,
+        Icon::Eye,
+        Icon::EyeOff,
+        Icon::SideBySide,
+        Icon::Sidebar,
+        Icon::Folder,
+        Icon::Agent,
+        Icon::Close,
+        Icon::Plus,
+        Icon::Search,
+        Icon::Tor,
+        Icon::Lock,
+        Icon::Warning,
+        Icon::Gear,
+        Icon::Stats,
+        Icon::Check,
+        Icon::Pencil,
+        Icon::Bin,
+        Icon::Reopen,
+        Icon::Swatch,
+        Icon::Back,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -132,19 +253,91 @@ impl Icon {
             ),
             Icon::Server => (16.0, &[Rect(2.2, 2.6, 11.6, 4.6, 1.4), Rect(2.2, 8.8, 11.6, 4.6, 1.4), Path("M4.7 4.9h.2M4.7 11.1h.2")]),
             Icon::Stats => (16.0, &[Path("M1.8 8.6h2.4l1.8-4.6 3.4 8.6 1.9-4h2.9")]),
+            Icon::ChevronUp => (16.0, &[Path("M4.2 9.8 8 6l3.8 3.8")]),
+            Icon::ChevronDown => (16.0, &[Path("M4.2 6.2 8 10l3.8-3.8")]),
+            Icon::Eye => (16.0, &[EYE, Oval(8.0, 8.0, 1.9, 1.9)]),
+            Icon::EyeOff => (16.0, &[EYE, Oval(8.0, 8.0, 1.9, 1.9), Path("M3.2 12.8 12.8 3.2")]),
+            Icon::SideBySide => (16.0, &[WINDOW, Path("M8 2.8v10.4")]),
+            Icon::Cloud => (16.0, &[Path("M4.8 12.6h6.6a2.8 2.8 0 0 0 .5-5.56 4.2 4.2 0 0 0-8.1 1.1A2.3 2.3 0 0 0 4.8 12.6z")]),
+            Icon::House => (16.0, &[Path("M2.4 7.6 8 2.8l5.6 4.8M3.8 6.6v6.6h8.4V6.6M6.7 13.2V9.6h2.6v3.6")]),
+            Icon::Router => (16.0, &[Rect(5.8, 2.2, 4.4, 3.6, 1.0), Rect(1.8, 10.2, 4.4, 3.6, 1.0), Rect(9.8, 10.2, 4.4, 3.6, 1.0), Path("M8 5.8V8M4 10.2V8h8v2.2")]),
+            Icon::Drive => (16.0, &[Rect(2.0, 8.4, 12.0, 4.8, 1.4), Path("M2.6 8.6 4.6 3.4h6.8l2 5.2M10.9 10.8h.2")]),
+            Icon::Cpu => (
+                16.0,
+                &[Rect(4.0, 4.0, 8.0, 8.0, 1.4), Rect(6.5, 6.5, 3.0, 3.0, 0.6), Path("M6.4 1.9V4M9.6 1.9V4M6.4 12v2.1M9.6 12v2.1M1.9 6.4H4M1.9 9.6H4M12 6.4h2.1M12 9.6h2.1")],
+            ),
+            Icon::Padlock => (16.0, &[Rect(3.4, 7.2, 9.2, 6.4, 1.4), Path("M5.4 7.2V5.2a2.6 2.6 0 0 1 5.2 0v2M8 9.8v1.4")]),
+            Icon::Rocket => (
+                16.0,
+                &[Path("M8 1.8c2 1.6 3 3.8 3 6.4l-1 3H6l-1-3c0-2.6 1-4.8 3-6.4zM5.2 9l-1.9 1.9.3 2.3 2.1-1.1M10.8 9l1.9 1.9-.3 2.3-2.1-1.1M8 12.6v1.6"), Oval(8.0, 6.4, 1.2, 1.2)],
+            ),
+            Icon::Bot => (16.0, &[Rect(3.0, 5.4, 10.0, 7.6, 2.0), Path("M8 5.4V3M6 8.4v1.4M10 8.4v1.4M1.6 8.2v2.2M14.4 8.2v2.2"), Oval(8.0, 2.4, 0.5, 0.5)]),
+            Icon::Sparkle => (16.0, &[Path("M8 2c.5 3.2 2.8 5.5 6 6-3.2.5-5.5 2.8-6 6-.5-3.2-2.8-5.5-6-6 3.2-.5 5.5-2.8 6-6z")]),
+            Icon::Git => (16.0, &[Oval(4.6, 3.8, 1.6, 1.6), Oval(4.6, 12.2, 1.6, 1.6), Oval(11.4, 5.6, 1.6, 1.6), Path("M4.6 5.4v5.2M11.4 7.2c0 2.2-2.2 3.2-6.8 3.4")]),
+            Icon::Mail => (16.0, &[Rect(1.8, 3.4, 12.4, 9.2, 1.6), Path("M2.6 4.8 8 8.8l5.4-4")]),
+            Icon::Chat => (
+                16.0,
+                &[Path("M3.4 2.8h9.2a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6H7.2l-3 2.4v-2.4h-.8a1.6 1.6 0 0 1-1.6-1.6V4.4a1.6 1.6 0 0 1 1.6-1.6z")],
+            ),
+            Icon::Shop => (16.0, &[Path("M2.2 6.4 3.6 2.8h8.8l1.4 3.6zM3.4 6.4v6.8h9.2V6.4M6.6 13.2V9.6h2.8v3.6")]),
+            Icon::Key => (16.0, &[Oval(5.2, 10.8, 2.6, 2.6), Path("M7.1 8.9 13 3M11.2 4.8l1.8 1.8M9.3 6.7l1.5 1.5")]),
+            Icon::Chart => (16.0, &[Path("M2.2 2.4v11.4h11.6M4.8 10.6l2.6-3.2 2.2 1.8 3.4-4.4")]),
+            Icon::Game => (
+                16.0,
+                &[Path("M5.2 5h5.6A3.2 3.2 0 0 1 14 8.2v.6a2.6 2.6 0 0 1-4.6 1.6l-.2-.2H6.8l-.2.2A2.6 2.6 0 0 1 2 8.8v-.6A3.2 3.2 0 0 1 5.2 5zM5.2 7v2M4.2 8h2M10.7 8h.2")],
+            ),
+            Icon::Film => (16.0, &[Rect(2.2, 3.0, 11.6, 10.0, 1.6), Path("M5.2 3v10M10.8 3v10M2.2 6.4h3M2.2 9.6h3M10.8 6.4h3M10.8 9.6h3")]),
+            Icon::Music => (16.0, &[Oval(4.8, 11.6, 1.9, 1.9), Oval(11.3, 10.4, 1.9, 1.9), Path("M6.7 11.6V4l6.5-1.4v7.8")]),
+            Icon::Camera => (16.0, &[Rect(1.8, 4.6, 12.4, 8.6, 1.6), Oval(8.0, 8.9, 2.4, 2.4), Path("M5.6 4.6l.9-1.7h3l.9 1.7")]),
+            Icon::Wifi => (16.0, &[Path("M2.2 6.6a8.4 8.4 0 0 1 11.6 0M4.3 8.9a5.3 5.3 0 0 1 7.4 0M6.4 11.1a2.3 2.3 0 0 1 3.2 0M8 13.3v.1")]),
+            Icon::Desktop => (16.0, &[Rect(1.8, 2.8, 12.4, 8.2, 1.4), Path("M5.8 13.6h4.4M8 11v2.6")]),
+            Icon::Cube => (16.0, &[Path("M8 1.9l5.4 3v6.2L8 14.1l-5.4-3V4.9zM2.6 4.9 8 8l5.4-3.1M8 8v6.1")]),
+            Icon::Check => (16.0, &[Path("M3.4 8.4l3 3 6.2-6.6")]),
+            Icon::Pencil => (16.0, &[Path("M10.6 2.9l2.5 2.5-7.6 7.6-3 .5.5-3zM9.2 4.3l2.5 2.5")]),
+            Icon::Bin => (
+                16.0,
+                &[Path("M2.8 4.4h10.4M6.2 4.4V2.9h3.6v1.5M4.2 4.4l.6 8.2a1.2 1.2 0 0 0 1.2 1.1h4a1.2 1.2 0 0 0 1.2-1.1l.6-8.2M6.7 7v4M9.3 7v4")],
+            ),
+            Icon::Reopen => (16.0, &[Path("M2.8 3v3.6h3.6M3 6.6a5.3 5.3 0 1 1 1.3 5.2")]),
+            Icon::Swatch => (16.0, &[Oval(8.0, 8.0, 6.0, 6.0), Oval(8.0, 8.0, 2.2, 2.2)]),
+            Icon::Back => (16.0, &[Path("M9.8 3.6 5.4 8l4.4 4.4")]),
         }
     }
 
-    /// The icon for a server's look in 0.10 (`HOST_ICONS` in src/lib/labels.ts has thirty; the
-    /// 1.0 design has drawn these so far, and the rest show the plain server).
+    /// The icon for a server's look in 0.10, by its id there (`HOST_ICONS` in
+    /// src/lib/labels.ts: thirty of them). An id this version doesn't know shows the plain
+    /// server.
     pub fn for_server(id: &str) -> Icon {
         match id {
-            "laptop" | "local" | "desktop" | "terminal" => Icon::Laptop,
+            "laptop" | "local" => Icon::Laptop,
+            "cloud" => Icon::Cloud,
             "globe" => Icon::Globe,
             "database" => Icon::Database,
+            "box" => Icon::Cube,
+            "home" => Icon::House,
+            "router" => Icon::Router,
+            "drive" => Icon::Drive,
+            "cpu" => Icon::Cpu,
+            "shield" => Icon::Shield,
+            "vpn" => Icon::Padlock,
+            "rocket" => Icon::Rocket,
             "flask" => Icon::Flask,
-            "backup" | "drive" | "box" => Icon::Box,
-            "shield" | "vpn" | "vault" => Icon::Shield,
+            "bot" => Icon::Bot,
+            "ai" => Icon::Sparkle,
+            "terminal" => Icon::Terminal,
+            "git" => Icon::Git,
+            "mail" => Icon::Mail,
+            "chat" => Icon::Chat,
+            "shop" => Icon::Shop,
+            "vault" => Icon::Key,
+            "chart" => Icon::Chart,
+            "backup" => Icon::Box,
+            "game" => Icon::Game,
+            "film" => Icon::Film,
+            "music" => Icon::Music,
+            "camera" => Icon::Camera,
+            "iot" => Icon::Wifi,
+            "desktop" => Icon::Desktop,
             _ => Icon::Server,
         }
     }
@@ -279,7 +472,20 @@ mod tests {
         assert_eq!(Icon::for_server("database"), Icon::Database);
         assert_eq!(Icon::for_server("laptop"), Icon::Laptop);
         assert_eq!(Icon::for_server("backup"), Icon::Box);
-        assert_eq!(Icon::for_server("rocket"), Icon::Server);
+        assert_eq!(Icon::for_server("rocket"), Icon::Rocket);
+        assert_eq!(Icon::for_server("something-new"), Icon::Server);
         assert_eq!(Icon::for_server(""), Icon::Server);
+    }
+
+    #[test]
+    fn each_of_0_10s_thirty_server_icons_has_a_drawing_of_its_own() {
+        let ids = sshee_app::labels::HOST_ICONS.map(|(id, _)| id);
+        let drawn: std::collections::HashSet<Icon> = ids.iter().map(|id| Icon::for_server(id)).collect();
+        assert_eq!(drawn.len(), 30);
+        // Only the plain server shows the plain server.
+        assert_eq!(ids.iter().filter(|id| Icon::for_server(id) == Icon::Server).count(), 1);
+        // Every icon is on the sheet once: as a server's, or as a sign.
+        assert_eq!(drawn.len() + Icon::SIGNS.len(), Icon::ALL.len());
+        assert!(Icon::SIGNS.iter().all(|sign| !drawn.contains(sign)));
     }
 }
