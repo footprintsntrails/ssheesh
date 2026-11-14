@@ -111,8 +111,11 @@ fn run(name: &str, args: &[&str], size: &str, script: Option<Value>) -> Option<R
 
 fn key(t: f64, name: &str, held: &str) -> Value {
     let mut e = json!({ "t": t, "type": "key", "name": name });
+    // "c": the shortcut key, Ctrl elsewhere and ⌘ alone on a Mac (as `window.rs` presses it).
     if held.contains('c') {
-        e["ctrl"] = json!(true);
+        if !cfg!(target_os = "macos") {
+            e["ctrl"] = json!(true);
+        }
         e["cmd"] = json!(true);
     }
     if held.contains('s') {
