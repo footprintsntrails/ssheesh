@@ -150,7 +150,7 @@ fn shortcut_row(s: &Shell, t: &'static Theme, id: &'static str, on: Keyboard) ->
     // so the caps stay in one column.
     let own: Vec<String> = ids.iter().filter_map(|i| keymap::default_keys(i, on.mac())).map(|k| keymap::keys_label(&k, on)).collect();
     let reset = if is_changed && works {
-        icon_button(t, Icon::Undo, &format!("Back to {}", own.join(" or ")), true).key(format!("reset-{id}")).on_press_tx(move |s: &mut Shell, tx| {
+        icon_button(t, Icon::Reopen, &format!("Back to {}", own.join(" or ")), true).key(format!("reset-{id}")).on_press_tx(move |s: &mut Shell, tx| {
             let mut next = s.settings.get().shortcuts.clone();
             match keymap::reset(&mut next, ids, keyboard(s)) {
                 Ok(()) => {

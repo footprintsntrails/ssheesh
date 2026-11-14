@@ -109,6 +109,14 @@ pub trait Backend {
         let _ = command;
     }
 
+    /// Adding and managing servers (`screens::add_server`, `screens::server_menu`): saving,
+    /// the keychain and reading other programs' files wait, so the backend does what is
+    /// asked on a thread of its own and answers through `Remote` (`Shell::servers_answer`,
+    /// `Remote::set_servers`, `Shell::set_server_looks`).
+    fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        let _ = ask;
+    }
+
     /// Sessions are replays on the window's own clock (a demo, a test): panes then run on
     /// Rune's clock, virtual in a headless run, so every run draws the same.
     fn replays(&self) -> bool {
@@ -169,8 +177,18 @@ pub struct Shell {
     pub screens: crate::screens::States,
     /// The settings. Changed through [`Shell::change_settings`], which applies them at once.
     pub settings: SettingsStore,
-    /// What panes hide and colour, as the settings say (`screens::settings::apply`).
-    pub(crate) look: sshee_term::present::Look,
+    /// The words terminals colour, as Settings has them (`screens::settings::apply`).
+    pub(crate) highlights: std::sync::Arc<sshee_term::highlight::Highlights>,
+    /// The panes' look changed where no `Tx` was at hand (a setting from another thread): the
+    /// next poll hands it to them.
+    pub(crate) look_stale: bool,
+    /// Which tabs are shown side by side (`split.rs`), and where the pair is drawn.
+    pub layout: sshee_app::workbench::layout::Layout,
+    pub(crate) sides: super::split::Sides,
+    /// The row of tabs' own state: its menu, a drag, what is in sight (`tabs.rs`).
+    pub(crate) row: super::tabs::Row,
+    /// Streamer mode (`streamer.rs`).
+    pub(crate) streamer: super::streamer::Streamer,
 }
 
 /// A session's status as a tab's.
@@ -195,7 +213,8 @@ impl Shell {
         let settings = backend.settings();
         let mut shell = Shell {
             settings,
-            look: sshee_term::present::Look::default(),
+            highlights: Default::default(),
+            look_stale: false,
             screens: crate::screens::States::default(),
             kept,
             bench,
@@ -209,6 +228,10 @@ impl Shell {
             watching: None,
             strip_width: None,
             clock_base,
+            layout: Default::default(),
+            sides: Default::default(),
+            row: Default::default(),
+            streamer: Default::default(),
         };
         shell.apply_settings();
         shell.sync_panes();
@@ -234,6 +257,11 @@ impl Shell {
         self.panes.get(&id)
     }
 
+    /// The backend, for a screen that asks it for something.
+    pub(crate) fn backend_mut(&mut self) -> &mut dyn Backend {
+        self.backend.as_mut()
+    }
+
     /// A pane for `tab`, with a link from the backend and the window's wakers.
     fn make_pane(&mut self, tab: &Tab) -> TermPane {
         let id = tab.id;
@@ -246,7 +274,9 @@ impl Shell {
             None => Arc::new(|_| {}),
         };
         let mut pane = TermPane::new(link, status, self.options.pane.clone());
-        pane.set_look(self.look.clone());
+        // Side by side there are two terminals on the page: each takes the keyboard by its own name.
+        pane.set_focus_key(format!("pane-{}", id.0));
+        pane.view.borrow_mut().set_look(self.look());
         if let Some(waker) = &self.waker {
             pane.set_waker(waker.clone());
         }
@@ -273,9 +303,14 @@ impl Shell {
         }
         let bench = &self.bench;
         self.screens.retain(|id| bench.tab(id).is_some());
-        if let Some(tab) = self.bench.active().filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
-            let pane = self.make_pane(&tab);
-            self.panes.insert(tab.id, pane);
+        self.row.retain(|id| bench.tab(id).is_some());
+        self.layout.prune(bench);
+        // The tab on screen, and the one shown beside it.
+        for id in self.tabs_on_screen() {
+            if let Some(tab) = self.bench.tab(id).filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
+                let pane = self.make_pane(&tab);
+                self.panes.insert(tab.id, pane);
+            }
         }
     }
 
@@ -330,16 +365,39 @@ impl Shell {
         self.sync_panes();
         self.sync_watch();
         self.sync_keyboard(tx);
+        self.save_tabs();
+        if self.screens.any_open() || self.screens.settings.open {
+            // What is open over the window, and Settings over the page, keep the keyboard.
+        } else if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
+            tx.focus(format!("pane-{}", id.0), false);
+        } else if self.bench.showing_home() {
+            // The main menu takes arrows, Return and typing, whatever was clicked.
+            tx.focus("home-page", false);
+        }
+        // Tabs come and go at once, as in a browser: nothing slides.
+        tx.instant();
+    }
+
+    /// Settings' two copy switches, for every terminal open now and opened later: whether a
+    /// selection that rests is copied, and whether a program may write the clipboard (OSC 52).
+    /// A program that copies what you select in it (OpenCode, tmux) and SSHeesh's own copy on
+    /// select would otherwise both write.
+    pub fn set_copy_modes(&mut self, copy_on_select: bool, program_clipboard: bool) {
+        self.options.pane.copy_on_select = copy_on_select;
+        self.options.pane.program_clipboard = program_clipboard;
+        for pane in self.panes.values_mut() {
+            pane.options.copy_on_select = copy_on_select;
+            pane.options.program_clipboard = program_clipboard;
+        }
+    }
+
+    /// Tells the backend what to keep for the next run, when the row of tabs changed.
+    pub(crate) fn save_tabs(&mut self) {
         let saved = self.bench.saved();
         if saved != self.kept {
             self.backend.tabs_changed(&saved);
             self.kept = saved;
         }
-        if self.active_pane().is_some() && !self.screens.settings.open {
-            tx.focus("term", false);
-        }
-        // Tabs come and go at once, as in a browser: nothing slides.
-        tx.instant();
     }
 
     // ---- what the screen does
@@ -417,9 +475,17 @@ impl Shell {
             Shortcut::ToggleSidebar => self.toggle_sidebar(tx),
             Shortcut::Settings => self.toggle_settings(tx),
             Shortcut::ToggleVitals => self.change_settings(tx, |st| st.set(|s| s.show_vitals = !s.show_vitals)),
-            Shortcut::StreamerMode => self.change_settings(tx, |st| st.set(|s| s.streamer_mode = !s.streamer_mode)),
             Shortcut::StepTab(step) => self.step_tab(step, tx),
             Shortcut::JumpToTab(n) => self.jump_to_tab(n, tx),
+            Shortcut::Find { .. } => {
+                if let Some(pane) = self.active_pane() {
+                    pane.open_find(tx);
+                }
+            }
+            Shortcut::Streamer => self.toggle_streamer(tx),
+            Shortcut::SideBySide => self.toggle_side_by_side(tx),
+            Shortcut::Palette | Shortcut::PaletteAlt => self.toggle_palette(tx),
+            Shortcut::AddServer => self.open_add_server(tx),
         }
     }
 
@@ -428,6 +494,10 @@ impl Shell {
         let Some(name) = super::keys::key_name(ev, tx.physical_key(), tx.key_base()) else { return false };
         let pressed = Pressed { key: &name, ctrl: ev.mods.ctrl, meta: ev.mods.logo, alt: ev.mods.alt, shift: ev.mods.shift };
         let Some(shortcut) = match_shortcut(&pressed, self.options.mac_keys, &self.options.shortcuts) else { return false };
+        // Ctrl+F alone is also a program's key (vim, less): the terminal on screen says whose.
+        if shortcut == (Shortcut::Find { always: false }) && !self.active_pane().is_some_and(|p| p.find_is_open() || p.takes_find_key()) {
+            return false;
+        }
         // A held key walks through the tabs; it doesn't open or close one after another.
         if !tx.key_repeat() || matches!(shortcut, Shortcut::StepTab(_)) {
             self.run(shortcut, tx);
@@ -438,9 +508,16 @@ impl Shell {
     /// A key with nothing focused (`AppSpec::on_key`): a shortcut, else the terminal on
     /// screen's.
     pub fn key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        // Behind the palette, a dialog or a menu, keys are theirs alone.
+        if self.screens.any_open() {
+            return false;
+        }
         // Settings, while it is over the page, takes what is left: nothing reaches a terminal
         // nobody sees.
-        self.shortcut(ev, tx) || crate::screens::settings::key(self, ev, tx) || self.active_pane().is_some_and(|p| p.key(ev, tx))
+        self.shortcut(ev, tx)
+            || crate::screens::settings::key(self, ev, tx)
+            || self.active_pane().is_some_and(|p| p.key(ev, tx))
+            || self.home_key(ev, tx)
     }
 
     pub fn paste(&mut self, content: &ClipboardContent, tx: &mut Tx) {
@@ -460,11 +537,6 @@ impl Shell {
     pub fn window_focus(&mut self, focused: bool, tx: &mut Tx) {
         self.window_focused = focused;
         self.sync_keyboard(tx);
-    }
-
-    /// The backend, for a screen that asks it something.
-    pub(crate) fn backend(&mut self) -> &mut dyn Backend {
-        self.backend.as_mut()
     }
 
     /// The window closes: connections go, shells in tmux stay.
@@ -489,16 +561,24 @@ impl Shell {
     /// hidden ones too (a program's questions are answered, and switching to a tab shows it as
     /// it is now). True when the view must run again.
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        // The screens' own clockwork: who started to wait, a server's card coming up.
+        let ticked = crate::screens::home::tick(self, clock, tx);
         let active = self.bench.active_id();
         let mut changed = false;
         let mut asked = Vec::new();
+        let mut wishes = Vec::new();
+        let beside = active.and_then(|id| self.layout.partner(id));
         for (id, pane) in &mut self.panes {
             let drew = pane.poll(clock, tx);
-            changed |= drew && Some(*id) == active;
+            changed |= drew && (Some(*id) == active || Some(*id) == beside);
             if pane.take_wants_you() {
                 asked.push(*id);
             }
+            wishes.extend(pane.take_wishes().into_iter().map(|wish| (*id, wish)));
         }
+        // What panes ask of the window (`tabs.rs`), and names to hide that are new.
+        changed |= self.grant(wishes, tx);
+        changed |= self.keep_streaming(tx);
         // A program rang or sent a notification: its tab says so, unless you're looking at it
         // or Settings says not to be told.
         for id in asked.into_iter().filter(|_| self.settings.get().notify_attention) {
@@ -506,7 +586,7 @@ impl Shell {
             self.bench.set_needs_you(id, true);
             changed |= self.bench.tab(id).is_some_and(|t| t.needs_you) != before;
         }
-        changed
+        changed || ticked
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

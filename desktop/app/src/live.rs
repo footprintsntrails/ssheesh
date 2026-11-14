@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use sshee_app::model::{ReconnectMode, Settings, WelcomeMode};
 use sshee_app::settings_store::SettingsStore;
@@ -24,8 +24,10 @@ use sshee_term::engine::Size;
 use sshee_term::model::Model;
 use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
+use sshee_ui::terminal::overlays::{Answer, Ask, Reply};
 use sshee_ui::terminal::{LinkStatus, StatusSink, TermLink};
 
+use crate::servers::{ServerStore, Shown};
 use crate::vitals::Watcher;
 
 /// History the terminal keeps itself: a little with tmux (tmux keeps the rest on the server),
@@ -36,12 +38,15 @@ const HISTORY_OWN: usize = 10_000;
 pub struct LiveBackend {
     manager: Arc<SessionManager>,
     env: SshEnv,
-    /// The servers by their key in the sidebar.
-    hosts: HashMap<String, Host>,
+    /// The servers by their key in the sidebar. Shared with the thread that changes the list
+    /// (`servers`), so a server added a moment ago connects.
+    hosts: Arc<Mutex<HashMap<String, Host>>>,
+    /// This copy's own list, when the program keeps one: adding, importing, renaming.
+    store: Option<Arc<Mutex<ServerStore>>>,
+    remote: Option<Remote>,
     /// `-F FILE` for every ssh, when the program was given a config of its own.
     ssh_config: Option<PathBuf>,
     watcher: Option<Watcher>,
-    remote: Option<Remote>,
     /// What a new terminal on a server shows first, as Settings has it now.
     welcome: Welcome,
     /// Settings' "SSHeesh's the first time, then the server's", and the servers that have had
@@ -76,18 +81,24 @@ impl LiveBackend {
     }
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
-        let hosts = hosts.iter().map(|h| (format!("host:{}", h.id), h.clone())).collect();
         LiveBackend {
             manager: Arc::new(SessionManager::new()),
             env,
-            hosts,
+            hosts: Arc::new(Mutex::new(by_key(hosts))),
             ssh_config,
             watcher: None,
+            store: None,
             remote: None,
             welcome: full_welcome(),
             welcome_first: false,
             welcomed: vec![],
         }
+    }
+
+    /// With this copy's own list of servers behind it (`Backend::servers`).
+    pub fn with_store(mut self, store: Arc<Mutex<ServerStore>>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Where a machine's shells run: this computer, or ssh's target for a server. `None`: a
@@ -97,12 +108,28 @@ impl LiveBackend {
         if server.is_local() {
             return Some(Target::Local);
         }
-        let mut target = self.hosts.get(&server.key())?.target();
+        let mut target = self.hosts.lock().ok()?.get(&server.key())?.target();
         if let Some(config) = &self.ssh_config {
             target.extra_args.extend(["-F".to_owned(), config.display().to_string()]);
         }
         Some(Target::Ssh(target))
     }
+}
+
+/// The hosts by their key in the sidebar.
+fn by_key(hosts: &[Host]) -> HashMap<String, Host> {
+    hosts.iter().map(|h| (format!("host:{}", h.id), h.clone())).collect()
+}
+
+/// Tells the window what the list holds now.
+fn show(remote: &Remote, shown: Shown, answer: Option<sshee_app::servers::Answer>) {
+    remote.update(move |s| {
+        s.bench.set_servers(shown.servers);
+        s.set_server_looks(shown.colors, shown.config_new, shown.old_new);
+        if let Some(answer) = answer {
+            s.servers_answer(answer);
+        }
+    });
 }
 
 /// Tor's state as the sidebar shows it. How long a round trip through it takes isn't measured
@@ -120,9 +147,19 @@ impl Backend for LiveBackend {
     fn start(&mut self, remote: Remote) {
         self.remote = Some(remote.clone());
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
+        self.remote = Some(remote.clone());
+        // The servers' colours, and what 0.10 and the ssh config still offer: files to read,
+        // so on a thread, and the main menu says so when it's known.
+        if let Some(store) = self.store.clone() {
+            let remote = remote.clone();
+            let _ = std::thread::Builder::new().name("servers".into()).spawn(move || {
+                let shown = store.lock().unwrap_or_else(|e| e.into_inner()).shown();
+                show(&remote, shown, None);
+            });
+        }
         // Tor, if it was left on in this copy (`~/.sshee-preview/tor/on`): every connection
         // from here on goes through it. The ports are the servers' own.
-        let ports = self.hosts.values().filter_map(|h| h.port).collect();
+        let ports = self.hosts.lock().map(|h| h.values().filter_map(|h| h.port).collect()).unwrap_or_default();
         sshee_core::tor::watch(move |status| remote.set_tor(tor_shown(&status)));
         sshee_core::tor::init(std::env::current_exe().unwrap_or_default(), ports);
     }
@@ -154,7 +191,30 @@ impl Backend for LiveBackend {
             env: self.env.clone(),
             bytes: Arc::new(AtomicU64::new(0)),
             welcome,
+            durable: Arc::new(AtomicBool::new(false)),
+            saved: self.store.clone().zip(server.and_then(|s| sshee_app::servers::host_id(&s.key()).map(str::to_owned))),
         })
+    }
+
+    /// Adding, importing and changing servers: files and the keychain, so on a thread of its
+    /// own. The answer and the new list are posted while the list is still held, so they
+    /// reach the window in the order the list changed.
+    fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        let (Some(store), Some(remote)) = (self.store.clone(), self.remote.clone()) else { return };
+        let hosts = self.hosts.clone();
+        let failed = remote.clone();
+        let spawned = std::thread::Builder::new().name("servers".into()).spawn(move || {
+            let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+            let answer = store.handle(ask);
+            let shown = store.shown();
+            if let Ok(mut hosts) = hosts.lock() {
+                *hosts = by_key(&shown.hosts);
+            }
+            show(&remote, shown, Some(answer));
+        });
+        if let Err(e) = spawned {
+            failed.update(move |s| s.servers_answer(sshee_app::servers::Answer::Failed(format!("Couldn't start: {e}"))));
+        }
     }
 
     fn settings(&mut self) -> SettingsStore {
@@ -174,7 +234,7 @@ impl Backend for LiveBackend {
     /// Settings' Tor switch and buttons. Starting Tor and writing its state take a moment:
     /// on a thread of their own; the sidebar hears through `tor::watch`.
     fn tor(&mut self, command: TorCommand) {
-        let ports: Vec<u16> = self.hosts.values().filter_map(|h| h.port).collect();
+        let ports: Vec<u16> = self.hosts.lock().map(|h| h.values().filter_map(|h| h.port).collect()).unwrap_or_default();
         let spawned = std::thread::Builder::new().name("tor-command".into()).spawn(move || {
             let done = match command {
                 TorCommand::On => sshee_core::tor::set_on(true, ports),
@@ -214,6 +274,11 @@ struct LiveLink {
     bytes: Arc<AtomicU64>,
     /// What it shows first.
     welcome: Welcome,
+    /// The shell runs in tmux on the server, as its last status said.
+    durable: Arc<AtomicBool>,
+    /// A server of this copy's own list, by its host id: its saved password is asked of the
+    /// keychain when the session starts, on the session's thread.
+    saved: Option<(Arc<Mutex<ServerStore>>, String)>,
 }
 
 /// What a tab says of a session's state. sshee-core's failure texts name no host.
@@ -235,7 +300,8 @@ impl TermLink for LiveLink {
             status(LinkStatus::Gone { note: "That server isn't in your list anymore.".into() });
             return;
         };
-        let spec = SessionSpec {
+        let saved = self.saved.clone();
+        let mut spec = SessionSpec {
             target,
             key: self.key.clone(),
             env: self.env.clone(),
@@ -245,12 +311,14 @@ impl TermLink for LiveLink {
         // On the reader thread (output, a server's Connected) or the session's (the rest): the
         // model locks what it shares.
         let bytes = self.bytes.clone();
+        let durable = self.durable.clone();
         let sink: EventSink = Arc::new(move |event| match event {
             SessionEvent::Output { data } => {
                 bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
                 model.feed(data.as_bytes());
             }
             SessionEvent::Status { state } => {
+                durable.store(matches!(state, SessionState::Connected { durable: true, .. }), Ordering::Relaxed);
                 match &state {
                     SessionState::Connected { durable, .. } => model.connected(*durable, if *durable { HISTORY_TMUX } else { HISTORY_OWN }),
                     SessionState::Connecting { .. } => {}
@@ -259,7 +327,14 @@ impl TermLink for LiveLink {
                 status(link_status(&state));
             }
         });
-        self.manager.open_with(&self.id, size.cols, size.rows, move || Ok(spec), sink, Delivery::Direct);
+        // The keychain may take a while, or ask to be unlocked: asked here, off the UI thread.
+        let prepare = move || {
+            if let (Target::Ssh(target), Some((store, host_id))) = (&mut spec.target, saved) {
+                target.password = store.lock().unwrap_or_else(|e| e.into_inner()).password(&host_id);
+            }
+            Ok(spec)
+        };
+        self.manager.open_with(&self.id, size.cols, size.rows, prepare, sink, Delivery::Direct);
     }
 
     fn write(&self, bytes: &[u8]) {
@@ -292,6 +367,29 @@ impl TermLink for LiveLink {
 
     fn bytes_received(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// tmux's rows, history or scroll position, read over the server's shared connection on a
+    /// thread of its own (each is an ssh round trip). Only for a shell in tmux on a server.
+    fn ask(&self, ask: Ask, done: Answer) -> bool {
+        let Some(target @ Target::Ssh(_)) = self.target.clone() else { return false };
+        if !self.durable.load(Ordering::Relaxed) {
+            return false;
+        }
+        let (env, key) = (self.env.clone(), self.key.clone());
+        let work = move || {
+            use sshee_core::session;
+            let reply = match ask {
+                Ask::Rows => session::rows(&target, &env, &key).ok().map(Reply::Rows),
+                Ask::History { lines } => session::history(&target, &env, &key, lines).ok().map(|text| Reply::History { text, away_ms: None }),
+                Ask::Scroll { position } => session::tmux_scroll(&target, &env, &key, position).ok().map(|s| {
+                    Reply::Scroll(sshee_term::scroll::TmuxScroll { in_mode: s.in_mode, position: s.position, history: s.history, height: s.height, limit: s.limit })
+                }),
+            };
+            done(reply);
+        };
+        // No thread to be had: the pane is told it couldn't be read.
+        std::thread::Builder::new().name("session-ask".into()).spawn(work).is_ok()
     }
 }
 

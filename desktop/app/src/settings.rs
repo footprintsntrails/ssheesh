@@ -34,6 +34,13 @@ pub fn open() -> SettingsStore {
     }
 }
 
+/// Whether this is the first start of this copy here: it has a folder and no settings file
+/// in it yet. Only then is 0.10 looked at (it copies a database), and the store waits for
+/// the answer.
+pub fn first_start() -> bool {
+    sshee_core::app_identity::current().dir().is_some_and(|dir| !dir.join(sshee_app::settings_store::FILE).exists())
+}
+
 /// What the first start begins from, given what looking for 0.10 turned up: its settings as
 /// the import read them (doubts included); a new install's defaults when 0.10 never ran here
 /// (`ran_here` false and nothing found); and a doubt when it did but nothing could be had.

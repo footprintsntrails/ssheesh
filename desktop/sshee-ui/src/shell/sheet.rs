@@ -10,12 +10,12 @@ use super::state::Shell;
 use crate::icons::{icon, logo, Icon};
 use crate::kit::button::toolbar_button;
 use crate::kit::chip::prod_chip;
-use crate::kit::field::{text_field, Field};
+use crate::kit::field::{input, search_field};
 use crate::kit::keycap::{key_cap_button, CapState};
 use crate::kit::menu::{menu, menu_row, RowState};
 use crate::kit::popover::{popover, popover_foot};
 use crate::kit::popup::popup_button;
-use crate::kit::push::{icon_button, push_button, toggle_button};
+use crate::kit::push::{icon_button, push_button, toggle_button, Push};
 use crate::kit::rail::{rail_button, RailState};
 use crate::kit::segmented::segmented;
 use crate::kit::slider::{slider, Range};
@@ -105,25 +105,20 @@ pub fn view(t: &'static Theme) -> El {
         slider(t, "Font size", Range { min: 10.0, max: 20.0, step: 1.0 }, 13.0, "13 px", true, |_: &mut Shell, _: f64, _: &mut Tx| {}).key("f-slider"),
     ];
     let buttons_and_fields = vec![
-        push_button(t, "Check now", true).key("f-push").on_press_tx(|_: &mut Shell, _| {}),
-        push_button(t, "Choose…", false).key("f-push-dis"),
+        push_button(t, "Check now", Push::Quiet, true).key("f-push").on_press_tx(|_: &mut Shell, _| {}),
+        push_button(t, "Choose…", Push::Quiet, false).key("f-push-dis"),
         popup_button(t, "Font", "JetBrains Mono", true).key("f-popup").on_press_tx(|_: &mut Shell, _| {}),
         toggle_button(t, "Logo", true, true).key("f-toggle-on").on_press_tx(|_: &mut Shell, _| {}),
         toggle_button(t, "System", false, true).key("f-toggle-off").on_press_tx(|_: &mut Shell, _| {}),
-        icon_button(t, Icon::Undo, "Back to its own keys", true).key("f-icon").on_press_tx(|_: &mut Shell, _| {}),
+        icon_button(t, Icon::Reopen, "Back to its own keys", true).key("f-icon").on_press_tx(|_: &mut Shell, _| {}),
         key_cap_button(t, "New terminal", "Ctrl+Shift+T", CapState::Rest).key("f-cap").on_press_tx(|_: &mut Shell, _| {}),
         key_cap_button(t, "New terminal", "Press keys…", CapState::Recording).key("f-cap-rec"),
         key_cap_button(t, "Next tab", "Ctrl+Tab", CapState::Fixed).key("f-cap-fixed"),
         key_cap_button(t, "Command bar", "Ctrl+Shift+L", CapState::Disabled).key("f-cap-dis"),
-        text_field(
-            t,
-            Field { placeholder: "Search", lead: Some(Icon::Search), width: Some(170.0) },
-            &TextEdit::default(),
-            |s: &mut Shell| &mut s.screens.settings.search,
-            |field| field.key("f-field"),
-        ),
+        search_field(t, input(t, &TextEdit::default(), "Search").key("f-field")).w(170.0),
     ];
-    let icons: Vec<El> = Icon::ALL.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
+    let icons: Vec<El> = Icon::SIGNS.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
+    let server_icons: Vec<El> = sshee_app::labels::HOST_ICONS.iter().map(|(id, _)| icon(Icon::for_server(id), theme::ICON_RAIL, t.l2on)).collect();
     col()
         .key("sheet")
         .w_full()
@@ -140,4 +135,5 @@ pub fn view(t: &'static Theme) -> El {
         .child(line(t, "l-form", "Switch, segments, slider", form))
         .child(line(t, "l-form-2", "Buttons, key caps, field", buttons_and_fields))
         .child(line(t, "l-icons", "Icons", icons))
+        .child(line(t, "l-server-icons", "Server icons", server_icons))
 }

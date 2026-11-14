@@ -1,58 +1,64 @@
-//! A text field (the design's `.field`): one line in a soft box, ringed in the focus colour
-//! while it has the keyboard. The typing itself is Rune's (`rune::text_input`): selection,
-//! the clipboard, input methods.
+//! The text field: one line on a recessed surface, with the blue ring while it has the
+//! keyboard (the design's `.field`). Rune's `text_input` does the editing (selection, the
+//! clipboard, input methods); this is its look.
+//!
+//! ```ignore
+//! field(t, input(t, &s.name, "Name").key("name").on_edit(|s: &mut Shell| &mut s.name), false)
+//! search_field(t, input(t, &s.query, "Search").key("search").on_edit(|s: &mut Shell| &mut s.query))
+//! ```
+//!
+//! The field takes the width it is given; the caller chains `.w(..)` or `.w_full()` on it.
 
 use rune::{text_input, El, TextEdit};
 
 use crate::icons::{icon, Icon};
 use crate::theme::{self, Theme};
 
-/// What a field shows around its text.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Field<'a> {
-    /// What it is for, said when it is empty and to a screen reader.
-    pub placeholder: &'a str,
-    /// An icon before the text (the magnifier of a search field).
-    pub lead: Option<Icon>,
-    /// Its width in points; `None` fills the room it is given.
-    pub width: Option<f32>,
+/// A one-line `text_input` in the interface's text, showing `hint` while empty. The caller
+/// adds its key, `.on_edit(..)` and the handlers, then wraps it in [`field`].
+pub fn input(t: &Theme, edit: &TextEdit, hint: &str) -> El {
+    styled(t, text_input(edit, theme::TEXT), hint)
 }
 
-/// The field over `edit`, a `TextEdit` in the window's state that `access` finds again.
-/// `dress` adds to the field itself what the caller needs: its `.key(..)`, and
-/// `.on_input_change(..)`, `.on_input_key(..)` or `.on_submit(..)` to hear of typing.
-pub fn text_field<S: 'static>(
-    t: &Theme,
-    spec: Field,
-    edit: &TextEdit,
-    access: impl for<'a> Fn(&'a mut S) -> &'a mut TextEdit + 'static,
-    dress: impl FnOnce(El) -> El,
-) -> El {
-    let input = text_input(edit, theme::TEXT)
-        .single_line()
-        .color(t.l1)
-        .placeholder(spec.placeholder, t.l2)
-        .caret(t.ring, t.ring.alpha(0.3))
-        .label(spec.placeholder)
-        .grow(1.0)
-        .min_w(0.0)
-        .on_edit(access);
-    let mut field = rune::row()
+/// [`input`] in the terminal's font: a path, a command, a pattern.
+pub fn code_input(t: &Theme, edit: &TextEdit, hint: &str) -> El {
+    styled(t, text_input(edit, theme::CODE), hint)
+}
+
+fn styled(t: &Theme, input: El, hint: &str) -> El {
+    input.single_line().grow(1.0).shrink().min_w(0.0).color(t.l1).placeholder(hint, t.l2).caret(t.ring, t.ring.alpha(0.35)).label(hint)
+}
+
+/// The surface, with `lead` before the text when there is one.
+fn surface(t: &Theme, lead: Option<Icon>, input: El, bad: bool) -> El {
+    let mut e = rune::row()
         .h(theme::FIELD)
         .px(8.0)
         .gap(6.0)
         .radius(theme::RADIUS_ROW)
-        .fill(if t.dark { t.code } else { t.page })
-        .border(1.0, t.hair)
-        .items_center()
+        .fill(t.field())
+        .border(1.0, if bad { t.red } else { t.hair })
+        .focus_within_ring(theme::RING, 0.0, if bad { t.red } else { t.ring })
         .cursor(rune::Cursor::Text)
-        .focus_within_ring(theme::RING, 0.0, t.ring);
-    field = match spec.width {
-        Some(width) => field.w(width),
-        None => field.w_full(),
-    };
-    if let Some(glyph) = spec.lead {
-        field = field.child(icon(glyph, 14.0, t.l2));
+        .items_center();
+    if let Some(glyph) = lead {
+        e = e.child(icon(glyph, 14.0, t.l2));
     }
-    field.child(dress(input))
+    e.child(input)
+}
+
+/// The field's surface around an [`input`]. `bad`: what it holds was refused, so its edge and
+/// ring are red.
+pub fn field(t: &Theme, input: El, bad: bool) -> El {
+    surface(t, None, input, bad)
+}
+
+/// A search field: the magnifier, then the [`input`].
+pub fn search_field(t: &Theme, input: El) -> El {
+    surface(t, Some(Icon::Search), input, false)
+}
+
+/// A quiet label over a field: "Address", "Port".
+pub fn labelled(t: &Theme, label: &str, field: El) -> El {
+    rune::col().gap(4.0).child(rune::text(label).font(theme::SMALL).color(t.l2).single_line().a11y_hidden()).child(field)
 }

@@ -530,8 +530,8 @@ fn a_shortcut_is_recorded_by_pressing_keys_and_refused_with_the_reason() {
     w.click("keys-closePane");
     w.key(Key::Escape, "");
     assert!(w.rt.state.screens.settings.keys.id.is_none() && w.rt.state.screens.settings.open);
-    // A shortcut 1.0 doesn't act on yet can't be recorded.
-    w.click("keys-palette");
+    // A shortcut 1.0 doesn't act on yet (filling the window with a pane) can't be recorded.
+    w.click("keys-zoomPane");
     assert!(w.rt.state.screens.settings.keys.id.is_none());
 }
 
@@ -668,4 +668,46 @@ fn copying_is_a_choice_and_a_switch_under_their_own_heading() {
     mac.go(Section::Terminal);
     assert!(mac.tree().contains("Only with ⌘C") && !mac.tree().contains("Only with Ctrl+Shift+C"));
     assert!(mac.says("Agents like OpenCode copy what you select inside them. If that fights with SSHeesh's own copying, choose 'Only with ⌘C' above."));
+}
+
+#[test]
+fn streamer_mode_is_one_thing_whichever_switch_turns_it() {
+    let mut w = Window::defaults();
+    w.click("server-1");
+    let streaming = |w: &Window| (w.settings().streamer_mode, w.rt.state.streaming(), w.rt.state.panes.values().next().unwrap().view.borrow().look().streaming);
+    // The eye in the top row: saved in Settings, and the terminal hides names.
+    w.click("streamer");
+    assert_eq!(streaming(&w), (true, true, true));
+    assert!(!w.tree().contains("web-7731"));
+    // Settings' switch shows it on, and turns it off for the eye too.
+    w.go(Section::Privacy);
+    w.click("privacy-streamer-control");
+    assert_eq!(streaming(&w), (false, false, false));
+    // The shortcut, with Settings open: on again, and Settings stays where it was.
+    w.key(Key::Command('h'), "cs");
+    assert_eq!(streaming(&w), (true, true, true));
+    assert!(w.rt.state.screens.settings.open && w.rt.state.screens.settings.section == Section::Privacy);
+    // The eye's own state is the setting's.
+    assert_eq!(w.fill("streamer"), Theme::of(true).selrail.hex());
+}
+
+#[test]
+fn copying_reaches_every_terminal_through_the_windows_copy_modes() {
+    let mut w = Window::defaults();
+    w.click("server-1");
+    let modes = |w: &Window| {
+        let pane = w.rt.state.panes.values().next().unwrap();
+        (w.rt.state.options.pane.copy_on_select, w.rt.state.options.pane.program_clipboard, pane.options.copy_on_select, pane.options.program_clipboard)
+    };
+    assert_eq!(modes(&w), (true, true, true, true));
+    w.go(Section::Terminal);
+    w.click("term-copy-control");
+    w.click("popup-menu/item-1");
+    w.click("term-program-clipboard-control");
+    assert_eq!(modes(&w), (false, false, false, false));
+    // A terminal opened later starts with them too.
+    w.click("settings-close");
+    w.click("server-2");
+    let fresh = w.rt.state.panes.values().filter(|p| !p.options.copy_on_select && !p.options.program_clipboard).count();
+    assert_eq!(fresh, 2);
 }

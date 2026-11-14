@@ -48,24 +48,24 @@ pub struct Entry {
 pub const SHORTCUTS: [Entry; 16] = [
     // The command bar sits on L, like a browser's address bar. On a Mac ⌘K clears the
     // terminal, so the bar has only ⌘L; elsewhere Ctrl+Shift+K opens it too, as it always did.
-    Entry { id: "palette", name: "Command bar", mac: k("l"), other: k("l"), does: None },
-    Entry { id: "paletteAlt", name: "Command bar", mac: None, other: k("k"), does: None },
+    Entry { id: "palette", name: "Command bar", mac: k("l"), other: k("l"), does: Some(Shortcut::Palette) },
+    Entry { id: "paletteAlt", name: "Command bar", mac: None, other: k("k"), does: Some(Shortcut::PaletteAlt) },
     Entry { id: "splitRight", name: "Split right", mac: k("d"), other: k("d"), does: None },
     Entry { id: "splitDown", name: "Split down", mac: ks("d", true), other: k("e"), does: None },
     Entry { id: "closePane", name: "Close tab", mac: k("w"), other: k("w"), does: Some(Shortcut::CloseTab) },
     Entry { id: "newTerminal", name: "New terminal", mac: k("t"), other: k("t"), does: Some(Shortcut::NewTerminal) },
     // Elsewhere Ctrl+Shift+T is a new tab, as in Windows Terminal; Z undoes a close.
     Entry { id: "reopenTab", name: "Reopen closed tab", mac: ks("t", true), other: k("z"), does: Some(Shortcut::ReopenTab) },
-    Entry { id: "toggleSplit", name: "Tabs side by side, or one at a time", mac: ks("s", true), other: k("s"), does: None },
-    Entry { id: "addHost", name: "Add a server", mac: ks("n", true), other: k("n"), does: None },
+    Entry { id: "toggleSplit", name: "Tabs side by side, or one at a time", mac: ks("s", true), other: k("s"), does: Some(Shortcut::SideBySide) },
+    Entry { id: "addHost", name: "Add a server", mac: ks("n", true), other: k("n"), does: Some(Shortcut::AddServer) },
     Entry { id: "settings", name: "Settings", mac: k(","), other: ks(",", false), does: Some(Shortcut::Settings) },
     Entry { id: "sidebar", name: "Show or hide the sidebar", mac: k("b"), other: k("b"), does: Some(Shortcut::ToggleSidebar) },
     Entry { id: "vitals", name: "Show or hide server vitals", mac: k("j"), other: k("j"), does: Some(Shortcut::ToggleVitals) },
     Entry { id: "zoomPane", name: "Fill the window with a pane", mac: ks("enter", true), other: k("enter"), does: None },
-    Entry { id: "streamer", name: "Streamer mode", mac: ks("h", true), other: k("h"), does: Some(Shortcut::StreamerMode) },
+    Entry { id: "streamer", name: "Streamer mode", mac: ks("h", true), other: k("h"), does: Some(Shortcut::Streamer) },
     Entry { id: "compact", name: "Compact mode", mac: ks("m", true), other: k("m"), does: None },
     // As in a browser. In 0.10, vim and less keep it.
-    Entry { id: "find", name: "Find in the terminal", mac: k("f"), other: ks("f", false), does: None },
+    Entry { id: "find", name: "Find in the terminal", mac: k("f"), other: ks("f", false), does: Some(Shortcut::Find { always: false }) },
 ];
 
 /// How Settings groups them. The command bar's second key shows on its row.
@@ -417,14 +417,16 @@ mod tests {
             assert_eq!(shortcut.id(), Some(e.id));
             for mac in [true, false] {
                 assert_eq!(default_keys(e.id, mac), rules::default_keys(shortcut, mac), "{} (mac: {mac})", e.id);
-                let k = default_keys(e.id, mac).unwrap();
+                // The command bar has no second key on a Mac.
+                let Some(k) = default_keys(e.id, mac) else { continue };
                 let (ctrl, meta, alt, shift) = held(&k);
                 let pressed = rules::Pressed { key: &k.key, ctrl, meta, alt, shift };
-                assert_eq!(rules::match_shortcut(&pressed, mac, &none()), Some(shortcut), "{} (mac: {mac})", e.id);
+                // Find comes back saying whether a program may keep it; it's the same shortcut.
+                assert_eq!(rules::match_shortcut(&pressed, mac, &none()).and_then(Shortcut::id), Some(e.id), "{} (mac: {mac})", e.id);
             }
         }
-        assert!(works("newTerminal") && works("settings") && works("streamer"));
-        assert!(!works("palette") && !works("splitRight") && !works("nobody"));
+        assert!(works("newTerminal") && works("settings") && works("streamer") && works("palette") && works("find"));
+        assert!(!works("splitRight") && !works("zoomPane") && !works("compact") && !works("nobody"));
     }
 
     #[test]

@@ -12,10 +12,10 @@ use sshee_term::engine::Color as TermColor;
 
 use super::{keyboard, TorCommand};
 use crate::icons::{icon, logo, Icon};
-use crate::kit::field::{text_field, Field};
+use crate::kit::field::{code_input, field, input};
 use crate::kit::form::{form_group, form_heading, form_note, form_row, form_row_stacked, RowText};
 use crate::kit::popup::popup_button;
-use crate::kit::push::{icon_button, push_button, toggle_button};
+use crate::kit::push::{icon_button, push_button, toggle_button, Push};
 use crate::kit::segmented::segmented;
 use crate::kit::slider::{slider, Range};
 use crate::kit::switch::switch;
@@ -88,19 +88,14 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
             let row_key = r.key;
             let fallback = rune::TextEdit::new(get(store));
             let edit = s.screens.settings.texts.get(row_key).unwrap_or(&fallback);
-            text_field(
-                t,
-                Field { placeholder, lead: None, width: Some(220.0) },
-                edit,
-                move |s: &mut Shell| s.screens.settings.texts.entry(row_key).or_default(),
-                move |input| {
-                    input.key(key).on_input_change(move |s: &mut Shell, tx| {
-                        // No longer than the row allows, counted in characters.
-                        let typed: String = s.screens.settings.texts.get(row_key).map(|e| e.text.chars().take(max).collect()).unwrap_or_default();
-                        s.change_settings(tx, |st| set(st, &typed));
-                    })
+            let typing = input(t, edit, placeholder).key(key).on_edit(move |s: &mut Shell| s.screens.settings.texts.entry(row_key).or_default()).on_input_change(
+                move |s: &mut Shell, tx| {
+                    // No longer than the row allows, counted in characters.
+                    let typed: String = s.screens.settings.texts.get(row_key).map(|e| e.text.chars().take(max).collect()).unwrap_or_default();
+                    s.change_settings(tx, |st| set(st, &typed));
                 },
-            )
+            );
+            field(t, typing, false).w(220.0)
         }
         Control::Toggles { options, get, toggle } => {
             let now = get(store);
@@ -119,12 +114,16 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
             let mut all = row().key(key).gap(6.0).flex_wrap().justify_end();
             for (i, (label, action)) in buttons.iter().enumerate() {
                 let enabled = on && *action != Action::Later;
-                let mut button = push_button(t, label, enabled).key(format!("button-{i}"));
-                if let (true, Action::Open(url)) = (enabled, action) {
-                    button = button.on_press_tx(move |_: &mut Shell, tx: &mut Tx| {
-                        // A link that doesn't open says nothing: there is nowhere to say it yet.
-                        let _ = tx.open_url(url);
-                    });
+                let mut button = push_button(t, label, Push::Quiet, enabled).key(format!("button-{i}"));
+                match (enabled, action) {
+                    (true, Action::Open(url)) => {
+                        button = button.on_press_tx(move |_: &mut Shell, tx: &mut Tx| {
+                            // A link that doesn't open says nothing: there is nowhere to say it yet.
+                            let _ = tx.open_url(url);
+                        });
+                    }
+                    (true, Action::AddServer) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_add_server(tx)),
+                    _ => {}
                 }
                 all = all.child(button);
             }
@@ -165,7 +164,7 @@ fn special_control(s: &Shell, t: &'static Theme, r: &'static Row, special: Speci
         Special::TorSwitch => {
             let on = s.bench.tor() != Tor::Off;
             switch(t, r.label, on, true).key(key).on_press_tx(move |s: &mut Shell, tx| {
-                s.backend().tor(if on { TorCommand::Off } else { TorCommand::On });
+                s.backend_mut().tor(if on { TorCommand::Off } else { TorCommand::On });
                 tx.instant();
             })
         }
@@ -304,13 +303,9 @@ fn highlight_rules(s: &Shell, t: &'static Theme) -> El {
     }
     let draft = state.word.text.trim();
     let broken = !draft.is_empty() && sshee_term::highlight::compile_rule(draft).is_none();
-    let field = text_field(
-        t,
-        Field { placeholder: "nginx, or /took \\d+ms/", lead: None, width: None },
-        &state.word,
-        |s: &mut Shell| &mut s.screens.settings.word,
-        |input| input.key("word-new").on_submit(add_word),
-    );
+    // A pattern: in the terminal's font, red while it doesn't work.
+    let typing = code_input(t, &state.word, "nginx, or /took \\d+ms/").key("word-new").on_edit(|s: &mut Shell| &mut s.screens.settings.word).on_submit(add_word);
+    let field = field(t, typing, broken);
     let mut colors = row().gap(6.0).items_center().role("radiogroup").label_static("Color").focus_group();
     for (i, (_, name, index)) in WORD_COLORS.iter().enumerate() {
         let picked = state.word_color == i;
@@ -329,7 +324,7 @@ fn highlight_rules(s: &Shell, t: &'static Theme) -> El {
         );
     }
     let can_add = !draft.is_empty() && !broken;
-    let mut add = push_button(t, "Add", can_add).key("word-add");
+    let mut add = push_button(t, "Add", Push::Quiet, can_add).key("word-add");
     if can_add {
         add = add.on_press_tx(add_word);
     }
@@ -402,7 +397,7 @@ fn version_card(t: &'static Theme, key: &str, mark: f32, lines: (&str, &str), bu
             col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(text(lines.0).font(theme::TEXT_BOLD).color(t.l1).single_line()).child(text(lines.1).font(theme::NOTE).color(t.l2).wrap()),
         );
     if let Some(label) = button {
-        card = card.child(push_button(t, label, false));
+        card = card.child(push_button(t, label, Push::Quiet, false));
     }
     card
 }
@@ -427,8 +422,8 @@ fn tor_state(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(icon(Icon::Tor, theme::ICON, t.green))
         .child(text(words).font(theme::NOTE).color(t.l1).wrap().grow(1.0).shrink());
     if let Some((label, command)) = button {
-        line = line.child(push_button(t, label, true).key("tor-action").on_press_tx(move |s: &mut Shell, tx| {
-            s.backend().tor(command);
+        line = line.child(push_button(t, label, Push::Quiet, true).key("tor-action").on_press_tx(move |s: &mut Shell, tx| {
+            s.backend_mut().tor(command);
             tx.instant();
         }));
     }

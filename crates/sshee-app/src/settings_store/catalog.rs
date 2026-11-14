@@ -174,6 +174,8 @@ pub enum Action {
     Later,
     /// Opens a page in the browser.
     Open(&'static str),
+    /// Opens "Add a server", where the ssh config's hosts and 0.10's servers are offered.
+    AddServer,
 }
 
 /// A row's one line of help.
@@ -433,7 +435,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.view_mode = ViewMode::from(v)),
             },
         )
-        .later("One at a time for now. Side by side comes later.")
+        .later("One at a time for now. Two tabs go side by side from a tab's menu or its shortcut; a mode for all of them comes later.")
         .saves(&["viewMode"])
         .words("split panes side by side"),
         Row::new(
@@ -443,7 +445,7 @@ fn build() -> Vec<Row> {
             Buttons(&[("Main + stack", Action::Later), ("Columns", Action::Later), ("Rows", Action::Later), ("Grid", Action::Later)]),
         )
         .hint("Rearranges what's open. Nothing gets closed.")
-        .later("Comes with side by side.")
+        .later("Comes later.")
         .words("layout grid columns rows split"),
         Row::new(
             "layout-sidebar-side",
@@ -522,10 +524,9 @@ fn build() -> Vec<Row> {
         .later("Comes later. The status bar shows the server on screen.")
         .saves(&["railStatus"])
         .words("cpu memory busy meter stats"),
-        Row::new("layout-ssh-config", Layout, "Servers from ~/.ssh/config", Buttons(&[("Choose…", Action::Later)]))
-            .hint("Choose which of them show up in the sidebar. Your config file isn't changed.")
-            .later("Comes with adding servers. The ones you hid in 0.10 stay hidden.")
-            .words("hidden hosts import"),
+        Row::new("layout-ssh-config", Layout, "Servers from ~/.ssh/config", Buttons(&[("Choose…", Action::AddServer)]))
+            .hint("Choose which of them show up in the sidebar, in Add a server. Your config file isn't changed.")
+            .words("hidden hosts import config bring over 0.10"),
         Row::new(
             "layout-env-line",
             Layout,
@@ -556,7 +557,7 @@ fn build() -> Vec<Row> {
             "Space between panes",
             Slider { min: 0.0, max: 16.0, step: 1.0, get: |st| st.get().pane_gap, set: |st, v| st.set(|s| s.pane_gap = v), show: px },
         )
-        .later("Comes with side by side.")
+        .later("Comes later.")
         .saves(&["paneGap"])
         .words("gap spacing"),
         Row::new(
@@ -565,7 +566,7 @@ fn build() -> Vec<Row> {
             "Corner roundness",
             Slider { min: 0.0, max: 18.0, step: 1.0, get: |st| st.get().pane_radius, set: |st, v| st.set(|s| s.pane_radius = v), show: px },
         )
-        .later("Comes with side by side.")
+        .later("Comes later.")
         .saves(&["paneRadius"])
         .words("radius rounded corners"),
         Row::new(
@@ -631,7 +632,7 @@ fn build() -> Vec<Row> {
             },
         )
         .hint("Makes it obvious where you're typing.")
-        .later("Comes with side by side.")
+        .later("Comes later.")
         .saves(&["dimInactive"])
         .words("dim inactive focus opacity"),
         Row::new("look-animations", Look, "Animations", Switch { get: |st| st.get().animations, set: |st, v| st.set(|s| s.animations = v) })

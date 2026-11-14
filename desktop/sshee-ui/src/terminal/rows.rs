@@ -28,10 +28,12 @@ use rune::tok::{Family, TextStyle};
 use rune::{Color, GridRow, LineCap, Shape, Span};
 use sshee_term::engine::{row_texts, CellFlags, Cursor, Modes, Row, Size};
 use sshee_term::model::{EdgeRows, Frame};
-use sshee_term::present::{Edges, Look, PresentedRow, Presenter, Role, RowText, Screen};
+use sshee_term::present::{Edges, FindMarks, Look, PresentedRow, Presenter, Role, RowText, Screen};
+use sshee_term::scroll::ScrollView;
 use sshee_term::select::SelectionSpan;
 
 use super::coverage::Coverage;
+use super::find::FindMark;
 use super::glyphs::{self, Op};
 use super::metrics::CellMetrics;
 use super::palette::{mix_srgb, Palette};
@@ -41,6 +43,21 @@ pub const DOT: char = '•';
 
 /// How far a hidden secret's pill is tinted with the accent.
 pub const PILL_ALPHA: f32 = 0.16;
+
+/// How far a find match's fill goes from the terminal's background to its text colour. The
+/// match the find bar is on is drawn the other way round (the text's colour behind, the
+/// background's in front). Neither is blue (that's the selection) and both keep the text well
+/// above 4.5:1 in either appearance (`find_marks_keep_the_text_readable`).
+pub const FOUND_MIX: f32 = 0.22;
+
+/// A find match's fill and its text's colour: `current` for the one the bar is on.
+pub fn found_colors(p: &Palette, current: bool) -> (Color, Color) {
+    if current {
+        (p.fg(), p.bg())
+    } else {
+        (mix_srgb(p.bg(), p.fg(), FOUND_MIX), p.fg())
+    }
+}
 
 /// No ligatures or contextual alternates: `--` and `->` stay two characters, each on its cell
 /// (Rune turns them off only for its own mono slot, and this is a named family).
@@ -107,8 +124,15 @@ struct RunKey {
     secret: bool,
 }
 
-/// Works out row `row` as `shown` (its presented text) says, with the selection over `sel`.
-pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, look: &RowLook, coverage: &mut Coverage) -> RowPlan {
+/// A link's underline on a row: its columns, and whether it is dotted (a file's path).
+pub type Underline = (Range<u16>, bool);
+
+/// A link's cells by view line: a long link runs over several rows.
+pub type LinkCells = Vec<(usize, Range<u16>)>;
+
+/// Works out row `row` as `shown` (its presented text) says, with the selection over `sel` and
+/// the link under the pointer underlined over `under`.
+pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under: Option<&Underline>, look: &RowLook, coverage: &mut Coverage) -> RowPlan {
     let cols = row.cells.len();
     let p = look.palette;
     let (cw, ch) = (look.metrics.cell_w_px as i32, look.metrics.cell_h_px as i32);
@@ -121,11 +145,20 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, look: 
         }
     }
     let mut hidden = vec![false; cols];
+    // Find matches by column: `Some(true)` for the one the find bar is on.
+    let mut found: Vec<Option<bool>> = vec![None; cols];
     for span in &shown.spans {
         if matches!(span.role, Role::Secret { .. } | Role::Masked) {
             for c in span.cols.clone() {
                 if let Some(h) = hidden.get_mut(c as usize) {
                     *h = true;
+                }
+            }
+        }
+        if let Role::Found { current } = span.role {
+            for c in span.cols.clone() {
+                if let Some(f) = found.get_mut(c as usize) {
+                    *f = Some(f.unwrap_or(false) || current);
                 }
             }
         }
@@ -137,9 +170,12 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, look: 
         let flags = cell.flags;
         let (fg, bg) = if flags.contains(CellFlags::INVERSE) { (cell.bg, cell.fg) } else { (cell.fg, cell.bg) };
         let mut fgc = p.color(fg);
-        let bgc = p.color(bg);
+        let mut bgc = p.color(bg);
         if flags.contains(CellFlags::DIM) {
             fgc = mix_srgb(fgc, bgc, 0.5);
+        }
+        if let Some(current) = found[c] {
+            (bgc, fgc) = found_colors(p, current);
         }
         if bgc != p.bg() {
             match plan.fills.last_mut() {
@@ -154,7 +190,9 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, look: 
         let secret = hidden[c];
         let text = at[c].map_or("", |(s, e)| &shown.text[s..e]);
         let first = text.chars().next().unwrap_or(' ');
-        let underline = flags.intersects(CellFlags::UNDERLINE | CellFlags::UNDERCURL | CellFlags::DOTTED_UNDERLINE | CellFlags::DASHED_UNDERLINE);
+        let linked = under.filter(|(cols, _)| cols.contains(&(c as u16))).map(|(_, dotted)| *dotted);
+        let underline = flags.intersects(CellFlags::UNDERLINE | CellFlags::UNDERCURL | CellFlags::DOTTED_UNDERLINE | CellFlags::DASHED_UNDERLINE)
+            || linked == Some(false);
         let key = RunKey {
             // The default colour is written out too: a row has no colour of its own, and text
             // without one would take the window's default instead of the scheme's.
@@ -195,6 +233,14 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, look: 
         }
         // Lines the line's spans don't draw.
         let t = glyphs::light_px(cw);
+        if linked == Some(true) && !secret {
+            // A path's dotted underline: a dot and two gaps, in step along the whole row.
+            let period = 3 * t;
+            let first = (period - x.rem_euclid(period)) % period;
+            for dot in (first..cw * width as i32).step_by(period as usize) {
+                plan.ops.push((x, Op::Rect { x: dot, y: ch - 2 * t, w: t, h: t, alpha: 1.0 }, fgc));
+            }
+        }
         if flags.contains(CellFlags::DOUBLE_UNDERLINE) && !secret {
             let y = ch - 3 * t;
             for yy in [y, y + 2 * t] {
@@ -308,6 +354,7 @@ struct LineInputs {
     row: u64,
     shown: *const PresentedRow,
     sel: Option<Range<u16>>,
+    under: Option<Underline>,
 }
 
 /// The pane's view of its terminal: the rows of the last frame, what the presentation pass
@@ -336,6 +383,12 @@ pub struct PaneView {
     pub display_offset: usize,
     pub selection: Option<SelectionSpan>,
     pub stats: RowStats,
+    /// What the scroll bar shows, as of the last frame.
+    pub scroll: ScrollView,
+    /// What the find bar looks for and the match it is on (`set_find`).
+    find: Option<FindMark>,
+    /// The link under the pointer: its cells by view line, and whether its underline is dotted.
+    underline: Option<(LinkCells, bool)>,
 }
 
 fn hash_of(v: &impl Hash) -> u64 {
@@ -367,6 +420,9 @@ impl PaneView {
             display_offset: 0,
             selection: None,
             stats: RowStats::default(),
+            scroll: ScrollView::default(),
+            find: None,
+            underline: None,
         }
     }
 
@@ -389,7 +445,38 @@ impl PaneView {
         self.modes = frame.modes;
         self.display_offset = frame.display_offset;
         self.selection = frame.selection;
+        self.scroll = frame.scroll;
         self.stale = true;
+    }
+
+    /// What the find bar looks for, to mark on screen (`None`: nothing).
+    pub fn set_find(&mut self, find: Option<FindMark>) {
+        if self.find != find {
+            self.find = find;
+            self.stale = true;
+        }
+    }
+
+    /// The link under the pointer, to underline: its cells by view line, dotted for a path.
+    pub fn set_underline(&mut self, underline: Option<(LinkCells, bool)>) {
+        self.underline = underline;
+    }
+
+    /// New settings for the presentation pass (streamer mode, secret hiding, highlighting):
+    /// what is on screen is worked out again under them, at once.
+    pub fn set_look(&mut self, look: Look) {
+        self.presenter.set_look(look);
+        self.stale = true;
+    }
+
+    /// The view line the find bar's match starts on, when it is in view: its place is kept
+    /// from the history's bottom, and the view's own is in the scroll position.
+    fn current_match(&self) -> Option<(usize, usize)> {
+        let (from_bottom, start) = self.find.as_ref()?.current?;
+        let v = self.scroll;
+        let bottom = v.total.saturating_sub(v.top + v.rows);
+        let line = (bottom + self.mirror.len()).checked_sub(from_bottom + 1)?;
+        (line < self.mirror.len()).then_some((line, start))
     }
 
     /// The rows the presentation pass reads: the edges' and the view's.
@@ -417,7 +504,10 @@ impl PaneView {
             return;
         }
         let texts = self.texts();
-        let screen = self.screen(&texts);
+        let mut screen = self.screen(&texts);
+        // (The query is copied out: the pass borrows the presenter, and with it the view.)
+        let find = self.find.as_ref().map(|f| f.query.clone()).zip(Some(self.current_match()));
+        screen.find = find.as_ref().map(|(query, current)| FindMarks { query, current: *current });
         self.shown = self.presenter.present(&screen);
         self.stale = false;
     }
@@ -442,13 +532,6 @@ impl PaneView {
             self.stale = true;
         }
         shown
-    }
-
-    /// New rules for what is hidden and coloured (Settings changed): every row is presented
-    /// again under them.
-    pub fn set_look(&mut self, look: Look) {
-        self.presenter.set_look(look);
-        self.stale = true;
     }
 
     /// What copying goes through: the presentation pass's dots, never the secret.
@@ -526,11 +609,12 @@ impl PaneView {
         for line in 0..n {
             let shown = &self.shown[line];
             let sel = self.selection.and_then(|s| s.columns_on(line as i32 - self.display_offset as i32, cols));
-            let inputs = LineInputs { row: self.hashes[line], shown: Arc::as_ptr(shown), sel: sel.clone() };
+            let under = self.underline.as_ref().and_then(|(parts, dotted)| parts.iter().find(|(l, _)| *l == line).map(|(_, cols)| (cols.clone(), *dotted)));
+            let inputs = LineInputs { row: self.hashes[line], shown: Arc::as_ptr(shown), sel: sel.clone(), under: under.clone() };
             if self.inputs[line].as_ref() == Some(&inputs) {
                 continue;
             }
-            let key = hash_of(&(self.epoch, self.hashes[line], &**shown, &sel));
+            let key = hash_of(&(self.epoch, self.hashes[line], &**shown, &sel, &under));
             let before = before.get_or_insert_with(|| {
                 let mut screen = HashMap::with_capacity(n);
                 for (line, (k, row)) in self.keys.iter().zip(&self.built).enumerate() {
@@ -547,7 +631,7 @@ impl PaneView {
                 }
                 None => {
                     self.stats.built += 1;
-                    let plan = plan_row(&self.mirror[line], shown, sel, &look, &mut self.coverage);
+                    let plan = plan_row(&self.mirror[line], shown, sel, under.as_ref(), &look, &mut self.coverage);
                     Rc::new(plan.into_grid_row(&metrics))
                 }
             };
@@ -593,7 +677,7 @@ mod tests {
         let m = metrics();
         let look = RowLook { palette: &palette, metrics: &m, selection: palette.selection };
         let shown = present(std::slice::from_ref(row));
-        plan_row(row, &shown[0], sel, &look, &mut Coverage::new(crate::fonts::TERMINAL_REGULAR))
+        plan_row(row, &shown[0], sel, None, &look, &mut Coverage::new(crate::fonts::TERMINAL_REGULAR))
     }
 
     /// A made-up token of GitHub's shape, built at run time so none sits in the source.
@@ -787,5 +871,93 @@ mod tests {
         assert!(!view.shown(0).unwrap().text.contains(&secret));
         assert!(view.reveal(0, 20));
         assert!(view.shown(0).unwrap().text.contains(&secret));
+    }
+
+    /// Relative luminance and contrast as WCAG counts them (a `Color` holds linear values).
+    fn contrast(a: Color, b: Color) -> f32 {
+        let l = |c: Color| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+        let (hi, lo) = if l(a) > l(b) { (l(a), l(b)) } else { (l(b), l(a)) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn find_marks_keep_the_text_readable() {
+        use super::super::palette::Scheme;
+        for scheme in [Scheme::Classic, Scheme::Fresh] {
+            for dark in [true, false] {
+                let p = Palette::of(scheme, dark);
+                let (quiet, quiet_ink) = found_colors(&p, false);
+                let (strong, strong_ink) = found_colors(&p, true);
+                assert!(contrast(quiet, quiet_ink) >= 4.5, "{scheme:?} dark={dark}: a match's text is {:.1}:1", contrast(quiet, quiet_ink));
+                assert!(contrast(strong, strong_ink) >= 4.5, "{scheme:?} dark={dark}: the current match's text is {:.1}:1", contrast(strong, strong_ink));
+                // The current match stands out from the others more than they do from the page.
+                assert!(contrast(strong, p.bg()) > contrast(quiet, p.bg()) * 2.0);
+                assert!(contrast(quiet, p.bg()) > 1.15, "{scheme:?} dark={dark}: a match can't be told from the page");
+                // Neither is the selection's blue.
+                assert!(quiet != p.selection && strong != p.selection);
+            }
+        }
+    }
+
+    #[test]
+    fn find_matches_are_fills_with_their_own_ink_and_never_show_a_secret() {
+        use sshee_term::present::FindMarks;
+        let secret = token();
+        let rows = [Row::from_text("red needle, blue needle", 30), Row::from_text(&format!("KEY={secret}"), 60)];
+        let palette = Palette::new(true);
+        let m = metrics();
+        let look = RowLook { palette: &palette, metrics: &m, selection: palette.selection };
+        let present = |row: &Row, query: &str, current: Option<(usize, usize)>| {
+            let texts = row_texts(std::slice::from_ref(row), false);
+            let mut screen = Screen::new(&texts, row.cells.len() as u16);
+            screen.find = Some(FindMarks { query, current });
+            Presenter::new(Look { hide_secrets: true, ..Look::default() }).present(&screen)
+        };
+        let mut coverage = Coverage::new(crate::fonts::TERMINAL_REGULAR);
+        // Two matches, the second the one the bar is on.
+        let shown = present(&rows[0], "needle", Some((0, 17)));
+        let p = plan_row(&rows[0], &shown[0], None, None, &look, &mut coverage);
+        let (quiet, quiet_ink) = found_colors(&palette, false);
+        let (strong, strong_ink) = found_colors(&palette, true);
+        assert_eq!(p.fills, [(4, 10, quiet), (17, 23, strong)]);
+        let ink = |col: usize| p.spans.iter().find(|s| (s.start..s.end).contains(&col)).and_then(|s| s.color);
+        assert_eq!((ink(5), ink(18), ink(0)), (Some(quiet_ink), Some(strong_ink), Some(palette.fg())));
+        // The text itself is as it was: a mark changes colours only.
+        assert_eq!(p.text.trim_end(), "red needle, blue needle");
+        // Looking for a piece of a hidden secret marks nothing: the pass searches the dots.
+        let shown = present(&rows[1], &secret[8..16], None);
+        let p = plan_row(&rows[1], &shown[0], None, None, &look, &mut coverage);
+        assert!(p.fills.is_empty(), "{:?}", p.fills);
+        assert!(!p.text.contains(&secret[8..16]));
+    }
+
+    #[test]
+    fn the_link_under_the_pointer_is_underlined_and_a_paths_underline_is_dotted() {
+        let row = Row::from_text("see https://example.com now", 30);
+        let web = plan(&row, None);
+        assert!(web.spans.iter().all(|s| s.underline.is_none()) && web.ops.is_empty(), "a link is underlined before the pointer is on it");
+        let palette = Palette::new(true);
+        let m = metrics();
+        let look = RowLook { palette: &palette, metrics: &m, selection: palette.selection };
+        let shown = present(std::slice::from_ref(&row));
+        let mut coverage = Coverage::new(crate::fonts::TERMINAL_REGULAR);
+        // A web link: a line under its cells and no others.
+        let p = plan_row(&row, &shown[0], None, Some(&(4..23, false)), &look, &mut coverage);
+        let lined: Vec<(usize, usize)> = p.spans.iter().filter(|s| s.underline.is_some()).map(|s| (s.start, s.end)).collect();
+        assert_eq!(lined, [(4, 23)]);
+        assert!(p.ops.is_empty());
+        // A path: dots instead, a pixel on and two off, all within its cells.
+        let p = plan_row(&row, &shown[0], None, Some(&(4..23, true)), &look, &mut coverage);
+        assert!(p.spans.iter().all(|s| s.underline.is_none()));
+        let cw = m.cell_w_px as i32;
+        let dots: Vec<i32> = p.ops.iter().map(|(x, op, _)| match op {
+            Op::Rect { x: dx, w, h, .. } => {
+                assert_eq!((*w, *h), (1, 1));
+                x + dx
+            }
+            _ => panic!("a dot is a rectangle"),
+        }).collect();
+        assert!(dots.len() > 30 && dots.windows(2).all(|d| d[1] - d[0] == 3), "{dots:?}");
+        assert!(dots[0] >= 4 * cw && *dots.last().unwrap() < 23 * cw);
     }
 }

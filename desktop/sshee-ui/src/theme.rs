@@ -39,8 +39,6 @@ pub const ICON_LINE: f32 = 1.4;
 pub const RING: f32 = 3.0;
 /// A control in a form: a push button, a pop-up button, a segmented control, a key cap.
 pub const FORM_CONTROL: f32 = 24.0;
-/// A text field (the design's `.field`).
-pub const FIELD: f32 = 28.0;
 /// A switch's track, and the knob inside it.
 pub const SWITCH: (f32, f32) = (34.0, 20.0);
 pub const SWITCH_KNOB: f32 = 16.0;
@@ -91,6 +89,15 @@ pub const CONTROL_TEXT: TextStyle = TextStyle::new(12.0, 500.0);
 pub const VALUE: TextStyle = TextStyle::new(12.0, 400.0).features("'tnum' 1");
 /// A line of help under a row, wrapping.
 pub const HELP: TextStyle = TextStyle::new(11.0, 400.0).lh(15.0);
+/// What is typed into the command palette's search field.
+pub const INPUT: TextStyle = TextStyle::new(15.0, 400.0);
+/// A command in a list row or a field, in the terminal's font.
+pub const CODE: TextStyle = TextStyle::new(12.0, 400.0).mono();
+/// A dialog's title.
+pub const TITLE: TextStyle = TextStyle::new(15.0, 600.0);
+/// A text field's and a push button's height; a list row is `ROW`.
+pub const FIELD: f32 = 28.0;
+pub const ROW: f32 = 30.0;
 
 /// One appearance's colours. The names are the stylesheet's.
 #[derive(Clone, Debug, PartialEq)]
@@ -283,6 +290,19 @@ impl Theme {
 
     /// A control that can't be used: this much of itself.
     pub const DISABLED: f32 = 0.42;
+    /// A text field's surface: the code colour at night, white by day (the design's `.field`).
+    pub fn field(&self) -> Color {
+        if self.dark {
+            self.code
+        } else {
+            self.on_color
+        }
+    }
+
+    /// The veil over the window under a dialog.
+    pub fn scrim(&self) -> Color {
+        Color::BLACK.alpha(0.25)
+    }
 
     /// Tor's tile when it's on: green at 16%.
     pub fn tor_tile(&self) -> Color {

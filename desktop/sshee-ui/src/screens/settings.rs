@@ -31,9 +31,9 @@ use sshee_app::settings_store::keymap::Keyboard;
 use sshee_app::settings_store::SettingsStore;
 
 use crate::icons::{icon, Icon};
-use crate::kit::field::{text_field, Field};
+use crate::kit::field::{input, search_field};
 use crate::kit::popup::popup_menu;
-use crate::kit::push::{icon_button, push_button};
+use crate::kit::push::{icon_button, push_button, Push};
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
 
@@ -207,30 +207,27 @@ fn nav_row(t: &Theme, section: Section, on: bool) -> El {
 /// The list at the left: the search field, then the sections or what the search found.
 fn nav(s: &Shell, t: &'static Theme) -> El {
     let state = &s.screens.settings;
-    let search = text_field(
+    let search = search_field(
         t,
-        Field { placeholder: "Search", lead: Some(Icon::Search), width: None },
-        &state.search,
-        |s: &mut Shell| &mut s.screens.settings.search,
-        |input| {
-            input
-                .key("settings-search")
-                .on_submit(|s: &mut Shell, tx| {
-                    // Return goes to the first thing found.
-                    if let Some(first) = s.screens.settings.results(Platform::current()).into_iter().next() {
-                        jump(s, &first, tx);
-                    }
-                })
-                .on_input_key(|s: &mut Shell, ev, _| {
-                    // Esc empties the field first; a second one leaves Settings.
-                    let typed = !s.screens.settings.search.text.is_empty();
-                    if ev.key == Key::Escape && typed {
-                        s.screens.settings.search.clear();
-                    }
-                    ev.key == Key::Escape && typed
-                })
-        },
-    );
+        input(t, &state.search, "Search")
+            .key("settings-search")
+            .on_edit(|s: &mut Shell| &mut s.screens.settings.search)
+            .on_submit(|s: &mut Shell, tx| {
+                // Return goes to the first thing found.
+                if let Some(first) = s.screens.settings.results(Platform::current()).into_iter().next() {
+                    jump(s, &first, tx);
+                }
+            })
+            .on_input_key(|s: &mut Shell, ev, _| {
+                // Esc empties the field first; a second one leaves Settings.
+                let typed = !s.screens.settings.search.text.is_empty();
+                if ev.key == Key::Escape && typed {
+                    s.screens.settings.search.clear();
+                }
+                ev.key == Key::Escape && typed
+            }),
+    )
+    .w_full();
     let mut list = col().key("settings-nav").w(NAV_WIDTH).h_full().padding(10.0).gap(2.0).border_sides([0.0, 1.0, 0.0, 0.0], t.hair2).child(search.mb(8.0));
     if state.search.text.trim().is_empty() {
         let mut sections = col().key("nav-sections").w_full().gap(2.0).role("tablist").focus_group().label_static("Settings");
@@ -282,7 +279,7 @@ fn head(s: &Shell, t: &'static Theme) -> El {
         .child(text(section.label()).key("settings-title").font(theme::PAGE_TITLE).color(t.l1).single_line().role("heading").level(1))
         .child(rune::spacer());
     if section.has_reset() {
-        head = head.child(push_button(t, "Reset", true).key("settings-reset").help("Put this section back as it comes").on_press_tx(move |s: &mut Shell, tx| {
+        head = head.child(push_button(t, "Reset", Push::Quiet, true).key("settings-reset").help("Put this section back as it comes").on_press_tx(move |s: &mut Shell, tx| {
             s.screens.settings.keys = shortcuts::Recording::default();
             let keys = catalog::reset_keys(section);
             s.change_settings(tx, |st| {
@@ -369,8 +366,8 @@ pub fn notice_bar(s: &Shell, t: &'static Theme) -> Option<El> {
             .role("alert")
             .child(icon(Icon::Lock, 12.0, t.l2on))
             .child(text(notice.headline()).key("privacy-notice-text").font(theme::NOTE).color(t.l1).wrap().grow(1.0).shrink())
-            .child(push_button(t, "Review", true).key("privacy-notice-review").on_press_tx(|s: &mut Shell, tx| s.open_settings_at(Section::Privacy, tx)))
-            .child(push_button(t, "OK", true).key("privacy-notice-ok").on_press_tx(|s: &mut Shell, tx| {
+            .child(push_button(t, "Review", Push::Quiet, true).key("privacy-notice-review").on_press_tx(|s: &mut Shell, tx| s.open_settings_at(Section::Privacy, tx)))
+            .child(push_button(t, "OK", Push::Quiet, true).key("privacy-notice-ok").on_press_tx(|s: &mut Shell, tx| {
                 s.settings.dismiss_notice();
                 tx.instant();
             })),
