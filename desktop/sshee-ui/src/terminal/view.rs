@@ -11,6 +11,10 @@
 //! └── preedit  what the input method is composing, over the anchor's cell: underlined, the
 //!              clause being converted thicker, its caret a bar
 //! ```
+//!
+//! While "While you were away" shows, the grid is two (the rows above the line and the rows
+//! from it on) with the line between them (`away.rs`), and every cell's place counts its room.
+//! The find bar, the scroll bar and the pane's menu are drawn around `term` (`overlays.rs`).
 
 use std::rc::Rc;
 
@@ -18,6 +22,7 @@ use rune::tok::{Family, TextStyle};
 use rune::{el, grid, text, Cursor, Cx, El, GridRow, PointerButton, Span};
 use sshee_term::engine::CursorShape;
 
+use super::away::Inset;
 use super::ime::Preedit;
 use super::metrics::{advance_em, natural_height_em, CellMetrics};
 use super::palette::{rgb, Palette};
@@ -67,6 +72,8 @@ pub fn pane_view_with<S: 'static>(
     let env = cx.env();
     let m = metrics_at(pane, env.scale);
     let lit = pane.cursor_lit();
+    // The away line's room between two rows, if it shows.
+    let inset = pane.inset(&m);
     let mut view = pane.view.borrow_mut();
     if view.palette().dark != env.system_dark {
         // A program asking for the colours (Claude Code picks light or dark by them) is told
@@ -78,10 +85,16 @@ pub fn pane_view_with<S: 'static>(
     let size = view.size;
     let cursor = view.cursor;
     let in_view = cursor.visible && cursor.line < size.rows as usize && cursor.col < size.cols;
-    let mut g = grid(size.cols, m.cell_w, m.cell_h, rows).size(f32::from(size.cols) * m.cell_w, f32::from(size.rows) * m.cell_h);
-    if in_view {
-        g = g.grid_caret(cursor.col, cursor.line as u16);
-    }
+    let grids = match inset {
+        Some(inset) => super::away::split(pane, inset, rows, size.cols, &m, in_view.then_some((cursor.col, cursor.line)), crate::theme::Theme::of(env.system_dark), get),
+        None => {
+            let mut g = grid(size.cols, m.cell_w, m.cell_h, rows).size(f32::from(size.cols) * m.cell_w, f32::from(size.rows) * m.cell_h);
+            if in_view {
+                g = g.grid_caret(cursor.col, cursor.line as u16);
+            }
+            vec![g]
+        }
+    };
     let mut term = el()
         .key("term")
         .w_full()
@@ -92,7 +105,7 @@ pub fn pane_view_with<S: 'static>(
         .focusable(true)
         .no_focus_ring()
         .instant_changes()
-        .cursor(if pane.hover_secret { Cursor::Pointer } else { Cursor::Text })
+        .cursor(if pane.hover_secret || pane.over.links.pointing() { Cursor::Pointer } else { Cursor::Text })
         .on_key(move |s: &mut S, ev, tx| before_key(s, ev, tx) || get(s).is_some_and(|p| p.key(ev, tx)))
         .on_physical_input(move |s: &mut S, input, tx| get(s).is_some_and(|p| p.physical(input, tx)))
         .on_drag(move |s: &mut S, d, tx| {
@@ -111,18 +124,24 @@ pub fn pane_view_with<S: 'static>(
                 p.pointer_moved(&e, tx);
             }
         })
+        .on_hover_change(move |s: &mut S, over, tx| {
+            // The pointer left: no link is under it.
+            if over || !get(s).is_some_and(|p| p.links_left()) {
+                tx.live_only();
+            }
+        })
         .on_wheel(move |s: &mut S, w, tx| get(s).is_some_and(|p| p.wheel(&w, tx)))
         .on_layout_tx(move |s: &mut S, [_, _, w, h], tx| {
             if let Some(p) = get(s) {
                 p.laid_out(w, h, tx);
             }
         })
-        .child(g);
+        .children(grids);
     // The input method's anchor: only while the window has the keyboard, and steady (#602).
     // Also while the program hides its cursor (vim, Claude Code): the input method is on only
     // while it's drawn.
     if let (true, Some((line, col))) = (pane.focused, pane.anchor) {
-        let (x, y) = cell_xy(&m, line, col);
+        let (x, y) = cell_xy(&m, inset, line, col);
         term = term.child(el().key("ime").absolute(x, y).size(m.cell_w, m.cell_h).ime_cursor().ime_option_as_alt(cfg!(target_os = "macos")));
     }
     let preedit = pane.ime.preedit().zip(pane.anchor);
@@ -130,18 +149,21 @@ pub fn pane_view_with<S: 'static>(
     // element in an `instant_changes` subtree goes and comes back at once.
     if in_view && lit && preedit.is_none() {
         let (text, width, _) = view.shown_char(cursor.line, cursor.col);
-        drop(view);
-        term = term.child(cursor_el(pane, &palette, &m, cursor.shape, (cursor.line, cursor.col), text, width));
+        term = term.child(cursor_el(pane, &palette, &m, cursor.shape, cell_xy(&m, inset, cursor.line, cursor.col), text, width));
     }
     if let Some((p, (line, col))) = preedit {
-        term = term.child(preedit_el(p, &palette, &m, cell_xy(&m, line, col)));
+        term = term.child(preedit_el(p, &palette, &m, cell_xy(&m, inset, line, col)));
     }
-    term
+    // The overlays read the view themselves.
+    drop(view);
+    super::overlays::layer(term, pane, cx, get, &m)
 }
 
-/// The top-left of cell (`line`, `col`) in the terminal area's points.
-fn cell_xy(m: &CellMetrics, line: usize, col: u16) -> (f32, f32) {
-    (PADDING + f32::from(col) * m.cell_w, PADDING + line as f32 * m.cell_h)
+/// The top-left of cell (`line`, `col`) in the terminal area's points, the away line's room
+/// counted.
+fn cell_xy(m: &CellMetrics, inset: Option<Inset>, line: usize, col: u16) -> (f32, f32) {
+    let y = inset.map_or(PADDING + line as f32 * m.cell_h, |i| i.line_y(line, m.cell_h));
+    (PADDING + f32::from(col) * m.cell_w, y)
 }
 
 /// What the input method is composing, at `(x, y)`: over the terminal's text on its own
@@ -173,11 +195,10 @@ fn preedit_el(p: &Preedit, palette: &Palette, m: &CellMetrics, (x, y): (f32, f32
     e
 }
 
-/// The cursor over cell (`line`, `col`), `width` columns wide, showing `text` (the cell as
+/// The cursor over the cell at (`x`, `y`), `width` columns wide, showing `text` (the cell as
 /// shown) when it is a block.
 #[allow(clippy::too_many_arguments)]
-fn cursor_el(pane: &TermPane, p: &Palette, m: &CellMetrics, shape: CursorShape, (line, col): (usize, u16), text: String, width: u16) -> El {
-    let (x, y) = (PADDING + f32::from(col) * m.cell_w, PADDING + line as f32 * m.cell_h);
+fn cursor_el(pane: &TermPane, p: &Palette, m: &CellMetrics, shape: CursorShape, (x, y): (f32, f32), text: String, width: u16) -> El {
     let w = f32::from(width) * m.cell_w;
     let color = rgb(p.cursor);
     let shape = if pane.focused { shape } else { CursorShape::HollowBlock };

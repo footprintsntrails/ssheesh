@@ -8,15 +8,21 @@
 //!                 handlers: keys → model.user_input → link.write; drag → selection; click → reveal
 //! ```
 
+pub mod away;
 pub mod coverage;
+pub mod find;
 pub mod glyphs;
 pub mod ime;
 pub mod keys;
+pub mod links;
+pub mod menu;
 pub mod metrics;
+pub mod overlays;
 pub mod palette;
 pub mod pane;
 pub mod replay;
 pub mod rows;
+pub mod scrollbar;
 pub mod view;
 pub mod wake;
 
@@ -100,6 +106,15 @@ pub trait TermLink {
     /// up); a live session ignores it.
     fn note_copy(&self, text: &str) {
         let _ = text;
+    }
+    /// Asks the server for something of this terminal's tmux session, when it has one: its
+    /// rows for a find, its history for "while you were away", or a scroll. The answer comes
+    /// through `done` from any thread, `None` when it couldn't be had. Returns false, and
+    /// never calls `done`, when the history is the terminal's own (no tmux): the pane then
+    /// reads its own grid.
+    fn ask(&self, ask: overlays::Ask, done: overlays::Answer) -> bool {
+        let _ = (ask, done);
+        false
     }
 }
 

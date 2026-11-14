@@ -59,6 +59,39 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
   adds what it needs to `Backend` as methods with a default body, implements them in `live.rs`
   and with made-up data in `demo.rs`, and returns results through `Remote`.
 
+## A terminal pane and what sits over it
+
+`terminal/view.rs` draws the grid, the cursor and the input method; `terminal/overlays.rs`
+wraps it (`term-box`) with what sits over the text, each in its own file with its state in
+`TermPane::over`:
+
+| File | What | Where its rule lives |
+|---|---|---|
+| `find.rs` | the find bar; the search of the whole history (tmux's over ssh, else the grid) off the UI thread | `sshee_term::find`, marks by the presentation pass |
+| `links.rs` | the link under the pointer (underline, hint), Ctrl/⌘-click | `sshee_term::links`, `present::Link` |
+| `scrollbar.rs` | the scroll bar, Shift+Page Up/Down, "Jump to the bottom" | `sshee_term::scroll` |
+| `away.rs` | the "While you were away" line between two rows of the grid | `sshee_term::away` |
+| `menu.rs` | the pane's menu on the secondary button | `kit::menu` |
+
+- **Hidden things stay hidden.** Find searches rows made safe by `Look::safe_rows`, on the
+  thread that read them; marks, links and their hints come from the presentation pass. Nothing
+  here reads the engine's text to show it.
+- **Slow things come back through the pane's `Postbox`** (`overlays.rs`): a thread posts a
+  `Note` and wakes the window; `TermPane::poll_overlays` takes it. A replayed session does the
+  same work at once, so headless frames don't depend on a thread. What needs the server goes
+  through `TermLink::ask` (`Ask::Rows`, `History`, `Scroll`), which `live.rs` answers from the
+  shell's tmux session.
+- **What only the window can do is a `Wish`** the window takes after each poll
+  (`Shell::grant` in `shell/tabs.rs`): a new terminal here, a file's path to open
+  (`Shell::open_path`: the seam the Files screen takes; until then the path is copied), the
+  shell's folder (the tab's name, `Shell::set_folder`), a press on a pane shown beside another.
+- **Streamer mode** is `shell/streamer.rs`: `Shell::server_shown(key, name)` and
+  `Shell::text_shown(text)` are how every screen draws a server's name or any text that may
+  hold one; the terminals follow `Shell::look()`.
+- **Copying**: `PaneOptions::copy_on_select` and `program_clipboard` (a program's OSC 52), set
+  for every pane by `Shell::set_copy_modes`. A program that has the mouse gets the drag;
+  Shift makes it the terminal's own selection.
+
 ## Tokens, icons, components
 
 - `sshee-ui/src/theme.rs`: every colour (both appearances, from the design's stylesheet), size,
@@ -116,11 +149,20 @@ never writes 0.10's. `--demo` reads and writes nothing.
   borderless window can't be resized by its edges (Rune doesn't expose winit's
   `drag_resize_window`). macOS and Windows get the design's bar (`App::titlebar`); neither has
   been run yet, nor have their system fonts (`fonts::SYSTEM_FAMILIES`).
-- The row of tabs has no drag to reorder (`Workbench::move_tab` exists), no context menu, and
-  when crowded it shrinks tabs and names each server once, but doesn't scroll.
-- A terminal tab's title is "Terminal N": the working folder (OSC 7) and the agent's name
-  aren't wired (`Workbench::set_title`, `set_agent` exist). "Needs you" comes from the bell
-  and OSC 9/777 only; sshee-core's agent watch isn't wired.
+- The row of tabs (`shell/tabs.rs`) has its menu, drag to reorder and a list for tabs out of
+  sight; a tab can't be dragged out into a window of its own, and side by side
+  (`shell/split.rs`, `workbench::layout`) is one pair of one machine's tabs, not 0.10's tree of
+  splits. Pairs aren't kept between runs.
+- A terminal tab is named after its shell's folder when the shell says it (OSC 7, or a
+  `user@host: ~/dir` title). In tmux on a server neither reaches the window (tmux keeps both):
+  the agents' watch reads `pane_current_path` and should call `Shell::set_folder`, and
+  `TermPane::set_foreground` with the program in front (until then Ctrl+F in tmux stays the
+  program's; Ctrl+Shift+F and ⌘F always find). The agent's name isn't wired
+  (`Workbench::set_agent` exists). "Needs you" comes from the bell and OSC 9/777 only.
+- A click on a file's path copies it: `Shell::open_path` waits for the Files screen. A web
+  link whose text hides where it goes opens on a second Ctrl+click, not from a dialog.
+- Streamer mode doesn't know this computer's hostname (only its user, from the environment):
+  `Backend` has nothing to ask yet. Whether it is on isn't kept between runs (Settings will).
 - Saved passwords aren't read (0.10's keychain needs the owner's yes); a server that asks for
   one asks in the terminal. Host-key questions have no screen.
 - Tor's round-trip time isn't measured; the status bar shows "Tor" without it.
@@ -145,11 +187,11 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Add a server, import from ssh config and XPipe (`AddServerDialog.tsx`, `ConfigImport`, `XpipeImport`) | `screens/add_server.rs` | `servers.rs` |
 | A server's card and menu, labels and looks (`Sidebar.tsx` menus, `LookPicker`, `HostIcon`) | `screens/server_card.rs`, `screens/server_menu.rs`; more arms in `icons.rs` | `labels.rs` |
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |
-| Tab menu, drag to reorder, side by side, zoom (`Tabs.tsx`, `Workspace.tsx`, `Pane.tsx`) | `shell/tabs.rs` (split out of `view.rs`), `shell/split.rs` | `workbench/layout.rs` (port of `layout.ts`) |
+| Zoom, a tab dragged out to its own window, more than two side by side (`Workspace.tsx`, `Pane.tsx`); the tab menu, drag and the pair are built | `shell/tabs.rs`, `shell/split.rs` | `workbench/layout.rs` |
 | Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover) | `screens/agent.rs` | `agents.rs` |
 | Host-key and password questions, reconnect and sleep notices (`TerminalPane.tsx` overlays) | `screens/prompts.rs` | `prompts.rs` |
-| In the terminal: find, links, "while you were away", streamer mode, scroll bar, context menu (`termFind.ts`, `terminalLinks.ts`, `away.ts`) | `terminal/find.rs`, `terminal/links.rs`, `terminal/away.rs`, `terminal/menu.rs` | none (sshee-term has them) |
+| In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Tor: the switch, progress, log (`TorButton.tsx`) | `screens/tor.rs` | `tor.rs` |
 | Security check and fixes (`ServerTools.tsx`, `Recipes.tsx`) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
 | Docker and containers (`ServerTools.tsx`) | `screens/containers.rs` | `containers.rs` |

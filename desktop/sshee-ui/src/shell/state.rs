@@ -145,6 +145,13 @@ pub struct Shell {
     kept: SavedTabs,
     /// Every screen's own state (`crate::screens`).
     pub screens: crate::screens::States,
+    /// Which tabs are shown side by side (`split.rs`), and where the pair is drawn.
+    pub layout: sshee_app::workbench::layout::Layout,
+    pub(crate) sides: super::split::Sides,
+    /// The row of tabs' own state: its menu, a drag, what is in sight (`tabs.rs`).
+    pub(crate) row: super::tabs::Row,
+    /// Streamer mode (`streamer.rs`).
+    pub(crate) streamer: super::streamer::Streamer,
 }
 
 /// A session's status as a tab's.
@@ -180,6 +187,10 @@ impl Shell {
             watching: None,
             strip_width: None,
             clock_base,
+            layout: Default::default(),
+            sides: Default::default(),
+            row: Default::default(),
+            streamer: Default::default(),
         };
         shell.sync_panes();
         shell.sync_watch();
@@ -216,6 +227,11 @@ impl Shell {
             None => Arc::new(|_| {}),
         };
         let mut pane = TermPane::new(link, status, self.options.pane.clone());
+        // Side by side there are two terminals on the page: each takes the keyboard by its own name.
+        pane.set_focus_key(format!("pane-{}", id.0));
+        if self.streaming() {
+            pane.view.borrow_mut().set_look(self.look());
+        }
         if let Some(waker) = &self.waker {
             pane.set_waker(waker.clone());
         }
@@ -242,9 +258,14 @@ impl Shell {
         }
         let bench = &self.bench;
         self.screens.retain(|id| bench.tab(id).is_some());
-        if let Some(tab) = self.bench.active().filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
-            let pane = self.make_pane(&tab);
-            self.panes.insert(tab.id, pane);
+        self.row.retain(|id| bench.tab(id).is_some());
+        self.layout.prune(bench);
+        // The tab on screen, and the one shown beside it.
+        for id in self.tabs_on_screen() {
+            if let Some(tab) = self.bench.tab(id).filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
+                let pane = self.make_pane(&tab);
+                self.panes.insert(tab.id, pane);
+            }
         }
     }
 
@@ -291,16 +312,34 @@ impl Shell {
         self.sync_panes();
         self.sync_watch();
         self.sync_keyboard(tx);
+        self.save_tabs();
+        if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
+            tx.focus(format!("pane-{}", id.0), false);
+        }
+        // Tabs come and go at once, as in a browser: nothing slides.
+        tx.instant();
+    }
+
+    /// Settings' two copy switches, for every terminal open now and opened later: whether a
+    /// selection that rests is copied, and whether a program may write the clipboard (OSC 52).
+    /// A program that copies what you select in it (OpenCode, tmux) and SSHeesh's own copy on
+    /// select would otherwise both write.
+    pub fn set_copy_modes(&mut self, copy_on_select: bool, program_clipboard: bool) {
+        self.options.pane.copy_on_select = copy_on_select;
+        self.options.pane.program_clipboard = program_clipboard;
+        for pane in self.panes.values_mut() {
+            pane.options.copy_on_select = copy_on_select;
+            pane.options.program_clipboard = program_clipboard;
+        }
+    }
+
+    /// Tells the backend what to keep for the next run, when the row of tabs changed.
+    pub(crate) fn save_tabs(&mut self) {
         let saved = self.bench.saved();
         if saved != self.kept {
             self.backend.tabs_changed(&saved);
             self.kept = saved;
         }
-        if self.active_pane().is_some() {
-            tx.focus("term", false);
-        }
-        // Tabs come and go at once, as in a browser: nothing slides.
-        tx.instant();
     }
 
     // ---- what the screen does
@@ -375,6 +414,13 @@ impl Shell {
             Shortcut::ToggleSidebar => self.toggle_sidebar(tx),
             Shortcut::StepTab(step) => self.step_tab(step, tx),
             Shortcut::JumpToTab(n) => self.jump_to_tab(n, tx),
+            Shortcut::Find { .. } => {
+                if let Some(pane) = self.active_pane() {
+                    pane.open_find(tx);
+                }
+            }
+            Shortcut::Streamer => self.toggle_streamer(tx),
+            Shortcut::SideBySide => self.toggle_side_by_side(tx),
         }
     }
 
@@ -383,6 +429,10 @@ impl Shell {
         let Some(name) = super::keys::key_name(ev, tx.physical_key(), tx.key_base()) else { return false };
         let pressed = Pressed { key: &name, ctrl: ev.mods.ctrl, meta: ev.mods.logo, alt: ev.mods.alt, shift: ev.mods.shift };
         let Some(shortcut) = match_shortcut(&pressed, self.options.mac_keys, &self.options.shortcuts) else { return false };
+        // Ctrl+F alone is also a program's key (vim, less): the terminal on screen says whose.
+        if shortcut == (Shortcut::Find { always: false }) && !self.active_pane().is_some_and(|p| p.find_is_open() || p.takes_find_key()) {
+            return false;
+        }
         // A held key walks through the tabs; it doesn't open or close one after another.
         if !tx.key_repeat() || matches!(shortcut, Shortcut::StepTab(_)) {
             self.run(shortcut, tx);
@@ -435,13 +485,19 @@ impl Shell {
         let active = self.bench.active_id();
         let mut changed = false;
         let mut asked = Vec::new();
+        let mut wishes = Vec::new();
+        let beside = active.and_then(|id| self.layout.partner(id));
         for (id, pane) in &mut self.panes {
             let drew = pane.poll(clock, tx);
-            changed |= drew && Some(*id) == active;
+            changed |= drew && (Some(*id) == active || Some(*id) == beside);
             if pane.take_wants_you() {
                 asked.push(*id);
             }
+            wishes.extend(pane.take_wishes().into_iter().map(|wish| (*id, wish)));
         }
+        // What panes ask of the window (`tabs.rs`), and names to hide that are new.
+        changed |= self.grant(wishes, tx);
+        changed |= self.keep_streaming(tx);
         // A program rang or sent a notification: its tab says so, unless you're looking at it.
         for id in asked {
             let before = self.bench.tab(id).is_some_and(|t| t.needs_you);

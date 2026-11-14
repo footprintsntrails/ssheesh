@@ -6,13 +6,16 @@
 //! and pass. Without a GPU, Mesa's software driver (lavapipe) does.
 //!
 //! Geometry at `--scale 1 --size 1280x800`, from the design: the bar is 44 pt, the sidebar 52,
-//! the status bar 24; a sidebar button is 32 pt, the fifth server's (db-main) centred at
-//! (26, 251).
+//! the status bar 24. Scripts click elements by their keys and press the chords the app's own
+//! shortcut table gives for the system they run on, and pictures are sampled where the tree
+//! says an element is: a Mac's top row starts after the window's buttons, its sidebar with the
+//! logo, and its shortcuts are ⌘'s.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
+use sshee_app::workbench::shortcuts::{default_keys, Shortcut};
 
 const LVP: &str = "/usr/share/vulkan/icd.d/lvp_icd.json";
 
@@ -118,19 +121,50 @@ fn run(name: &str, args: &[&str], script: Option<Value>) -> Option<Run> {
     Some(Run { tree: serde_json::from_str(&tree_text).unwrap(), tree_text, png, home })
 }
 
-fn key(t: f64, name: &str, held: &str) -> Value {
+/// The window reads shortcuts as a Mac does (it decides the same way: `Options::default`).
+const MAC: bool = cfg!(target_os = "macos");
+
+/// A key press for a script, with Ctrl, ⌘ (a Mac's) and Shift as said. In a Rune script "cmd"
+/// is ⌘ on a Mac and Ctrl elsewhere, and "ctrl" is the Ctrl key itself.
+fn press(t: f64, name: &str, ctrl: bool, meta: bool, shift: bool) -> Value {
     let mut e = json!({ "t": t, "type": "key", "name": name });
-    if held.contains('c') {
+    if ctrl {
         e["ctrl"] = json!(true);
+    }
+    if (MAC && meta) || (!MAC && ctrl) {
         e["cmd"] = json!(true);
     }
-    if held.contains('s') {
+    if shift {
         e["shift"] = json!(true);
     }
     if name.len() == 1 {
         e["code"] = json!(name);
     }
     e
+}
+
+/// The chord the app gives `shortcut` on this system (⌘T on a Mac, Ctrl+Shift+T elsewhere).
+fn chord(t: f64, shortcut: Shortcut) -> Value {
+    let keys = default_keys(shortcut, MAC).expect("a shortcut with keys of its own");
+    let on = |b: Option<bool>| b.unwrap_or(false);
+    press(t, &keys.key, on(keys.ctrl), on(keys.meta), on(keys.shift))
+}
+
+/// Ctrl+Tab: the next tab, on every system.
+fn ctrl_tab(t: f64) -> Value {
+    press(t, "Tab", true, false, false)
+}
+
+/// A click on the element keyed `key`, wherever this system's window puts it.
+fn tap(t: f64, key: &str) -> Value {
+    json!({ "t": t, "type": "tap", "key": key })
+}
+
+/// The inside of the terminal on screen, as `[x0, y0, x1, y1]` in the picture: its text, away
+/// from its edges.
+fn text_area(run: &Run) -> [u32; 4] {
+    let [x, y, w, h] = run.rect("term");
+    [x as u32 + 12, y as u32 + 12, (x + w.min(660.0)) as u32, (y + h.min(440.0)) as u32]
 }
 
 #[test]
@@ -188,15 +222,15 @@ fn the_demo_is_the_designs_scene_in_both_appearances() {
 fn clicks_and_shortcuts_drive_the_tabs() {
     let script = json!([
         // A click on db-main's icon: its tab, the agent's.
-        { "t": 0.3, "type": "tap", "x": 26.0, "y": 251.0 },
+        tap(0.3, "server-4"),
         // A new terminal there.
-        key(0.8, "t", "cs"),
+        chord(0.8, Shortcut::NewTerminal),
         // Around the end of the row to the first tab, and close it.
-        key(1.2, "Tab", "c"),
-        key(1.6, "w", "cs"),
+        ctrl_tab(1.2),
+        chord(1.6, Shortcut::CloseTab),
         { "t": 2.2, "type": "mark", "name": "end" }
     ]);
-    let Some(run) = run("drive", &["--demo"], Some(script)) else { return };
+    let Some(run) = run("drive", &["--demo", "--theme", "dark"], Some(script)) else { return };
     // ~/shop is closed; Files came up; db-main has the agent's tab, seen now, and a new one.
     assert!(run.element("tab-1").is_none(), "the closed tab is still drawn");
     assert_eq!(run.label("tab-2"), "Files, web-7731");
@@ -216,21 +250,21 @@ fn clicks_and_shortcuts_drive_the_tabs() {
 fn a_tab_shows_its_own_terminal() {
     // db-main's agent tab, then a middle click on Files closes it without leaving.
     let script = json!([
-        { "t": 0.3, "type": "tap", "x": 26.0, "y": 251.0 },
-        { "t": 0.9, "type": "tap", "x": 440.0, "y": 22.0, "button": "middle" },
+        tap(0.3, "server-4"),
+        { "t": 0.9, "type": "tap", "key": "tab-2", "button": "middle" },
         { "t": 1.6, "type": "mark", "name": "end" }
     ]);
-    let Some(run) = run("agent", &["--demo"], Some(script)) else { return };
+    let Some(run) = run("agent", &["--demo", "--theme", "dark"], Some(script)) else { return };
     assert!(run.element("tab-2").is_none(), "Files wasn't closed by the middle click");
     assert_eq!(run.fill("tab-3"), "#3a3a3cff");
     assert!(run.element("pane-3").is_some());
     // The page shows that tab's terminal, not the shop's: the shop's listing has yellow lines
     // (commit ids, a restarting container), the agent's question has none.
     let yellow = [0xd9, 0xb5, 0x63];
-    let Some(shop) = self::run("agent-shop", &["--demo"], None) else { return };
-    assert!(near(&shop.pixels(), [64, 56, 700, 480], yellow) > 200, "the shop's terminal isn't as the fixture draws it");
-    assert_eq!(near(&run.pixels(), [64, 56, 700, 480], yellow), 0, "the shop's terminal is still on the page");
-    assert!(near(&run.pixels(), [64, 56, 700, 480], [0x7f, 0xc9, 0x8b]) > 50, "the agent's terminal drew nothing");
+    let Some(shop) = self::run("agent-shop", &["--demo", "--theme", "dark"], None) else { return };
+    assert!(near(&shop.pixels(), text_area(&shop), yellow) > 200, "the shop's terminal isn't as the fixture draws it");
+    assert_eq!(near(&run.pixels(), text_area(&run), yellow), 0, "the shop's terminal is still on the page");
+    assert!(near(&run.pixels(), text_area(&run), [0x7f, 0xc9, 0x8b]) > 50, "the agent's terminal drew nothing");
     // db-main's numbers: its disk is past the line, so the bar says so in one bold item.
     assert!(run.tree_text.contains("Disk 92%"), "the full disk isn't marked");
 }
@@ -248,4 +282,212 @@ fn the_component_sheet_draws_every_state() {
     for said in ["Reconnecting…", "Disconnected", "Needs you", "Esc to decide later", "Disk 92%"] {
         assert!(run.tree_text.contains(said), "{said}");
     }
+}
+
+// ---- what the terminal and the row of tabs gained: find, links, scrolling, "while you were
+// away", the pane's menu, streamer mode, the tab menu and list, two tabs side by side. Each in
+// both appearances; what the tree can't say (a mark's colour) is read from the picture.
+
+/// web-staging's icon in the sidebar: its first terminal plays a long log (`demo.rs`).
+const STAGING: &str = "server-2";
+
+/// The script's last event: the picture and the tree are taken here.
+fn end(t: f64) -> Value {
+    json!({ "t": t, "type": "mark", "name": "end" })
+}
+
+/// Runs `script` over the demo in the dark and the light appearance, and hands each run to
+/// `check` with whether it's the dark one.
+fn in_both(name: &str, script: impl Fn() -> Value, check: impl Fn(&Run, bool)) {
+    for theme in ["dark", "light"] {
+        let Some(run) = run(&format!("{name}-{theme}"), &["--demo", "--theme", theme], Some(script())) else { return };
+        check(&run, theme == "dark");
+    }
+}
+
+/// The longest run of pixels within a small step of `rgb` along any one row of the rectangle
+/// `[x0, y0, x1, y1]`: a filled block has long ones, text has none.
+fn longest_run(pixels: &(u32, u32, Vec<u8>), [x0, y0, x1, y1]: [u32; 4], rgb: [u8; 3]) -> usize {
+    let mut best = 0;
+    for y in y0..y1.min(pixels.1) {
+        let mut run = 0;
+        for x in x0..x1.min(pixels.0) {
+            let i = ((y * pixels.0 + x) * 4) as usize;
+            run = if (0..3).all(|c| pixels.2[i + c].abs_diff(rgb[c]) < 24) { run + 1 } else { 0 };
+            best = best.max(run);
+        }
+    }
+    best
+}
+
+/// The whole terminal on screen, as a rectangle of the picture.
+fn whole_terminal(run: &Run) -> [u32; 4] {
+    let [x, y, w, h] = run.rect("term");
+    [x as u32, y as u32, (x + w) as u32, (y + h) as u32]
+}
+
+#[test]
+fn while_you_were_away_is_a_line_above_the_first_new_line() {
+    // The shop's connection drops and comes back by itself (the fixture); a moment later the
+    // line is there.
+    in_both("away", || json!([end(1.6)]), |run, dark| {
+        assert_eq!(run.label("away"), "While you were away (41 min): 2 new lines, 1 error");
+        let (line, above, below, term) = (run.rect("away"), run.rect("grid-above"), run.rect("grid-below"), run.rect("term"));
+        // One row of 18 points between two rows of the grid, touching both, and nothing pushed
+        // off the page.
+        assert_eq!(line[3], 18.0);
+        assert_eq!(above[1] + above[3], line[1]);
+        assert_eq!(line[1] + line[3], below[1]);
+        assert!(above[1] >= term[1] + 2.0 && below[1] + below[3] <= term[1] + term[3] - 2.0, "{above:?} {below:?} in {term:?}");
+        // After its words, a hairline to the row's end.
+        let px = run.pixels();
+        let hair = if dark { "#3a3a3c" } else { "#d2d2d7" };
+        let y = line[1] as u32;
+        assert!((y + 7..y + 11).any(|y| at(&px, 900, y) == hair), "no hairline after the words");
+        // The tab came back from "Reconnecting…" by itself.
+        assert_eq!(run.label("tab-1"), "~/shop, web-7731");
+    });
+}
+
+#[test]
+fn find_marks_what_it_finds_and_goes_to_it() {
+    let script = || {
+        json!([
+            tap(0.3, STAGING),
+            chord(0.9, Shortcut::Find { always: true }),
+            { "t": 1.2, "type": "type", "text": "error" },
+            // Return: the older of the two.
+            press(1.8, "Enter", false, false, false),
+            end(2.4)
+        ])
+    };
+    in_both("find", script, |run, dark| {
+        // The bar sits at the page's top right, and says which match it is on.
+        let (bar, term) = (run.rect("find"), run.rect("term"));
+        assert_eq!((bar[0] + bar[2], bar[1]), (term[0] + term[2] - 20.0, term[1] + 8.0));
+        assert!(run.element("find-input").is_some());
+        assert!(run.tree_text.contains("1 of 2"), "the bar doesn't count its matches");
+        // The older match was above the screen: the view went up to it, and the scroll bar
+        // with it.
+        let (track, thumb) = (run.rect("scroll"), run.rect("thumb"));
+        assert!(thumb[1] > track[1] && thumb[1] + thumb[3] < track[1] + track[3] - 20.0, "{thumb:?} in {track:?}");
+        // The match the bar is on is a block in the text's colour (the others are quieter).
+        let ink = if dark { [0xeb, 0xeb, 0xf0] } else { [0x1d, 0x1d, 0x1f] };
+        assert!(longest_run(&run.pixels(), whole_terminal(run), ink) >= 30, "the current match isn't marked");
+        // The shell said which folder it is in: the tab is named after it.
+        assert_eq!(run.label("tab-4"), "~/shop, web-staging");
+    });
+}
+
+#[test]
+fn the_link_under_the_pointer_says_where_it_goes() {
+    // The log's "payments runbook" is a link a program marked (OSC 8) over other words.
+    let script = || json!([tap(0.3, STAGING), { "t": 0.9, "type": "move", "x": 260.0, "y": 507.0 }, end(1.9)]);
+    in_both("link", script, |run, _| {
+        let key = if MAC { "Cmd" } else { "Ctrl" };
+        let hint = format!("Goes to https://docs.shop.example/runbooks/payments. {key}+click to open");
+        assert!(run.tree_text.contains(&hint), "no hint says {hint:?}");
+        // Under the link, inside the page.
+        let (hint, term) = (run.rect("link-hint"), run.rect("term"));
+        assert!(hint[1] > 507.0 && hint[1] < 540.0 && hint[0] + hint[2] <= term[0] + term[2], "{hint:?}");
+    });
+}
+
+#[test]
+fn the_terminals_menu_opens_on_the_secondary_button() {
+    let script = || json!([tap(0.3, STAGING), { "t": 0.9, "type": "tap", "x": 500.0, "y": 300.0, "button": "secondary" }, end(1.5)]);
+    in_both("menu", script, |run, dark| {
+        let menu = run.rect("menu");
+        assert_eq!((menu[0], menu[1]), (500.0, 300.0));
+        assert_eq!(run.fill("menu"), if dark { "#2c2c2eff" } else { "#f6f6f8ff" });
+        for (key, label) in [("menu-copy", "Copy"), ("menu-paste", "Paste"), ("menu-select-all", "Select all"), ("menu-find", "Find"), ("menu-clear", "Clear"), ("menu-new", "New terminal here")] {
+            assert!(run.element(key).is_some(), "{key}");
+            assert!(run.tree_text.contains(&format!("\"{label}\"")), "{label}");
+        }
+    });
+}
+
+#[test]
+fn streamer_mode_hides_every_name_the_window_draws() {
+    in_both("streamer", || json!([chord(0.3, Shortcut::Streamer), end(1.2)]), |run, _| {
+        // Servers are numbered: in the title, the tabs, and the sidebar's names.
+        assert_eq!(run.label("tab-1"), "~/shop, Server 1");
+        assert_eq!(run.label("tab-3"), "Migration 0042, Server 4, Needs you");
+        assert_eq!(run.label("server-1"), "Server 1");
+        assert_eq!(run.label("server-0"), "This computer");
+        for name in ["web-7731", "web-staging", "backups", "db-main", "203.0.113", "deploy"] {
+            assert!(!run.tree_text.contains(name), "{name} is still in the tree");
+        }
+        // The switch says it's on.
+        assert_eq!(run.label("streamer"), "Streamer mode");
+        assert!(run.tree_text.contains("Streamer mode is on"));
+    });
+}
+
+#[test]
+fn a_tab_has_a_menu_and_a_crowded_row_has_a_list() {
+    let script = || json!([{ "t": 0.3, "type": "tap", "key": "tab-2", "button": "secondary" }, end(0.9)]);
+    in_both("tab-menu", script, |run, _| {
+        let (menu, tab) = (run.rect("tab-menu"), run.rect("tab-2"));
+        assert!(menu[1] >= tab[1] && menu[0] >= tab[0] && menu[0] <= tab[0] + tab[2], "{menu:?} isn't at {tab:?}");
+        for label in ["Show side by side", "Duplicate tab", "Close tab", "Close other tabs", "Close tabs to the right"] {
+            assert!(run.tree_text.contains(&format!("\"{label}\"")), "{label}");
+        }
+    });
+    // Twenty-two more terminals: the row can't hold them, so a run of them is in sight and
+    // the list has the rest, with a dot for the agent's tab, which waits out of sight.
+    let script = || {
+        let mut events = vec![tap(0.3, STAGING)];
+        events.extend((0..22).map(|i| chord(0.5 + 0.08 * f64::from(i), Shortcut::NewTerminal)));
+        events.extend([tap(2.6, "tab-list"), end(3.2)]);
+        Value::Array(events)
+    };
+    in_both("tab-list", script, |run, _| {
+        assert!(run.element("tab-list-menu").is_some() && run.element("tab-list-waits").is_some());
+        assert!(run.element("tab-3").is_none(), "the agent's tab should be out of sight");
+        assert!(run.tree_text.contains("Migration 0042, db-main, Needs you"));
+        let window = run.rect("window");
+        for key in ["tab-26", "tab-list", "new-tab", "streamer"] {
+            let r = run.rect(key);
+            assert!(r[0] >= 0.0 && r[0] + r[2] <= window[2], "{key} is off the window: {r:?}");
+        }
+        assert!(run.rect("tab-26")[2] >= 60.0, "the tab on screen was squeezed");
+    });
+}
+
+#[test]
+fn two_tabs_side_by_side_share_the_page() {
+    // web-staging has one tab: the shortcut opens a terminal beside it.
+    let script = || json!([tap(0.3, STAGING), chord(0.9, Shortcut::SideBySide), end(1.6)]);
+    in_both("side", script, |run, dark| {
+        let (left, right, divider) = (run.rect("side-4"), run.rect("side-5"), run.rect("side-divider"));
+        assert!((left[2] - right[2]).abs() < 8.0, "{left:?} {right:?}");
+        assert_eq!(left[0] + left[2], divider[0]);
+        assert_eq!(divider[0] + divider[2], right[0]);
+        assert!(run.element("pane-4").is_some() && run.element("pane-5").is_some());
+        assert!(run.element("side-close-4").is_some() && run.element("side-close-5").is_some());
+        // Both are tabs of their own; the one you're on is lit, the one beside it a little.
+        assert_eq!(run.fill("tab-4"), if dark { "#3a3a3cff" } else { "#ffffffff" });
+        // (The row is crowded with five tabs, so the machine is named once before its group.)
+        assert_eq!(run.label("tab-5"), "Terminal 2");
+        assert_ne!(run.fill("tab-5"), "#00000000", "the tab shown beside isn't lit");
+        // The divider's line is drawn between them.
+        let x = (divider[0] + divider[2] / 2.0) as u32;
+        assert_eq!(at(&run.pixels(), x, 400), if dark { "#111113" } else { "#d2d2d7" });
+    });
+}
+
+#[test]
+fn new_output_while_scrolled_up_offers_the_bottom() {
+    // Three notches up the log; three seconds in, the fixture prints two more lines.
+    let script = || json!([tap(0.3, STAGING), { "t": 0.9, "type": "wheel", "x": 600.0, "y": 400.0, "dx": 0.0, "dy": 360.0, "precise": false }, end(3.5)]);
+    in_both("scroll", script, |run, dark| {
+        assert_eq!(run.label("to-bottom"), "Jump to the bottom");
+        assert_eq!(run.fill("to-bottom"), if dark { "#2c2c2eff" } else { "#f6f6f8ff" });
+        let (button, term, track, thumb) = (run.rect("to-bottom"), run.rect("term"), run.rect("scroll"), run.rect("thumb"));
+        assert!(button[0] + button[2] <= term[0] + term[2] - 20.0 && button[1] + button[3] <= term[1] + term[3] - 10.0, "{button:?}");
+        // The scroll bar is at the page's right edge, its thumb off the bottom.
+        assert_eq!(track[0] + track[2], term[0] + term[2]);
+        assert!(thumb[1] + thumb[3] < track[1] + track[3], "{thumb:?} in {track:?}");
+    });
 }

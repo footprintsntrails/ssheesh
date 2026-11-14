@@ -5,7 +5,10 @@
 
 pub mod keys;
 pub mod sheet;
+pub mod split;
 pub mod state;
+pub mod streamer;
+pub mod tabs;
 pub mod view;
 
 #[cfg(test)]

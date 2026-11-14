@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use sshee_app::workbench::{Server, Tab, Tor};
@@ -21,6 +21,7 @@ use sshee_core::Host;
 use sshee_term::engine::Size;
 use sshee_term::model::Model;
 use sshee_ui::shell::{Backend, Remote};
+use sshee_ui::terminal::overlays::{Answer, Ask, Reply};
 use sshee_ui::terminal::{LinkStatus, StatusSink, TermLink};
 
 use crate::vitals::Watcher;
@@ -99,6 +100,7 @@ impl Backend for LiveBackend {
             key: tab.session_key.clone().unwrap_or_default(),
             env: self.env.clone(),
             bytes: Arc::new(AtomicU64::new(0)),
+            durable: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -120,6 +122,8 @@ struct LiveLink {
     env: SshEnv,
     /// Output so far, in bytes (counted on the reader thread).
     bytes: Arc<AtomicU64>,
+    /// The shell runs in tmux on the server, as its last status said.
+    durable: Arc<AtomicBool>,
 }
 
 /// What a tab says of a session's state. sshee-core's failure texts name no host.
@@ -151,12 +155,14 @@ impl TermLink for LiveLink {
         // On the reader thread (output, a server's Connected) or the session's (the rest): the
         // model locks what it shares.
         let bytes = self.bytes.clone();
+        let durable = self.durable.clone();
         let sink: EventSink = Arc::new(move |event| match event {
             SessionEvent::Output { data } => {
                 bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
                 model.feed(data.as_bytes());
             }
             SessionEvent::Status { state } => {
+                durable.store(matches!(state, SessionState::Connected { durable: true, .. }), Ordering::Relaxed);
                 match &state {
                     SessionState::Connected { durable, .. } => model.connected(*durable, if *durable { HISTORY_TMUX } else { HISTORY_OWN }),
                     SessionState::Connecting { .. } => {}
@@ -198,6 +204,29 @@ impl TermLink for LiveLink {
 
     fn bytes_received(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// tmux's rows, history or scroll position, read over the server's shared connection on a
+    /// thread of its own (each is an ssh round trip). Only for a shell in tmux on a server.
+    fn ask(&self, ask: Ask, done: Answer) -> bool {
+        let Some(target @ Target::Ssh(_)) = self.target.clone() else { return false };
+        if !self.durable.load(Ordering::Relaxed) {
+            return false;
+        }
+        let (env, key) = (self.env.clone(), self.key.clone());
+        let work = move || {
+            use sshee_core::session;
+            let reply = match ask {
+                Ask::Rows => session::rows(&target, &env, &key).ok().map(Reply::Rows),
+                Ask::History { lines } => session::history(&target, &env, &key, lines).ok().map(|text| Reply::History { text, away_ms: None }),
+                Ask::Scroll { position } => session::tmux_scroll(&target, &env, &key, position).ok().map(|s| {
+                    Reply::Scroll(sshee_term::scroll::TmuxScroll { in_mode: s.in_mode, position: s.position, history: s.history, height: s.height, limit: s.limit })
+                }),
+            };
+            done(reply);
+        };
+        // No thread to be had: the pane is told it couldn't be read.
+        std::thread::Builder::new().name("session-ask".into()).spawn(work).is_ok()
     }
 }
 

@@ -16,11 +16,13 @@
 //!
 //! Tabs are saved and brought back ([`Workbench::saved`], [`Workbench::restore`]) with their
 //! session keys, so a terminal on a server finds its shell in tmux again after a restart, as
-//! in 0.10. Not here yet: tabs side by side (0.10's layouts and `hidden`). The window owns one
+//! in 0.10. Tabs side by side are in [`layout`], kept beside the workbench. The window owns one
 //! `Workbench`; every change goes through its methods, so the rules are tested here, without a
 //! window.
 
+pub mod layout;
 pub mod shortcuts;
+pub mod titles;
 pub mod vitals;
 
 use crate::model::{EnvLabel, PaneKind, TargetRef};

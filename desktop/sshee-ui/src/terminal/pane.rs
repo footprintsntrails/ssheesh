@@ -58,7 +58,12 @@ pub struct PaneOptions {
     pub cell_mode: CellMode,
     pub cursor_shape: CursorShape,
     pub blink: bool,
+    /// A selection that rests is copied (0.10's setting). Off: selecting never touches the
+    /// clipboard; only the copy keys and the pane's menu copy.
     pub copy_on_select: bool,
+    /// A program may write to the clipboard (OSC 52), as tmux and editors do when you select
+    /// in them. Off: such a write is dropped, silently.
+    pub program_clipboard: bool,
     /// Lines of history kept before a session says how many (tmux keeps its own).
     pub history: usize,
     /// Answer a program's "which terminal are you?" (DA1). Off where Windows' console (ConPTY)
@@ -86,6 +91,7 @@ impl PaneOptions {
             cursor_shape: CursorShape::Bar,
             blink: true,
             copy_on_select: true,
+            program_clipboard: true,
             history: 10_000,
             answer_da1: platform != Platform::Windows,
             scheme: Scheme::Classic,
@@ -112,7 +118,7 @@ enum Gesture {
 /// One terminal pane.
 pub struct TermPane {
     pub model: Arc<Model>,
-    link: Box<dyn TermLink>,
+    pub(super) link: Box<dyn TermLink>,
     status_sink: StatusSink,
     opened: bool,
     wake: Option<Arc<Coalesce>>,
@@ -120,9 +126,9 @@ pub struct TermPane {
     /// The cell size the view last drew with (the view knows the scale).
     pub(crate) metrics: Cell<Option<CellMetrics>>,
     pub options: PaneOptions,
-    platform: Platform,
+    pub(super) platform: Platform,
     /// The terminal area's size in points (padding included), from layout.
-    area: Option<[f32; 2]>,
+    pub(super) area: Option<[f32; 2]>,
     /// The size the area settled on and when the terminal takes it (each new size restarts
     /// the wait).
     resize_due: Option<f64>,
@@ -144,7 +150,7 @@ pub struct TermPane {
     /// The blink's state: dark for this half beat, and when the next half begins.
     blink_dark: bool,
     blink_next: Option<f64>,
-    clock: f64,
+    pub(super) clock: f64,
     /// Clock to `Instant` for the model: `None` on the real clock (a live session, whose output
     /// is stamped by the reader thread); a replay runs on Rune's virtual clock from here.
     virtual_base: Option<Instant>,
@@ -158,10 +164,12 @@ pub struct TermPane {
     /// When the user last typed (pane clock).
     typed_at: Option<f64>,
     /// When the newest output on screen was parsed.
-    last_output: Option<Instant>,
+    pub(super) last_output: Option<Instant>,
     meter: Option<SharedMeter>,
     /// A program rang the bell or sent a notification since the window last asked.
     wants_you: bool,
+    /// The find bar, links, the scroll bar, the menu and "while you were away" (`overlays.rs`).
+    pub(crate) over: super::overlays::Overlays,
 }
 
 impl TermPane {
@@ -214,6 +222,7 @@ impl TermPane {
             last_output: None,
             meter: None,
             wants_you: false,
+            over: super::overlays::Overlays::default(),
         }
     }
 
@@ -232,6 +241,11 @@ impl TermPane {
         self.virtual_base = Some(base);
     }
 
+    /// The session is a replay on the pane's own clock (a demo, a test).
+    pub(crate) fn replays(&self) -> bool {
+        self.virtual_base.is_some()
+    }
+
     pub(crate) fn now(&self) -> Instant {
         match self.virtual_base {
             Some(base) => base + Duration::from_secs_f64(self.clock.max(0.0)),
@@ -244,6 +258,7 @@ impl TermPane {
         let coalesce = Arc::new(Coalesce::new(waker));
         let c = coalesce.clone();
         self.model.set_waker(Some(Arc::new(move || c.wake())));
+        self.over.post.set_waker(coalesce.clone());
         self.wake = Some(coalesce);
     }
 
@@ -386,12 +401,15 @@ impl TermPane {
         }
         // What the program asked of the terminal.
         for event in self.model.take_events() {
+            self.heard(&event);
             match event {
                 TermEvent::Reply(bytes) => self.link.write(&bytes),
-                TermEvent::Copy(text) => {
+                // A program's own copy (OSC 52), when programs may write the clipboard.
+                TermEvent::Copy(text) if self.options.program_clipboard => {
                     self.link.note_copy(&text);
                     tx.copy(text);
                 }
+                TermEvent::Copy(_) => {}
                 // A program wants you: the bell, or a notification it sent (OSC 9, OSC 777).
                 TermEvent::Bell | TermEvent::Osc(OscEvent::Notify(_)) => self.wants_you = true,
                 _ => {}
@@ -407,6 +425,7 @@ impl TermPane {
             }
         }
         changed |= self.pull(tx);
+        changed |= self.poll_overlays(clock, tx);
         changed |= self.blink(clock, tx);
         changed |= self.place_anchor(clock, tx);
         if let Some(meter) = &self.meter {
@@ -492,7 +511,7 @@ impl TermPane {
     }
 
     /// Takes a frame from the model if one is due. True when one was taken.
-    fn pull(&mut self, tx: &mut Tx) -> bool {
+    pub(super) fn pull(&mut self, tx: &mut Tx) -> bool {
         let now = self.now();
         match self.model.due(now) {
             Due::Now => {
@@ -553,6 +572,10 @@ impl TermPane {
     /// 30–44 drawn frames a second typing 8 keys a second, against 8 without it).
     pub fn key(&mut self, ev: &rune::KeyEvent, tx: &mut Tx) -> bool {
         self.clock = tx.clock();
+        // The find field has the keyboard: what it leaves isn't the program's either.
+        if self.over.find.has_keyboard() {
+            return false;
+        }
         if self.status.wants_reconnect() {
             self.link.reconnect();
         }
@@ -594,14 +617,9 @@ impl TermPane {
         let rows = self.size().rows as i32;
         match terminal_key(&k, &KeyOptions::new(self.platform, &modes)) {
             KeyAction::Send(s) => self.send(s.as_bytes(), Some(Via::Key), tx),
-            KeyAction::PageUp => {
-                self.model.scroll_lines(rows);
-                self.pull(tx);
-            }
-            KeyAction::PageDown => {
-                self.model.scroll_lines(-rows);
-                self.pull(tx);
-            }
+            // Through tmux's history where the history is tmux's (`scrollbar.rs`).
+            KeyAction::PageUp => self.scroll_by(rows, tx),
+            KeyAction::PageDown => self.scroll_by(-rows, tx),
             KeyAction::SelectAll => {
                 self.model.with_engine(|e| e.select_all());
                 self.pull(tx);
@@ -708,7 +726,7 @@ impl TermPane {
 
     /// Copies the selection as shown: hidden secrets copy as their dots (a private key's body
     /// too, wherever the selection starts in it: `Model::copy_text`).
-    fn copy(&mut self, tx: &mut Tx) {
+    pub(super) fn copy(&mut self, tx: &mut Tx) {
         let view = self.view.borrow();
         if let Some(text) = self.model.copy_text(view.look()).filter(|t| !t.is_empty()) {
             self.link.note_copy(&text);
@@ -722,7 +740,8 @@ impl TermPane {
         let m = self.metrics.get()?;
         let size = self.size();
         let fx = ((x - PADDING) / m.cell_w).max(0.0);
-        let fy = ((y - PADDING) / m.cell_h).max(0.0);
+        // The away line's room between two rows isn't a row.
+        let fy = ((self.plain_y(&m, y) - PADDING) / m.cell_h).max(0.0);
         let col = (fx.floor() as u32).min(u32::from(size.cols.saturating_sub(1))) as u16;
         let line = (fy.floor() as usize).min(size.rows.saturating_sub(1) as usize);
         let side = if fx.fract() < 0.5 || fx >= f32::from(size.cols) { Side::Left } else { Side::Right };
@@ -754,6 +773,8 @@ impl TermPane {
         let button = Self::button(tx);
         match d.phase {
             Phase::Down => {
+                // The window hears of it: side by side, a press makes this the tab you're on.
+                self.over.wish(super::overlays::Wish::Pressed);
                 let modes = self.view.borrow().modes;
                 if button != MouseButton::Left {
                     // The middle button is the program's when it wants the mouse; here it
@@ -768,6 +789,11 @@ impl TermPane {
                 }
                 if self.view.borrow_mut().revealable_at(line, col) {
                     self.gesture = Gesture::Reveal(line, col);
+                    return;
+                }
+                // Ctrl+click (⌘-click) on a link opens it: no selection, no report.
+                if self.link_pressed(line, col, d.clicks, tx) {
+                    self.gesture = Gesture::Ignore;
                     return;
                 }
                 if mouse_goes_to_program(&modes, mods.shift, self.platform) {
@@ -829,13 +855,19 @@ impl TermPane {
 
     /// The secondary button over the terminal. Rune gives its press only, so a program that
     /// wants the mouse gets the press and the release together (a right-button drag isn't
-    /// reported). The terminal's own menu is for later.
+    /// reported). Otherwise it opens the pane's menu (`menu.rs`).
     pub fn secondary(&mut self, p: &PointerEvent, tx: &mut Tx) {
         self.clock = tx.clock();
         let Some((line, col, _)) = self.cell_at(p.x, p.y) else { return };
         let mods = tx.mods();
         let modes = self.view.borrow().modes;
-        if mouse_goes_to_program(&modes, mods.shift, self.platform) {
+        // The pane's own menu, unless the click is the program's (`menu.rs`).
+        if self.menu_pressed(p.x, p.y, tx) {
+            return;
+        }
+        // In tmux, Shift is how the click reaches the program: tmux mustn't read it as Shift.
+        let (shift, mods) = if self.finds_in_tmux() { (false, rune::Mods { shift: false, ..mods }) } else { (mods.shift, mods) };
+        if mouse_goes_to_program(&modes, shift, self.platform) {
             self.mouse_report(line, col, MouseAction::Press(MouseButton::Right), mods, tx);
             self.mouse_report(line, col, MouseAction::Release(MouseButton::Right), mods, tx);
         }
@@ -850,9 +882,11 @@ impl TermPane {
         if modes.mouse == MouseProtocol::Any {
             self.mouse_report(line, col, MouseAction::Move(MouseButton::None), tx.mods(), tx);
         }
+        // The link under the pointer is underlined (`links.rs`).
+        let linked = self.links_moved(line, col, tx);
         if over != self.hover_secret {
             self.hover_secret = over;
-        } else {
+        } else if !linked {
             tx.live_only();
         }
     }

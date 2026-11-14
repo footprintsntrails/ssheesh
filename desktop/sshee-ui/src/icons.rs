@@ -51,6 +51,14 @@ pub enum Icon {
     Server,
     /// A Stats tab.
     Stats,
+    /// Up and down: the find bar's older and newer match, a list that opens.
+    ChevronUp,
+    ChevronDown,
+    /// Streamer mode: names and secrets are shown, or (the eye struck through) hidden.
+    Eye,
+    EyeOff,
+    /// Two tabs side by side.
+    SideBySide,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -69,9 +77,12 @@ use Piece::{Oval, Path, Rect};
 /// The window frame the sidebar toggle and the terminal share.
 const WINDOW: Piece = Rect(1.8, 2.8, 12.4, 10.4, 2.4);
 
+/// An eye's outline, for streamer mode's two states.
+const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8-3.7 4.2-6.4 4.2S3.1 10.8 1.6 8z");
+
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 19] = [
+    pub const ALL: [Icon; 24] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -91,6 +102,11 @@ impl Icon {
         Icon::Gear,
         Icon::Server,
         Icon::Stats,
+        Icon::ChevronUp,
+        Icon::ChevronDown,
+        Icon::Eye,
+        Icon::EyeOff,
+        Icon::SideBySide,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -132,6 +148,11 @@ impl Icon {
             ),
             Icon::Server => (16.0, &[Rect(2.2, 2.6, 11.6, 4.6, 1.4), Rect(2.2, 8.8, 11.6, 4.6, 1.4), Path("M4.7 4.9h.2M4.7 11.1h.2")]),
             Icon::Stats => (16.0, &[Path("M1.8 8.6h2.4l1.8-4.6 3.4 8.6 1.9-4h2.9")]),
+            Icon::ChevronUp => (16.0, &[Path("M4.2 9.8 8 6l3.8 3.8")]),
+            Icon::ChevronDown => (16.0, &[Path("M4.2 6.2 8 10l3.8-3.8")]),
+            Icon::Eye => (16.0, &[EYE, Oval(8.0, 8.0, 1.9, 1.9)]),
+            Icon::EyeOff => (16.0, &[EYE, Oval(8.0, 8.0, 1.9, 1.9), Path("M3.2 12.8 12.8 3.2")]),
+            Icon::SideBySide => (16.0, &[WINDOW, Path("M8 2.8v10.4")]),
         }
     }
 
