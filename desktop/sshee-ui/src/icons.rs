@@ -55,6 +55,25 @@ pub enum Icon {
     Server,
     /// A Stats tab.
     Stats,
+    /// Files: a file of no special kind, one of text, of code, a script, a picture, a video,
+    /// a link that leads nowhere.
+    File,
+    Doc,
+    Code,
+    Script,
+    Image,
+    Video,
+    Link,
+    /// Files' toolbar: forward (back is [`Icon::Back`]), the folder above, list again,
+    /// bookmarks, a new folder.
+    ChevronRight,
+    ArrowUp,
+    Refresh,
+    Star,
+    FolderPlus,
+    /// A download and an upload.
+    Download,
+    Upload,
     /// Up and down: the find bar's older and newer match, a list that opens.
     ChevronUp,
     ChevronDown,
@@ -128,12 +147,18 @@ use Piece::{Oval, Path, Rect};
 /// The window frame the sidebar toggle and the terminal share.
 const WINDOW: Piece = Rect(1.8, 2.8, 12.4, 10.4, 2.4);
 
+/// A sheet with its corner folded, which every kind of file shares.
+const SHEET: Piece = Path("M4.4 2.2h4.8l3.4 3.4v7.2a1 1 0 0 1-1 1H4.4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1zM9.2 2.2v3.4h3.4");
+
+/// A picture's and a video's frame.
+const FRAME: Piece = Rect(2.2, 3.0, 11.6, 10.0, 1.6);
+
 /// An eye's outline, for streamer mode's two states.
 const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8-3.7 4.2-6.4 4.2S3.1 10.8 1.6 8z");
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 52] = [
+    pub const ALL: [Icon; 66] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -153,6 +178,20 @@ impl Icon {
         Icon::Gear,
         Icon::Server,
         Icon::Stats,
+        Icon::File,
+        Icon::Doc,
+        Icon::Code,
+        Icon::Script,
+        Icon::Image,
+        Icon::Video,
+        Icon::Link,
+        Icon::ChevronRight,
+        Icon::ArrowUp,
+        Icon::Refresh,
+        Icon::Star,
+        Icon::FolderPlus,
+        Icon::Download,
+        Icon::Upload,
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -189,7 +228,7 @@ impl Icon {
     ];
 
     /// The signs that aren't a server's icon, for the component sheet.
-    pub const SIGNS: [Icon; 22] = [
+    pub const SIGNS: [Icon; 36] = [
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -212,6 +251,20 @@ impl Icon {
         Icon::Reopen,
         Icon::Swatch,
         Icon::Back,
+        Icon::File,
+        Icon::Doc,
+        Icon::Code,
+        Icon::Script,
+        Icon::Image,
+        Icon::Video,
+        Icon::Link,
+        Icon::ChevronRight,
+        Icon::ArrowUp,
+        Icon::Refresh,
+        Icon::Star,
+        Icon::FolderPlus,
+        Icon::Download,
+        Icon::Upload,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -253,6 +306,29 @@ impl Icon {
             ),
             Icon::Server => (16.0, &[Rect(2.2, 2.6, 11.6, 4.6, 1.4), Rect(2.2, 8.8, 11.6, 4.6, 1.4), Path("M4.7 4.9h.2M4.7 11.1h.2")]),
             Icon::Stats => (16.0, &[Path("M1.8 8.6h2.4l1.8-4.6 3.4 8.6 1.9-4h2.9")]),
+            Icon::File => (16.0, &[SHEET]),
+            Icon::Doc => (16.0, &[SHEET, Path("M5.6 8.6h4.8M5.6 11h3.2")]),
+            Icon::Code => (16.0, &[SHEET, Path("M6.8 8.2 5.4 9.8l1.4 1.6M9.2 8.2l1.4 1.6-1.4 1.6")]),
+            Icon::Script => (16.0, &[SHEET, Path("M5.6 8.4 7.2 9.8l-1.6 1.4M8.6 11.4h1.8")]),
+            Icon::Image => (16.0, &[FRAME, Oval(5.6, 6.4, 1.1, 1.1), Path("M2.6 11.6l3.2-3.2 2.4 2.4 2-2 3.2 3.2")]),
+            Icon::Video => (16.0, &[FRAME, Path("M6.8 6v4l3.4-2z")]),
+            Icon::Link => (
+                16.0,
+                &[Path("M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.8.8M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.8-.8")],
+            ),
+            Icon::ChevronRight => (16.0, &[Path("M6.2 3.6 10.6 8l-4.4 4.4")]),
+            Icon::ArrowUp => (16.0, &[Path("M8 13V3.4M4 7.2l4-4 4 4")]),
+            Icon::Refresh => (16.0, &[Path("M13 8a5 5 0 1 1-1.5-3.6M12.6 1.8v2.8H9.8")]),
+            Icon::Star => (16.0, &[Path("M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z")]),
+            Icon::FolderPlus => (
+                16.0,
+                &[
+                    Path("M1.8 4.6a1.6 1.6 0 0 1 1.6-1.6h2.7l1.5 1.7h5a1.6 1.6 0 0 1 1.6 1.6v5a1.6 1.6 0 0 1-1.6 1.6H3.4a1.6 1.6 0 0 1-1.6-1.6z"),
+                    Path("M8 7.4v3.6M6.2 9.2h3.6"),
+                ],
+            ),
+            Icon::Download => (16.0, &[Path("M8 2.6v7.6M4.8 7.2 8 10.4l3.2-3.2M3 13.2h10")]),
+            Icon::Upload => (16.0, &[Path("M8 10.4V2.8M4.8 6 8 2.8 11.2 6M3 13.2h10")]),
             Icon::ChevronUp => (16.0, &[Path("M4.2 9.8 8 6l3.8 3.8")]),
             Icon::ChevronDown => (16.0, &[Path("M4.2 6.2 8 10l3.8-3.8")]),
             Icon::Eye => (16.0, &[EYE, Oval(8.0, 8.0, 1.9, 1.9)]),

@@ -38,6 +38,15 @@ pub fn key_cap(t: &Theme, keys: &str, on_color: bool) -> El {
 /// One row: `label`, and the key that picks it at the right. The caller adds the key and
 /// `.on_press_tx(..)`.
 pub fn menu_row(t: &Theme, label: &str, keys: Option<&str>, state: RowState) -> El {
+    row_in(t, label, keys, state, t.l1)
+}
+
+/// A row that deletes or discards: its words are red while it rests.
+pub fn menu_row_destructive(t: &Theme, label: &str, keys: Option<&str>, state: RowState) -> El {
+    row_in(t, label, keys, state, t.red)
+}
+
+fn row_in(t: &Theme, label: &str, keys: Option<&str>, state: RowState, rest_ink: rune::Color) -> El {
     let on_color = matches!(state, RowState::Hot | RowState::Down);
     let mut row = rune::row().h(ROW).w_full().px(8.0).gap(8.0).radius(theme::RADIUS_ROW).items_center().no_focus_ring().role("menuitem");
     row = match state {
@@ -49,7 +58,7 @@ pub fn menu_row(t: &Theme, label: &str, keys: Option<&str>, state: RowState) -> 
     let ink = match state {
         RowState::Off => t.l2,
         _ if on_color => t.on_color,
-        _ => t.l1,
+        _ => rest_ink,
     };
     row = row.child(text(label).font(theme::TEXT).color(ink).single_line().truncate().grow(1.0).shrink());
     if let Some(keys) = keys {

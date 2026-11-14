@@ -170,8 +170,8 @@ fn a_link_is_underlined_under_the_pointer_and_opens_with_ctrl_click() {
     w.rt.pointer_move(x, y);
     w.settle();
     assert!(w.pane().over.links.hover.is_none());
-    // A path: dotted, and Ctrl+click asks the window for it. Files isn't there yet, so the
-    // path is copied and the terminal says so. Nothing reaches the shell, nothing is selected.
+    // A path: dotted, and Ctrl+click asks the window for it: the machine's Files shows the
+    // folder it is in. Nothing reaches the shell, nothing is selected.
     let (x, y) = w.cell(1, 7);
     w.rt.pointer_move(x, y);
     w.settle();
@@ -181,13 +181,11 @@ fn a_link_is_underlined_under_the_pointer_and_opens_with_ctrl_click() {
     w.rt.frame(1.0 / 60.0);
     w.rt.pointer_up(x, y);
     w.settle();
-    assert!(w.tree().contains("Copied the path"), "{}", w.tree());
+    let files = w.rt.state.bench.active().filter(|t| t.kind == TabKind::Files && t.server == WEB).map(|t| t.id).expect("Files on web-7731 is on screen");
+    assert_eq!(w.rt.state.screens.files[&files].browser.asked(), "/etc");
     assert_eq!(w.written(0), "");
-    assert!(w.pane().view.borrow().selection.is_none());
+    assert!(w.rt.state.panes.values().all(|p| p.view.borrow().selection.is_none()));
     w.hold(Mods::default());
-    // The note goes by itself.
-    w.wait(3.0);
-    assert!(!w.tree().contains("Copied the path"));
 }
 
 #[test]

@@ -253,15 +253,14 @@ impl Shell {
     }
 
     /// A click on a file's path in tab `from`'s terminal: `path` is absolute or starts at `~`,
-    /// `line` is where in the file. The Files screen will take this (show the folder, pick the
-    /// file out, as 0.10's `openTerminalLink`); until it does, the path is copied and the
-    /// terminal says so.
+    /// `line` is where in the file. The machine's Files tab shows the folder it is in with it
+    /// picked out, and opens it (a folder: goes into it), as 0.10's `openTerminalLink`. The
+    /// line isn't marked yet: the editor has no line marks.
     pub fn open_path(&mut self, from: TabId, path: &str, line: Option<u32>, tx: &mut Tx) {
         let _ = line;
-        tx.copy(path.to_owned());
-        if let Some(pane) = self.panes.get_mut(&from) {
-            pane.say("Copied the path", tx);
-        }
+        let Some(server) = self.bench.tab(from).map(|t| t.server.clone()) else { return };
+        let id = self.open_files_on(&server, None, tx);
+        crate::screens::files::show_path(self, id, path);
     }
 
     /// A terminal's shell is in `folder` now: its tab is named after it, unless something else
@@ -458,7 +457,12 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         }
         tabs = tabs.child(list);
     }
-    tabs.child(toolbar_button(t, "new-tab", Icon::Plus, "New terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)))
+    // A click: a new terminal. The other button: Files on that machine, until "+" has its menu.
+    tabs.child(
+        toolbar_button(t, "new-tab", Icon::Plus, "New terminal")
+            .on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx))
+            .on_secondary_press(|s: &mut Shell, _, tx| s.open_files(tx)),
+    )
 }
 
 /// What is drawn over the window for the row: a tab's menu, or the list of all tabs.

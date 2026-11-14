@@ -53,6 +53,9 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(bar(s, t, cx))
         .child(body.child(col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t))))
+        // Over the window: uploads and downloads in progress, then a Files tab's menu or question.
+        .children(screens::transfers::view(s, t))
+        .children(screens::files::overlay(s, t, cx))
         // Over the window: a tab's menu, the list of all tabs.
         .children(super::tabs::overlays(s, t))
         // Over everything: the palette, a server's card and menu, "Add a server".

@@ -5,7 +5,7 @@
 //! Every terminal has its own session with one shared `SessionManager`, under its tab's
 //! number. Output is parsed into the pane's model on the session's reader thread
 //! (`Delivery::Direct`), which wakes the window; status goes to the tab through the pane's
-//! status sink.
+//! status sink. What a Files tab asks for is done in `crate::files`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,6 +46,7 @@ pub struct LiveBackend {
     watcher: Option<Watcher>,
     /// The thread that asks servers what their terminals run (`crate::agents`).
     agents: Option<crate::agents::Watcher>,
+    files: crate::files::Files,
 }
 
 impl LiveBackend {
@@ -59,7 +60,8 @@ impl LiveBackend {
     }
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
-        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts: Arc::new(Mutex::new(by_key(hosts))), ssh_config, watcher: None, agents: None, store: None, remote: None }
+        let files = crate::files::Files::new(env.clone());
+        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts: Arc::new(Mutex::new(by_key(hosts))), ssh_config, watcher: None, agents: None, store: None, remote: None, files }
     }
 
     /// With this copy's own list of servers behind it (`Backend::servers`).
@@ -71,11 +73,15 @@ impl LiveBackend {
     /// Where a machine's shells run: this computer, or ssh's target for a server. `None`: a
     /// server that isn't in the list anymore.
     fn target(&self, server: Option<&Server>) -> Option<Target> {
-        let server = server?;
-        if server.is_local() {
+        self.target_of(&server?.key())
+    }
+
+    /// [`Self::target`] by a machine's key in the sidebar.
+    fn target_of(&self, key: &str) -> Option<Target> {
+        if key == "local" {
             return Some(Target::Local);
         }
-        let mut target = self.hosts.lock().ok()?.get(&server.key())?.target();
+        let mut target = self.hosts.lock().ok()?.get(key)?.target();
         if let Some(config) = &self.ssh_config {
             target.extra_args.extend(["-F".to_owned(), config.display().to_string()]);
         }
@@ -114,6 +120,7 @@ impl Backend for LiveBackend {
     fn start(&mut self, remote: Remote) {
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
         self.agents = Some(crate::agents::Watcher::start(self.env.clone(), remote.clone()));
+        self.files.start(remote.clone());
         self.remote = Some(remote.clone());
         // The servers' colours, and what 0.10 and the ssh config still offer: files to read,
         // so on a thread, and the main menu says so when it's known.
@@ -175,6 +182,11 @@ impl Backend for LiveBackend {
         if let Some(agents) = &self.agents {
             agents.watch(servers.iter().filter_map(|s| Some((s.key(), self.target(Some(s))?))).collect());
         }
+    }
+
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        let target = self.target_of(&ask.server);
+        self.files.ask(ask, target);
     }
 }
 

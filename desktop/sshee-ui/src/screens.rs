@@ -16,6 +16,7 @@ pub mod palette;
 pub mod server_card;
 pub mod server_menu;
 pub mod stats;
+pub mod transfers;
 
 #[cfg(test)]
 mod tests;
@@ -39,6 +40,13 @@ pub struct States {
     pub server_menu: server_menu::State,
     pub agent: agent::State,
     pub files: HashMap<TabId, files::State>,
+    /// Files, window-wide: folders seen lately, pinned and recent folders, uploads and
+    /// downloads in progress, and notes about what finished or failed (oldest first, until the
+    /// screen dismisses them).
+    pub dirs: sshee_app::dir_cache::DirCache,
+    pub bookmarks: sshee_app::model::Bookmarks,
+    pub transfers: sshee_app::transfers::Transfers,
+    pub notices: Vec<sshee_app::files::Notice>,
     pub stats: HashMap<TabId, stats::State>,
 }
 

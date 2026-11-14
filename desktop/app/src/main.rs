@@ -13,6 +13,7 @@
 mod agents;
 mod args;
 mod demo;
+mod files;
 mod live;
 mod servers;
 mod tabs;
@@ -54,6 +55,10 @@ impl Backend for Live {
 
     fn agents_on(&mut self, servers: &[Server]) {
         self.inner.agents_on(servers);
+    }
+
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        self.inner.files(ask);
     }
 
     fn tabs_changed(&mut self, saved: &SavedTabs) {

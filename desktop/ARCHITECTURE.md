@@ -130,6 +130,22 @@ wraps it (`term-box`) with what sits over the text, each in its own file with it
    `desktop/app/tests/window.rs` when the look matters. Add the screen's made-up data to
    `desktop/app/src/demo.rs`.
 
+## Files, as the example of a screen with a backend
+
+- **Rules** (`crates/sshee-app/src/files/`, `paths.rs`, `dir_cache.rs`, `transfers.rs`): `Browser`
+  is one tab's folder (rows, selection, history, what a key does), `Editor` the open file and
+  its save (overwrite, load theirs, save as a copy), `menu` what a right-click offers, `ops`
+  every question and note, `protocol` what the screen asks the backend (`Ask`) and hears
+  (`Reply`). No Rune, no sshee-core: sshee-core's types are mirrored there.
+- **Seam** (`sshee-ui/src/screens/files.rs`): one function per thing the screen does (`go`,
+  `open`, `save`, `rename`, `delete`, `download`...). Each changes the state at once and sends
+  an `Ask` through `Shell::files_ask`; `deliver` puts the `Reply` (from `Remote::files`) back.
+- **Drawing** (`screens/files/view.rs`, `screens/transfers.rs`): reads the state, calls the seam.
+  Keys come through `Shell::key` (nothing in the list takes focus); what is over the window
+  (menu, question, bookmarks, transfer cards) is drawn from `shell/view.rs`'s root.
+- **Backends**: `desktop/app/src/files.rs` runs every `Ask` on its own thread on sshee-core;
+  `demo/files.rs` is a made-up disk in memory with a fixed clock.
+
 ## Running it and taking pictures
 
 ```sh
@@ -200,8 +216,8 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 
 | Screen (0.10's source) | Owns in `sshee-ui/src/` | Owns in `crates/sshee-app/src/` |
 |---|---|---|
-| Files: folders, previews, editor, drag in and out (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `paths.rs`, `dir_cache.rs` |
-| Transfers (`Transfers.tsx`) | `screens/transfers.rs` | `transfers.rs` |
+| Files, what is left (the list, the editor with its guarded save, menus, transfers, drag onto a folder and bookmarks are built: see "Files" below): a filter box, typing a path, new file, archive, paste copied files, copy to another server, open a terminal here, a folder's peek, Markdown and video, drag in from and out to the desktop (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
+| Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
 | Settings and its sections (`SettingsDialog.tsx`, `ShortcutsEditor`, `ThemeEditor`, `ColorPicker`) | `screens/settings.rs`, `screens/settings/` | `model/settings.rs` (exists), `settings_store.rs` |
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |

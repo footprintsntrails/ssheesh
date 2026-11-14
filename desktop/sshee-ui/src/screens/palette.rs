@@ -194,7 +194,9 @@ impl Shell {
         }
         self.close_palette(tx);
         match row.action {
-            Action::Files { server, path } => self.show_tab(TabKind::Files, &server, path, tx),
+            Action::Files { server, path } => {
+                self.open_files_on(&server, path.as_deref(), tx);
+            }
             Action::Stats { server } => self.show_tab(TabKind::Stats, &server, None, tx),
             Action::Tab(id) => self.focus_tab(id, tx),
             Action::Server(server) => self.go_to(&server, tx),

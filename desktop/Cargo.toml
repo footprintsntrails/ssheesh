@@ -18,10 +18,11 @@ publish = false
 # Rune is pre-release: pin a rev of `dev` and bump it on purpose, together with the patch
 # list below (Rune's crates/rune/README.md "Depending on Rune"). Features: `tooling` gives
 # --script/--snap/--tree in release builds (the prototype's CI; 1.0 release builds drop it),
+# `native-file-dialog` the system's file picker (Files' Upload),
 # `dbus` Linux's light/dark preference, `accessibility` the screen-reader tree,
 # `metal-backend` macOS's default renderer. Off on purpose: `embedded-fonts` (we register our
 # own, sshee-ui/fonts), `svg` (hostile SVGs, Rune #587/#888) and `ogg-audio`.
-rune = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095", default-features = false, features = ["accessibility", "dbus", "metal-backend", "tooling"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095", default-features = false, features = ["accessibility", "dbus", "metal-backend", "native-file-dialog", "tooling"] }
 sshee-core = { path = "../crates/sshee-core" }
 sshee-term = { path = "../crates/sshee-term" }
 sshee-app = { path = "../crates/sshee-app" }

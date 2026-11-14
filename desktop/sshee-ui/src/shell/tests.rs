@@ -445,11 +445,11 @@ fn the_machine_on_screen_is_watched_once_its_terminal_is_connected() {
 fn a_tab_that_is_not_a_terminal_shows_its_placeholder_and_starts_no_session() {
     let mut w = linux();
     w.rt.update(|s, tx| {
-        s.bench.open(TabKind::Files, WEB);
+        s.bench.open(TabKind::Stats, WEB);
         s.settle(tx);
     });
     w.settle();
-    assert_eq!(w.row(), "*Files@web-7731");
+    assert_eq!(w.row(), "*Stats@web-7731");
     assert_eq!(w.sessions(), 0);
     assert!(w.tree().contains("This page isn't in the preview yet."));
     assert!(w.rt.find("term").is_none());

@@ -24,6 +24,8 @@ pub enum Shortcut {
     /// Brings back the tab closed last.
     ReopenTab,
     ToggleSidebar,
+    /// Files on the machine on screen (new in 1.0: 0.10 opened Files from menus only).
+    OpenFiles,
     /// Ctrl+Tab and Ctrl+Shift+Tab, on a Mac too: +1 or -1.
     StepTab(i32),
     /// The tab at this place in the row, 1 to 9.
@@ -46,12 +48,13 @@ pub enum Shortcut {
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 11] = [
+const NAMED: [(Shortcut, &str); 12] = [
     (Shortcut::Agents, "agents"),
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
     (Shortcut::ReopenTab, "reopenTab"),
     (Shortcut::ToggleSidebar, "sidebar"),
+    (Shortcut::OpenFiles, "files"),
     (Shortcut::Find { always: false }, "find"),
     (Shortcut::Streamer, "streamer"),
     (Shortcut::SideBySide, "toggleSplit"),
@@ -104,6 +107,8 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         Shortcut::AddServer => ("n", true),
         // ⌘A selects all on a Mac, so the agents take ⌘⇧A there.
         Shortcut::Agents => ("a", true),
+        // Like a file explorer: ⇧⌘E on a Mac, Ctrl+Shift+E elsewhere (F is Find).
+        Shortcut::OpenFiles => ("e", true),
         Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
     };
     Some(if mac { keys(key, false, true, mac_shift) } else { keys(key, true, false, true) })
@@ -281,6 +286,10 @@ mod tests {
         assert_eq!(hit("l", "cs", false), Some(Shortcut::Palette));
         assert_eq!(hit("k", "cs", false), Some(Shortcut::PaletteAlt));
         assert_eq!(hit("n", "cs", false), Some(Shortcut::AddServer));
+        // Files, as a file explorer: Ctrl+Shift+E, ⇧⌘E; F stays Find's.
+        assert_eq!(hit("e", "cs", false), Some(Shortcut::OpenFiles));
+        assert_eq!(hit("e", "ms", true), Some(Shortcut::OpenFiles));
+        assert_eq!(Shortcut::OpenFiles.id(), Some("files"));
         assert_eq!(hit("l", "m", true), Some(Shortcut::Palette));
         assert_eq!(hit("n", "ms", true), Some(Shortcut::AddServer));
         // ⌘K clears the terminal on a Mac; Ctrl+L and Ctrl+K are the shell's everywhere.

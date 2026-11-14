@@ -651,6 +651,26 @@ impl Workbench {
         }
     }
 
+    /// The folder a Files tab is in now: kept with the tab, so the next run opens it there.
+    pub fn set_path(&mut self, id: TabId, path: Option<String>) {
+        if let Some(tab) = self.tab_mut(id) {
+            tab.path = path;
+        }
+    }
+
+    /// Files on a machine: a machine has one Files tab, so the one it has comes to the screen,
+    /// and only a machine without one gets a new tab.
+    pub fn open_files(&mut self, server: &str) -> TabId {
+        let has = self.tabs_on(server).find(|t| t.kind == TabKind::Files).map(|t| t.id);
+        match has {
+            Some(id) => {
+                self.land_on(id);
+                id
+            }
+            None => self.open(TabKind::Files, server),
+        }
+    }
+
     /// What to keep for the next run.
     pub fn saved(&self) -> SavedTabs {
         SavedTabs {
@@ -1222,5 +1242,22 @@ mod tests {
         }
         assert_eq!(TabKind::from_pane_kind(&PaneKind::Empty), None);
         assert_eq!(TabKind::from_pane_kind(&PaneKind::Other("notes".into())), None);
+    }
+
+    #[test]
+    fn a_machine_has_one_files_tab_and_it_keeps_its_folder() {
+        let mut w = bench();
+        let shell = w.open(TabKind::Terminal, WEB);
+        let files = w.open_files(WEB);
+        assert_eq!(row(&w), "Terminal@web-7731 *Files@web-7731");
+        // Asked for again from the terminal: the same tab comes back, no second one.
+        w.focus(shell);
+        assert_eq!(w.open_files(WEB), files);
+        assert_eq!(row(&w), "Terminal@web-7731 *Files@web-7731");
+        // Another machine has its own.
+        assert_ne!(w.open_files(DB), files);
+        w.set_path(files, Some("/home/deploy/shop".into()));
+        assert_eq!(w.saved().tabs[1].path.as_deref(), Some("/home/deploy/shop"));
+        w.set_path(TabId(999), Some("/nowhere".into()));
     }
 }

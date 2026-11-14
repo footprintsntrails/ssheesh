@@ -68,6 +68,11 @@ impl Remote {
     pub fn set_foreground(&self, server: ServerKey, running: Vec<(String, String)>) {
         self.update(move |s| crate::screens::agent::foreground(s, &server, &running));
     }
+
+    /// The answer to a Files request, or news of a transfer (`screens::files::deliver`).
+    pub fn files(&self, reply: sshee_app::files::Reply) {
+        self.update(move |s| crate::screens::files::deliver(s, reply));
+    }
 }
 
 /// What the window needs from outside: sessions for its terminals and news of its machines.
@@ -106,6 +111,13 @@ pub trait Backend {
     /// that shows it and brings `tab` forward on a click; until then nothing is shown.
     fn notify(&mut self, tab: &Tab, note: &sshee_term::attention::Notification) {
         let _ = (tab, note);
+    }
+
+    /// A Files tab asks for something: a folder's listing, a file, a change, a transfer.
+    /// Never answered here: the work runs on a thread of its own and the answer comes back
+    /// through [`Remote::files`], addressed with `ask.reply(..)`.
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        let _ = ask;
     }
 
     /// Adding and managing servers (`screens::add_server`, `screens::server_menu`): saving,
@@ -234,6 +246,11 @@ impl Shell {
         self.waker = Some(waker);
     }
 
+    /// Rune's waker, for a screen's own background work (a picture being decoded).
+    pub(crate) fn waker(&self) -> Option<rune::Waker> {
+        self.waker.clone()
+    }
+
     /// The pane of the tab on screen, when that tab is a terminal.
     pub fn active_pane(&mut self) -> Option<&mut TermPane> {
         let id = self.bench.active_id()?;
@@ -305,6 +322,8 @@ impl Shell {
         self.screens.retain(|id| bench.tab(id).is_some());
         self.row.retain(|id| bench.tab(id).is_some());
         self.layout.prune(bench);
+        // A Files tab shown for the first time gets its state and lists its folder.
+        crate::screens::files::shown(self);
         // The tab on screen, and the one shown beside it.
         for id in self.tabs_on_screen() {
             if let Some(tab) = self.bench.tab(id).filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
@@ -457,12 +476,47 @@ impl Shell {
         self.settle(tx);
     }
 
+    /// Files on the machine on screen (this computer from the main menu): its Files tab, or a
+    /// new one when it has none.
+    pub fn open_files(&mut self, tx: &mut Tx) {
+        let server = self.bench.current_key().unwrap_or("local").to_owned();
+        self.open_files_on(&server, None, tx);
+    }
+
+    /// Files on `server` (its one Files tab, or a new one), in `folder` when one is given: the
+    /// palette's "Files" row, a server's menu. Returns the tab.
+    pub fn open_files_on(&mut self, server: &str, folder: Option<&str>, tx: &mut Tx) -> TabId {
+        let id = self.bench.open_files(server);
+        // A tab not shown yet starts there; one already showing another folder goes there.
+        let fresh = !self.screens.files.contains_key(&id);
+        if let (true, Some(folder)) = (fresh, folder) {
+            self.bench.set_path(id, Some(folder.to_owned()));
+        }
+        self.settle(tx);
+        if let (false, Some(folder)) = (fresh, folder) {
+            crate::screens::files::go(self, id, folder);
+        }
+        id
+    }
+
+    /// Sends a Files request to the backend. The answer arrives later through
+    /// [`Remote::files`]; `screens::files` has a function for everything the screen does.
+    pub fn files_ask(&mut self, ask: sshee_app::files::Ask) {
+        self.backend.files(ask);
+    }
+
+    /// Sessions and files are replays (a demo, a test): time stands still for Files too.
+    pub(crate) fn replays(&self) -> bool {
+        self.clock_base.is_some()
+    }
+
     fn run(&mut self, shortcut: Shortcut, tx: &mut Tx) {
         match shortcut {
             Shortcut::NewTerminal => self.new_terminal(tx),
             Shortcut::CloseTab => self.close_active(tx),
             Shortcut::ReopenTab => self.reopen_closed(tx),
             Shortcut::ToggleSidebar => self.toggle_sidebar(tx),
+            Shortcut::OpenFiles => self.open_files(tx),
             Shortcut::StepTab(step) => self.step_tab(step, tx),
             Shortcut::JumpToTab(n) => self.jump_to_tab(n, tx),
             Shortcut::Find { .. } => {
@@ -501,7 +555,7 @@ impl Shell {
         if self.screens.any_open() {
             return false;
         }
-        self.shortcut(ev, tx) || self.active_pane().is_some_and(|p| p.key(ev, tx)) || self.home_key(ev, tx)
+        self.shortcut(ev, tx) || self.active_pane().is_some_and(|p| p.key(ev, tx)) || self.home_key(ev, tx) || crate::screens::files::key(self, ev, tx)
     }
 
     pub fn paste(&mut self, content: &ClipboardContent, tx: &mut Tx) {

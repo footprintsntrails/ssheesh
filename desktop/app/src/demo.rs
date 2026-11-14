@@ -6,6 +6,9 @@
 //!
 //! Every name and address is made up: `web-7731`, `203.0.113.x` (a range set aside for
 //! documentation). Secrets in the output are made at run time, never written in a fixture.
+//! Each server's files are a made-up tree in memory (`files`).
+
+mod files;
 
 use std::path::Path;
 
@@ -19,8 +22,9 @@ use sshee_ui::terminal::replay::{Fixture, ReplayLink};
 use sshee_ui::terminal::TermLink;
 
 const WEB: &str = "host:demo-web";
-const DB: &str = "host:demo-db";
 const STAGING: &str = "host:demo-staging";
+const BACKUPS: &str = "host:demo-backups";
+const DB: &str = "host:demo-db";
 
 /// How many lines web-staging's log has: several screens of history.
 const LOG_LINES: usize = 240;
@@ -79,10 +83,11 @@ pub fn bench() -> Workbench {
 }
 
 /// Sessions that play fixtures, and a list of servers kept in memory: adding, importing and
-/// renaming work, and are gone when the window closes.
+/// renaming work, and are gone when the window closes; and files that live in memory.
 pub struct DemoBackend {
     book: Book,
     remote: Option<Remote>,
+    files: files::DemoFiles,
 }
 
 impl Default for DemoBackend {
@@ -93,7 +98,7 @@ impl Default for DemoBackend {
 
 impl DemoBackend {
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB) }
     }
 
     /// Tells the window what the list holds now.
@@ -170,6 +175,17 @@ impl Backend for DemoBackend {
     fn servers(&mut self, ask: Ask) {
         let answer = self.book.handle(ask);
         self.show(Some(answer));
+    }
+
+    /// Answered at once from the made-up tree (nothing here waits), but still through the
+    /// window's queue, as a real backend's answers arrive: after the handler that asked.
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        let replies = self.files.answer(&ask);
+        if let Some(remote) = &self.remote {
+            for reply in replies {
+                remote.files(reply);
+            }
+        }
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {

@@ -17,6 +17,9 @@ pub enum Push {
     Primary,
     /// It takes something away.
     Destructive,
+    /// It takes something away, offered among choices that don't ("Save over it" beside
+    /// "Load what's there", Delete beside Cancel): a quiet surface, its words red.
+    Caution,
 }
 
 /// A push button saying `label`. `enabled: false` greys it and takes its press away. The
@@ -26,6 +29,7 @@ pub fn push_button(t: &Theme, label: &str, kind: Push, enabled: bool) -> El {
         Push::Quiet => (t.hov2, t.down, t.l1),
         Push::Primary => (t.blue, t.blue_down, t.on_color),
         Push::Destructive => (t.red, t.red.alpha(0.8), if t.dark { t.page } else { t.on_color }),
+        Push::Caution => (t.hov2, t.down, t.red),
     };
     let mut b = rune::row().h(theme::FIELD).px(12.0).radius(theme::RADIUS).items_center().justify_center().fill(fill).role("button").label(label);
     b = if enabled { b.press(down).focusable(true) } else { b.disabled(true).opacity(0.45) };
