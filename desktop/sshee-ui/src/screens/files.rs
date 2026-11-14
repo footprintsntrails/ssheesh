@@ -23,6 +23,7 @@ use std::time::Instant;
 
 use rune::{Cx, El};
 
+pub mod edit;
 mod view;
 
 pub use view::{key, overlay};
@@ -388,6 +389,7 @@ pub fn menu_for(s: &Shell, tab: TabId, clicked: Option<&str>) -> Vec<MenuRow> {
     let Some(state) = s.screens.files.get(&tab) else { return Vec::new() };
     let browser = &state.browser;
     let local = browser.server() == "local";
+    let chosen = edit::chosen(s);
     menu::menu(&menu::Context {
         dir: browser.dir(),
         clicked: clicked.and_then(|name| browser.entry(name)),
@@ -396,6 +398,8 @@ pub fn menu_for(s: &Shell, tab: TabId, clicked: Option<&str>) -> Vec<MenuRow> {
         on_this_windows: local && cfg!(windows),
         pins: bookmarks::pins(&s.screens.bookmarks, browser.server()),
         show_hidden: browser.show_hidden(),
+        editor: chosen.as_ref().map(|e| e.name.as_str()),
+        editing: clicked.is_some_and(|name| edit::session_of(s, tab, name).is_some()),
     })
 }
 
@@ -568,8 +572,9 @@ mod tests {
 
     const WEB: &str = "host:web";
 
-    /// A backend that only writes down what it was asked.
-    struct Asked(Arc<Mutex<Vec<Ask>>>);
+    /// A backend that only writes down what it was asked: Files' requests, and the edit
+    /// bridge's.
+    struct Asked(Arc<Mutex<Vec<Ask>>>, Arc<Mutex<Vec<sshee_app::files::edit::EditAsk>>>);
 
     impl Backend for Asked {
         fn terminal(&mut self, _: Option<&Server>, _: &Tab) -> Box<dyn TermLink> {
@@ -577,6 +582,9 @@ mod tests {
         }
         fn files(&mut self, ask: Ask) {
             self.0.lock().unwrap().push(ask);
+        }
+        fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
+            self.1.lock().unwrap().push(ask);
         }
         fn replays(&self) -> bool {
             true
@@ -586,6 +594,7 @@ mod tests {
     struct Window {
         s: Shell,
         asked: Arc<Mutex<Vec<Ask>>>,
+        edits: Arc<Mutex<Vec<sshee_app::files::edit::EditAsk>>>,
         tab: TabId,
     }
 
@@ -602,9 +611,9 @@ mod tests {
         fn open() -> Window {
             let mut bench = Workbench::new(vec![Server::this_computer(), Server::host("web", "web-7731", "deploy@203.0.113.17")]);
             let tab = bench.open_files(WEB);
-            let asked = Arc::new(Mutex::new(Vec::new()));
-            let s = Shell::new(bench, Box::new(Asked(asked.clone())), Options::default(), None);
-            Window { s, asked, tab }
+            let (asked, edits) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+            let s = Shell::new(bench, Box::new(Asked(asked.clone(), edits.clone())), Options::default(), None);
+            Window { s, asked, edits, tab }
         }
 
         /// What the backend was asked since the last look.
@@ -665,7 +674,7 @@ mod tests {
         let tab = bench.open_files(WEB);
         bench.set_path(tab, Some("/srv/www".into()));
         let asked = Arc::new(Mutex::new(Vec::new()));
-        let _s = Shell::new(bench, Box::new(Asked(asked.clone())), Options::default(), None);
+        let _s = Shell::new(bench, Box::new(Asked(asked.clone(), Arc::default())), Options::default(), None);
         assert_eq!(asked.lock().unwrap()[0], Ask { tab, server: WEB.into(), want: Want::List { ticket: 1, path: "/srv/www".into() } });
     }
 
@@ -868,7 +877,7 @@ mod tests {
         assert_eq!(labels(menu_for(&w.s, w.tab, Some("shop"))), ["Open", "Download", "Rename", "Copy path", "Add to bookmarks", "---", "Delete"]);
         toggle_bookmark(&mut w.s, w.tab, "/home/deploy/shop");
         assert_eq!(labels(menu_for(&w.s, w.tab, Some("shop")))[4], "Remove bookmark");
-        assert_eq!(labels(menu_for(&w.s, w.tab, Some("site.zip")))[3], "Unpack “site.zip”");
+        assert_eq!(labels(menu_for(&w.s, w.tab, Some("site.zip")))[5], "Unpack “site.zip”");
         assert_eq!(labels(menu_for(&w.s, w.tab, None))[..2], ["New folder", "Upload files…"]);
         assert!(menu_for(&w.s, TabId(99), None).is_empty());
     }
@@ -891,5 +900,67 @@ mod tests {
         let wants = w.wants();
         assert!(matches!(&wants[..], [Want::List { path, .. }] if path == "/etc/shop/old"), "{wants:?}");
         assert!(w.state().editor.is_none(), "a folder opened as a file");
+    }
+
+    /// What the edit bridge was asked since the last look.
+    fn edit_asks(w: &Window) -> Vec<sshee_app::files::edit::EditAsk> {
+        std::mem::take(&mut *w.edits.lock().unwrap())
+    }
+
+    #[test]
+    fn open_in_an_editor_elsewhere_from_start_to_the_servers_last_tab() {
+        use sshee_app::editors::Editor;
+        use sshee_app::files::edit::{EditAsk, EditEvent, EditReply, Opened};
+        let mut w = Window::at_home();
+        // At start: the editors and the leftovers are asked for, nothing custom set.
+        assert_eq!(edit_asks(&w), [EditAsk::Start { custom: None }]);
+        let code = Editor { id: "vscode".into(), name: "VS Code".into(), program: "/usr/share/code/code".into(), args: vec![], vscode_like: true };
+        edit::deliver(&mut w.s, EditReply::Editors { found: vec![code.clone()], custom: None });
+        // The menu names it, for a file only.
+        let menu: Vec<String> = menu_for(&w.s, w.tab, Some("notes.md")).into_iter().filter_map(|r| match r {
+            MenuRow::Item(i) => Some(i.label),
+            MenuRow::Separator => None,
+        }).collect();
+        assert_eq!(menu[..3], ["Open preview", "Open in VS Code", "Open in…"]);
+        // Open: no Tor, no streamer mode, so no question.
+        edit::open_in(&mut w.s, w.tab, "notes.md", None);
+        let asked = edit_asks(&w);
+        assert!(matches!(&asked[..], [EditAsk::Open { path, editor, confirmed: false, .. }] if path == "/home/deploy/notes.md" && editor.name == "VS Code"), "{asked:?}");
+        assert!(w.s.screens.edits.is_opening(WEB, "/home/deploy/notes.md"));
+        edit::deliver(&mut w.s, EditReply::Opened { tab: w.tab, host: WEB.into(), path: "/home/deploy/notes.md".into(), editor: "VS Code".into(), result: Ok(Opened::Session { id: "s1".into(), local: "/tmp/e/s1/notes.md".into() }) });
+        // A save that reached the server lists the folder again: its size and time changed.
+        w.wants();
+        edit::deliver(&mut w.s, EditReply::Event { id: "s1".into(), event: EditEvent::Uploaded { at: 1_700_000_400 } });
+        assert!(w.wants().iter().any(|want| matches!(want, Want::List { path, .. } if path == "/home/deploy")));
+        assert_eq!(edit::session_of(&w.s, w.tab, "notes.md").as_deref(), Some("s1"));
+        // A conflict brings its dialog up by itself.
+        edit::deliver(&mut w.s, EditReply::Event { id: "s1".into(), event: EditEvent::Conflict { gone: false } });
+        assert_eq!(w.s.screens.edits.conflict.as_deref(), Some("s1"));
+        // The server's last tab closes (`Shell::settle` runs this): its sessions end.
+        w.s.bench.close(w.tab);
+        edit::hosts_changed(&mut w.s);
+        assert!(edit_asks(&w).contains(&EditAsk::CloseHost { host: WEB.into() }));
+    }
+
+    #[test]
+    fn choose_an_app_keeps_it_as_the_setting_and_opens_the_file_it_was_asked_for() {
+        use sshee_app::editors::Editor;
+        use sshee_app::files::edit::{EditAsk, EditReply};
+        let mut w = Window::at_home();
+        edit_asks(&w);
+        w.s.screens.edits.pending = Some((w.tab, WEB.into(), "/home/deploy/notes.md".into()));
+        let kate = Editor { id: "custom:/opt/kate/bin/kate".into(), name: "kate".into(), program: "/opt/kate/bin/kate".into(), args: vec![], vscode_like: false };
+        edit::deliver(&mut w.s, EditReply::Chosen(Ok(kate)));
+        assert_eq!(w.s.settings.more().external_editor.as_deref(), Some("custom:/opt/kate/bin/kate"));
+        assert_eq!(edit::chosen(&w.s).unwrap().name, "kate");
+        assert!(matches!(&edit_asks(&w)[..], [EditAsk::Open { editor, .. }] if editor.name == "kate"));
+        // A pick that can't be started says why, and changes nothing.
+        edit::deliver(&mut w.s, EditReply::Chosen(Err("That isn't a program that can be started.".into())));
+        assert_eq!(w.s.screens.notices.last().unwrap().title, "Can't open files in that app");
+        // Leftovers at start are marked offered as they're shown.
+        let left = sshee_app::files::edit::Leftover { id: "l1".into(), host: WEB.into(), remote_path: "/home/deploy/a".into(), local: "/tmp/e/l1/a".into(), size: 3 };
+        edit::deliver(&mut w.s, EditReply::Leftovers(vec![left]));
+        assert_eq!(edit_asks(&w), [EditAsk::MarkOffered { ids: vec!["l1".into()] }]);
+        assert_eq!(w.s.screens.edits.leftovers.len(), 1);
     }
 }

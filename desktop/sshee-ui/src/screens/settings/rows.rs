@@ -168,6 +168,15 @@ fn special_control(s: &Shell, t: &'static Theme, r: &'static Row, special: Speci
                 tx.instant();
             })
         }
+        // The editor Files' "Open in" starts: the ones found, or one picked with "Choose an app…".
+        Special::ExternalEditor => {
+            let name = crate::screens::files::edit::chosen(s).map_or_else(|| "None found".to_owned(), |e| sshee_app::files::edit::listed(&e.name));
+            let row_key = r.key;
+            popup_button(t, r.label, &name, true).key(key).on_press_tx(move |s: &mut Shell, tx| {
+                s.screens.settings.menu = Some(row_key);
+                tx.instant();
+            })
+        }
         // The wide ones are drawn by `wide`.
         _ => rune::el(),
     }

@@ -11,6 +11,7 @@
 
 pub mod bookmarks;
 pub mod browser;
+pub mod edit;
 pub mod editor;
 pub mod format;
 pub mod kinds;
@@ -174,11 +175,13 @@ pub struct Notice {
     pub body: Option<String>,
     /// "Undo" on a move: the names to move back, see [`ops::Undo`].
     pub undo: Option<ops::Undo>,
+    /// "Show in folder": a folder of this computer's (where a copy edited elsewhere was kept).
+    pub folder: Option<std::path::PathBuf>,
 }
 
 impl Notice {
     pub fn new(tone: Tone, title: impl Into<String>) -> Notice {
-        Notice { tone, title: title.into(), body: None, undo: None }
+        Notice { tone, title: title.into(), body: None, undo: None, folder: None }
     }
 
     pub fn body(mut self, body: impl Into<String>) -> Notice {

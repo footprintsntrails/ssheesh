@@ -144,6 +144,8 @@ pub enum Special {
     Network,
     /// The version, and checking for a new one.
     UpdateCard,
+    /// The editor Files' "Open in <editor>" starts: the ones found, and "Choose an app…".
+    ExternalEditor,
     /// The logo, the version and the links.
     AboutCard,
     /// Tips: on, off, shown again.
@@ -919,6 +921,10 @@ fn build() -> Vec<Row> {
         .later("Comes with Files: nothing is uploaded from here yet.")
         .saves(&["cleanUploads"])
         .words("metadata exif gps location camera author strip remove photos pdf word upload"),
+        Row::new("files-editor", Files, "Open files in", Control::Special(Special::ExternalEditor))
+            .hint("Files' “Open in” starts this editor on a copy of a server's file, and every save goes back to the server.")
+            .adds(&["externalEditor"])
+            .words("editor external vs code vscode zed sublime open in app"),
         // ------------------------------------------------------------------ Agents and notifications
         Row::new(
             "agents-notify",

@@ -61,6 +61,9 @@ pub struct Additions {
     /// A program in a terminal (tmux, an agent) may put text on the clipboard (OSC 52). On by
     /// default, as 0.10 always allowed it.
     pub program_clipboard: bool,
+    /// The editor "Open in <editor>" in Files starts (`editors::SETTING_KEY`): an editor's id,
+    /// or `custom:<path>` for one picked with "Choose an app…". `None`: the default one found.
+    pub external_editor: Option<String>,
     /// Fields a newer 1.x wrote, as saved.
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -68,7 +71,7 @@ pub struct Additions {
 
 impl Default for Additions {
     fn default() -> Self {
-        Additions { tabs_name_server: true, program_clipboard: true, extra: JsonMap::new() }
+        Additions { tabs_name_server: true, program_clipboard: true, external_editor: None, extra: JsonMap::new() }
     }
 }
 

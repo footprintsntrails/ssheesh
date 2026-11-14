@@ -132,6 +132,10 @@ fn thread_name(want: &Want) -> &'static str {
     }
 }
 
+/// What to do to a server's target on the work's thread, before it is used: read its saved
+/// password from the keychain, as a terminal does when it connects.
+pub type Prepare = Box<dyn FnOnce(&mut Target) + Send>;
+
 impl Files {
     pub fn new(env: SshEnv) -> Files {
         Files { work: Work { env, running: Arc::default(), started: Instant::now(), downloads: downloads_dir() }, remote: None }
@@ -143,8 +147,10 @@ impl Files {
     }
 
     /// Does what a Files tab asks on `target` (`None`: its server left the list) and answers
-    /// through the window's `Remote`. Returns at once.
-    pub fn ask(&self, ask: Ask, target: Option<Target>) {
+    /// through the window's `Remote`. Returns at once. `prepare` runs on the work's thread
+    /// before the target is used: it reads the server's saved password, which may wait on the
+    /// keychain.
+    pub fn ask(&self, ask: Ask, target: Option<Target>, prepare: Prepare) {
         // Stopping is a flag the transfer's own thread sees; its end is that thread's answer.
         if let Want::CancelTransfer { id } = ask.want {
             if let Some(xfer) = self.work.running.lock().unwrap().get(&id) {
@@ -163,6 +169,10 @@ impl Files {
                     let (remote, tab, server) = (remote.clone(), ask.tab, ask.server.clone());
                     move |answer| remote.files(Reply { tab, server: server.clone(), answer })
                 };
+                let mut target = target;
+                if let Some(target) = target.as_mut() {
+                    prepare(target);
+                }
                 let answer = answer(&ask.want, target.as_ref(), &work, &report);
                 remote.files(ask.reply(answer));
             }

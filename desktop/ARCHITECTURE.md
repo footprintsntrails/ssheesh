@@ -271,7 +271,14 @@ Servers, with their labels and looks, come over when you pick them in "Add a ser
 
 ## Open in your own editor (for the Files screen)
 
-The core is built and tested; the screen isn't. `sshee_core::edit_bridge` copies a server's
+Built, core and screen. The screen's rules are `sshee_app::files::edit` (which editor, each
+status's words, the questions, `EditAsk`/`EditReply`); the seam and the drawing are
+`sshee-ui/src/screens/files/edit.rs` (`Backend::edit`, `Remote::edit`); the live backend is
+`desktop/app/src/edit.rs` and the demo's `app/src/demo/edit.rs` (no editor starts; the status
+flow plays, `--demo-leftovers` offers two leftovers). The chosen editor is 1.0's own setting
+`externalEditor` (Settings → Files → "Open files in"). Not built yet: a submenu for "Open
+in…" (it replaces the menu in place), and Upload or Discard per leftover (the prompt acts on
+all). `sshee_core::edit_bridge` copies a server's
 file into a private folder, starts an editor on it and uploads every save with a guarded save;
 `sshee_app::editors` finds the editors on this computer. Neither knows about Rune. The rules
 (sizes, how long copies live, the start-up sweep, the 2 GB cap, safe deletion) are in the doc

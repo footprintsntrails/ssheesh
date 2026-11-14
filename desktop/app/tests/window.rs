@@ -811,7 +811,7 @@ fn a_download_shows_its_card_until_it_is_stopped() {
             tap(0.3, "tab-2"),
             json!({ "t": 0.8, "type": "double-click", "x": 300.0, "y": 153.0 }),
             json!({ "t": 1.4, "type": "secondary-click", "x": 300.0, "y": 153.0 }),
-            json!({ "t": 1.8, "type": "tap", "x": 340.0, "y": 198.0 }),
+            tap(1.8, "menu-4"),
         ];
         if stop {
             // The card's cross.
@@ -877,4 +877,70 @@ fn files_move_by_dragging_rename_and_upload() {
     for said in ["Uploaded notes.txt", "notes.txt", "9 items, 4 hidden"] {
         assert!(run.tree_text.contains(said), "{said} isn't in the tree");
     }
+}
+
+// ---- Open in your own editor (the demo starts no editor: it plays a session's news)
+
+/// The Files tab, then "Open in VS Code" from the menu of the row at `y`, and Return on the
+/// warning the demo's Tor brings up before the first one.
+fn open_in_editor(t: f64, y: f64) -> Vec<Value> {
+    vec![
+        json!({ "t": t, "type": "secondary-click", "x": 300.0, "y": y }),
+        tap(t + 0.4, "menu-1"),
+        press(t + 0.7, "Enter", false, false, false),
+    ]
+}
+
+#[test]
+fn a_file_opens_in_your_own_editor_and_says_how_its_saves_go() {
+    for theme in ["dark", "light"] {
+        // nginx.conf: the menu names the editor; the row and the line under the list say saved.
+        let mut events = vec![tap(0.3, "tab-2")];
+        events.extend(open_in_editor(0.8, 283.0));
+        events.push(json!({ "t": 1.9, "type": "mark", "name": "end" }));
+        let Some(run) = run(&format!("edit-{theme}"), &["--demo", "--theme", theme], Some(Value::Array(events))) else { return };
+        for said in ["Uploaded 14:02", "Saved to the server at 14:02", "Stop editing", "nginx.conf"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        assert!(run.element("files-editing").is_some(), "{theme}: no line under the list");
+        assert!(run.element("edit-warn").is_none(), "{theme}: the warning stayed");
+    }
+    // The menu on a file: "Open in VS Code", and "Open in…" with every editor found.
+    let script = json!([tap(0.3, "tab-2"), { "t": 0.8, "type": "secondary-click", "x": 300.0, "y": 309.0 }, tap(1.2, "menu-2"), end(1.8)]);
+    let Some(run) = self::run("edit-others", &["--demo"], Some(script)) else { return };
+    for said in ["VS Code", "Zed", "Text Editor", "The default text editor", "Choose an app…"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in Open in…");
+    }
+    // Over 50 MB it asks first.
+    let mut events = vec![tap(0.3, "tab-2"), json!({ "t": 0.8, "type": "double-click", "x": 300.0, "y": 179.0 })];
+    events.extend(open_in_editor(1.4, 153.0));
+    events.push(end(2.4));
+    let Some(run) = self::run("edit-big", &["--demo"], Some(Value::Array(events))) else { return };
+    assert!(run.tree_text.contains("This file is 230 MB. Download a copy to edit?"), "no question for a big file");
+}
+
+#[test]
+fn a_conflict_offers_every_way_on_and_compares() {
+    let mut events = vec![tap(0.3, "tab-2"), json!({ "t": 0.8, "type": "double-click", "x": 300.0, "y": 205.0 })];
+    events.extend(open_in_editor(1.4, 179.0));
+    events.push(tap(2.6, "conflict-compare"));
+    events.push(end(3.2));
+    let Some(run) = run("edit-conflict", &["--demo"], Some(Value::Array(events))) else { return };
+    for said in ["This file changed on the server since you opened it", "Keep mine", "Take theirs", "Save mine as a copy", "Hide changes", "yours", "server", "Conflict"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    assert!(run.element("compare-lines").is_some());
+    // The dialog sits over the window, the copy that keeps both is focused.
+    assert_eq!(run.fill("edit-conflict"), "#2c2c2eff");
+}
+
+#[test]
+fn copies_an_earlier_run_left_unsent_are_offered_once_at_start() {
+    let Some(run) = run("edit-leftovers", &["--demo", "--demo-leftovers"], None) else { return };
+    for said in ["2 files have changes that were never uploaded", "/home/deploy/nginx.conf on web-7731 (178 B)", "Upload", "Discard", "Show in folder"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    // Without the flag the demo has none, and nothing is over the window.
+    let Some(run) = self::run("edit-no-leftovers", &["--demo"], None) else { return };
+    assert!(run.element("edit-leftovers").is_none());
 }

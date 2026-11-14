@@ -64,6 +64,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         // Over the window: uploads and downloads in progress, then a Files tab's menu or question.
         .children(screens::transfers::view(s, t))
         .children(screens::files::overlay(s, t, cx))
+        // Files open in an editor elsewhere: a question, a conflict, copies left unsent.
+        .children(screens::files::edit::overlay(s, t))
         // Over the window: a tab's menu, the list of all tabs.
         .children(super::tabs::overlays(s, t))
         // Over everything: the palette, a server's card and menu, "Add a server".

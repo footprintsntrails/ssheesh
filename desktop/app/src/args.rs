@@ -8,6 +8,7 @@ usage: ssheesh-preview [options]
   --demo              start on made-up servers and tabs, with made-up terminal output:
                       nothing is read from this computer and nothing connects
   --sheet             show the component sheet (every control in its states) instead of the window
+  --demo-leftovers    with --demo: offer two made-up copies an earlier run left unsent
   --ssh-config FILE   the ssh config to list servers from and connect with (ssh's -F),
                       instead of ~/.ssh/config
 Rune's own flags (--snap, --script, --tree, --theme, ...) are listed by --help.";
@@ -16,6 +17,7 @@ Rune's own flags (--snap, --script, --tree, --theme, ...) are listed by --help."
 pub struct Args {
     pub demo: bool,
     pub sheet: bool,
+    pub demo_leftovers: bool,
     pub ssh_config: Option<PathBuf>,
 }
 
@@ -27,6 +29,7 @@ impl Args {
             let switch = match flag.as_str() {
                 "--demo" => &mut args.demo,
                 "--sheet" => &mut args.sheet,
+                "--demo-leftovers" => &mut args.demo_leftovers,
                 "--ssh-config" => {
                     if args.ssh_config.is_some() {
                         return Err(format!("{flag} is given twice"));
@@ -43,6 +46,9 @@ impl Args {
             if std::mem::replace(switch, true) {
                 return Err(format!("{flag} is given twice"));
             }
+        }
+        if args.demo_leftovers && !args.demo {
+            return Err("--demo-leftovers goes with --demo".into());
         }
         if args.demo && args.ssh_config.is_some() {
             return Err("--demo connects to nothing: it takes no --ssh-config".into());
@@ -64,6 +70,8 @@ mod tests {
         assert_eq!(parse(&[]).unwrap(), Args::default());
         assert!(parse(&["--demo"]).unwrap().demo);
         assert!(parse(&["--demo", "--sheet"]).unwrap().sheet);
+        assert!(parse(&["--demo", "--demo-leftovers"]).unwrap().demo_leftovers);
+        assert!(parse(&["--demo-leftovers"]).is_err());
         assert_eq!(parse(&["--ssh-config", "/tmp/p/ssh_config"]).unwrap().ssh_config, Some("/tmp/p/ssh_config".into()));
     }
 

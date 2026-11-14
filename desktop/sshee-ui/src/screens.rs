@@ -48,6 +48,8 @@ pub struct States {
     pub bookmarks: sshee_app::model::Bookmarks,
     pub transfers: sshee_app::transfers::Transfers,
     pub notices: Vec<sshee_app::files::Notice>,
+    /// Files open in an editor elsewhere, and the editors on this computer.
+    pub edits: sshee_app::files::edit::Edits,
     pub stats: HashMap<TabId, stats::State>,
     pub settings: settings::State,
 }
