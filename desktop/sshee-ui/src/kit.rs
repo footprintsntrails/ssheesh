@@ -16,10 +16,18 @@
 
 pub mod button;
 pub mod chip;
+pub mod field;
+pub mod form;
+pub mod keycap;
 pub mod menu;
 pub mod popover;
+pub mod popup;
+pub mod push;
 pub mod rail;
+pub mod segmented;
+pub mod slider;
 pub mod status;
+pub mod switch;
 pub mod tab;
 
 use rune::{canvas, el, Color, El, LineCap, Shape};

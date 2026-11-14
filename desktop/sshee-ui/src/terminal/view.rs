@@ -68,12 +68,14 @@ pub fn pane_view_with<S: 'static>(
     let m = metrics_at(pane, env.scale);
     let lit = pane.cursor_lit();
     let mut view = pane.view.borrow_mut();
-    if view.palette().dark != env.system_dark {
+    // Dark or light as Settings says, else as the system is.
+    let dark = pane.dark(env.system_dark);
+    if view.palette().dark != dark {
         // A program asking for the colours (Claude Code picks light or dark by them) is told
         // the scheme it is drawn in.
-        pane.model.set_answer_colors(Palette::of(view.palette().scheme, env.system_dark).answer_colors());
+        pane.model.set_answer_colors(Palette::of(view.palette().scheme, dark).answer_colors());
     }
-    let rows = view.rows(m, env.system_dark, pane.focused);
+    let rows = view.rows(m, dark, pane.focused);
     let palette = view.palette().clone();
     let size = view.size;
     let cursor = view.cursor;

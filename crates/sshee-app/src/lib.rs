@@ -3,10 +3,11 @@
 //! `raw` is what 0.10 left on disk, as stored; `legacy` finds and reads it; `model` holds the
 //! typed state with the same versions and migrations as 0.10's zustand stores; `import` turns
 //! the raw stores into the model; `workbench` is what the 1.0 window shows and does (servers,
-//! tabs, the tab you're on), without a screen. Plan: `reports/План 1.0.md` sections 4 and 6 (local notes).
+//! tabs, the tab you're on), without a screen; `settings_store` holds a running 1.0's settings. Plan: `reports/План 1.0.md` sections 4 and 6 (local notes).
 
 pub mod raw;
 pub mod legacy;
 pub mod model;
 pub mod import;
 pub mod workbench;
+pub mod settings_store;

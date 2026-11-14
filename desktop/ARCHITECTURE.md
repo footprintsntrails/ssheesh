@@ -9,7 +9,7 @@ patched crates stay out of the 0.10 app in the root workspace); build and test f
 |---|---|---|
 | `crates/sshee-core` (root workspace) | no | ssh, tmux, files, Tor, metrics: everything that talks to a machine |
 | `crates/sshee-term` (root) | no | the terminal without a screen: engine, keys, secrets, selection |
-| `crates/sshee-app` (root) | no | the app's state without screens. `workbench` is what the window shows and does: servers, the row of tabs, the tab on screen, shortcuts, vital signs, saved tabs. `model`, `import`, `legacy` are 0.10's stores and bringing them over |
+| `crates/sshee-app` (root) | no | the app's state without screens. `workbench` is what the window shows and does: servers, the row of tabs, the tab on screen, shortcuts, vital signs, saved tabs. `model`, `import`, `legacy` are 0.10's stores and bringing them over. `settings_store` is a running 1.0's settings: the file, the catalogue of rows, the shortcut and scheme tables |
 | `desktop/sshee-ui` | **yes** | everything drawn: `theme` (tokens), `icons`, `kit` (components), `terminal` (the pane), `shell` (the window), `screens` (one module per screen). It doesn't depend on sshee-core |
 | `desktop/app` (`ssheesh-preview`) | through sshee-ui | `main`: which copy this is (`AppIdentity::preview`), ssh's helper roles (Tor proxy, askpass), and the window's backend: `live.rs` on sshee-core, `demo.rs` on made-up data |
 | `desktop/proto` (`ssheesh-proto`) | through sshee-ui | the terminal prototype: one window, one pane, the meter |
@@ -67,7 +67,8 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
 - `sshee-ui/src/icons.rs`: `Icon` and `icon(Icon, size, colour)`; a new icon is one arm of
   `Icon::drawing` with SVG path data (`svg.rs` reads it), on the 16-unit grid, 1.4 pt line.
 - `sshee-ui/src/kit/`: one module per component (`button`, `tab`, `rail`, `chip`, `menu`,
-  `popover`, `status`). A component is a function from what it shows to an `El`; the caller
+  `popover`, `status`, and a form's: `switch`, `segmented`, `slider`, `field`, `popup`, `push`,
+  `keycap`, `form`). A component is a function from what it shows to an `El`; the caller
   chains `.key(..)` and handlers. Add states to the component, not at the call site.
 - From Rune itself, used as is: tooltips (`El::help`), focus rings and Tab order, text fields
   (`rune::text_input`), native pop-up menus, virtual lists (`El::virtual_rows`). **rune-kit**
@@ -75,6 +76,30 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
   it pulls rune-highlights (a WASM-to-Rust build) and its own theme. The first screen that
   needs a big piece of it (a table for Files, Markdown for previews) should add it as a git
   dependency at Rune's pinned rev and wrap it in `kit/`; small things are cheaper to draw here.
+
+## Settings
+
+- **Where they live.** `Shell::settings` is a `sshee_app::settings_store::SettingsStore`: every
+  0.10 setting (the typed `model::Settings`, 0.10's own shape on disk) plus what 1.0 added
+  (`Additions`). The window gets it from its `Backend` (`Backend::settings`): the program's is
+  `settings.json` in the copy's own folder, a demo's and a test's live in memory. A first start
+  with no file waits, private, for `Shell::seed_settings` (what `import` made of 0.10's).
+- **Reading one.** `s.settings.get().terminal_font_size`, `s.settings.more().tabs_name_server`.
+  For what the window itself draws by them there are helpers in `screens/settings/apply.rs`:
+  `s.dark(system_dark)`, `s.streaming()`, `s.shown_server(key, name)`, `s.sidebar_at_right()`.
+- **Changing one.** `s.change_settings(tx, |st| st.set(|v| v.cursor_blink = false))`. The store
+  tells its listeners and writes the file on its own thread; `Shell::apply_settings` then hands
+  the values on: to the panes (`TermPane::set_options`, `set_look`), to the shortcut table, and
+  to the backend (`Backend::settings_changed`) for what only the program can do.
+- **Adding a row to Settings.** One `Row` in `settings_store/catalog.rs`: its section, name,
+  help, control (`Switch`, `Choice`, `Slider`, `Text`, `Toggles`, `Buttons`) with a getter and a
+  setter, the 0.10 keys it owns, its search words. The page draws the list; a test there fails
+  if a 0.10 setting has no row. A feature that isn't built yet gets `.later("…")`: its row is
+  drawn disabled with that one line. When the feature lands, drop the `.later` and make
+  `apply_settings` (or your screen) read the value.
+- **When in doubt, private.** If the settings from before can't be read with certainty,
+  streamer mode and secret hiding start on and `SettingsStore::notice` says why; the shell
+  draws it across the top of the page (`screens::settings::notice_bar`) until "OK".
 
 ## Adding a screen
 
@@ -141,7 +166,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Transfers (`Transfers.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
 | Command palette, search (`Overlays.tsx` palette, `cmdk`) | `screens/palette.rs` | `palette.rs` |
-| Settings and its sections (`SettingsDialog.tsx`, `ShortcutsEditor`, `ThemeEditor`, `ColorPicker`) | `screens/settings.rs`, `screens/settings/` | `model/settings.rs` (exists), `settings_store.rs` |
+| Settings: built but for the theme editor and the colour picker (`ThemeEditor.tsx`, `ColorPicker.tsx`); the rows marked `.later` in the catalogue wait for their features | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
 | Add a server, import from ssh config and XPipe (`AddServerDialog.tsx`, `ConfigImport`, `XpipeImport`) | `screens/add_server.rs` | `servers.rs` |
 | A server's card and menu, labels and looks (`Sidebar.tsx` menus, `LookPicker`, `HostIcon`) | `screens/server_card.rs`, `screens/server_menu.rs`; more arms in `icons.rs` | `labels.rs` |
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |

@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use sshee_app::model::{ReconnectMode, Settings, WelcomeMode};
+use sshee_app::settings_store::SettingsStore;
 use sshee_app::workbench::{Server, Tab, Tor};
 use sshee_core::session::{Delivery, EventSink, SessionEvent, SessionManager, SessionSpec, SessionState};
 use sshee_core::ssh::{SshEnv, Target};
@@ -20,6 +22,7 @@ use sshee_core::welcome::Welcome;
 use sshee_core::Host;
 use sshee_term::engine::Size;
 use sshee_term::model::Model;
+use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
 use sshee_ui::terminal::{LinkStatus, StatusSink, TermLink};
 
@@ -38,6 +41,28 @@ pub struct LiveBackend {
     /// `-F FILE` for every ssh, when the program was given a config of its own.
     ssh_config: Option<PathBuf>,
     watcher: Option<Watcher>,
+    remote: Option<Remote>,
+    /// What a new terminal on a server shows first, as Settings has it now.
+    welcome: Welcome,
+    /// Settings' "SSHeesh's the first time, then the server's", and the servers that have had
+    /// theirs.
+    welcome_first: bool,
+    welcomed: Vec<String>,
+}
+
+/// SSHeesh's welcome with everything in it: what a terminal shows before Settings has spoken.
+fn full_welcome() -> Welcome {
+    Welcome { mode: "ssheesh".into(), parts: vec!["logo".into(), "system".into(), "usage".into()], note: String::new() }
+}
+
+/// Settings' welcome as sshee-core takes it. "The first time" is SSHeesh's here; the backend
+/// turns it into the server's own for a server that has had it.
+pub fn welcome_of(settings: &Settings) -> Welcome {
+    let mode = match settings.welcome_mode {
+        WelcomeMode::First => "ssheesh",
+        ref other => other.as_str(),
+    };
+    Welcome { mode: mode.to_owned(), parts: settings.welcome_parts.iter().map(|p| p.as_str().to_owned()).collect(), note: settings.welcome_note.trim().to_owned() }
 }
 
 impl LiveBackend {
@@ -52,7 +77,17 @@ impl LiveBackend {
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
         let hosts = hosts.iter().map(|h| (format!("host:{}", h.id), h.clone())).collect();
-        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts, ssh_config, watcher: None }
+        LiveBackend {
+            manager: Arc::new(SessionManager::new()),
+            env,
+            hosts,
+            ssh_config,
+            watcher: None,
+            remote: None,
+            welcome: full_welcome(),
+            welcome_first: false,
+            welcomed: vec![],
+        }
     }
 
     /// Where a machine's shells run: this computer, or ssh's target for a server. `None`: a
@@ -83,6 +118,7 @@ pub fn tor_shown(status: &TorStatus) -> Tor {
 
 impl Backend for LiveBackend {
     fn start(&mut self, remote: Remote) {
+        self.remote = Some(remote.clone());
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
         // Tor, if it was left on in this copy (`~/.sshee-preview/tor/on`): every connection
         // from here on goes through it. The ports are the servers' own.
@@ -92,6 +128,24 @@ impl Backend for LiveBackend {
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
+        let mut welcome = self.welcome.clone();
+        // "The first time": a server that has had SSHeesh's welcome shows its own from then on.
+        if let (true, Some(host)) = (self.welcome_first, server.filter(|s| !s.is_local()).and_then(|s| s.target.host_id.clone())) {
+            if self.welcomed.contains(&host) {
+                welcome.mode = "auto".into();
+            } else {
+                self.welcomed.push(host.clone());
+                if let Some(remote) = &self.remote {
+                    remote.update(move |s| {
+                        s.settings.update(|v| {
+                            if !v.welcomed_hosts.contains(&host) {
+                                v.welcomed_hosts.push(host);
+                            }
+                        });
+                    });
+                }
+            }
+        }
         Box::new(LiveLink {
             manager: self.manager.clone(),
             id: format!("tab-{}", tab.id.0),
@@ -99,7 +153,45 @@ impl Backend for LiveBackend {
             key: tab.session_key.clone().unwrap_or_default(),
             env: self.env.clone(),
             bytes: Arc::new(AtomicU64::new(0)),
+            welcome,
         })
+    }
+
+    fn settings(&mut self) -> SettingsStore {
+        crate::settings::open()
+    }
+
+    /// What only sshee-core can act on: whether a dropped connection comes back by itself,
+    /// what a new terminal shows first, and ssh's steady beat through Tor.
+    fn settings_changed(&mut self, settings: &Settings) {
+        self.manager.set_auto_reconnect(settings.reconnect_mode == ReconnectMode::Auto);
+        sshee_core::tor::set_hide_typing(settings.tor_hide_typing);
+        self.welcome = welcome_of(settings);
+        self.welcome_first = settings.welcome_mode == WelcomeMode::First;
+        self.welcomed.clone_from(&settings.welcomed_hosts);
+    }
+
+    /// Settings' Tor switch and buttons. Starting Tor and writing its state take a moment:
+    /// on a thread of their own; the sidebar hears through `tor::watch`.
+    fn tor(&mut self, command: TorCommand) {
+        let ports: Vec<u16> = self.hosts.values().filter_map(|h| h.port).collect();
+        let spawned = std::thread::Builder::new().name("tor-command".into()).spawn(move || {
+            let done = match command {
+                TorCommand::On => sshee_core::tor::set_on(true, ports),
+                TorCommand::Off => sshee_core::tor::set_on(false, ports),
+                TorCommand::NewRoutes => {
+                    sshee_core::tor::new_routes();
+                    Ok(())
+                }
+                TorCommand::StartAfresh => sshee_core::tor::start_afresh(),
+            };
+            if let Err(e) = done {
+                eprintln!("ssheesh-preview: Tor: {e}");
+            }
+        });
+        if let Err(e) = spawned {
+            eprintln!("ssheesh-preview: Tor: {e}");
+        }
     }
 
     fn watch(&mut self, server: Option<&Server>) {
@@ -120,6 +212,8 @@ struct LiveLink {
     env: SshEnv,
     /// Output so far, in bytes (counted on the reader thread).
     bytes: Arc<AtomicU64>,
+    /// What it shows first.
+    welcome: Welcome,
 }
 
 /// What a tab says of a session's state. sshee-core's failure texts name no host.
@@ -146,7 +240,7 @@ impl TermLink for LiveLink {
             key: self.key.clone(),
             env: self.env.clone(),
             run: None,
-            welcome: Welcome { mode: "ssheesh".into(), parts: vec!["logo".into(), "system".into(), "usage".into()], note: String::new() },
+            welcome: self.welcome.clone(),
         };
         // On the reader thread (output, a server's Connected) or the session's (the rest): the
         // model locks what it shares.
@@ -213,6 +307,35 @@ mod tests {
         assert!(link_status(&SessionState::Asleep).wants_reconnect());
         assert!(!link_status(&SessionState::Ended { code: Some(0) }).wants_reconnect());
         assert_eq!(link_status(&SessionState::Failed { message: "refused".into() }), LinkStatus::Gone { note: "refused".into() });
+    }
+
+    #[test]
+    fn the_welcome_is_settings_and_the_first_time_is_once_a_server() {
+        let mut settings = Settings::default();
+        let w = welcome_of(&settings);
+        assert_eq!((w.mode.as_str(), w.parts.len(), w.note.as_str()), ("auto", 4, ""));
+        settings.welcome_mode = WelcomeMode::Off;
+        settings.welcome_note = "  production, careful ".into();
+        let w = welcome_of(&settings);
+        assert_eq!((w.mode.as_str(), w.note.as_str()), ("off", "production, careful"));
+        // "The first time": SSHeesh's for a server that hasn't had it, its own after.
+        settings.welcome_mode = WelcomeMode::First;
+        settings.welcomed_hosts = vec!["saved:1".into()];
+        let mut backend = LiveBackend::with_env(&[], None, SshEnv::default());
+        backend.settings_changed(&settings);
+        assert_eq!(backend.welcome.mode, "ssheesh");
+        assert!(backend.welcome_first && backend.welcomed == ["saved:1"]);
+        let tab = |bench: &mut sshee_app::workbench::Workbench, key: &str| {
+            let id = bench.go_to(key);
+            bench.tab(id).unwrap().clone()
+        };
+        let servers = vec![Server::host("saved:1", "web-7731", "deploy@203.0.113.17"), Server::host("saved:2", "db-main", "postgres@203.0.113.31")];
+        let mut bench = sshee_app::workbench::Workbench::new(servers.clone());
+        let (had, new) = (tab(&mut bench, "host:saved:1"), tab(&mut bench, "host:saved:2"));
+        let _ = backend.terminal(Some(&servers[0]), &had);
+        assert_eq!(backend.welcomed, ["saved:1"]);
+        let _ = backend.terminal(Some(&servers[1]), &new);
+        assert_eq!(backend.welcomed, ["saved:1", "saved:2"]);
     }
 
     #[test]

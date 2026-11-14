@@ -3,17 +3,24 @@
 //! what a change to a token or a component does everywhere at once. Hover, press and the
 //! focus ring show under the pointer and the Tab key; nothing here does anything.
 
-use rune::{col, row, text, El};
+use rune::{col, row, text, El, TextEdit, Tx};
 use sshee_app::workbench::Badge;
 
 use super::state::Shell;
 use crate::icons::{icon, logo, Icon};
 use crate::kit::button::toolbar_button;
 use crate::kit::chip::prod_chip;
+use crate::kit::field::{text_field, Field};
+use crate::kit::keycap::{key_cap_button, CapState};
 use crate::kit::menu::{menu, menu_row, RowState};
 use crate::kit::popover::{popover, popover_foot};
+use crate::kit::popup::popup_button;
+use crate::kit::push::{icon_button, push_button, toggle_button};
 use crate::kit::rail::{rail_button, RailState};
+use crate::kit::segmented::segmented;
+use crate::kit::slider::{slider, Range};
 use crate::kit::status::{status_item, status_tor};
+use crate::kit::switch::switch;
 use crate::kit::tab::{group_name, tab, Tab};
 use crate::kit::divider;
 use crate::theme::{self, Theme};
@@ -86,6 +93,36 @@ pub fn view(t: &'static Theme) -> El {
         status_item(t, "Down", "1.6 MB/s", false).key("s-down"),
         status_tor(t, Some(84)),
     ];
+    // A form's controls: nothing here changes anything, so a pick goes nowhere.
+    let picked = |_: &mut Shell, _: usize, _: &mut Tx| {};
+    let form = vec![
+        switch(t, "On", true, true).key("f-on").on_press_tx(|_: &mut Shell, _| {}),
+        switch(t, "Off", false, true).key("f-off").on_press_tx(|_: &mut Shell, _| {}),
+        switch(t, "On, and can't be changed", true, false).key("f-on-dis"),
+        switch(t, "Off, and can't be changed", false, false).key("f-off-dis"),
+        segmented(t, "Cursor", &["Bar", "Block", "Line"], Some(1), true, picked).key("f-seg"),
+        segmented(t, "Tabs", &["Under each server", "Along the top"], Some(1), false, picked).key("f-seg-dis"),
+        slider(t, "Font size", Range { min: 10.0, max: 20.0, step: 1.0 }, 13.0, "13 px", true, |_: &mut Shell, _: f64, _: &mut Tx| {}).key("f-slider"),
+    ];
+    let buttons_and_fields = vec![
+        push_button(t, "Check now", true).key("f-push").on_press_tx(|_: &mut Shell, _| {}),
+        push_button(t, "Choose…", false).key("f-push-dis"),
+        popup_button(t, "Font", "JetBrains Mono", true).key("f-popup").on_press_tx(|_: &mut Shell, _| {}),
+        toggle_button(t, "Logo", true, true).key("f-toggle-on").on_press_tx(|_: &mut Shell, _| {}),
+        toggle_button(t, "System", false, true).key("f-toggle-off").on_press_tx(|_: &mut Shell, _| {}),
+        icon_button(t, Icon::Undo, "Back to its own keys", true).key("f-icon").on_press_tx(|_: &mut Shell, _| {}),
+        key_cap_button(t, "New terminal", "Ctrl+Shift+T", CapState::Rest).key("f-cap").on_press_tx(|_: &mut Shell, _| {}),
+        key_cap_button(t, "New terminal", "Press keys…", CapState::Recording).key("f-cap-rec"),
+        key_cap_button(t, "Next tab", "Ctrl+Tab", CapState::Fixed).key("f-cap-fixed"),
+        key_cap_button(t, "Command bar", "Ctrl+Shift+L", CapState::Disabled).key("f-cap-dis"),
+        text_field(
+            t,
+            Field { placeholder: "Search", lead: Some(Icon::Search), width: Some(170.0) },
+            &TextEdit::default(),
+            |s: &mut Shell| &mut s.screens.settings.search,
+            |field| field.key("f-field"),
+        ),
+    ];
     let icons: Vec<El> = Icon::ALL.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
     col()
         .key("sheet")
@@ -100,5 +137,7 @@ pub fn view(t: &'static Theme) -> El {
         .child(line(t, "l-buttons", "Button, chip, logo", buttons))
         .child(line(t, "l-menu", "Popover and menu", vec![question]))
         .child(line(t, "l-status", "Status bar", status))
+        .child(line(t, "l-form", "Switch, segments, slider", form))
+        .child(line(t, "l-form-2", "Buttons, key caps, field", buttons_and_fields))
         .child(line(t, "l-icons", "Icons", icons))
 }

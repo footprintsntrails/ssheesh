@@ -444,6 +444,13 @@ impl PaneView {
         shown
     }
 
+    /// New rules for what is hidden and coloured (Settings changed): every row is presented
+    /// again under them.
+    pub fn set_look(&mut self, look: Look) {
+        self.presenter.set_look(look);
+        self.stale = true;
+    }
+
     /// What copying goes through: the presentation pass's dots, never the secret.
     pub fn look(&self) -> &Look {
         self.presenter.look()

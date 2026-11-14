@@ -10,6 +10,7 @@
 
 pub mod files;
 pub mod home;
+pub mod settings;
 pub mod stats;
 
 use std::collections::HashMap;
@@ -27,6 +28,7 @@ pub struct States {
     pub home: home::State,
     pub files: HashMap<TabId, files::State>,
     pub stats: HashMap<TabId, stats::State>,
+    pub settings: settings::State,
 }
 
 impl States {

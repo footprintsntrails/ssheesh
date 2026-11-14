@@ -86,6 +86,11 @@ fn near(pixels: &(u32, u32, Vec<u8>), [x0, y0, x1, y1]: [u32; 4], rgb: [u8; 3]) 
 /// Runs the window with `args` and, when given, `script` (Rune script events, ending in a mark
 /// named "end"); `None` (after saying why) when there is nothing to draw with.
 fn run(name: &str, args: &[&str], script: Option<Value>) -> Option<Run> {
+    run_in(name, args, script, |_| {})
+}
+
+/// [`run`], with `prepare` putting files into the run's home folder before the window starts.
+fn run_in(name: &str, args: &[&str], script: Option<Value>, prepare: impl FnOnce(&Path)) -> Option<Run> {
     if !vulkan() {
         eprintln!("{name}: skipped, no Vulkan driver here");
         return None;
@@ -94,6 +99,7 @@ fn run(name: &str, args: &[&str], script: Option<Value>) -> Option<Run> {
     let _ = std::fs::remove_dir_all(&dir);
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
+    prepare(&home);
     let (png, tree) = (dir.join("end.png"), dir.join("tree.json"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ssheesh-preview"));
     // A home of its own: whatever the window writes or reads, it isn't this machine's.
@@ -245,5 +251,145 @@ fn the_component_sheet_draws_every_state() {
     }
     for said in ["Reconnecting…", "Disconnected", "Needs you", "Esc to decide later", "Disk 92%"] {
         assert!(run.tree_text.contains(said), "{said}");
+    }
+}
+
+/// Where Settings' controls are at 1280 x 800: the gear is the sidebar's last button; the list
+/// of sections starts under the search field, 30 points a row.
+const GEAR: (f64, f64) = (26.0, 776.0);
+
+fn tap(t: f64, (x, y): (f64, f64)) -> Value {
+    json!({ "t": t, "type": "tap", "x": x, "y": y })
+}
+
+/// The centre of a section's row in Settings' list, by its place (Layout is 0).
+fn section(n: usize) -> (f64, f64) {
+    (168.0, 106.0 + 30.0 * n as f64)
+}
+
+/// The centre of the element keyed `key` in `run`.
+fn centre(run: &Run, key: &str) -> (f64, f64) {
+    let [x, y, w, h] = run.rect(key);
+    (x + w / 2.0, y + h / 2.0)
+}
+
+#[test]
+fn settings_is_a_page_in_the_window_in_both_appearances() {
+    // (theme, the frame, the page, a box of rows, the section on screen)
+    for (theme, frame, page, group) in [("dark", "#28282a", "#1c1c1e", "#242426"), ("light", "#ececee", "#ffffff", "#f5f5f7")] {
+        let script = json!([tap(0.3, GEAR), { "t": 1.0, "type": "mark", "name": "end" }]);
+        let Some(run) = run(&format!("settings-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        // The page takes the terminal's place; the bar, the sidebar and the status bar stay.
+        assert!(run.element("term").is_none(), "{theme}: the terminal is still drawn");
+        assert_eq!(run.rect("settings"), [52.0, 44.0, 1228.0, 732.0], "{theme}");
+        assert_eq!(run.rect("status"), [52.0, 776.0, 1228.0, 24.0], "{theme}");
+        assert_eq!(run.rect("settings-nav")[2], 232.0, "{theme}");
+        assert_eq!(run.fill("window"), format!("{frame}ff"), "{theme}");
+        // The list: ten sections, Layout first and picked in the selection's blue.
+        for (n, (id, name)) in [
+            ("layout", "Layout"),
+            ("appearance", "Appearance"),
+            ("terminal", "Terminal"),
+            ("keyboard", "Keyboard"),
+            ("privacy", "Privacy"),
+            ("files", "Files"),
+            ("agents", "Agents and notifications"),
+            ("tor", "Tor"),
+            ("updates", "Updates"),
+            ("about", "About"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(run.label(&format!("nav-{id}")), *name, "{theme}");
+            let (x, y) = centre(&run, &format!("nav-{id}"));
+            assert_eq!((x, y), section(n), "{theme}: {name}");
+        }
+        assert_eq!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
+        // Rows with their words and controls; one that comes later says so.
+        for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Comes later.", "Search"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        // The picture: the page's colour, a box of rows on it, the picked section's blue, and
+        // a switch that is on in the system's green.
+        let px = run.pixels();
+        assert_eq!(at(&px, 1250, 400), page, "{theme}: the page");
+        assert_eq!(at(&px, 26, 500), frame, "{theme}: the sidebar");
+        let [x, y, w, _] = run.rect("layout-tab-server");
+        assert_eq!(at(&px, (x + w / 2.0) as u32, (y + 4.0) as u32), group, "{theme}: a row's box");
+        assert_eq!(at(&px, 262, 106), "#0071e3", "{theme}: the picked section");
+        let [sx, sy, sw, sh] = run.rect("layout-tab-server-control");
+        let green = if theme == "dark" { [0x30, 0xd1, 0x58] } else { [0x34, 0xc7, 0x59] };
+        assert!(near(&px, [sx as u32, sy as u32, (sx + sw) as u32, (sy + sh) as u32], green) > 100, "{theme}: the switch isn't green");
+    }
+}
+
+#[test]
+fn a_setting_changed_in_settings_takes_effect_at_once() {
+    // The 0.10 shortcut opens it; Appearance; "Light" in a dark system.
+    let first = json!([key(0.3, ",", "c"), tap(0.8, section(1)), { "t": 1.4, "type": "mark", "name": "end" }]);
+    let Some(look) = run("settings-look", &["--demo", "--theme", "dark"], Some(first)) else { return };
+    assert_eq!(look.fill("window"), "#28282aff");
+    assert!(look.tree_text.contains("Match my system"));
+    let light = centre(&look, "seg-1");
+    let script = json!([
+        key(0.3, ",", "c"),
+        tap(0.8, section(1)),
+        tap(1.4, light),
+        // Then the terminal: a bigger cursor, and back to the tab with Esc.
+        tap(2.0, section(2)),
+        { "t": 2.6, "type": "key", "name": "Escape" },
+        { "t": 3.2, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = run("settings-light", &["--demo", "--theme", "dark"], Some(script)) else { return };
+    // The whole window is the light one now, the terminal with it, on a dark system.
+    assert_eq!(run.fill("window"), "#ececeeff");
+    assert_eq!(run.fill("term"), "#ffffffff");
+    assert!(run.element("settings").is_none(), "Esc didn't go back to the tab");
+    let px = run.pixels();
+    assert_eq!(at(&px, 1200, 22), "#ececee");
+    assert_eq!(at(&px, 900, 600), "#ffffff");
+}
+
+#[test]
+fn a_settings_file_that_does_not_read_starts_private_and_says_so() {
+    // The real window (no --demo), in a home of its own with a damaged settings file.
+    let damaged = r#"{"format":1,"settings":{"state":{"streamerMode":fal"#;
+    let prepare = |home: &Path| {
+        let dir = home.join(".sshee-preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), damaged).unwrap();
+    };
+    let Some(run) = run_in("settings-damaged", &["--theme", "dark"], None, prepare) else { return };
+    // Across the top of the page: what was turned on and why.
+    assert!(run.element("privacy-notice").is_some(), "nothing says the settings couldn't be read");
+    assert!(run.tree_text.contains("Streamer mode is on, because your settings from before couldn't be read with certainty."));
+    assert!(run.tree_text.contains("Review") && run.tree_text.contains("OK"));
+    // What was there is kept aside; the new file reads, with streamer mode on in it.
+    let dir = run.home.join(".sshee-preview");
+    assert_eq!(std::fs::read_to_string(dir.join("settings.damaged.json")).unwrap(), damaged);
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved["settings"]["state"]["streamerMode"], json!(true));
+    assert_eq!(saved["settings"]["state"]["hideSecrets"], json!(true));
+    assert_eq!(saved["notice"]["turnedOn"], json!(["streamerMode"]));
+}
+
+#[test]
+fn a_first_start_with_no_0_10_keeps_a_new_installs_settings() {
+    // No settings file, and 0.10 never ran in this home: defaults, saved, nothing to say.
+    let script = json!([{ "t": 1.5, "type": "mark", "name": "end" }]);
+    let Some(run) = run("settings-fresh", &["--theme", "dark"], Some(script)) else { return };
+    assert!(run.element("privacy-notice").is_none());
+    let file = run.home.join(".sshee-preview").join("settings.json");
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).expect("the first start saved its settings")).unwrap();
+    assert_eq!(saved["from"], json!("fresh"));
+    assert_eq!(saved["settings"]["version"], json!(4));
+    assert_eq!(saved["settings"]["state"]["streamerMode"], json!(false));
+    assert_eq!(saved["settings"]["state"]["terminalFontSize"], json!(13));
+    assert_eq!(saved["more"]["tabsNameServer"], json!(true));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
     }
 }

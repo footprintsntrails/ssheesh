@@ -13,6 +13,12 @@ pub enum Scheme {
     Classic,
     /// The 1.0 design's: Apple's dark and light greys, a green cursor, softer colours.
     Fresh,
+    /// One of 0.10's named schemes (Dracula, Nord, ...), picked in Settings: the same colours
+    /// in a light and a dark window.
+    Fixed(sshee_app::settings_store::schemes::Colors),
+    /// Settings' "Your own": the 1.0 design's colours with your background and text
+    /// (`0xRRGGBB`).
+    Own { background: u32, foreground: u32 },
 }
 
 /// One scheme's colours, as bytes (what a program asking gets) and as Rune colours.
@@ -120,28 +126,53 @@ impl Palette {
 
     /// `scheme`'s dark or light colours.
     pub fn of(scheme: Scheme, dark: bool) -> Palette {
+        let fresh = if dark { &FRESH_NIGHT } else { &FRESH_DAY };
+        let picked: [Rgb; 20];
         let src = match (scheme, dark) {
             (Scheme::Classic, true) => &NIGHT,
             (Scheme::Classic, false) => &DAY,
-            (Scheme::Fresh, true) => &FRESH_NIGHT,
-            (Scheme::Fresh, false) => &FRESH_DAY,
+            (Scheme::Fresh, _) => fresh,
+            (Scheme::Fixed(c), _) => {
+                let mut table = [hex(c.background), hex(c.foreground), hex(c.cursor), hex(c.cursor_accent)].to_vec();
+                table.extend(c.ansi.map(hex));
+                picked = std::array::from_fn(|i| table[i]);
+                &picked
+            }
+            (Scheme::Own { background, foreground }, _) => {
+                picked = std::array::from_fn(|i| match i {
+                    0 | 3 => hex(background),
+                    1 => hex(foreground),
+                    _ => fresh[i],
+                });
+                &picked
+            }
         };
         let mut ansi = [Rgb::default(); 16];
         ansi.copy_from_slice(&src[4..20]);
         let table = (0..=255u8).map(|i| rgb(if i < 16 { ansi[i as usize] } else { xterm_256(i) })).collect();
         // The selection is the scheme's blue: 0.10's cursor blue, the 1.0 design's focus blue.
         let blue = match (scheme, dark) {
-            (Scheme::Classic, _) => src[2],
-            (Scheme::Fresh, true) => hex(0x0a84ff),
-            (Scheme::Fresh, false) => hex(0x0071e3),
+            (Scheme::Classic | Scheme::Fixed(_), _) => src[2],
+            (Scheme::Fresh | Scheme::Own { .. }, true) => hex(0x0a84ff),
+            (Scheme::Fresh | Scheme::Own { .. }, false) => hex(0x0071e3),
         };
-        let (selection, selection_inactive) =
-            if dark { (rgb(blue).alpha(0.32), Color::WHITE.alpha(0.12)) } else { (rgb(blue).alpha(0.2), Color::BLACK.alpha(0.08)) };
+        // A named scheme's own background says whether it is a dark one, whatever the window is.
+        let on_dark = match scheme {
+            Scheme::Fixed(c) => !sshee_app::settings_store::schemes::is_light((c.background << 8) | 0xff),
+            Scheme::Own { background, .. } => !sshee_app::settings_store::schemes::is_light((background << 8) | 0xff),
+            Scheme::Classic | Scheme::Fresh => dark,
+        };
+        let (mut selection, selection_inactive) =
+            if on_dark { (rgb(blue).alpha(0.32), Color::WHITE.alpha(0.12)) } else { (rgb(blue).alpha(0.2), Color::BLACK.alpha(0.08)) };
+        if let Scheme::Fixed(c) = scheme {
+            // The scheme's own selection colour, as see-through as it says.
+            selection = rgb(hex(c.selection >> 8)).alpha((c.selection & 0xff) as f32 / 255.0);
+        }
         // A hidden secret's dots: 0.10's accent, the 1.0 design's quiet grey.
         let accent = match (scheme, dark) {
-            (Scheme::Classic, _) => src[2],
-            (Scheme::Fresh, true) => hex(0xa1a1a6),
-            (Scheme::Fresh, false) => hex(0x636366),
+            (Scheme::Classic | Scheme::Fixed(_), _) => src[2],
+            (Scheme::Fresh | Scheme::Own { .. }, true) => hex(0xa1a1a6),
+            (Scheme::Fresh | Scheme::Own { .. }, false) => hex(0x636366),
         };
         Palette {
             scheme,
@@ -216,6 +247,24 @@ mod tests {
         assert_eq!((day.background, day.foreground), (Rgb::new(0xff, 0xff, 0xff), Rgb::new(0x1d, 0x1d, 0x1f)));
         assert_eq!(Palette::new(true), Palette::of(Scheme::Classic, true));
         assert_ne!(night.selection, Palette::new(true).selection);
+    }
+
+    #[test]
+    fn a_scheme_picked_in_settings_is_the_same_in_a_light_and_a_dark_window() {
+        use sshee_app::settings_store::schemes::{resolve, Resolved};
+        let Resolved::Fixed(dracula) = resolve("dracula", None) else { panic!() };
+        let night = Palette::of(Scheme::Fixed(dracula.colors), true);
+        let day = Palette::of(Scheme::Fixed(dracula.colors), false);
+        assert_eq!((night.background, night.foreground, night.ansi[1]), (Rgb::new(0x28, 0x2a, 0x36), Rgb::new(0xf8, 0xf8, 0xf2), Rgb::new(0xff, 0x55, 0x55)));
+        assert_eq!((day.background, day.ansi, day.selection), (night.background, night.ansi, night.selection));
+        // The palette still says which window it was made for, so it is made once per appearance.
+        assert!(night.dark && !day.dark);
+        assert_eq!(night.selection, rgb(Rgb::new(0x44, 0x47, 0x5a)));
+        // Your own: the design's colours under your background and text.
+        let own = Palette::of(Scheme::Own { background: 0x101418, foreground: 0xe6e6e6 }, true);
+        let fresh = Palette::of(Scheme::Fresh, true);
+        assert_eq!((own.background, own.foreground, own.cursor_accent), (Rgb::new(0x10, 0x14, 0x18), Rgb::new(0xe6, 0xe6, 0xe6), Rgb::new(0x10, 0x14, 0x18)));
+        assert_eq!((own.ansi, own.cursor), (fresh.ansi, fresh.cursor));
     }
 
     #[test]

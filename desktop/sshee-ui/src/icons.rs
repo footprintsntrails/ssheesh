@@ -51,6 +51,19 @@ pub enum Icon {
     Server,
     /// A Stats tab.
     Stats,
+    /// Appearance: a disc, half of it shaded.
+    Contrast,
+    Keyboard,
+    /// Updates: two arrows going round.
+    Refresh,
+    /// Back to what it was: an arrow turning back.
+    Undo,
+    /// About.
+    Info,
+    /// A pop-up button's two arrows.
+    UpDown,
+    /// The picked item in a menu.
+    Check,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -71,7 +84,7 @@ const WINDOW: Piece = Rect(1.8, 2.8, 12.4, 10.4, 2.4);
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 19] = [
+    pub const ALL: [Icon; 26] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -91,6 +104,13 @@ impl Icon {
         Icon::Gear,
         Icon::Server,
         Icon::Stats,
+        Icon::Contrast,
+        Icon::Keyboard,
+        Icon::Refresh,
+        Icon::Undo,
+        Icon::Info,
+        Icon::UpDown,
+        Icon::Check,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -132,6 +152,13 @@ impl Icon {
             ),
             Icon::Server => (16.0, &[Rect(2.2, 2.6, 11.6, 4.6, 1.4), Rect(2.2, 8.8, 11.6, 4.6, 1.4), Path("M4.7 4.9h.2M4.7 11.1h.2")]),
             Icon::Stats => (16.0, &[Path("M1.8 8.6h2.4l1.8-4.6 3.4 8.6 1.9-4h2.9")]),
+            Icon::Contrast => (16.0, &[Oval(8.0, 8.0, 6.0, 6.0), Path("M8 2v12M8 5h5.1M8 8h6M8 11h5.1")]),
+            Icon::Keyboard => (16.0, &[Rect(1.6, 4.0, 12.8, 8.0, 1.8), Path("M4.3 6.9h.2M6.8 6.9h.2M9.2 6.9h.2M11.6 6.9h.2M5.4 9.5h5.2")]),
+            Icon::Refresh => (16.0, &[Path("M13.2 8a5.2 5.2 0 0 1-9.3 3.2M2.8 8a5.2 5.2 0 0 1 9.3-3.2M12.6 2.2v2.9H9.7M3.4 13.8v-2.9h2.9")]),
+            Icon::Undo => (16.0, &[Path("M3 2.8v3.4h3.4M3.2 6.2a5.2 5.2 0 1 1-.3 3.4")]),
+            Icon::Info => (16.0, &[Oval(8.0, 8.0, 6.0, 6.0), Path("M8 7.5v3.4M8 5v.2")]),
+            Icon::UpDown => (16.0, &[Path("M5.2 6.3 8 3.6l2.8 2.7M5.2 9.7 8 12.4l2.8-2.7")]),
+            Icon::Check => (16.0, &[Path("M3.4 8.4 6.5 11.4 12.6 4.8")]),
         }
     }
 

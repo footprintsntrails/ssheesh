@@ -561,6 +561,10 @@ pub trait Engine: Send {
     /// Keeps this many lines of history from now on (fewer drops the oldest).
     fn set_history(&mut self, lines: usize);
 
+    /// The cursor a program gets when it asks for none of its own, from now on (Settings'
+    /// cursor and blink). A style the program set (DECSCUSR) stays until it gives it up.
+    fn set_cursor_default(&mut self, shape: CursorShape, blinking: bool);
+
     // Selection: see `crate::select` for the meaning of the arguments.
 
     fn start_selection(&mut self, kind: crate::select::SelectionKind, at: GridPoint, side: crate::select::Side);
@@ -1071,6 +1075,18 @@ impl Engine for AlacrittyEngine {
         self.config.history = lines;
         // Setting options repeats the title as an event though it didn't change: keep what came
         // before, drop the repeat.
+        self.collect();
+        self.term.set_options(alac_config(&self.config));
+        while self.events.try_recv().is_ok() {}
+    }
+
+    fn set_cursor_default(&mut self, shape: CursorShape, blinking: bool) {
+        if (shape, blinking) == (self.config.cursor_shape, self.config.cursor_blinking) {
+            return;
+        }
+        self.config.cursor_shape = shape;
+        self.config.cursor_blinking = blinking;
+        // As in `set_history`: setting options repeats the title as an event.
         self.collect();
         self.term.set_options(alac_config(&self.config));
         while self.events.try_recv().is_ok() {}
@@ -1631,6 +1647,21 @@ mod tests {
         e.set_history(5);
         assert_eq!(e.history_size(), 5);
         assert!(e.take_events().is_empty(), "no repeated title");
+    }
+
+    #[test]
+    fn the_cursor_from_settings_changes_at_once_unless_the_program_set_its_own() {
+        let mut e = engine(10, 3, "ab");
+        e.set_cursor_default(CursorShape::Bar, true);
+        assert_eq!((e.cursor().shape, e.cursor().blinking), (CursorShape::Bar, true));
+        assert!(e.take_events().is_empty(), "no repeated title");
+        // A program's own cursor (vim's block) stays while Settings changes.
+        e.feed(b"\x1b[2 q");
+        e.set_cursor_default(CursorShape::Underline, false);
+        assert_eq!((e.cursor().shape, e.cursor().blinking), (CursorShape::Block, false));
+        // It gives it up (DECSCUSR 0): the cursor is Settings' again.
+        e.feed(b"\x1b[0 q");
+        assert_eq!((e.cursor().shape, e.cursor().blinking), (CursorShape::Underline, false));
     }
 
     #[test]

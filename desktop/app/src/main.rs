@@ -14,6 +14,7 @@ mod args;
 mod demo;
 mod live;
 mod servers;
+mod settings;
 mod tabs;
 mod vitals;
 
@@ -39,17 +40,37 @@ struct Live {
 impl Backend for Live {
     fn start(&mut self, remote: Remote) {
         self.inner.start(remote.clone());
-        // Production labels and icons are in 0.10's web view storage: reading it copies a
-        // database, so it happens on a thread of its own and the sidebar is labelled when done.
+        // Production labels, icons and (at 1.0's first start here) the settings are in 0.10's
+        // web view storage: reading it copies a database, so it happens on a thread of its
+        // own; the sidebar is labelled and the settings take 0.10's when done.
         let hosts = self.hosts.clone();
-        let spawned = std::thread::Builder::new().name("labels".into()).spawn(move || {
-            if let Some(labels) = servers::labels_of_0_10() {
-                remote.set_servers(servers::labelled(&hosts, &labels));
+        let seeder = remote.clone();
+        let spawned = std::thread::Builder::new().name("import".into()).spawn(move || {
+            let (found, imported) = servers::import_of_0_10();
+            // Only a first start waits for this; a copy with its own file ignores it.
+            let seed = settings::seed(&found, imported.as_ref(), servers::ran_0_10_here());
+            remote.update(move |s| s.seed_settings(seed));
+            if let Some(imported) = imported {
+                remote.set_servers(servers::labelled(&hosts, &imported.state.labels));
             }
         });
         if let Err(e) = spawned {
-            eprintln!("ssheesh-preview: labels weren't read: {e}");
+            eprintln!("ssheesh-preview: 0.10's settings and labels weren't read: {e}");
+            // Nothing will answer: the settings stay private, and say why.
+            seeder.update(|s| s.seed_settings(sshee_app::settings_store::Seed::Doubt("the settings of SSHeesh 0.10 couldn't be looked for".into())));
         }
+    }
+
+    fn settings(&mut self) -> sshee_app::settings_store::SettingsStore {
+        self.inner.settings()
+    }
+
+    fn settings_changed(&mut self, settings: &sshee_app::model::Settings) {
+        self.inner.settings_changed(settings);
+    }
+
+    fn tor(&mut self, command: sshee_ui::screens::settings::TorCommand) {
+        self.inner.tor(command);
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &sshee_app::workbench::Tab) -> Box<dyn TermLink> {
@@ -94,7 +115,7 @@ fn main() {
     };
     let options = Options { sheet: args.sheet, ..Options::default() };
     let launch = if args.demo {
-        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend), options }
+        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::default()), options }
     } else {
         // The server list is a couple of small files: read before the window opens, so the
         // sidebar is there in the first frame.

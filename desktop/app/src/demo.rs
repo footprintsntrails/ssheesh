@@ -10,8 +10,10 @@
 use std::path::Path;
 
 use serde_json::Value;
-use sshee_app::model::EnvLabel;
+use sshee_app::model::{EnvLabel, Settings};
+use sshee_app::settings_store::SettingsStore;
 use sshee_app::workbench::{Open, Server, Tab, TabKind, Tor, Vitals, Workbench};
+use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
 use sshee_ui::terminal::replay::{Fixture, ReplayLink};
 use sshee_ui::terminal::TermLink;
@@ -50,7 +52,16 @@ pub fn bench() -> Workbench {
 }
 
 /// Sessions that play fixtures.
-pub struct DemoBackend;
+#[derive(Default)]
+pub struct DemoBackend {
+    remote: Option<Remote>,
+}
+
+/// The demo's settings: 0.10's defaults, kept in memory, following the system's light or
+/// dark so that `--theme` picks the picture.
+pub fn settings() -> Settings {
+    Settings { theme_follows_system: true, ..Settings::default() }
+}
 
 /// A fixture written in this crate: it reads, or the build is broken.
 fn fixture(json: &str) -> Fixture {
@@ -66,7 +77,20 @@ fn prompt(user: &str, name: &str) -> Fixture {
 }
 
 impl Backend for DemoBackend {
-    fn start(&mut self, _: Remote) {}
+    fn start(&mut self, remote: Remote) {
+        self.remote = Some(remote);
+    }
+
+    fn settings(&mut self) -> SettingsStore {
+        SettingsStore::in_memory(settings())
+    }
+
+    /// Tor's switch in Settings: the made-up Tor goes on and off at once.
+    fn tor(&mut self, command: TorCommand) {
+        if let Some(remote) = &self.remote {
+            remote.set_tor(if command == TorCommand::Off { Tor::Off } else { Tor::On { latency_ms: Some(84) } });
+        }
+    }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {
@@ -115,5 +139,15 @@ mod tests {
         }
         assert!(SHOP.contains("{{SECRET_A:4:17}}") && SHOP.contains("{{SECRET_B}}"));
         assert_eq!(prompt("deploy", "web-staging").steps.len(), 2);
+    }
+
+    #[test]
+    fn the_demos_settings_are_0_10s_defaults_following_the_system() {
+        let mut backend = DemoBackend::default();
+        let store = backend.settings();
+        assert!(store.get().theme_follows_system && !store.get().streamer_mode && store.get().hide_secrets);
+        assert_eq!(store.notice(), None);
+        // Nothing of it reaches a disk.
+        assert_eq!(store.save_error(), None);
     }
 }
