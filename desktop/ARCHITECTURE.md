@@ -268,3 +268,55 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) isn't wired.
 Servers, with their labels and looks, come over when you pick them in "Add a server"
 (`desktop/app/src/servers.rs`); snippets are still 0.10's starters (`screens::palette::State`).
+
+## Open in your own editor (for the Files screen)
+
+The core is built and tested; the screen isn't. `sshee_core::edit_bridge` copies a server's
+file into a private folder, starts an editor on it and uploads every save with a guarded save;
+`sshee_app::editors` finds the editors on this computer. Neither knows about Rune. The rules
+(sizes, how long copies live, the start-up sweep, the 2 GB cap, safe deletion) are in the doc
+comment at the top of `edit_bridge.rs`; what the window does with them:
+
+- **One bridge per app**, held by the backend: `EditBridge::for_app(sink)` (the edit folder is
+  `<the copy's folder>/edit`). Its `sink` gets `(session id, EditEvent)` on the bridge's
+  threads: pass them on through `Remote`. Every call that talks to a server blocks, so the
+  backend runs it on a thread, as with the rest of Files. Each server's `Remote` for the bridge
+  is `edit_bridge::Server { target, env }`, the same `Target` and `SshEnv` Files uses, so Tor
+  and saved passwords apply as they do there.
+- **The menu item.** In a file's menu: "Open in <name>", with `name` from
+  `editors::chosen(Os::current(), &Places::here(), setting, &editors::installed())` (setting
+  `externalEditor`), and under it the other editors found and "Choose an app…" (a file picker;
+  `editors::choose_app` checks the pick and gives the id `custom:<path>` to store). Build the
+  bridge's `EditorCommand { program, args }` from the `Editor`. Call `bridge.open(OpenRequest
+  { host, path, remote, editor, confirmed: false })`.
+- **The 128 KB rule.** Below `edit_bridge::BUILT_IN_MAX` (128 KB) Files' own editor stays the
+  default action; at or above it, the preview says "This file is too big to edit here" with the
+  button "Open in <name>". The menu item is there for any size.
+- **Big files.** `Opened::NeedsConfirm { size }` (over 50 MB): ask "This file is 230 MB.
+  Download a copy to edit?" and on yes call `open` again with `confirmed: true`. Over 1 GB, and
+  when the copy would leave less than 1 GB free, `open` fails with a message to show as it is.
+- **Before opening, once:** while Tor is on, warn that the editor, its extensions and AI
+  helpers reach the internet from your real address (offer Files' own editor instead); in
+  streamer mode, warn that the editor shows the file as it is, secrets included.
+- **The status line** under the file's row (and in the preview's header) is the session's last
+  event: `Opened` "Open in VS Code", `Uploading` "Saving to the server…", `Uploaded { at }`
+  "Saved to the server at 12:41", `Offline` "Not on the server yet: waiting for the connection"
+  (with a Retry button: `retry_now`), `Failed { message }` the message and Retry, `Evicted`
+  "Copy cleared to save space; Open downloads it again", `Closed`. A "Stop editing" button on
+  it calls `close(id)`; when `kept` comes back, say where the copy is ("Show in folder").
+  `bridge.sessions()` lists the open ones (`SessionInfo`) for a Files view opened later.
+- **The conflict** (`EditEvent::Conflict`): a dialog "This file changed on the server since you
+  opened it" with **Keep mine** (`keep_mine`), **Take theirs** (`take_theirs`; the editor
+  reloads it), **Save mine as a copy** (`save_mine_as_copy`, which returns the new path; then
+  `take_theirs`), and **Compare** (`compare`: both texts and `lines`, a line diff marked
+  `Same`/`Mine`/`Theirs`; `binary` when there's nothing to diff). With `now: None` the file
+  was deleted on the server, and Keep mine puts it back.
+- **When sessions end:** "Stop editing" (`close`); when a server's last tab closes
+  (`close_host(host)`); on quit (`close_all`, before the window goes). Reconnecting a server
+  calls `retry_host(host)`. A session also closes by itself after 24 hours without a change and
+  with nothing to upload.
+- **At start:** `bridge.sweep()` deletes uploaded leftovers and returns the others. When
+  there are any, show once "2 files have changes that were never uploaded" with **Upload**
+  (`resume_leftover(id, remote, None)`; it can raise a conflict like any session), **Discard**
+  (`discard_leftover`) and **Show in folder** (`local`), and call `mark_offered(ids)` when it's
+  shown: one that's offered and then sits for 30 days is deleted at a later start.

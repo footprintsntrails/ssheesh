@@ -9,6 +9,7 @@ pub mod app_identity;
 pub mod checkup;
 pub mod containers;
 pub mod disk;
+pub mod edit_bridge;
 pub mod drop_folder;
 pub mod error;
 pub mod files;
