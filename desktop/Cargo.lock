@@ -5827,6 +5827,7 @@ name = "ssheesh-preview"
 version = "0.0.1"
 dependencies = [
  "dirs",
+ "indexmap 2.14.2",
  "png",
  "serde_json",
  "sshee-app",

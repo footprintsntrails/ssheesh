@@ -87,6 +87,14 @@ pub trait Backend {
         let _ = saved;
     }
 
+    /// Adding and managing servers (`screens::add_server`, `screens::server_menu`): saving,
+    /// the keychain and reading other programs' files wait, so the backend does what is
+    /// asked on a thread of its own and answers through `Remote` (`Shell::servers_answer`,
+    /// `Remote::set_servers`, `Shell::set_server_looks`).
+    fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        let _ = ask;
+    }
+
     /// Sessions are replays on the window's own clock (a demo, a test): panes then run on
     /// Rune's clock, virtual in a headless run, so every run draws the same.
     fn replays(&self) -> bool {
@@ -215,6 +223,11 @@ impl Shell {
         self.panes.get(&id)
     }
 
+    /// The backend, for a screen that asks it for something.
+    pub(crate) fn backend_mut(&mut self) -> &mut dyn Backend {
+        self.backend.as_mut()
+    }
+
     /// A pane for `tab`, with a link from the backend and the window's wakers.
     fn make_pane(&mut self, tab: &Tab) -> TermPane {
         let id = tab.id;
@@ -313,8 +326,13 @@ impl Shell {
         self.sync_watch();
         self.sync_keyboard(tx);
         self.save_tabs();
-        if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
+        if self.screens.any_open() {
+            // What is open over the window keeps the keyboard.
+        } else if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
             tx.focus(format!("pane-{}", id.0), false);
+        } else if self.bench.showing_home() {
+            // The main menu takes arrows, Return and typing, whatever was clicked.
+            tx.focus("home-page", false);
         }
         // Tabs come and go at once, as in a browser: nothing slides.
         tx.instant();
@@ -421,6 +439,8 @@ impl Shell {
             }
             Shortcut::Streamer => self.toggle_streamer(tx),
             Shortcut::SideBySide => self.toggle_side_by_side(tx),
+            Shortcut::Palette | Shortcut::PaletteAlt => self.toggle_palette(tx),
+            Shortcut::AddServer => self.open_add_server(tx),
         }
     }
 
@@ -443,7 +463,11 @@ impl Shell {
     /// A key with nothing focused (`AppSpec::on_key`): a shortcut, else the terminal on
     /// screen's.
     pub fn key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
-        self.shortcut(ev, tx) || self.active_pane().is_some_and(|p| p.key(ev, tx))
+        // Behind the palette, a dialog or a menu, keys are theirs alone.
+        if self.screens.any_open() {
+            return false;
+        }
+        self.shortcut(ev, tx) || self.active_pane().is_some_and(|p| p.key(ev, tx)) || self.home_key(ev, tx)
     }
 
     pub fn paste(&mut self, content: &ClipboardContent, tx: &mut Tx) {
@@ -482,6 +506,8 @@ impl Shell {
     /// hidden ones too (a program's questions are answered, and switching to a tab shows it as
     /// it is now). True when the view must run again.
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        // The screens' own clockwork: who started to wait, a server's card coming up.
+        let ticked = crate::screens::home::tick(self, clock, tx);
         let active = self.bench.active_id();
         let mut changed = false;
         let mut asked = Vec::new();
@@ -504,7 +530,7 @@ impl Shell {
             self.bench.set_needs_you(id, true);
             changed |= self.bench.tab(id).is_some_and(|t| t.needs_you) != before;
         }
-        changed
+        changed || ticked
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

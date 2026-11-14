@@ -55,6 +55,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .child(body.child(col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t))))
         // Over the window: a tab's menu, the list of all tabs.
         .children(super::tabs::overlays(s, t))
+        // Over everything: the palette, a server's card and menu, "Add a server".
+        .children(screens::overlays(s, t, cx))
 }
 
 /// The top row.
@@ -91,9 +93,22 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     // The machine on screen is the window's title (its alias in streamer mode).
     let (title, prod) = s.bench.window_title();
     let title = s.server_shown(s.bench.current_key().unwrap_or("local"), title);
-    let mut name = row().key("title").items_center().gap(8.0).ml(8.0).mr(16.0).child(
-        text(title).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line(),
-    );
+    // A click on it opens the command palette under it, as a browser's address bar.
+    let mut name = row()
+        .key("title")
+        .h(theme::CONTROL)
+        .items_center()
+        .gap(8.0)
+        .ml(2.0)
+        .mr(10.0)
+        .px(6.0)
+        .radius(theme::RADIUS)
+        .hover(t.hov2)
+        .press(t.down)
+        .role("button")
+        .help(s.text_shown(&sshee_app::palette::placeholder(&s.bench)).into_owned())
+        .on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
+        .child(text(title).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line());
     if prod {
         name = name.child(prod_chip(t, false));
     }
@@ -127,17 +142,26 @@ fn rail(s: &Shell, t: &'static Theme) -> El {
         );
     }
     rail = rail
-        .child(rail_button(t, Icon::Search, "Search", RailState::Plain, false).key("search"))
+        .child(rail_button(t, Icon::Search, "Search", RailState::Plain, false).key("search").on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx)))
         .child(el().key("rule").size(20.0, 1.0).mt(5.0).mb(5.0).fill(t.hair));
     let current = s.bench.current_key();
     for (i, server) in s.bench.servers().iter().enumerate() {
         let key = server.key();
         let state = if current == Some(key.as_str()) { RailState::Selected } else { RailState::Plain };
         let waiting = s.bench.server_needs_you(&key);
+        let menu = key.clone();
         rail = rail.child(
             rail_button(t, Icon::for_server(&server.icon), &s.server_shown(&key, &server.name), state, waiting)
                 .key(format!("server-{i}"))
-                .on_press_tx(move |s: &mut Shell, tx| s.go_to(&key, tx)),
+                .on_press_tx(move |s: &mut Shell, tx| {
+                    s.screens.server_card.hide();
+                    s.go_to(&key, tx)
+                })
+                // Its card (`screens::server_card`) says more than a tooltip; a right click
+                // opens its menu (`screens::server_menu`).
+                .help("")
+                .on_hover_change(move |s: &mut Shell, inside, tx| s.hover_server(i, inside, tx))
+                .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx)),
         );
     }
     let tor = match s.bench.tor() {
@@ -146,7 +170,7 @@ fn rail(s: &Shell, t: &'static Theme) -> El {
         Tor::On { .. } => RailState::TorOn,
         Tor::Failed => RailState::TorFailed,
     };
-    rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server"))
+    rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)))
         .child(spacer())
         .child(rail_button(t, Icon::Shield, "Security check", RailState::Plain, false).key("check"))
         .child(rail_button(t, Icon::Tor, "Tor", tor, false).key("tor"))

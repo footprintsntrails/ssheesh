@@ -577,6 +577,14 @@ impl Workbench {
         None
     }
 
+    /// Brings back one of the tabs closed lately, by its place in [`Self::closed`] (the main
+    /// menu's list). `None` when there's no such place, or its machine left the list.
+    pub fn reopen_closed_at(&mut self, index: usize) -> Option<TabId> {
+        let c = self.closed.get(index).filter(|c| self.server(&c.server).is_some())?.clone();
+        self.closed.remove(index);
+        Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None }))
+    }
+
     /// Ctrl+Tab and Ctrl+Shift+Tab: the next (`1`) or previous (`-1`) tab in the row, around
     /// its ends, every machine's. On the main menu it comes back to the tab you were on.
     pub fn step(&mut self, step: i32) -> Option<TabId> {

@@ -69,6 +69,15 @@ pub const GROUP: TextStyle = TextStyle::new(11.0, 600.0);
 pub const SMALL: TextStyle = TextStyle::new(11.0, 400.0);
 /// Second lines, 12 pt.
 pub const NOTE: TextStyle = TextStyle::new(12.0, 400.0);
+/// What is typed into the command palette's search field.
+pub const INPUT: TextStyle = TextStyle::new(15.0, 400.0);
+/// A command in a list row or a field, in the terminal's font.
+pub const CODE: TextStyle = TextStyle::new(12.0, 400.0).mono();
+/// A dialog's title.
+pub const TITLE: TextStyle = TextStyle::new(15.0, 600.0);
+/// A text field's and a push button's height; a list row is `ROW`.
+pub const FIELD: f32 = 28.0;
+pub const ROW: f32 = 30.0;
 
 /// One appearance's colours. The names are the stylesheet's.
 #[derive(Clone, Debug, PartialEq)]
@@ -223,6 +232,20 @@ impl Theme {
     /// The ring of a label chip and the like: `color` at 45%.
     pub fn outline_of(&self, color: Color) -> Color {
         color.alpha(0.45)
+    }
+
+    /// A text field's surface: the code colour at night, white by day (the design's `.field`).
+    pub fn field(&self) -> Color {
+        if self.dark {
+            self.code
+        } else {
+            self.on_color
+        }
+    }
+
+    /// The veil over the window under a dialog.
+    pub fn scrim(&self) -> Color {
+        Color::BLACK.alpha(0.25)
     }
 
     /// Tor's tile when it's on: green at 16%.

@@ -17,7 +17,6 @@ mod servers;
 mod tabs;
 mod vitals;
 
-use sshee_app::model::Labels;
 use sshee_app::workbench::{SavedTabs, Server, Workbench};
 use sshee_core::AppIdentity;
 use sshee_ui::shell::{self, Backend, Launch, Options, Remote};
@@ -30,26 +29,18 @@ fn fail(message: &str) -> ! {
     std::process::exit(2);
 }
 
-/// The live backend, which also brings 0.10's labels over once the window is up.
+/// The live backend, which also keeps the tabs between runs.
 struct Live {
     inner: live::LiveBackend,
-    hosts: Vec<sshee_core::Host>,
 }
 
 impl Backend for Live {
     fn start(&mut self, remote: Remote) {
-        self.inner.start(remote.clone());
-        // Production labels and icons are in 0.10's web view storage: reading it copies a
-        // database, so it happens on a thread of its own and the sidebar is labelled when done.
-        let hosts = self.hosts.clone();
-        let spawned = std::thread::Builder::new().name("labels".into()).spawn(move || {
-            if let Some(labels) = servers::labels_of_0_10() {
-                remote.set_servers(servers::labelled(&hosts, &labels));
-            }
-        });
-        if let Err(e) = spawned {
-            eprintln!("ssheesh-preview: labels weren't read: {e}");
-        }
+        self.inner.start(remote);
+    }
+
+    fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        self.inner.servers(ask);
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &sshee_app::workbench::Tab) -> Box<dyn TermLink> {
@@ -94,18 +85,22 @@ fn main() {
     };
     let options = Options { sheet: args.sheet, ..Options::default() };
     let launch = if args.demo {
-        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend), options }
+        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new()), options }
     } else {
-        // The server list is a couple of small files: read before the window opens, so the
-        // sidebar is there in the first frame.
-        let hosts = servers::list(args.ssh_config.as_deref());
-        let mut bench = Workbench::new(servers::labelled(&hosts, &Labels::default()));
+        // This copy's own list (`~/.sshee-preview/hosts.json`, `looks.json`) and the ssh
+        // config: a couple of small files, read before the window opens, so the sidebar is
+        // there in the first frame. 0.10's list is never this copy's: "Add a server" offers to
+        // bring it over. Passwords are kept under this copy's own keychain name.
+        let places = servers::Places::of(sshee_core::app_identity::current(), args.ssh_config.clone());
+        let mut store = servers::ServerStore::open(places, std::sync::Arc::new(sshee_core::secrets::PasswordStore::default()));
+        let shown = store.shown();
+        let mut bench = Workbench::new(shown.servers);
         // The tabs of the last run, each terminal with the key of its shell on the server.
         if let Some(saved) = sshee_core::app_identity::current().dir().and_then(tabs::load) {
             bench.restore(&saved);
         }
-        let inner = live::LiveBackend::new(&hosts, args.ssh_config);
-        Launch { bench, backend: Box::new(Live { inner, hosts }), options }
+        let inner = live::LiveBackend::new(&shown.hosts, args.ssh_config).with_store(std::sync::Arc::new(std::sync::Mutex::new(store)));
+        Launch { bench, backend: Box::new(Live { inner }), options }
     };
     shell::run(launch);
 }
