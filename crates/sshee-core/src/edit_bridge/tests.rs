@@ -296,6 +296,22 @@ fn a_burst_of_writes_is_one_upload_and_a_save_without_change_is_none() {
 }
 
 #[test]
+fn a_copy_emptied_and_then_written_never_sends_the_empty_one() {
+    // A plain write empties the file first; an editor on a busy machine may pause between
+    // the two for longer than the quiet wait. The server must only ever see the text.
+    let rig = rig_with("emptied", |c| c.timing.debounce = Duration::from_millis(300));
+    let server = FakeServer::with(PATH, b"listen 80;\n");
+    let info = rig.open(&server);
+    std::fs::write(&info.local, b"").unwrap();
+    std::thread::sleep(Duration::from_millis(420));
+    std::fs::write(&info.local, b"listen 8080;\n").unwrap();
+    rig.wait("the upload", |e| matches!(e, EditEvent::Uploaded { .. }));
+    rig.no_upload_for(900);
+    assert_eq!(server.get(PATH).unwrap(), b"listen 8080;\n");
+    assert_eq!(server.saves.load(Ordering::SeqCst), 1, "the empty copy went up first");
+}
+
+#[test]
 fn other_files_in_the_folder_and_files_elsewhere_are_never_uploaded() {
     let rig = rig("others");
     let server = FakeServer::with(PATH, b"x\n");
@@ -874,11 +890,23 @@ fn the_file_is_one_argument_whatever_its_name() {
         std::thread::sleep(Duration::from_millis(50));
         std::fs::read_to_string(p).unwrap()
     };
-    EditorCommand::new(&editor, &["--new-window"]).launch(&file).unwrap();
+    // A script written a moment ago can't be started while another test's fork still holds
+    // it open for writing ("Text file busy"): that clears in a moment.
+    let launch = |args: &[&str]| {
+        for _ in 0..100 {
+            match EditorCommand::new(&editor, args).launch(&file) {
+                Ok(_) => return,
+                Err(e) if e.message.contains("busy") || e.message.contains("os error 26") => std::thread::sleep(Duration::from_millis(20)),
+                Err(e) => panic!("{e:?}"),
+            }
+        }
+        panic!("the script stayed busy");
+    };
+    launch(&["--new-window"]);
     assert_eq!(wait_for(&out), format!("[--new-window]\n[{}]\n", file.display()));
     std::fs::remove_file(&out).unwrap();
 
-    EditorCommand::new(&editor, &["-a", FILE_ARG, "--wait"]).launch(&file).unwrap();
+    launch(&["-a", FILE_ARG, "--wait"]);
     assert_eq!(wait_for(&out), format!("[-a]\n[{}]\n[--wait]\n", file.display()));
     assert!(!scratch.0.join("pwned").exists());
     assert!(EditorCommand::new(&editor, &[]).command(Path::new("relative.conf")).is_err());

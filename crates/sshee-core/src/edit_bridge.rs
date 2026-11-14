@@ -492,10 +492,19 @@ fn write_marker(dir: &Dir, marker: &Marker) -> io::Result<()> {
 /// Takes the session lock of the folder, or None when someone holds it.
 fn try_lock(dir: &Dir) -> io::Result<Option<File>> {
     let file = dir.open_lock(os(LOCK))?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    // A program this process starts holds a copy of every open file for the moment between
+    // its fork and its exec, our lock with them. So a lock held "right now" is asked again
+    // for up to half a second before the folder counts as another copy's.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e),
+        }
     }
 }
 
@@ -1194,7 +1203,7 @@ impl Session {
             let now = Instant::now();
             let mut until = next_poll;
             if let Some((first, last)) = burst {
-                until = until.min(last + t.debounce).min(first + t.poll);
+                until = until.min(last + t.debounce).min(first + 4 * t.poll);
             }
             if let Some(at) = lock(&self.state).retry_at {
                 until = until.min(at);
@@ -1214,9 +1223,17 @@ impl Session {
             }
             let now = Instant::now();
             if let Some((first, last)) = burst {
-                if now >= last + t.debounce || now >= first + t.poll {
-                    burst = None;
-                    self.sync(false);
+                // A burst goes up once the copy has held still for `debounce`. Only a copy
+                // written to without end (or left blank) goes up anyway, after four polls.
+                let ceiling = now >= first + 4 * t.poll;
+                if now >= last + t.debounce || ceiling {
+                    let touched = self.copy_touched();
+                    if !ceiling && (touched || self.looks_half_written()) {
+                        burst = Some((first, now));
+                    } else {
+                        burst = None;
+                        self.sync(false);
+                    }
                 }
             }
             let due = lock(&self.state).retry_at.is_some_and(|at| now >= at);
@@ -1226,8 +1243,9 @@ impl Session {
             }
             if now >= next_poll {
                 next_poll = now + t.poll;
+                // A change the system's watcher missed waits for quiet like any other.
                 if self.copy_touched() {
-                    self.sync(false);
+                    burst = Some(burst.map_or((now, now), |(first, _)| (first, now)));
                 }
                 if self.idle(&t) {
                     self.sync(false);
@@ -1247,6 +1265,14 @@ impl Session {
         let touched = now.is_some() && st.seen != now;
         st.seen = now;
         touched
+    }
+
+    /// The copy is empty where the server's file isn't: almost always an editor between
+    /// emptying the file and writing it (a plain write does both), so it waits for the
+    /// burst's ceiling rather than sending a blank file over a full one.
+    fn looks_half_written(&self) -> bool {
+        let st = lock(&self.state);
+        st.seen.is_some_and(|(size, _)| size == 0) && st.base.size > 0
     }
 
     fn idle(&self, t: &Timing) -> bool {
