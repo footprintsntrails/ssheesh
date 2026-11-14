@@ -544,7 +544,7 @@ mod tests {
 
     fn fixture_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "tests/fixtures/legacy/windows-leveldb/Local/io.github.footprintsntrails.ssheesh/EBWebView/Default/Local Storage/leveldb",
+            "tests/fx/windows-leveldb/Local/io.github.footprintsntrails.ssheesh/EBWebView/Default/Local Storage/leveldb",
         )
     }
 

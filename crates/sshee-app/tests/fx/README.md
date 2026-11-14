@@ -25,8 +25,8 @@ isn't there, and every LevelDB test fails.
 | `windows-sqlite` | Chrome for Testing 158.0.8127.18, Chromium's SQLite localStorage (Chrome's default for a new profile), closed normally | **real Chromium**, not WebView2 |
 | `windows-sqlite-running` | the same, copied while Chrome was open (`LocalStorage` + `LocalStorage-wal`) | **real Chromium** |
 | `windows-leveldb` | Chrome for Testing 158 with SQLite localStorage turned off, so LevelDB; copied while Chrome was open | **real Chromium** |
-| `macos-webkit` | built: the Linux fixture's real WebKit database and `origin` file, placed in newer WebKit's macOS layout (`WebsiteData/Default/<hash>/<hash>/LocalStorage/localstorage.sqlite3`) | layout from WebKit's source, **not seen on a Mac** |
-| `macos-webkit-older` | built: the same database in older WebKit's layout (`WebsiteData/LocalStorage/tauri_localhost_0.localstorage`) | layout from WebKit's source, **not seen on a Mac** |
+| `mac` | built: the Linux fixture's real WebKit database and `origin` file, placed in newer WebKit's macOS layout (`WebsiteData/Default/<hash>/<hash>/LocalStorage/localstorage.sqlite3`) | layout from WebKit's source, **not seen on a Mac** |
+| `mac-older` | built: the same database in older WebKit's layout (`WebsiteData/LocalStorage/tauri_localhost_0.localstorage`) | layout from WebKit's source, **not seen on a Mac** |
 | `.window-state.json` under `Roaming` and `Library/Application Support` | written by hand in tauri-plugin-window-state 2.5.0's shape | built |
 
 WebView2 is Chromium, and its localStorage is Chromium's own code (`components/services/storage/

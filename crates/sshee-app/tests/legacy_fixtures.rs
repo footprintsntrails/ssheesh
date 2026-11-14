@@ -1,4 +1,4 @@
-//! `legacy` against stores real web views wrote (see `fixtures/legacy/README.md` for how each
+//! `legacy` against stores real web views wrote (see `fx/README.md` for how each
 //! was made): the real 0.10.14 under WebKitGTK, Chrome's LevelDB and SQLite localStorage, and
 //! WebKit's newer and older macOS layouts built from the WebKitGTK files.
 
@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fx").join(name)
 }
 
 fn linux(name: &str) -> Places {
@@ -189,7 +189,7 @@ fn windows_sqlite_copied_while_chrome_ran_reads_the_wal() {
 
 #[test]
 fn macos_newer_webkit_layout_names_its_origin_in_the_origin_file() {
-    let found = find_untouched("macos-webkit", &macos("macos-webkit"));
+    let found = find_untouched("mac", &macos("mac"));
     assert!(found.problems.is_empty(), "{:?}", found.problems);
     let best = found.best().unwrap();
     assert_eq!(best.origin.as_deref(), Some("tauri://localhost"));
@@ -201,7 +201,7 @@ fn macos_newer_webkit_layout_names_its_origin_in_the_origin_file() {
 
 #[test]
 fn macos_older_webkit_layout() {
-    let found = find_untouched("macos-webkit-older", &macos("macos-webkit-older"));
+    let found = find_untouched("mac-older", &macos("mac-older"));
     assert!(found.problems.is_empty(), "{:?}", found.problems);
     let best = found.best().unwrap();
     assert_eq!(best.origin.as_deref(), Some("tauri://localhost"));

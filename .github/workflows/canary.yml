@@ -36,6 +36,11 @@ jobs:
       run:
         shell: bash
     steps:
+      # The fixtures keep the web views' own folder layout, which runs close to Windows' 260 characters.
+      - name: Let git write long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
       - uses: actions/checkout@v7
 
       - name: Install Linux libraries and a software Vulkan driver

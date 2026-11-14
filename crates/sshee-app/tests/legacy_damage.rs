@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 const ID: &str = "io.github.footprintsntrails.ssheesh";
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fx").join(name)
 }
 
 fn copy_tree(from: &Path, to: &Path) {

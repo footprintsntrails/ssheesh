@@ -17,7 +17,7 @@ const ID: &str = "io.github.footprintsntrails.ssheesh";
 
 fn leveldb_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/legacy/windows-leveldb/Local")
+        .join("tests/fx/windows-leveldb/Local")
         .join(ID)
         .join("EBWebView/Default/Local Storage/leveldb")
 }
