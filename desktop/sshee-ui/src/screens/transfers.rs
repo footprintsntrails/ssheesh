@@ -2,14 +2,15 @@
 //! the window's bottom right corner, over whatever tab is on screen (0.10's Transfers.tsx and
 //! its toasts). A card says how far the transfer got and how fast it goes, and has a button
 //! to stop it; a note stays until it's dismissed. The words are sshee-app's
-//! (`sshee_app::transfers::Transfer::card`, `sshee_app::files::Notice`).
+//! (`sshee_app::transfers::Transfer::card`, `sshee_app::files::Notice`). Names and paths in
+//! them go through `Shell::text_shown`, for streamer mode.
 
 use rune::{col, el, row, text, El};
 use sshee_app::files::Tone;
 use sshee_app::transfers::Kind;
 
 use crate::icons::{icon, Icon};
-use crate::kit::button::{text_button, ButtonKind};
+use crate::kit::push::{push_button, Push};
 use crate::kit::popover::popover;
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
@@ -30,10 +31,10 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
     let mut stack = col().key("transfers").pin(None, None, Some(14.0), Some(theme::STATUS_HEIGHT + 12.0)).w(WIDTH).gap(8.0);
     for (i, n) in notices.iter().enumerate() {
         let mut head = row().w_full().gap(8.0).items_center().child(
-            text(&n.title).font(theme::TAB_NAME).color(if n.tone == Tone::Error { t.red } else { t.l1 }).single_line().truncate().grow(1.0).min_w(0.0),
+            text(s.text_shown(&n.title).into_owned()).font(theme::TAB_NAME).color(if n.tone == Tone::Error { t.red } else { t.l1 }).single_line().truncate().grow(1.0).min_w(0.0),
         );
         if let Some(undo) = n.undo.clone() {
-            head = head.child(text_button(t, "Undo", ButtonKind::Plain).key(format!("note-undo-{i}")).on_press_tx(move |s: &mut Shell, tx| {
+            head = head.child(push_button(t, "Undo", Push::Quiet, true).key(format!("note-undo-{i}")).on_press_tx(move |s: &mut Shell, tx| {
                 if let Some(tab) = s.bench.active_id() {
                     super::files::undo_move(s, tab, &undo);
                 }
@@ -47,7 +48,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         }));
         let mut card = popover(t, WIDTH).key(format!("note-{i}")).role("status").px(12.0).py(9.0).gap(3.0).child(head);
         if let Some(body) = &n.body {
-            card = card.child(text(body).font(theme::NOTE).color(t.l2).max_lines(3));
+            card = card.child(text(s.text_shown(body).into_owned()).font(theme::NOTE).color(t.l2).max_lines(3));
         }
         stack = stack.child(card);
     }
@@ -78,13 +79,13 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
             .gap(7.0)
             .child(
                 row().w_full().gap(8.0).items_center().child(icon(if card.waiting { Icon::Warning } else { glyph }, 14.0, if card.waiting { t.orange } else { t.l2on })).child(
-                    text(&card.label).font(theme::TAB_NAME).color(t.l1).single_line().truncate().grow(1.0).min_w(0.0),
+                    text(s.text_shown(&card.label).into_owned()).font(theme::TAB_NAME).color(t.l1).single_line().truncate().grow(1.0).min_w(0.0),
                 ).child(stop),
             )
             .child(el().w_full().h(4.0).radius(2.0).fill(t.hov2).child(el().w_frac(filled).h(4.0).radius(2.0).fill(if card.waiting { t.l2 } else { t.l1 })))
             .child(foot);
         if let Some(cleaned) = &card.cleaned {
-            body = body.child(text(cleaned).font(theme::SMALL).color(t.l2).single_line().truncate());
+            body = body.child(text(s.text_shown(cleaned).into_owned()).font(theme::SMALL).color(t.l2).single_line().truncate());
         }
         stack = stack.child(body);
     }

@@ -16,11 +16,13 @@
 //!
 //! Tabs are saved and brought back ([`Workbench::saved`], [`Workbench::restore`]) with their
 //! session keys, so a terminal on a server finds its shell in tmux again after a restart, as
-//! in 0.10. Not here yet: tabs side by side (0.10's layouts and `hidden`). The window owns one
+//! in 0.10. Tabs side by side are in [`layout`], kept beside the workbench. The window owns one
 //! `Workbench`; every change goes through its methods, so the rules are tested here, without a
 //! window.
 
+pub mod layout;
 pub mod shortcuts;
+pub mod titles;
 pub mod vitals;
 
 use crate::model::{EnvLabel, PaneKind, TargetRef};
@@ -573,6 +575,14 @@ impl Workbench {
             }
         }
         None
+    }
+
+    /// Brings back one of the tabs closed lately, by its place in [`Self::closed`] (the main
+    /// menu's list). `None` when there's no such place, or its machine left the list.
+    pub fn reopen_closed_at(&mut self, index: usize) -> Option<TabId> {
+        let c = self.closed.get(index).filter(|c| self.server(&c.server).is_some())?.clone();
+        self.closed.remove(index);
+        Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None }))
     }
 
     /// Ctrl+Tab and Ctrl+Shift+Tab: the next (`1`) or previous (`-1`) tab in the row, around

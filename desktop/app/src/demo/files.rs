@@ -113,6 +113,7 @@ const ENV: &str = "# Made-up values for the demo.\nAPP_ENV=production\nAPP_PORT=
 const NGINX: &str = "server {\n    listen 80;\n    server_name shop.example;\n    root /home/deploy/shop/releases/current/public;\n\n    location /api/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\n";
 const DEPLOY: &str = "#!/bin/sh\n# Puts a release live: ./deploy.sh 2024-10-12\nset -eu\nrelease=\"$1\"\ncd \"$HOME/shop/releases\"\ntest -d \"$release\" || { echo \"no such release: $release\" >&2; exit 1; }\nln -sfn \"$release\" current\nsudo systemctl reload shop\necho \"now serving $release\"\n";
 const CHANGELOG: &str = "# Changelog\n\n## 2024-10-12\n- Checkout: free shipping banner\n- Fixed the cart badge on small screens\n\n## 2024-10-05\n- New product page\n";
+const WORKER: &str = "# Made-up settings for the demo's worker.\nqueue = \"orders\"\nthreads = 4\nretry_after_s = 30\n";
 const THEIR_LINE: &str = "- Hotfix: prices round to two places (added on the server)\n";
 const ACCESS_LOG: &str = "203.0.113.50 - - [12/Oct/2024:13:58:01 +0000] \"GET / HTTP/1.1\" 200 5120\n203.0.113.51 - - [12/Oct/2024:13:58:07 +0000] \"GET /cart HTTP/1.1\" 200 2048\n203.0.113.50 - - [12/Oct/2024:13:59:40 +0000] \"POST /api/checkout HTTP/1.1\" 201 312\n";
 
@@ -373,7 +374,12 @@ impl DemoFiles {
     pub fn new(web: &str, staging: &str, backups: &str, db: &str) -> DemoFiles {
         let disks = HashMap::from([
             (web.to_owned(), Disk::web()),
-            (staging.to_owned(), Disk::small("/home/deploy", &[("shop/", ""), ("README.md", "# shop (staging)\n\nWhat goes live next. Break things here first.\n"), ("deploy.sh", DEPLOY)])),
+            (staging.to_owned(), {
+                let mut d = Disk::small("/home/deploy", &[("shop/", ""), ("README.md", "# shop (staging)\n\nWhat goes live next. Break things here first.\n"), ("deploy.sh", DEPLOY)]);
+                // The file the staging worker's log names (`demo.rs`): a Ctrl+click on it opens it.
+                d.file("/etc/shop/worker.toml", WORKER, NOW.now - DAY, "-rw-r--r--");
+                d
+            }),
             (backups.to_owned(), Disk::small("/home/backup", &[("daily/", ""), ("weekly/", ""), ("restore.sh", "#!/bin/sh\n# Restores a dump: ./restore.sh daily/shop-db.sql.gz\nset -eu\necho \"restoring $1\"\n"), ("retention.txt", "daily: 7\nweekly: 8\n")])),
             (db.to_owned(), Disk::small("/var/lib/postgresql", &[("16/", ""), ("migrations/", ""), ("backup.sh", "#!/bin/sh\nset -eu\npg_dump shop | gzip > \"shop-db.sql.gz\"\n")])),
             ("local".to_owned(), Disk::small("/home/dev", &[("Documents/", ""), ("Downloads/", ""), ("Pictures/", ""), ("notes.txt", "Things to do on web-7731:\n- rotate the logs\n- try the new deploy script on staging first\n")])),

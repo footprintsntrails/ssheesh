@@ -59,6 +59,39 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
   adds what it needs to `Backend` as methods with a default body, implements them in `live.rs`
   and with made-up data in `demo.rs`, and returns results through `Remote`.
 
+## A terminal pane and what sits over it
+
+`terminal/view.rs` draws the grid, the cursor and the input method; `terminal/overlays.rs`
+wraps it (`term-box`) with what sits over the text, each in its own file with its state in
+`TermPane::over`:
+
+| File | What | Where its rule lives |
+|---|---|---|
+| `find.rs` | the find bar; the search of the whole history (tmux's over ssh, else the grid) off the UI thread | `sshee_term::find`, marks by the presentation pass |
+| `links.rs` | the link under the pointer (underline, hint), Ctrl/⌘-click | `sshee_term::links`, `present::Link` |
+| `scrollbar.rs` | the scroll bar, Shift+Page Up/Down, "Jump to the bottom" | `sshee_term::scroll` |
+| `away.rs` | the "While you were away" line between two rows of the grid | `sshee_term::away` |
+| `menu.rs` | the pane's menu on the secondary button | `kit::menu` |
+
+- **Hidden things stay hidden.** Find searches rows made safe by `Look::safe_rows`, on the
+  thread that read them; marks, links and their hints come from the presentation pass. Nothing
+  here reads the engine's text to show it.
+- **Slow things come back through the pane's `Postbox`** (`overlays.rs`): a thread posts a
+  `Note` and wakes the window; `TermPane::poll_overlays` takes it. A replayed session does the
+  same work at once, so headless frames don't depend on a thread. What needs the server goes
+  through `TermLink::ask` (`Ask::Rows`, `History`, `Scroll`), which `live.rs` answers from the
+  shell's tmux session.
+- **What only the window can do is a `Wish`** the window takes after each poll
+  (`Shell::grant` in `shell/tabs.rs`): a new terminal here, a file's path to open
+  (`Shell::open_path`: the seam the Files screen takes; until then the path is copied), the
+  shell's folder (the tab's name, `Shell::set_folder`), a press on a pane shown beside another.
+- **Streamer mode** is `shell/streamer.rs`: `Shell::server_shown(key, name)` and
+  `Shell::text_shown(text)` are how every screen draws a server's name or any text that may
+  hold one; the terminals follow `Shell::look()`.
+- **Copying**: `PaneOptions::copy_on_select` and `program_clipboard` (a program's OSC 52), set
+  for every pane by `Shell::set_copy_modes`. A program that has the mouse gets the drag;
+  Shift makes it the terminal's own selection.
+
 ## Tokens, icons, components
 
 - `sshee-ui/src/theme.rs`: every colour (both appearances, from the design's stylesheet), size,
@@ -67,7 +100,7 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
 - `sshee-ui/src/icons.rs`: `Icon` and `icon(Icon, size, colour)`; a new icon is one arm of
   `Icon::drawing` with SVG path data (`svg.rs` reads it), on the 16-unit grid, 1.4 pt line.
 - `sshee-ui/src/kit/`: one module per component (`button`, `tab`, `rail`, `chip`, `menu`,
-  `popover`, `status`). A component is a function from what it shows to an `El`; the caller
+  `popover`, `status`, and for forms and lists `field`, `list`, `tile`, `push`). A component is a function from what it shows to an `El`; the caller
   chains `.key(..)` and handlers. Add states to the component, not at the call site.
 - From Rune itself, used as is: tooltips (`El::help`), focus rings and Tab order, text fields
   (`rune::text_input`), native pop-up menus, virtual lists (`El::virtual_rows`). **rune-kit**
@@ -85,8 +118,12 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
    `shell/view.rs::tab_icon`, its page in `page`, its module in `screens/`.
 3. **Something over the window** (the command palette, settings, an agent's question, a
    server's card): a module in `screens/` with its `State` in `screens::States`, drawn as a
-   last child of the root in `shell/view.rs::view` (Rune's `El::modal` traps focus and closes
-   on a click outside), opened by a `Shell` method. Use `kit::popover` and `kit::menu`.
+   last child of the root (Rune's `El::modal` traps focus and closes on a click outside),
+   opened by a `Shell` method. Its element goes in `screens::overlays`, its "is it open" in
+   `States::any_open` (no shortcut fires and no key reaches a terminal behind it) and its
+   closing in `States::close_all` (one thing over the window at a time). Use `kit::popover`,
+   `kit::list` and `kit::push`; the palette (`screens/palette.rs`) is the one to copy for a
+   list with one moving highlight, "Add a server" for a form.
 4. Keys are fixed words and tab numbers (`format!("tab-{}", id.0)`), never a server's name.
 5. Tests: rules in sshee-app; the screen in `Runtime::with_text` (see `shell/tests.rs`: a fake
    `Backend`, clicks by element key, the screen reader's tree); one headless picture in
@@ -132,16 +169,40 @@ never writes 0.10's. `--demo` reads and writes nothing.
   borderless window can't be resized by its edges (Rune doesn't expose winit's
   `drag_resize_window`). macOS and Windows get the design's bar (`App::titlebar`); neither has
   been run yet, nor have their system fonts (`fonts::SYSTEM_FAMILIES`).
-- The row of tabs has no drag to reorder (`Workbench::move_tab` exists), no context menu, and
-  when crowded it shrinks tabs and names each server once, but doesn't scroll.
-- A terminal tab's title is "Terminal N": the working folder (OSC 7) and the agent's name
-  aren't wired (`Workbench::set_title`, `set_agent` exist). "Needs you" comes from the bell
-  and OSC 9/777 only; sshee-core's agent watch isn't wired.
+- The row of tabs (`shell/tabs.rs`) has its menu, drag to reorder and a list for tabs out of
+  sight; a tab can't be dragged out into a window of its own, and side by side
+  (`shell/split.rs`, `workbench::layout`) is one pair of one machine's tabs, not 0.10's tree of
+  splits. Pairs aren't kept between runs.
+- A terminal tab is named after its shell's folder when the shell says it (OSC 7, or a
+  `user@host: ~/dir` title). In tmux on a server neither reaches the window (tmux keeps both):
+  the agents' watch reads `pane_current_path` and should call `Shell::set_folder`, and
+  `TermPane::set_foreground` with the program in front (until then Ctrl+F in tmux stays the
+  program's; Ctrl+Shift+F and ⌘F always find). The agent's name isn't wired
+  (`Workbench::set_agent` exists). "Needs you" comes from the bell and OSC 9/777 only.
+- A click on a file's path copies it: `Shell::open_path` waits for the Files screen. A web
+  link whose text hides where it goes opens on a second Ctrl+click, not from a dialog.
+- Streamer mode doesn't know this computer's hostname (only its user, from the environment):
+  `Backend` has nothing to ask yet. Whether it is on isn't kept between runs (Settings will).
 - Saved passwords aren't read (0.10's keychain needs the owner's yes); a server that asks for
   one asks in the terminal. Host-key questions have no screen.
 - Tor's round-trip time isn't measured; the status bar shows "Tor" without it.
 - Every hidden pane still takes its frames in `poll` (so a switch shows it at once); with
   dozens of busy tabs that wants a "drain replies only" mode in `TermPane`.
+
+## Screens that are built
+
+| Screen | In `sshee-ui/src/` | Rules in `crates/sshee-app/src/` |
+|---|---|---|
+| Main menu: search field, server tiles, agents at work, closed tabs | `screens/home.rs` | `home.rs` |
+| Command palette (`srv:` `cmd:` `file:` `set:`; a command for a server is never preselected) | `screens/palette.rs` | `palette.rs` |
+| Add a server: by hand, from the ssh config, XPipe and 0.10 | `screens/add_server.rs` | `servers.rs` (`Form`, `Ask`, `Answer`, and `Book`, the list in memory a demo and the tests answer from) |
+| A server's menu (rename, icon and colour, label, remove) and its card under the pointer | `screens/server_menu.rs`, `screens/server_card.rs` | `labels.rs`, `home.rs` (`Card`) |
+
+The list of servers is this copy's own: `desktop/app/src/servers.rs` keeps `hosts.json` and
+`looks.json` in `~/.sshee-preview` and passwords under the copy's keychain name. The window
+never touches it: a screen calls `Backend::servers(Ask)`, the backend does the work on a
+thread and answers through `Remote` (`Shell::servers_answer`, with the new list). 0.10's list
+is only read, to offer "Bring over your servers from 0.10".
 
 ## Screens still to port, and the files each owns
 
@@ -152,20 +213,16 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 
 | Screen (0.10's source) | Owns in `sshee-ui/src/` | Owns in `crates/sshee-app/src/` |
 |---|---|---|
-| Main menu: servers, running now, "Where to?" (`Home.tsx`) | `screens/home.rs` | `home.rs` |
 | Files, what is left (the list, the editor with its guarded save, menus, transfers, drag onto a folder and bookmarks are built: see "Files" below): a filter box, typing a path, new file, archive, paste copied files, copy to another server, open a terminal here, a folder's peek, Markdown and video, drag in from and out to the desktop (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
-| Command palette, search (`Overlays.tsx` palette, `cmdk`) | `screens/palette.rs` | `palette.rs` |
 | Settings and its sections (`SettingsDialog.tsx`, `ShortcutsEditor`, `ThemeEditor`, `ColorPicker`) | `screens/settings.rs`, `screens/settings/` | `model/settings.rs` (exists), `settings_store.rs` |
-| Add a server, import from ssh config and XPipe (`AddServerDialog.tsx`, `ConfigImport`, `XpipeImport`) | `screens/add_server.rs` | `servers.rs` |
-| A server's card and menu, labels and looks (`Sidebar.tsx` menus, `LookPicker`, `HostIcon`) | `screens/server_card.rs`, `screens/server_menu.rs`; more arms in `icons.rs` | `labels.rs` |
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |
-| Tab menu, drag to reorder, side by side, zoom (`Tabs.tsx`, `Workspace.tsx`, `Pane.tsx`) | `shell/tabs.rs` (split out of `view.rs`), `shell/split.rs` | `workbench/layout.rs` (port of `layout.ts`) |
+| Zoom, a tab dragged out to its own window, more than two side by side (`Workspace.tsx`, `Pane.tsx`); the tab menu, drag and the pair are built | `shell/tabs.rs`, `shell/split.rs` | `workbench/layout.rs` |
 | Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover) | `screens/agent.rs` | `agents.rs` |
 | Host-key and password questions, reconnect and sleep notices (`TerminalPane.tsx` overlays) | `screens/prompts.rs` | `prompts.rs` |
-| In the terminal: find, links, "while you were away", streamer mode, scroll bar, context menu (`termFind.ts`, `terminalLinks.ts`, `away.ts`) | `terminal/find.rs`, `terminal/links.rs`, `terminal/away.rs`, `terminal/menu.rs` | none (sshee-term has them) |
+| In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Tor: the switch, progress, log (`TorButton.tsx`) | `screens/tor.rs` | `tor.rs` |
 | Security check and fixes (`ServerTools.tsx`, `Recipes.tsx`) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
 | Docker and containers (`ServerTools.tsx`) | `screens/containers.rs` | `containers.rs` |
@@ -176,5 +233,6 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Second window, the mini window (`windows.ts`, `MiniApp.tsx`) | `shell/windows.rs` | `windows.rs` |
 | Notifications with a click, tray (outside the window) | none | a new Rune-free crate, `crates/sshee-desktop` |
 
-Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) is wired only
-for labels and looks so far (`desktop/app/src/servers.rs`).
+Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) isn't wired.
+Servers, with their labels and looks, come over when you pick them in "Add a server"
+(`desktop/app/src/servers.rs`); snippets are still 0.10's starters (`screens::palette::State`).

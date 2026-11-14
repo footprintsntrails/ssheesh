@@ -67,11 +67,13 @@ pub struct State {
     pub replace: Option<Replace>,
     /// What only the drawing keeps: the text being typed, the menu or question on screen.
     pub(crate) ui: view::Ui,
+    /// A path from a terminal to open once its folder is listed ([`show_path`]).
+    reveal: Option<(String, String)>,
 }
 
 impl State {
     fn new(server: &str, path: &str) -> State {
-        State { browser: Browser::new(server, path), editor: None, tickets: Tickets::default(), busy: None, replace: None, ui: view::Ui::default() }
+        State { browser: Browser::new(server, path), editor: None, tickets: Tickets::default(), busy: None, replace: None, ui: view::Ui::default(), reveal: None }
     }
 }
 
@@ -144,9 +146,44 @@ fn changed(s: &mut Shell, server: &str, dir: &str) {
 /// The Files tab on screen is shown for the first time: it gets its state, in the folder the
 /// tab was last in (the home folder for a new one), and lists it. `Shell::settle` calls this.
 pub(crate) fn shown(s: &mut Shell) {
-    let Some(tab) = s.bench.active().filter(|t| t.kind == TabKind::Files && !s.screens.files.contains_key(&t.id)).cloned() else { return };
-    s.screens.files.insert(tab.id, State::new(&tab.server, tab.path.as_deref().unwrap_or("~")));
-    load(s, tab.id, |b, cache, now| b.start(cache, now));
+    for id in s.tabs_on_screen() {
+        let Some(tab) = s.bench.tab(id).filter(|t| t.kind == TabKind::Files && !s.screens.files.contains_key(&t.id)).cloned() else { continue };
+        s.screens.files.insert(tab.id, State::new(&tab.server, tab.path.as_deref().unwrap_or("~")));
+        load(s, tab.id, |b, cache, now| b.start(cache, now));
+    }
+}
+
+/// Shows `path` (a click on it in a terminal): the folder it is in, with it picked out, and
+/// then opens it: a file beside the list, a folder in its place. What the open file had
+/// typed and not saved is kept: then the path is only picked out.
+pub fn show_path(s: &mut Shell, tab: TabId, path: &str) {
+    let (dir, name) = (paths::parent(path), paths::name(path).to_owned());
+    let Some(state) = s.screens.files.get_mut(&tab) else { return };
+    if state.editor.as_ref().is_some_and(|e| e.can_edit() && e.is_dirty(state.ui.draft_text())) {
+        state.browser.select_when_listed(&name);
+        return;
+    }
+    state.reveal = Some((dir.clone(), name.clone()));
+    go(s, tab, &dir);
+    if let Some(state) = s.screens.files.get_mut(&tab) {
+        state.browser.select_when_listed(&name);
+    }
+    reveal(s, tab);
+}
+
+/// Opens what [`show_path`] asked for, once the folder it is in is listed.
+fn reveal(s: &mut Shell, tab: TabId) {
+    let Some(state) = s.screens.files.get_mut(&tab) else { return };
+    let Some((dir, name)) = state.reveal.clone() else { return };
+    let b = &state.browser;
+    let there = b.listing().is_some() && !b.is_loading() && (b.asked() == dir || b.dir() == dir);
+    if !there {
+        return;
+    }
+    state.reveal = None;
+    if state.browser.entry(&name).is_some() {
+        open(s, tab, &name);
+    }
 }
 
 // ---- going places
@@ -392,6 +429,7 @@ fn apply(s: &mut Shell, reply: Reply) {
                     let kept = screens.dirs.remember(&server, &asked, listing, clock, now);
                     state.browser.listed(ticket, kept, clock);
                     keep_place(s, tab);
+                    reveal(s, tab);
                 }
                 Err(failure) => {
                     state.browser.failed(ticket, failure, &mut screens.dirs);
@@ -833,5 +871,25 @@ mod tests {
         assert_eq!(labels(menu_for(&w.s, w.tab, Some("site.zip")))[3], "Unpack “site.zip”");
         assert_eq!(labels(menu_for(&w.s, w.tab, None))[..2], ["New folder", "Upload files…"]);
         assert!(menu_for(&w.s, TabId(99), None).is_empty());
+    }
+
+    #[test]
+    fn a_path_from_a_terminal_opens_in_its_folder_and_a_folder_opens_itself() {
+        let mut w = Window::at_home();
+        show_path(&mut w.s, w.tab, "/etc/shop/worker.toml");
+        let listing = Listing { path: "/etc/shop".into(), entries: vec![entry("worker.toml", EntryKind::File), entry("old", EntryKind::Dir)] };
+        w.list(listing.clone());
+        // Listed: picked out and opened beside the list.
+        assert_eq!(w.state().browser.dir(), "/etc/shop");
+        assert_eq!(w.state().browser.selected(), ["worker.toml"]);
+        let wants = w.wants();
+        assert!(matches!(&wants[..], [Want::Read { path, .. }] if path == "/etc/shop/worker.toml"), "{wants:?}");
+        // A folder's path: the folder it is in is listed again (it is the one on screen), and
+        // then it goes into it.
+        show_path(&mut w.s, w.tab, "/etc/shop/old");
+        w.list(listing);
+        let wants = w.wants();
+        assert!(matches!(&wants[..], [Want::List { path, .. }] if path == "/etc/shop/old"), "{wants:?}");
+        assert!(w.state().editor.is_none(), "a folder opened as a file");
     }
 }

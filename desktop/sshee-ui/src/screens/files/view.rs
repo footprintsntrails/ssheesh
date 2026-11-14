@@ -15,11 +15,15 @@
 //! functions. This module keeps only what belongs to drawing: the text being typed, which menu
 //! or question is up.
 //!
+//! Streamer mode: every name and path drawn here (folders in the path, rows, the open file,
+//! questions, menus, bookmarks) goes through `Shell::text_shown`, so a user's name in
+//! `/home/deploy` is dots while streaming. The open file's own text isn't masked.
+//!
 //! Keys reach the list through the window (`Shell::key`), not through focus: nothing in the
 //! list takes the keyboard, so arrows work the moment the tab is on screen, and a text field
 //! (a new name, the open file) has the keys only while it is being typed in.
 
-use rune::tok::{Family, TextStyle};
+use rune::tok::TextStyle;
 use rune::{col, el, row, spacer, text, text_input, Align, Cx, Drag, El, Phase, Picked, FileDialogOptions, GrowthSpec, Key, KeyEvent, PointerPress, ScrollSpec, Side, SurfaceFit, TextEdit, Tx};
 use sshee_app::files::bookmarks;
 use sshee_app::files::browser::{key_does, Click, KeyDoes, ListKey, Problem, OPEN_TERMINAL, TRY_AGAIN};
@@ -30,7 +34,8 @@ use sshee_app::paths;
 use sshee_app::workbench::{Tab, TabId, TabKind};
 
 use crate::icons::{icon, Icon};
-use crate::kit::button::{text_button, toolbar_button, ButtonKind};
+use crate::kit::button::toolbar_button;
+use crate::kit::push::{push_button, Push};
 use crate::kit::menu::{menu, menu_row, menu_row_destructive, RowState};
 use crate::kit::popover::popover;
 use crate::shell::Shell;
@@ -114,8 +119,16 @@ impl Default for Ui {
     }
 }
 
+impl Ui {
+    /// The open file's text as typed so far.
+    pub(crate) fn draft_text(&self) -> &str {
+        &self.draft.text
+    }
+}
+
+/// The open file's text: the interface's code style, on 18-point lines.
 fn code_style() -> TextStyle {
-    TextStyle::new(12.0, 400.0).family(Family::Named(crate::fonts::TERMINAL_FAMILY)).lh(18.0)
+    theme::CODE.lh(18.0)
 }
 
 /// After anything that may have changed the open file: the field takes the text the server
@@ -469,7 +482,7 @@ fn toolbar(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }),
     );
     bar = bar
-        .child(tool(t, "files-back", Icon::ChevronLeft, "Back", b.can_go_back(), |s, tab, _| guarded(s, tab, After::Back), id))
+        .child(tool(t, "files-back", Icon::Back, "Back", b.can_go_back(), |s, tab, _| guarded(s, tab, After::Back), id))
         .child(tool(t, "files-forward", Icon::ChevronRight, "Forward", b.can_go_forward(), |s, tab, _| guarded(s, tab, After::Forward), id))
         .child(tool(t, "files-up", Icon::ArrowUp, "Up one folder", paths::has_parent(&dir), |s, tab, _| guarded(s, tab, After::Up), id));
     // The path: every folder in it goes there.
@@ -481,7 +494,7 @@ fn toolbar(s: &Shell, id: TabId, t: &'static Theme) -> El {
             trail = trail.child(text("/").font(theme::TEXT).color(t.l2.alpha(0.6)).single_line().a11y_hidden());
         }
         let (ink, font) = if i == last { (t.l1, theme::TEXT_BOLD) } else { (t.l2on, theme::TEXT) };
-        let mut crumb = el().key(format!("crumb-{i}")).h(22.0).px(5.0).radius(5.0).items_center().child(text(&c.label).font(font).color(ink).single_line());
+        let mut crumb = el().key(format!("crumb-{i}")).h(22.0).px(5.0).radius(5.0).items_center().child(text(s.text_shown(&c.label).into_owned()).font(font).color(ink).single_line());
         if i != last {
             let to = c.path.clone();
             crumb = crumb.hover(t.hov2).press(t.down).role("button").on_press_tx(move |s: &mut Shell, tx| {
@@ -574,7 +587,7 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
     let (e, clock) = (r.entry, state.browser.clock());
     let (ink, quiet) = if r.selected { (t.on_color, t.on_color.alpha(0.8)) } else { (t.l1, t.l2) };
     let name = e.name.clone();
-    let mut line = list_row().role("row").label(&e.name);
+    let mut line = list_row().role("row").label(s.text_shown(&e.name).into_owned());
     line = if r.selected { line.fill(t.blue) } else { line.hover(t.hov) };
     if let Some((names, to)) = &state.ui.dragging {
         if *to == Some(Over::Row(i)) {
@@ -587,7 +600,8 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
     line = match &state.ui.naming {
         Some((Naming::Rename(from), edit)) if *from == e.name => line.child(naming_field(t, edit, id)),
         _ => {
-            let shown = if e.is_link && !e.name.is_empty() { format!("{} ↗", e.name) } else { e.name.clone() };
+            let name = s.text_shown(&e.name);
+            let shown = if e.is_link && !e.name.is_empty() { format!("{name} ↗") } else { name.into_owned() };
             line.child(text(shown).font(theme::TEXT).color(if e.is_hidden() && !r.selected { t.l2on } else { ink }).single_line().truncate().grow(1.0).min_w(0.0))
         }
     };
@@ -633,9 +647,9 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
     if let Some(Problem::Page { title, message, open_terminal }) = &problem {
         let mut buttons = row().gap(8.0).mt(6.0);
         if *open_terminal {
-            buttons = buttons.child(text_button(t, OPEN_TERMINAL, ButtonKind::Default).key("files-open-terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)));
+            buttons = buttons.child(push_button(t, OPEN_TERMINAL, Push::Quiet, true).key("files-open-terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)));
         }
-        buttons = buttons.child(text_button(t, TRY_AGAIN, ButtonKind::Plain).key("files-try-again").on_press_tx(move |s: &mut Shell, tx| {
+        buttons = buttons.child(push_button(t, TRY_AGAIN, Push::Quiet, true).key("files-try-again").on_press_tx(move |s: &mut Shell, tx| {
             super::refresh(s, id);
             tx.instant();
         }));
@@ -667,9 +681,9 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
             text(note).font(theme::NOTE).color(t.l2on).single_line().truncate().grow(1.0).min_w(0.0),
         );
         if open_terminal {
-            line = line.child(text_button(t, OPEN_TERMINAL, ButtonKind::Plain).key("files-open-terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)));
+            line = line.child(push_button(t, OPEN_TERMINAL, Push::Quiet, true).key("files-open-terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)));
         }
-        pane = pane.child(line.child(text_button(t, TRY_AGAIN, ButtonKind::Plain).key("files-try-again").on_press_tx(move |s: &mut Shell, tx| {
+        pane = pane.child(line.child(push_button(t, TRY_AGAIN, Push::Quiet, true).key("files-try-again").on_press_tx(move |s: &mut Shell, tx| {
             super::refresh(s, id);
             tx.instant();
         })));
@@ -744,7 +758,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
     let name = editor.name().to_owned();
     let dirty = dirty(s, id).is_some();
     let mut head = row().key("preview-head").w_full().h(TOOLBAR).items_center().gap(8.0).pl(14.0).pr(8.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(
-        text(&name).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate().shrink().min_w(0.0),
+        text(s.text_shown(&name).into_owned()).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate().shrink().min_w(0.0),
     );
     if dirty {
         head = head.child(el().key("preview-dirty").size(6.0, 6.0).radius(3.0).fill(t.l2on).label_static("Unsaved changes"));
@@ -752,7 +766,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
     head = head.child(spacer());
     if dirty {
         let label = if editor.is_saving() { "Saving…" } else { "Save" };
-        head = head.child(text_button(t, label, ButtonKind::Default).key("preview-save").on_press_tx(move |s: &mut Shell, tx| {
+        head = head.child(push_button(t, label, Push::Quiet, true).key("preview-save").on_press_tx(move |s: &mut Shell, tx| {
             save(s, id);
             tx.instant();
         }));
@@ -774,7 +788,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
     if let Some(conflict) = editor.conflict() {
         let mut answers = row().gap(8.0).flex_wrap();
         for (i, (choice, label)) in conflict.choices().into_iter().enumerate() {
-            answers = answers.child(text_button(t, label, if i == 0 { ButtonKind::Destructive } else { ButtonKind::Plain }).key(format!("conflict-{i}")).on_press_tx(move |s: &mut Shell, tx| {
+            answers = answers.child(push_button(t, label, if i == 0 { Push::Caution } else { Push::Quiet }, true).key(format!("conflict-{i}")).on_press_tx(move |s: &mut Shell, tx| {
                 let draft = s.screens.files.get(&id).map(|st| st.ui.draft.text.clone()).unwrap_or_default();
                 super::resolve(s, id, choice, &draft);
                 sync(s);
@@ -800,7 +814,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
                     .w_full()
                     .padding(14.0)
                     .color(t.l1)
-                    .label(format!("Text of {name}"))
+                    .label(format!("Text of {}", s.text_shown(&name)))
                     .on_edit(move |s: &mut Shell| draft_field(s, id))
                     // Return breaks the line: this is a document, not a form.
                     .on_submit(move |s: &mut Shell, _| draft_field(s, id).insert("\n"))
@@ -834,7 +848,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
                 // Never bigger than it is: a small icon stays sharp instead of filling the pane.
                 let [w, h] = picture.size().map_or([f32::MAX, f32::MAX], |[w, h]| [w as f32, h as f32]);
                 el().key("preview-picture").w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(
-                    el().w_full().h_full().max_w(w).max_h(h).pixels_fit(picture.pixels(), SurfaceFit::Fit).label(format!("Picture {name}")),
+                    el().w_full().h_full().max_w(w).max_h(h).pixels_fit(picture.pixels(), SurfaceFit::Fit).label(format!("Picture {}", s.text_shown(&name))),
                 )
             }
             None => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
@@ -844,7 +858,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
             let mut said = vec![text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(line).font(theme::NOTE).color(t.l2).max_w(340.0).align(Align::Center)];
             if on_server {
                 let n = name.clone();
-                said.push(text_button(t, "Download", ButtonKind::Plain).key("preview-get").mt(6.0).on_press_tx(move |s: &mut Shell, tx| {
+                said.push(push_button(t, "Download", Push::Quiet, true).key("preview-get").mt(6.0).on_press_tx(move |s: &mut Shell, tx| {
                     super::download(s, id, std::slice::from_ref(&n));
                     tx.instant();
                 }));
@@ -880,6 +894,15 @@ fn close_menu(s: &mut Shell, id: TabId, tx: &mut Tx) {
     tx.instant();
 }
 
+/// A question as streamer mode lets it be drawn: the names in it dotted while streaming.
+fn shown(s: &Shell, q: &Confirm) -> Confirm {
+    let mut q = q.clone();
+    q.title = s.text_shown(&q.title).into_owned();
+    q.body = s.text_shown(&q.body).into_owned();
+    q.lines = q.lines.iter().map(|l| s.text_shown(l).into_owned()).collect();
+    q
+}
+
 fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + Clone + 'static) -> El {
     let mut card = popover(t, 400.0).key("files-question").padding(18.0).gap(8.0).child(text(&q.title).font(theme::TEXT_BOLD).color(t.l1));
     if !q.body.is_empty() {
@@ -893,11 +916,11 @@ fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 
         card = card.child(names);
     }
     let cancel = no.clone();
-    let kind = if q.danger { ButtonKind::Destructive } else { ButtonKind::Default };
+    let kind = if q.danger { Push::Caution } else { Push::Quiet };
     let card = card
         .child(
-            row().w_full().gap(8.0).mt(8.0).child(spacer()).child(text_button(t, "Cancel", ButtonKind::Plain).key("question-no").on_press_tx(cancel)).child(
-                text_button(t, q.confirm_label, kind).key("question-yes").default_button().on_press_tx(yes),
+            row().w_full().gap(8.0).mt(8.0).child(spacer()).child(push_button(t, "Cancel", Push::Quiet, true).key("question-no").on_press_tx(cancel)).child(
+                push_button(t, q.confirm_label, kind, true).key("question-yes").default_button().on_press_tx(yes),
             ),
         )
         .modal_tx(false, no);
@@ -908,7 +931,7 @@ fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 
 pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let id = s.bench.active().filter(|tab| tab.kind == TabKind::Files)?.id;
     let state = s.screens.files.get(&id)?;
-    if let Some((q, _)) = &state.ui.confirm {
+    if let Some(q) = state.ui.confirm.as_ref().map(|(q, _)| shown(s, q)) {
         let answer = move |yes: bool| {
             move |s: &mut Shell, tx: &mut Tx| {
                 let Some((_, pending)) = ui(s, id).and_then(|ui| ui.confirm.take()) else { return };
@@ -920,7 +943,7 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                 tx.instant();
             }
         };
-        return Some(question(t, q, answer(true), answer(false)));
+        return Some(question(t, &q, answer(true), answer(false)));
     }
     if let Some(replace) = &state.replace {
         let answer = move |yes: bool| {
@@ -929,7 +952,7 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                 tx.instant();
             }
         };
-        return Some(question(t, &replace.question, answer(true), answer(false)));
+        return Some(question(t, &shown(s, &replace.question), answer(true), answer(false)));
     }
     if let Some(open) = &state.ui.menu {
         let mut rows = Vec::new();
@@ -943,9 +966,10 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                 MenuRow::Item(item) => {
                     height += 26.0;
                     let (action, clicked) = (item.action, open.clicked.clone());
+                    let label = s.text_shown(&item.label);
                     let label = match item.checked {
-                        Some(true) => format!("✓ {}", item.label),
-                        _ => item.label.clone(),
+                        Some(true) => format!("✓ {label}"),
+                        _ => label.into_owned(),
                     };
                     let draw = if item.destructive { menu_row_destructive } else { menu_row };
                     let line = draw(t, &label, item.hint, RowState::Rest).key(format!("menu-{i}"));
@@ -976,7 +1000,7 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
             for (label, path) in items {
                 n += 1;
                 let to = path.clone();
-                card = card.child(menu_row(t, &label, None, RowState::Rest).key(format!("place-{n}")).help(path).on_press_tx(move |s: &mut Shell, tx| {
+                card = card.child(menu_row(t, &s.text_shown(&label), None, RowState::Rest).key(format!("place-{n}")).help(s.text_shown(&path).into_owned()).on_press_tx(move |s: &mut Shell, tx| {
                     close_menu(s, id, tx);
                     guarded(s, id, After::Go(to.clone()));
                 }));

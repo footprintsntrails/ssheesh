@@ -204,7 +204,8 @@ fn it_starts_on_the_main_menu_with_the_servers_in_the_sidebar() {
     for name in ["This computer", "web-7731", "db-main", "Search", "Settings", "Tor", "Security check", "New terminal", "Main menu"] {
         assert!(tree.contains(name), "{name} isn't named in: {tree}");
     }
-    assert!(tree.contains("SSHeesh Preview"), "{tree}");
+    // The main menu is the page: its search field and its tiles.
+    assert!(tree.contains("Search servers, files, commands and settings") && tree.contains("Add a server"), "{tree}");
     for key in ["server-0", "server-1", "server-2", "new-tab", "sidebar", "home", "rail", "status"] {
         assert!(w.rt.find(key).is_some(), "{key}");
     }
@@ -479,3 +480,6 @@ fn the_window_closing_closes_connections_but_ends_no_shell() {
         assert!(seen.closed && !seen.ended, "session {n}");
     }
 }
+
+/// What came after the first window: find, links, scrolling, the row of tabs, side by side.
+mod more;
