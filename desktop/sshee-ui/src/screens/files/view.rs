@@ -108,6 +108,8 @@ pub struct Ui {
     dragging: Option<(Vec<String>, Option<Over>)>,
     /// The bookmarks are open.
     places: bool,
+    /// Where the last context menu opened: "Open in…" lists the editors there.
+    last_menu_at: [f32; 2],
     /// The open picture, decoded by Rune on its own thread.
     picture: Option<(u64, rune::image::Image)>,
     pictures: Option<rune::ImageCache>,
@@ -115,7 +117,7 @@ pub struct Ui {
 
 impl Default for Ui {
     fn default() -> Self {
-        Ui { draft: TextEdit::new(""), draft_of: None, lines: Vec::new(), naming: None, menu: None, confirm: None, dragging: None, places: false, picture: None, pictures: None }
+        Ui { draft: TextEdit::new(""), draft_of: None, lines: Vec::new(), naming: None, menu: None, confirm: None, dragging: None, places: false, last_menu_at: [0.0, 0.0], picture: None, pictures: None }
     }
 }
 
@@ -295,6 +297,24 @@ fn run_action(s: &mut Shell, tab: TabId, action: Action, clicked: Option<String>
             }
         }
         (Action::Refresh, _) => super::refresh(s, tab),
+        (Action::OpenInEditor, Some(name)) => super::edit::open_in(s, tab, &name, None),
+        (Action::OpenInOther, Some(name)) => {
+            // "Open in…": the same place, now listing the editors.
+            let rows = sshee_app::files::menu::editor_menu(&s.screens.edits.found);
+            if let Some(ui) = ui(s, tab) {
+                ui.menu = Some(Menu { at: ui.last_menu_at, clicked: Some(name), rows });
+            }
+        }
+        (Action::OpenWith(i), Some(name)) => {
+            let editor = s.screens.edits.found.get(i as usize).cloned();
+            super::edit::open_in(s, tab, &name, editor);
+        }
+        (Action::ChooseApp, Some(name)) => super::edit::choose_app(Some((tab, name)), tx),
+        (Action::StopEditing, Some(name)) => {
+            if let Some(id) = super::edit::session_of(s, tab, &name) {
+                super::edit::stop(s, &id);
+            }
+        }
         _ => {}
     }
     tx.instant();
@@ -306,6 +326,7 @@ fn open_menu(s: &mut Shell, tab: TabId, clicked: Option<&str>, at: PointerPress,
     }
     let rows = super::menu_for(s, tab, clicked);
     if let Some(ui) = ui(s, tab) {
+        ui.last_menu_at = [at.x, at.y];
         ui.menu = Some(Menu { at: [at.x, at.y], clicked: clicked.map(str::to_owned), rows });
     }
     tx.instant();
@@ -436,7 +457,7 @@ pub fn key(s: &mut Shell, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
 // ---- drawing
 
-fn glyph_icon(g: Glyph) -> Icon {
+pub(super) fn glyph_icon(g: Glyph) -> Icon {
     match g {
         Glyph::Folder => Icon::Folder,
         Glyph::BrokenLink => Icon::Link,
@@ -602,7 +623,13 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
         _ => {
             let name = s.text_shown(&e.name);
             let shown = if e.is_link && !e.name.is_empty() { format!("{name} ↗") } else { name.into_owned() };
-            line.child(text(shown).font(theme::TEXT).color(if e.is_hidden() && !r.selected { t.l2on } else { ink }).single_line().truncate().grow(1.0).min_w(0.0))
+            let mut named = row().grow(1.0).min_w(0.0).items_center().child(text(shown).font(theme::TEXT).color(if e.is_hidden() && !r.selected { t.l2on } else { ink }).single_line().truncate().shrink().min_w(0.0));
+            if !e.is_dir() {
+                if let Some(mark) = super::edit::row_mark(s, state.browser.server(), &state.browser.path_of(&e.name), r.selected, t) {
+                    named = named.child(mark);
+                }
+            }
+            line.child(named)
         }
     };
     let size = if e.is_dir() { "—".to_owned() } else { bytes(e.size) };
@@ -731,6 +758,9 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
     }
     pane = pane.child(rows);
+    if let Some(lines) = super::edit::strip(s, id, t) {
+        pane = pane.child(lines);
+    }
     // The line under the list: how many, how many selected, what runs.
     let mut foot = row().key("files-status").w_full().h(theme::STATUS_HEIGHT).items_center().gap(14.0).px(16.0).border_sides([1.0, 0.0, 0.0, 0.0], t.hair2);
     if let Some(status) = b.status() {
@@ -801,8 +831,17 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
             ).child(answers),
         );
     }
+    let open_in = super::edit::chosen(s).map(|e| format!("Open in {}", e.name));
     if let Some(why) = editor.read_only() {
-        pane = pane.child(banner(why.note()).key("preview-read-only"));
+        let mut line = banner(why.note()).key("preview-read-only").items_center().gap(8.0);
+        if let (sshee_app::files::ReadOnly::TooBigToEdit, Some(label)) = (why, &open_in) {
+            let n = name.clone();
+            line = line.child(push_button(t, label, Push::Quiet, true).key("preview-open-in").on_press_tx(move |s: &mut Shell, tx| {
+                super::edit::open_in(s, id, &n, None);
+                tx.instant();
+            }));
+        }
+        pane = pane.child(line);
     }
     let body = match editor.body() {
         Body::Loading => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
@@ -856,13 +895,22 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
         _ => {
             let (title, line) = editor.message(on_server).unwrap_or_default();
             let mut said = vec![text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(line).font(theme::NOTE).color(t.l2).max_w(340.0).align(Align::Center)];
+            let mut buttons = row().gap(8.0).mt(6.0);
+            if let (false, Some(label)) = (matches!(editor.body(), Body::Failed(_)), &open_in) {
+                let n = name.clone();
+                buttons = buttons.child(push_button(t, label, Push::Quiet, true).key("preview-open-in").on_press_tx(move |s: &mut Shell, tx| {
+                    super::edit::open_in(s, id, &n, None);
+                    tx.instant();
+                }));
+            }
             if on_server {
                 let n = name.clone();
-                said.push(push_button(t, "Download", Push::Quiet, true).key("preview-get").mt(6.0).on_press_tx(move |s: &mut Shell, tx| {
+                buttons = buttons.child(push_button(t, "Download", Push::Quiet, true).key("preview-get").on_press_tx(move |s: &mut Shell, tx| {
                     super::download(s, id, std::slice::from_ref(&n));
                     tx.instant();
                 }));
             }
+            said.push(buttons);
             centered(said)
         }
     };
@@ -895,7 +943,7 @@ fn close_menu(s: &mut Shell, id: TabId, tx: &mut Tx) {
 }
 
 /// A question as streamer mode lets it be drawn: the names in it dotted while streaming.
-fn shown(s: &Shell, q: &Confirm) -> Confirm {
+pub(super) fn shown(s: &Shell, q: &Confirm) -> Confirm {
     let mut q = q.clone();
     q.title = s.text_shown(&q.title).into_owned();
     q.body = s.text_shown(&q.body).into_owned();
@@ -903,10 +951,10 @@ fn shown(s: &Shell, q: &Confirm) -> Confirm {
     q
 }
 
-fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + Clone + 'static) -> El {
-    let mut card = popover(t, 400.0).key("files-question").padding(18.0).gap(8.0).child(text(&q.title).font(theme::TEXT_BOLD).color(t.l1));
+pub(super) fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + Clone + 'static) -> El {
+    let mut card = popover(t, 400.0).key("files-question").padding(18.0).gap(8.0).child(text(&q.title).font(theme::TEXT_BOLD).color(t.l1).wrap().w_full());
     if !q.body.is_empty() {
-        card = card.child(text(&q.body).font(theme::NOTE).color(t.l2on));
+        card = card.child(text(&q.body).font(theme::NOTE).color(t.l2on).wrap().w_full());
     }
     if !q.lines.is_empty() {
         let mut names = col().w_full().gap(2.0).padding(8.0).radius(theme::RADIUS_ROW).fill(t.code);

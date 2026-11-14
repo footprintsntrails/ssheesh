@@ -8,6 +8,7 @@
 //! documentation). Secrets in the output are made at run time, never written in a fixture.
 //! Each server's files are a made-up tree in memory (`files`).
 
+mod edit;
 mod files;
 
 use std::path::Path;
@@ -96,6 +97,8 @@ pub struct DemoBackend {
     book: Book,
     remote: Option<Remote>,
     files: files::DemoFiles,
+    /// "Open in your own editor", without an editor: the status flow only.
+    edit: edit::DemoEdit,
 }
 
 impl Default for DemoBackend {
@@ -105,8 +108,14 @@ impl Default for DemoBackend {
 }
 
 impl DemoBackend {
+    /// Two copies "left from an earlier run" are offered at start (`--demo-leftovers`).
+    pub fn with_leftovers(mut self, on: bool) -> DemoBackend {
+        self.edit.leftovers = on;
+        self
+    }
+
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB) }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default() }
     }
 
     /// Tells the window what the list holds now.
@@ -187,6 +196,17 @@ impl Backend for DemoBackend {
 
     /// Answered at once from the made-up tree (nothing here waits), but still through the
     /// window's queue, as a real backend's answers arrive: after the handler that asked.
+    /// No editor starts and nothing is copied: a file's status goes through what a real
+    /// session says, through the window's queue as a real backend's news arrives.
+    fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
+        let replies = self.edit.answer(ask, &mut self.files);
+        if let Some(remote) = &self.remote {
+            for reply in replies {
+                remote.edit(reply);
+            }
+        }
+    }
+
     fn files(&mut self, ask: sshee_app::files::Ask) {
         let replies = self.files.answer(&ask);
         if let Some(remote) = &self.remote {

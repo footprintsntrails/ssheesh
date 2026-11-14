@@ -50,6 +50,8 @@ pub struct LiveBackend {
     /// The thread that asks servers what their terminals run (`crate::agents`).
     agents: Option<crate::agents::Watcher>,
     files: crate::files::Files,
+    /// "Open in your own editor": the app's one edit bridge.
+    edit: crate::edit::Edit,
     /// What a new terminal on a server shows first, as Settings has it now.
     welcome: Welcome,
     /// Settings' "SSHeesh's the first time, then the server's", and the servers that have had
@@ -85,6 +87,7 @@ impl LiveBackend {
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
         let files = crate::files::Files::new(env.clone());
+        let edit = crate::edit::Edit::new(env.clone());
         LiveBackend {
             manager: Arc::new(SessionManager::new()),
             env,
@@ -95,6 +98,7 @@ impl LiveBackend {
             store: None,
             remote: None,
             files,
+            edit,
             welcome: full_welcome(),
             welcome_first: false,
             welcomed: vec![],
@@ -111,6 +115,20 @@ impl LiveBackend {
     /// server that isn't in the list anymore.
     fn target(&self, server: Option<&Server>) -> Option<Target> {
         self.target_of(&server?.key())
+    }
+
+    /// Where a machine is for Files and the edit bridge: its target, and on the work's thread
+    /// its saved password read into it (the keychain may wait or ask to be unlocked).
+    fn reach(&self, key: &str) -> crate::edit::Reach {
+        let saved = self.store.clone().zip(sshee_app::servers::host_id(key).map(str::to_owned));
+        let prepare: crate::files::Prepare = Box::new(move |target| {
+            if let (Target::Ssh(target), Some((store, host_id))) = (target, saved) {
+                if target.password.is_none() {
+                    target.password = store.lock().unwrap_or_else(|e| e.into_inner()).password(&host_id);
+                }
+            }
+        });
+        (self.target_of(key), prepare)
     }
 
     /// [`Self::target`] by a machine's key in the sidebar.
@@ -159,6 +177,7 @@ impl Backend for LiveBackend {
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
         self.agents = Some(crate::agents::Watcher::start(self.env.clone(), remote.clone()));
         self.files.start(remote.clone());
+        self.edit.start(remote.clone());
         self.remote = Some(remote.clone());
         // The servers' colours, and what 0.10 and the ssh config still offer: files to read,
         // so on a thread, and the main menu says so when it's known.
@@ -279,8 +298,12 @@ impl Backend for LiveBackend {
     }
 
     fn files(&mut self, ask: sshee_app::files::Ask) {
-        let target = self.target_of(&ask.server);
-        self.files.ask(ask, target);
+        let (target, prepare) = self.reach(&ask.server);
+        self.files.ask(ask, target, prepare);
+    }
+
+    fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
+        self.edit.ask(ask, |host| self.reach(host));
     }
 }
 

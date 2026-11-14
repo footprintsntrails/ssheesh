@@ -163,6 +163,9 @@ impl Disk {
         d.file(&at("logs/access.log"), ACCESS_LOG, NOW.now - 20, "-rw-r-----");
         d.file(&at("logs/error.log"), "", NOW.now - DAY - 5 * HOUR + 13 * MINUTE, "-rw-r-----");
         d.file(&at("logs/deploy.log"), "2024-10-12 11:02 now serving 2024-10-12\n", NOW.now - 3 * HOUR, "-rw-r--r--");
+        // Big enough that "Open in" asks first (over 50 MB).
+        d.file(&at("logs/access-2024-09.log"), Vec::new(), NOW.now - 12 * DAY, "-rw-r-----");
+        d.nodes.get_mut(&at("logs/access-2024-09.log")).expect("just made").size = Some(241_172_480);
         d.file(ENDLESS, Vec::new(), NOW.now - 9 * HOUR, "-rw-------");
         d.nodes.get_mut(ENDLESS).expect("just made").size = Some(1_717_986_918);
         d.file(&at(".bashrc"), "# ~/.bashrc\nalias ll='ls -la'\nexport EDITOR=nano\n", NOW.now - 380 * DAY, "-rw-r--r--");
@@ -387,6 +390,23 @@ impl DemoFiles {
         DemoFiles { disks, endless: HashMap::new() }
     }
 
+    /// A file's size on `host`'s made-up disk, for "Open in": `None` when it isn't there.
+    pub fn size_of(&self, host: &str, path: &str) -> Option<u64> {
+        let disk = self.disks.get(host)?;
+        let node = disk.nodes.get(&disk.resolve(path)).filter(|n| n.kind == EntryKind::File)?;
+        Some(node.size.unwrap_or(node.bytes.len() as u64))
+    }
+
+    /// A save from an editor elsewhere reached `path` on `host`: it changed just now.
+    pub fn touch(&mut self, host: &str, path: &str) {
+        if let Some(disk) = self.disks.get_mut(host) {
+            let at = disk.resolve(path);
+            if let Some(node) = disk.nodes.get_mut(&at) {
+                node.modified = NOW.now;
+            }
+        }
+    }
+
     /// Everything one request is answered with, in order (a transfer: its progress, then its
     /// end). Empty for a request whose answer comes later, when something else happens.
     pub fn answer(&mut self, ask: &Ask) -> Vec<Reply> {
@@ -535,7 +555,7 @@ mod tests {
         assert_eq!(dates, ["12 min ago", "Today 11:02", "Oct 10", "Oct 5", "Sep 28, 2023"]);
         assert_eq!(names(&mut files, "~/shop/releases"), ["2024-09-28", "2024-10-05", "2024-10-12", "current", "previous"]);
         assert_eq!(names(&mut files, "/"), ["home"]);
-        assert_eq!(names(&mut files, "/home/deploy/logs/"), ["access.log", "deploy.log", "error.log"]);
+        assert_eq!(names(&mut files, "/home/deploy/logs/"), ["access-2024-09.log", "access.log", "deploy.log", "error.log"]);
         let Answer::Listed { result: Err(f), .. } = one(&mut files, Want::List { ticket: 2, path: "/nowhere".into() }) else { panic!() };
         assert_eq!(f.kind, FailureKind::NotFound);
     }

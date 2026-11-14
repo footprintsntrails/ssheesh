@@ -326,6 +326,9 @@ pub fn overlay(s: &Shell, t: &'static Theme) -> Option<El> {
     let state = &s.screens.settings;
     let key = state.menu.filter(|_| state.open)?;
     let row = catalog::row(key)?;
+    if let Control::Special(catalog::Special::ExternalEditor) = row.control {
+        return Some(editor_menu(s, t, key));
+    }
     let Control::Choice { options, get, set, .. } = row.control else { return None };
     let labels = row.choice_labels(keyboard(s));
     let now = get(&s.settings);
@@ -345,6 +348,36 @@ pub fn overlay(s: &Shell, t: &'static Theme) -> Option<El> {
             tx.instant();
         },
     ))
+}
+
+/// "Open files in": every editor found, then "Choose an app…", the one in use checked.
+fn editor_menu(s: &Shell, t: &'static Theme, key: &'static str) -> El {
+    let found: Vec<(String, String)> = s.screens.edits.found.iter().map(|e| (e.id.clone(), sshee_app::files::edit::listed(&e.name))).collect();
+    let custom = s.screens.edits.custom.as_ref().map(|e| (e.id.clone(), format!("{} (chosen)", e.name)));
+    let all: Vec<(String, String)> = found.into_iter().chain(custom).collect();
+    let chosen = crate::screens::files::edit::chosen(s).map(|e| e.id);
+    let selected = all.iter().position(|(id, _)| Some(id) == chosen.as_ref());
+    let mut labels: Vec<&str> = all.iter().map(|(_, name)| name.as_str()).collect();
+    labels.push("Choose an app…");
+    let ids: Vec<String> = all.iter().map(|(id, _)| id.clone()).collect();
+    popup_menu(
+        t,
+        &rows::control_key(key),
+        &labels,
+        selected,
+        move |s: &mut Shell, i, tx| {
+            s.screens.settings.menu = None;
+            match ids.get(i).cloned() {
+                Some(id) => s.change_settings(tx, move |st| st.set_more(move |m| m.external_editor = Some(id))),
+                None => crate::screens::files::edit::choose_app(None, tx),
+            }
+            tx.instant();
+        },
+        |s: &mut Shell, tx| {
+            s.screens.settings.menu = None;
+            tx.instant();
+        },
+    )
 }
 
 /// The line across the top of the page while privacy settings are on as a precaution: what

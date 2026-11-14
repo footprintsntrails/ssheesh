@@ -33,6 +33,16 @@ pub enum Action {
     CopyFolderPath,
     ToggleHidden,
     Refresh,
+    /// "Open in <editor>": the chosen editor (`super::edit::Edits::chosen`).
+    OpenInEditor,
+    /// "Open in…": the editors found, to pick one ([`editor_menu`]).
+    OpenInOther,
+    /// One of [`editor_menu`]'s: the editor at this place among the found ones.
+    OpenWith(u8),
+    /// "Choose an app…": the system's file picker, then that program.
+    ChooseApp,
+    /// The file is open in an editor elsewhere: that session ends.
+    StopEditing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +84,10 @@ pub struct Context<'a> {
     /// The machine's pinned folders ([`super::bookmarks::pins`]).
     pub pins: &'a [String],
     pub show_hidden: bool,
+    /// The name of the editor "Open in" means; `None` when none was found.
+    pub editor: Option<&'a str>,
+    /// The clicked file is open in an editor elsewhere.
+    pub editing: bool,
 }
 
 /// The rows an action from a row's menu applies to: all the selected ones when the click
@@ -84,6 +98,16 @@ pub fn targets<'a>(clicked: &'a Entry, selected: &[&'a Entry]) -> Vec<&'a Entry>
     } else {
         vec![clicked]
     }
+}
+
+/// "Open in…": every editor found, by name, and "Choose an app…" after a line.
+pub fn editor_menu(found: &[crate::editors::Editor]) -> Vec<MenuRow> {
+    let mut rows: Vec<MenuRow> = found.iter().take(u8::MAX as usize).enumerate().map(|(i, e)| MenuRow::Item(item(Action::OpenWith(i as u8), super::edit::listed(&e.name)))).collect();
+    if !rows.is_empty() {
+        rows.push(MenuRow::Separator);
+    }
+    rows.push(MenuRow::Item(item(Action::ChooseApp, "Choose an app…")));
+    rows
 }
 
 /// The menu, top to bottom.
@@ -97,6 +121,17 @@ pub fn menu(cx: &Context<'_>) -> Vec<MenuRow> {
         if !many {
             let open = if entry.is_dir() { item(Action::Open, "Open") } else { item(Action::OpenPreview, "Open preview") };
             items.push(Some(MenuItem { hint: Some("↵"), ..open }));
+            if !entry.is_dir() {
+                if let Some(name) = cx.editor {
+                    items.push(Some(item(Action::OpenInEditor, format!("Open in {name}"))));
+                }
+                items.push(Some(item(Action::OpenInOther, "Open in…")));
+                if cx.editing {
+                    items.push(Some(item(Action::StopEditing, "Stop editing")));
+                }
+                // Opening stands apart from what changes the file.
+                items.push(None);
+            }
         }
         if cx.on_server {
             items.push(Some(item(Action::Download, if many { format!("Download {count} items") } else { "Download".into() })));
@@ -152,16 +187,34 @@ mod tests {
     }
 
     fn base<'a>() -> Context<'a> {
-        Context { dir: "/home/deploy", clicked: None, selected: &[], on_server: true, on_this_windows: false, pins: &[], show_hidden: false }
+        Context { dir: "/home/deploy", clicked: None, selected: &[], on_server: true, on_this_windows: false, pins: &[], show_hidden: false, editor: None, editing: false }
     }
 
     #[test]
     fn on_a_file() {
         let readme = file("README.md", 1, 1);
         let cx = Context { clicked: Some(&readme), selected: &[&readme], ..base() };
-        assert_eq!(lines(&cx), ["Open preview [↵]", "Download", "Rename [F2]", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(&cx), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Copy path", "---", "Delete !"]);
         // This computer has nothing to download from.
-        assert_eq!(lines(&Context { on_server: false, ..cx }), ["Open preview [↵]", "Rename [F2]", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(&Context { on_server: false, ..cx }), ["Open preview [↵]", "Open in…", "---", "Rename [F2]", "Copy path", "---", "Delete !"]);
+    }
+
+    #[test]
+    fn a_file_opens_in_an_editor_elsewhere() {
+        let env = file(".env", 1, 1);
+        let cx = Context { clicked: Some(&env), selected: &[&env], editor: Some("VS Code"), ..base() };
+        assert_eq!(lines(&cx)[..3], ["Open preview [↵]", "Open in VS Code", "Open in…"]);
+        assert_eq!(lines(&Context { editing: true, ..cx })[3], "Stop editing");
+        // Never for a folder, nor for several files at once.
+        let shop = dir("shop");
+        assert!(!lines(&Context { clicked: Some(&shop), selected: &[&shop], ..cx }).iter().any(|l| l.starts_with("Open in")));
+        let other = file("b", 1, 1);
+        assert!(!lines(&Context { selected: &[&env, &other], ..cx }).iter().any(|l| l.starts_with("Open in")));
+        // "Open in…": every editor found, then the picker.
+        let found = [crate::editors::Editor { id: "zed".into(), name: "Zed".into(), program: "/usr/bin/zed".into(), args: vec![], vscode_like: false }];
+        let rows = editor_menu(&found);
+        assert!(matches!(&rows[..], [MenuRow::Item(a), MenuRow::Separator, MenuRow::Item(b)] if a.label == "Zed" && a.action == Action::OpenWith(0) && b.action == Action::ChooseApp));
+        assert!(matches!(&editor_menu(&[])[..], [MenuRow::Item(b)] if b.label == "Choose an app…"));
     }
 
     #[test]
@@ -180,7 +233,7 @@ mod tests {
     fn an_archive_can_be_unpacked_where_the_machine_can() {
         let site = file("site.tar.gz", 1, 1);
         let cx = Context { clicked: Some(&site), selected: &[&site], ..base() };
-        assert_eq!(lines(&cx), ["Open preview [↵]", "Download", "Rename [F2]", "Unpack “site.tar.gz”", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(&cx), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Unpack “site.tar.gz”", "Copy path", "---", "Delete !"]);
         let squeezed = file("dump.sql.gz", 1, 1);
         let here = Context { clicked: Some(&squeezed), selected: &[&squeezed], on_server: false, on_this_windows: true, ..base() };
         assert!(!lines(&here).iter().any(|l| l.starts_with("Unpack")));

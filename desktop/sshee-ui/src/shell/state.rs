@@ -78,6 +78,12 @@ impl Remote {
     pub fn files(&self, reply: sshee_app::files::Reply) {
         self.update(move |s| crate::screens::files::deliver(s, reply));
     }
+
+    /// News from the edit bridge: a file open in an editor elsewhere, an answer to what was
+    /// asked of it (`screens::files::edit::deliver`).
+    pub fn edit(&self, reply: sshee_app::files::edit::EditReply) {
+        self.update(move |s| crate::screens::files::edit::deliver(s, reply));
+    }
 }
 
 /// What the window needs from outside: sessions for its terminals and news of its machines.
@@ -122,6 +128,13 @@ pub trait Backend {
     /// Never answered here: the work runs on a thread of its own and the answer comes back
     /// through [`Remote::files`], addressed with `ask.reply(..)`.
     fn files(&mut self, ask: sshee_app::files::Ask) {
+        let _ = ask;
+    }
+
+    /// "Open in your own editor": the backend's one edit bridge does what is asked, those
+    /// that wait on a thread of its own, and answers through [`Remote::edit`]. `CloseAll` is
+    /// done before this returns: the window is going.
+    fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
         let _ = ask;
     }
 
@@ -269,6 +282,8 @@ impl Shell {
         shell.apply_settings();
         shell.sync_panes();
         shell.sync_watch();
+        // The editors on this computer, and copies an earlier run left unsent.
+        crate::screens::files::edit::start(&mut shell);
         shell
     }
 
@@ -364,6 +379,8 @@ impl Shell {
         self.layout.prune(bench);
         // A Files tab shown for the first time gets its state and lists its folder.
         crate::screens::files::shown(self);
+        // A server's last tab closed: its files open elsewhere stop being edited.
+        crate::screens::files::edit::hosts_changed(self);
         // The tab on screen, and the one shown beside it.
         for id in self.tabs_on_screen() {
             if let Some(tab) = self.bench.tab(id).filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
@@ -550,6 +567,11 @@ impl Shell {
         id
     }
 
+    /// Sends a request to the backend's edit bridge (`screens::files::edit`).
+    pub fn edit_ask(&mut self, ask: sshee_app::files::edit::EditAsk) {
+        self.backend.edit(ask);
+    }
+
     /// Sends a Files request to the backend. The answer arrives later through
     /// [`Remote::files`]; `screens::files` has a function for everything the screen does.
     pub fn files_ask(&mut self, ask: sshee_app::files::Ask) {
@@ -640,6 +662,8 @@ impl Shell {
     pub fn close(&mut self) {
         // Every change so far is in the settings file before the program ends.
         self.settings.flush();
+        // Files open in an editor elsewhere end; copies with unsent changes stay.
+        crate::screens::files::edit::close_all(self);
         for pane in self.panes.values_mut() {
             pane.close();
         }
@@ -651,6 +675,8 @@ impl Shell {
         if let Some(pane) = self.panes.get_mut(&id) {
             pane.status = status;
         }
+        // Its server is back: files open elsewhere waiting to upload try at once.
+        crate::screens::files::edit::reconnected(self, id);
         self.sync_watch();
         crate::screens::agent::linked(self);
     }
