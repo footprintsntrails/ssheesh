@@ -78,6 +78,11 @@ impl Backend for FakeBackend {
     fn replays(&self) -> bool {
         true
     }
+    /// The defaults, with a cursor that keeps still: every frame of a test draws the same.
+    fn settings(&mut self) -> sshee_app::settings_store::SettingsStore {
+        let settings = sshee_app::model::Settings { cursor_blink: false, ..Default::default() };
+        sshee_app::settings_store::SettingsStore::in_memory(settings)
+    }
 }
 
 type Queue = Arc<Mutex<Vec<Box<dyn FnOnce(&mut Shell, &mut Tx) -> bool + Send>>>>;

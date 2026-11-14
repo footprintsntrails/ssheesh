@@ -445,12 +445,14 @@ fn esc_closes_the_palette_and_the_terminal_has_the_keyboard_again() {
     assert!(!w.rt.state.screens.palette.open && !w.has("palette"));
     w.type_text("b");
     assert_eq!(w.written(0), "ab");
-    // Settings rows say the page isn't there yet, and keep the palette open.
+    // A Settings row opens Settings, where the palette was: no key reaches the terminal.
     w.key(Key::Command('l'), "cs");
-    w.type_text("set:");
+    w.type_text("set: tor");
     w.key(Key::Enter, "");
-    assert!(w.rt.state.screens.palette.open);
-    assert!(w.tree().contains("Settings isn't in the preview yet."));
+    assert!(!w.rt.state.screens.palette.open && w.rt.state.screens.settings.open);
+    assert_eq!(w.rt.state.screens.settings.section, sshee_app::settings_store::catalog::Section::Tor);
+    w.type_text("c");
+    assert_eq!(w.written(0), "ab");
 }
 
 // ---------------------------------------------------------------- adding a server

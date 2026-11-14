@@ -26,6 +26,10 @@ pub enum Shortcut {
     ToggleSidebar,
     /// Files on the machine on screen (new in 1.0: 0.10 opened Files from menus only).
     OpenFiles,
+    /// Opens Settings, or goes back to the tab that was on screen.
+    Settings,
+    /// Shows or hides the machine's vital signs in the status bar.
+    ToggleVitals,
     /// Ctrl+Tab and Ctrl+Shift+Tab, on a Mac too: +1 or -1.
     StepTab(i32),
     /// The tab at this place in the row, 1 to 9.
@@ -48,13 +52,15 @@ pub enum Shortcut {
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 12] = [
+const NAMED: [(Shortcut, &str); 14] = [
     (Shortcut::Agents, "agents"),
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
     (Shortcut::ReopenTab, "reopenTab"),
+    (Shortcut::Settings, "settings"),
     (Shortcut::ToggleSidebar, "sidebar"),
     (Shortcut::OpenFiles, "files"),
+    (Shortcut::ToggleVitals, "vitals"),
     (Shortcut::Find { always: false }, "find"),
     (Shortcut::Streamer, "streamer"),
     (Shortcut::SideBySide, "toggleSplit"),
@@ -96,6 +102,9 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         // Elsewhere Ctrl+Shift+T is a new tab, as in Windows Terminal; Z undoes a close.
         Shortcut::ReopenTab => (if mac { "t" } else { "z" }, true),
         Shortcut::ToggleSidebar => ("b", false),
+        Shortcut::ToggleVitals => ("j", false),
+        // No terminal program reads Ctrl+comma, so elsewhere it needs no Shift.
+        Shortcut::Settings => return Some(if mac { keys(",", false, true, false) } else { keys(",", true, false, false) }),
         // As in a browser: ⌘F, and Ctrl+F without Shift elsewhere.
         Shortcut::Find { .. } => return Some(if mac { keys("f", false, true, false) } else { keys("f", true, false, false) }),
         Shortcut::Streamer => ("h", true),
@@ -172,6 +181,11 @@ mod tests {
         assert_eq!(hit("w", "m", true), Some(Shortcut::CloseTab));
         assert_eq!(hit("t", "ms", true), Some(Shortcut::ReopenTab));
         assert_eq!(hit("b", "m", true), Some(Shortcut::ToggleSidebar));
+        assert_eq!(hit(",", "m", true), Some(Shortcut::Settings));
+        assert_eq!(hit("j", "m", true), Some(Shortcut::ToggleVitals));
+        assert_eq!(hit("h", "ms", true), Some(Shortcut::Streamer));
+        // ⌘H hides the app on a Mac: streamer mode needs Shift.
+        assert_eq!(hit("h", "m", true), None);
         assert_eq!(hit("3", "m", true), Some(Shortcut::JumpToTab(3)));
         assert_eq!(hit("9", "m", true), Some(Shortcut::JumpToTab(9)));
         // Ctrl+letter is the shell's on a Mac too, and ⌘⇧W isn't ⌘W.
@@ -191,10 +205,14 @@ mod tests {
         assert_eq!(hit("a", "ms", true), Some(Shortcut::Agents));
         // ⌘A stays "select all" on a Mac, and Ctrl+A the start of the line everywhere.
         assert_eq!((hit("a", "m", true), hit("a", "c", false), hit("a", "c", true)), (None, None, None));
+        assert_eq!(hit(",", "c", false), Some(Shortcut::Settings));
+        assert_eq!(hit(",", "cs", false), None);
+        assert_eq!(hit("j", "cs", false), Some(Shortcut::ToggleVitals));
+        assert_eq!(hit("h", "cs", false), Some(Shortcut::Streamer));
         assert_eq!(hit("1", "cs", false), Some(Shortcut::JumpToTab(1)));
         // Ctrl+W deletes a word, Ctrl+T swaps letters, Ctrl+Z suspends, Ctrl+B goes back:
         // all the terminal's.
-        for key in ["w", "t", "z", "b", "c", "d", "1"] {
+        for key in ["w", "t", "z", "b", "c", "d", "j", "h", "1"] {
             assert_eq!(hit(key, "c", false), None, "Ctrl+{key}");
         }
         // The Windows key isn't Ctrl, and Alt changes the chord.
@@ -246,6 +264,9 @@ mod tests {
         assert_eq!(Shortcut::NewTerminal.id(), Some("newTerminal"));
         assert_eq!(Shortcut::ReopenTab.id(), Some("reopenTab"));
         assert_eq!(Shortcut::ToggleSidebar.id(), Some("sidebar"));
+        assert_eq!(Shortcut::Settings.id(), Some("settings"));
+        assert_eq!(Shortcut::ToggleVitals.id(), Some("vitals"));
+        assert_eq!(Shortcut::Streamer.id(), Some("streamer"));
         assert_eq!(Shortcut::StepTab(1).id(), None);
         assert_eq!(default_keys(Shortcut::ReopenTab, true), Some(keys("t", false, true, true)));
         assert_eq!(default_keys(Shortcut::ReopenTab, false), Some(keys("z", true, false, true)));

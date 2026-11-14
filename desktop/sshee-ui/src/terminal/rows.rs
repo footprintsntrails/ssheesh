@@ -462,8 +462,8 @@ impl PaneView {
         self.underline = underline;
     }
 
-    /// New settings for the presentation pass (streamer mode): what is on screen is worked
-    /// out again under them, at once.
+    /// New settings for the presentation pass (streamer mode, secret hiding, highlighting):
+    /// what is on screen is worked out again under them, at once.
     pub fn set_look(&mut self, look: Look) {
         self.presenter.set_look(look);
         self.stale = true;

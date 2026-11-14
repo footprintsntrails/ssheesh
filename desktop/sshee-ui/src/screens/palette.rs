@@ -186,12 +186,6 @@ impl Shell {
     /// Return on a row, or a click on it.
     fn palette_pick(&mut self, at: usize, tx: &mut Tx) {
         let Some(row) = self.palette_rows().into_iter().nth(at) else { return };
-        if let Action::Settings(_) = row.action {
-            // The Settings screen is another module's; until the window has it, say so here.
-            self.screens.palette.note = Some("Settings isn't in the preview yet.".into());
-            self.screens.palette.hot = Some(at);
-            return;
-        }
         self.close_palette(tx);
         match row.action {
             Action::Files { server, path } => {
@@ -207,7 +201,12 @@ impl Shell {
             Action::ToggleSidebar => self.toggle_sidebar(tx),
             Action::MainMenu => self.show_home(tx),
             Action::AddServer => self.open_add_server(tx),
-            Action::Settings(_) => {}
+            // At the section named, else where Settings was last.
+            Action::Settings(Some(id)) => match sshee_app::settings_store::catalog::Section::from_id(id) {
+                Some(section) => self.open_settings_at(section, tx),
+                None => self.open_settings(tx),
+            },
+            Action::Settings(None) => self.open_settings(tx),
         }
     }
 

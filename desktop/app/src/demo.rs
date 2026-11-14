@@ -14,9 +14,11 @@ use std::path::Path;
 
 use serde_json::Value;
 use sshee_app::labels::{Listed, Looks};
-use sshee_app::model::EnvLabel;
+use sshee_app::model::{EnvLabel, Settings};
+use sshee_app::settings_store::SettingsStore;
 use sshee_app::servers::{Ask, Book, Candidate, Sources};
 use sshee_app::workbench::{Open, Server, Tab, TabKind, Tor, Vitals, Workbench};
+use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
 use sshee_ui::terminal::replay::{Fixture, ReplayLink};
 use sshee_ui::terminal::TermLink;
@@ -80,6 +82,12 @@ pub fn bench() -> Workbench {
         Some(Vitals { cpu: Some(0.12), memory: 0.71, disk: Some((0.92, None)), uptime_secs: 212 * 86_400 + 9 * 3_600, down: Some(48.0 * 1024.0), up: Some(22.0 * 1024.0) }),
     );
     bench
+}
+
+/// The demo's settings: 0.10's defaults, kept in memory, following the system's light or
+/// dark so that `--theme` picks the picture.
+pub fn settings() -> Settings {
+    Settings { theme_follows_system: true, ..Settings::default() }
 }
 
 /// Sessions that play fixtures, and a list of servers kept in memory: adding, importing and
@@ -188,6 +196,17 @@ impl Backend for DemoBackend {
         }
     }
 
+    fn settings(&mut self) -> SettingsStore {
+        SettingsStore::in_memory(settings())
+    }
+
+    /// Tor's switch in Settings: the made-up Tor goes on and off at once.
+    fn tor(&mut self, command: TorCommand) {
+        if let Some(remote) = &self.remote {
+            remote.set_tor(if command == TorCommand::Off { Tor::Off } else { Tor::On { latency_ms: Some(84) } });
+        }
+    }
+
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {
             (WEB, Some("~/shop")) => fixture(SHOP),
@@ -243,5 +262,15 @@ mod tests {
         let log = log();
         assert_eq!(log.steps.len(), 3);
         assert!(matches!(&log.steps[0].1, sshee_ui::terminal::replay::Step::Out(bytes) if bytes.iter().filter(|b| **b == b'\n').count() > LOG_LINES));
+    }
+
+    #[test]
+    fn the_demos_settings_are_0_10s_defaults_following_the_system() {
+        let mut backend = DemoBackend::default();
+        let store = backend.settings();
+        assert!(store.get().theme_follows_system && !store.get().streamer_mode && store.get().hide_secrets);
+        assert_eq!(store.notice(), None);
+        // Nothing of it reaches a disk.
+        assert_eq!(store.save_error(), None);
     }
 }

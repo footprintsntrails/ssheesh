@@ -299,10 +299,14 @@ pub(crate) fn tab_icon(tab: &sshee_app::workbench::Tab) -> Icon {
 }
 
 /// How wide a tab is when nothing is squeezed, in points: for telling whether the row fits.
-/// `working`: an agent is at work in it (the quiet ring after its name).
-fn natural_width(st: &StripTab, label: &str, server: &str, working: bool) -> f32 {
-    let mut w = 10.0 + theme::ICON + 7.0 + rune::text::advance(label, theme::TAB_NAME) + 7.0 + rune::text::advance(server, theme::TAB_SERVER) + 10.0;
-    if st.prod {
+/// `named`: the tab names its server (Settings → Layout); else its group does. `working`: an
+/// agent is at work in it (the quiet ring after its name).
+fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working: bool) -> f32 {
+    let mut w = 10.0 + theme::ICON + 7.0 + rune::text::advance(label, theme::TAB_NAME) + 10.0;
+    if named {
+        w += 7.0 + rune::text::advance(server, theme::TAB_SERVER);
+    }
+    if st.prod && named {
         w += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
     }
     if let Some(badge) = st.tab.badge() {
@@ -349,11 +353,28 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         .map(|st| (s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned()))
         .collect();
     let working = |st: &StripTab| s.screens.agent.working(st.tab.id);
-    let needed: f32 = strip.iter().zip(&names).map(|(st, (label, server))| natural_width(st, label, server, working(st))).sum::<f32>() + theme::CONTROL + 2.0;
+    // Settings: every tab names its server (the default), or a server is named once, before
+    // its group, as in a crowded row.
+    let named = s.settings.more().tabs_name_server;
+    let needed: f32 = strip
+        .iter()
+        .zip(&names)
+        .enumerate()
+        .map(|(i, (st, (label, server)))| {
+            // A group's name before its first tab, where tabs don't name their server.
+            let lead = if !named && (i == 0 || st.starts_group) { 12.0 + rune::text::advance(server, theme::GROUP) } else { 0.0 };
+            natural_width(st, label, server, named, working(st)) + lead
+        })
+        .sum::<f32>()
+        + theme::CONTROL
+        + 2.0;
     // Crowded or roomy: as the widths say, but not changing under the pointer.
     let crowded = s.strip_width.is_some_and(|w| needed > w);
     let compact = row.held.as_ref().map_or(crowded, |h| h.compact) && !strip.is_empty();
     row.compact.set(compact);
+    let grouped = compact || !named;
+    // While Settings is over the page, no tab is the one on screen.
+    let in_settings = s.screens.settings.open;
     let current = s.bench.current_key();
     let active_at = strip.iter().position(|st| st.active);
     let partner = s.bench.active_id().and_then(|id| s.layout.partner(id));
@@ -405,18 +426,18 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         if st.starts_group && i > sight.start {
             tabs = tabs.child(divider(t).key(format!("sep-{}", id.0)));
         }
-        if compact && (i == sight.start || st.starts_group) {
-            // Crowded: the server is named once, before its tabs.
+        if grouped && (i == sight.start || st.starts_group) {
+            // Crowded, or tabs that don't name it: the server is named once, before its tabs.
             tabs = tabs.child(group_name(t, server, prod_of(st), current == Some(st.tab.server.as_str())).key(format!("group-{}", id.0)));
         }
         let spec = Tab {
             icon: tab_icon(st.tab),
             name: label,
-            server: (!compact).then_some(server.as_str()),
-            prod: st.prod && !compact,
+            server: (!grouped).then_some(server.as_str()),
+            prod: st.prod && !grouped,
             badge: st.tab.badge(),
             working: working(st),
-            active: st.active,
+            active: st.active && !in_settings,
             window_active,
             compact,
         };

@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use indexmap::IndexMap;
 use rune::{ClipboardContent, Ime, KeyEvent, Tx};
-use sshee_app::model::Keys;
+use sshee_app::model::{Keys, Settings};
+use sshee_app::settings_store::SettingsStore;
 use sshee_app::workbench::shortcuts::{match_shortcut, Pressed, Shortcut};
 use sshee_app::workbench::{Link, SavedTabs, Server, ServerKey, Tab, TabId, TabKind, Tor, Vitals, Workbench};
 
@@ -60,7 +61,11 @@ impl Remote {
 
     /// The list of servers changed.
     pub fn set_servers(&self, servers: Vec<Server>) {
-        self.update(move |s| s.bench.set_servers(servers));
+        self.update(move |s| {
+            s.bench.set_servers(servers);
+            // Streamer mode hides the new names too.
+            s.apply_settings();
+        });
     }
 
     /// The program in front in each of a server's terminals, by session key (tmux's answer):
@@ -118,6 +123,23 @@ pub trait Backend {
     /// through [`Remote::files`], addressed with `ask.reply(..)`.
     fn files(&mut self, ask: sshee_app::files::Ask) {
         let _ = ask;
+    }
+
+    /// Once, when the window starts: the settings it runs with, and keeps. The program's are
+    /// the copy's own file; a demo's and a test's live in memory.
+    fn settings(&mut self) -> SettingsStore {
+        SettingsStore::in_memory(Settings::default())
+    }
+
+    /// A setting changed (and once at the start): what only the backend can act on, such as
+    /// whether sessions reconnect by themselves.
+    fn settings_changed(&mut self, settings: &Settings) {
+        let _ = settings;
+    }
+
+    /// Settings' Tor switch and its buttons.
+    fn tor(&mut self, command: crate::screens::settings::TorCommand) {
+        let _ = command;
     }
 
     /// Adding and managing servers (`screens::add_server`, `screens::server_menu`): saving,
@@ -186,6 +208,13 @@ pub struct Shell {
     kept: SavedTabs,
     /// Every screen's own state (`crate::screens`).
     pub screens: crate::screens::States,
+    /// The settings. Changed through [`Shell::change_settings`], which applies them at once.
+    pub settings: SettingsStore,
+    /// The words terminals colour, as Settings has them (`screens::settings::apply`).
+    pub(crate) highlights: std::sync::Arc<sshee_term::highlight::Highlights>,
+    /// The panes' look changed where no `Tx` was at hand (a setting from another thread): the
+    /// next poll hands it to them.
+    pub(crate) look_stale: bool,
     /// Which tabs are shown side by side (`split.rs`), and where the pair is drawn.
     pub layout: sshee_app::workbench::layout::Layout,
     pub(crate) sides: super::split::Sides,
@@ -214,7 +243,11 @@ impl Shell {
         }
         let clock_base = backend.replays().then(Instant::now);
         let kept = bench.saved();
+        let settings = backend.settings();
         let mut shell = Shell {
+            settings,
+            highlights: Default::default(),
+            look_stale: false,
             screens: crate::screens::States::default(),
             kept,
             bench,
@@ -233,6 +266,7 @@ impl Shell {
             row: Default::default(),
             streamer: Default::default(),
         };
+        shell.apply_settings();
         shell.sync_panes();
         shell.sync_watch();
         shell
@@ -280,9 +314,7 @@ impl Shell {
         let mut pane = TermPane::new(link, status, self.options.pane.clone());
         // Side by side there are two terminals on the page: each takes the keyboard by its own name.
         pane.set_focus_key(format!("pane-{}", id.0));
-        if self.streaming() {
-            pane.view.borrow_mut().set_look(self.look());
-        }
+        pane.view.borrow_mut().set_look(self.look());
         if let Some(waker) = &self.waker {
             pane.set_waker(waker.clone());
         }
@@ -351,7 +383,8 @@ impl Shell {
     /// The pane of the tab on screen has the keyboard while the window is in front; the pane
     /// that had it is told it lost it (a program that asked for focus reports hears both).
     fn sync_keyboard(&mut self, tx: &mut Tx) {
-        let want = self.bench.active_id().filter(|id| self.window_focused && self.panes.contains_key(id));
+        // While Settings is over the page, no terminal has the keyboard.
+        let want = self.bench.active_id().filter(|id| self.window_focused && !self.screens.settings.open && self.panes.contains_key(id));
         // A pane starts out believing it has the keyboard.
         for (id, pane) in &mut self.panes {
             if pane.focused && Some(*id) != want && Some(*id) != self.keyboard {
@@ -371,15 +404,22 @@ impl Shell {
     }
 
     /// The end of every change made from the screen: see the module's docs. Keys go to the
-    /// terminal on screen again, whatever was clicked.
+    /// terminal on screen again, whatever was clicked. Going anywhere leaves Settings.
     pub fn settle(&mut self, tx: &mut Tx) {
+        self.screens.settings.open = false;
+        self.settle_in_place(tx);
+    }
+
+    /// [`Shell::settle`] for a change that goes nowhere (the sidebar shown or hidden, Settings
+    /// opened): a page over the tab's stays, and keeps the keyboard.
+    pub(crate) fn settle_in_place(&mut self, tx: &mut Tx) {
         self.sync_panes();
         self.sync_watch();
         self.sync_keyboard(tx);
         self.save_tabs();
         crate::screens::agent::settled(self, tx);
-        if self.screens.any_open() {
-            // What is open over the window keeps the keyboard.
+        if self.screens.any_open() || self.screens.settings.open {
+            // What is open over the window, and Settings over the page, keep the keyboard.
         } else if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
             tx.focus(format!("pane-{}", id.0), false);
         } else if self.bench.showing_home() {
@@ -467,7 +507,10 @@ impl Shell {
 
     pub fn toggle_sidebar(&mut self, tx: &mut Tx) {
         self.bench.toggle_sidebar();
-        self.settle(tx);
+        // Settings keeps it too, as 0.10 did.
+        let shown = self.bench.sidebar_shown();
+        self.settings.update(|s| s.sidebar_visible = shown);
+        self.settle_in_place(tx);
     }
 
     /// The logo: the main menu.
@@ -517,6 +560,8 @@ impl Shell {
             Shortcut::ReopenTab => self.reopen_closed(tx),
             Shortcut::ToggleSidebar => self.toggle_sidebar(tx),
             Shortcut::OpenFiles => self.open_files(tx),
+            Shortcut::Settings => self.toggle_settings(tx),
+            Shortcut::ToggleVitals => self.change_settings(tx, |st| st.set(|s| s.show_vitals = !s.show_vitals)),
             Shortcut::StepTab(step) => self.step_tab(step, tx),
             Shortcut::JumpToTab(n) => self.jump_to_tab(n, tx),
             Shortcut::Find { .. } => {
@@ -555,17 +600,26 @@ impl Shell {
         if self.screens.any_open() {
             return false;
         }
-        self.shortcut(ev, tx) || self.active_pane().is_some_and(|p| p.key(ev, tx)) || self.home_key(ev, tx) || crate::screens::files::key(self, ev, tx)
+        // Settings, while it is over the page, takes what is left: nothing reaches a terminal
+        // nobody sees.
+        self.shortcut(ev, tx)
+            || crate::screens::settings::key(self, ev, tx)
+            || self.active_pane().is_some_and(|p| p.key(ev, tx))
+            || self.home_key(ev, tx)
+            || crate::screens::files::key(self, ev, tx)
     }
 
     pub fn paste(&mut self, content: &ClipboardContent, tx: &mut Tx) {
+        if self.screens.settings.open {
+            return;
+        }
         if let Some(pane) = self.active_pane() {
             pane.paste(content, tx);
         }
     }
 
     pub fn ime(&mut self, ev: &Ime, tx: &mut Tx) -> bool {
-        self.active_pane().is_some_and(|p| p.ime(ev, tx))
+        !self.screens.settings.open && self.active_pane().is_some_and(|p| p.ime(ev, tx))
     }
 
     /// The window came to the front or left it (`App::on_focus`).
@@ -576,6 +630,8 @@ impl Shell {
 
     /// The window closes: connections go, shells in tmux stay.
     pub fn close(&mut self) {
+        // Every change so far is in the settings file before the program ends.
+        self.settings.flush();
         for pane in self.panes.values_mut() {
             pane.close();
         }
@@ -613,8 +669,10 @@ impl Shell {
         // What panes ask of the window (`tabs.rs`), and names to hide that are new.
         changed |= self.grant(wishes, tx);
         changed |= self.keep_streaming(tx);
-        // A program rang or sent a notification: its tab says so, unless you're looking at it.
-        for id in asked {
+        // A program rang or sent a notification: its tab says so, unless you're looking at it
+        // or Settings says not to be told.
+        let notify = self.settings.get().notify_attention;
+        for id in asked.into_iter().filter(|_| notify) {
             let before = self.bench.tab(id).is_some_and(|t| t.needs_you);
             crate::screens::agent::asked(self, id, clock);
             changed |= self.bench.tab(id).is_some_and(|t| t.needs_you) != before;

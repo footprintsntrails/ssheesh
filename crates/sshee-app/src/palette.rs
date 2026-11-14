@@ -202,14 +202,19 @@ pub struct Context<'a> {
     pub shortcuts: &'a IndexMap<String, Option<Keys>>,
 }
 
-/// Settings' sections, with words people might search for (0.10's `SETTINGS_SECTIONS`).
-const SETTINGS_SECTIONS: [(&str, &str, &str); 6] = [
-    ("appearance", "Appearance", "theme colors colours accent zoom size"),
-    ("terminal", "Terminal", "font cursor colors colours scheme copy gpu idle afk sleep disconnect"),
-    ("layout", "Layout", "tabs side by side sidebar compact vitals reconnect"),
-    ("privacy", "Privacy", "tor onion anonymous hide ip address vpn proxy streamer mode metadata exif gps clean uploads"),
+/// Settings' sections, with words people might search for (0.10's `SETTINGS_SECTIONS`). The ids
+/// are `settings_store::catalog::Section`'s, which opens them.
+const SETTINGS_SECTIONS: [(&str, &str, &str); 10] = [
+    ("layout", "Layout", "tabs side by side sidebar compact vitals"),
+    ("appearance", "Appearance", "theme colors colours accent zoom size dark light"),
+    ("terminal", "Terminal", "font cursor colors colours scheme copy gpu idle afk sleep disconnect reconnect highlight welcome"),
+    ("keyboard", "Keyboard", "shortcuts keys hotkeys keybindings"),
+    ("privacy", "Privacy", "hide ip address streamer mode secrets"),
+    ("files", "Files", "metadata exif gps clean uploads"),
+    ("agents", "Agents and notifications", "notification bell agent claude codex attention"),
+    ("tor", "Tor", "tor onion anonymous vpn proxy typing rhythm"),
     ("updates", "Updates", "version download"),
-    ("about", "About", "version license licence credits"),
+    ("about", "About", "version license licence credits tour"),
 ];
 
 /// A key's name on a key cap.
@@ -590,7 +595,7 @@ mod tests {
         assert!(list(&w, &[], "srv: db nowhere").is_empty());
         // By address, and by the extra words a row is known by.
         assert_eq!(labels(&list(&w, &[], "srv: 203.0.113.18")), ["web-staging"]);
-        assert_eq!(labels(&list(&w, &[], "set: onion")), ["Settings: Privacy"]);
+        assert_eq!(labels(&list(&w, &[], "set: onion")), ["Settings: Tor"]);
         // Nothing is closed yet: "undo" finds only itself, as a command to run.
         assert!(list(&w, &[], "undo").iter().all(Row::runs));
         let closed = w.new_terminal();
@@ -629,7 +634,8 @@ mod tests {
         assert!(of("file:").iter().all(|r| matches!(r.action, Action::Files { .. })));
         assert_eq!(of("file:")[0].label, "Files");
         assert!(of("set:").iter().all(|r| matches!(r.action, Action::Settings(_))));
-        assert_eq!(of("set:").len(), 7);
+        // "Settings", then its ten sections.
+        assert_eq!(of("set:").len(), 11);
         let commands = of("cmd:");
         assert_eq!(commands.iter().filter(|r| r.runs()).count(), snippets.len());
         assert!(commands.iter().any(|r| r.action == Action::NewTerminal));

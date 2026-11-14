@@ -9,7 +9,9 @@
 //! and a link's hint see dots too.
 //!
 //! Every screen draws names through [`Shell::server_shown`] and [`Shell::text_shown`], so the
-//! switch stays one.
+//! switch stays one. It is Settings' `streamerMode`: the eye, the shortcut and the switch in
+//! Settings → Privacy all change that one setting, which is saved, and the window follows it
+//! (`Shell::apply_settings`).
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -26,7 +28,11 @@ use crate::theme::{self, Theme};
 /// Streamer mode's state.
 #[derive(Default)]
 pub struct Streamer {
+    /// What the window shows now: Settings' `streamerMode` as last applied.
     pub(crate) on: bool,
+    /// It was switched on since the panes last took their look: their find bars close (what
+    /// was typed there could be a name).
+    switched_on: bool,
     /// Everything to hide, made from the server list when the mode was switched on or the
     /// list changed since.
     names: Arc<Names>,
@@ -88,9 +94,41 @@ impl Shell {
         }
     }
 
-    /// What every terminal's presentation pass follows now.
+    /// What every terminal's presentation pass follows now: streamer mode, and Settings'
+    /// secret hiding and highlighting.
     pub(crate) fn look(&self) -> Look {
-        Look { streaming: self.streamer.on, hide_secrets: true, names: self.streamer.names.clone(), ..Look::default() }
+        Look {
+            streaming: self.streamer.on,
+            hide_secrets: self.settings.get().hide_secrets,
+            names: self.streamer.names.clone(),
+            highlights: self.highlights.clone(),
+        }
+    }
+
+    /// Follows Settings' `streamerMode` (from `apply_settings`, where no `Tx` may be at hand):
+    /// the names are made when it comes on, and the panes take the new look at the next
+    /// [`Shell::push_look`].
+    pub(crate) fn follow_streamer(&mut self, on: bool) {
+        if on != self.streamer.on {
+            self.streamer.on = on;
+            self.streamer.switched_on |= on;
+            self.refresh_names();
+            self.row.close_overlays();
+        }
+        self.look_stale = true;
+    }
+
+    /// Hands every pane the look in force. Applies to what is already on screen.
+    pub(crate) fn push_look(&mut self, tx: &mut Tx) {
+        let look = self.look();
+        let close_find = std::mem::take(&mut self.streamer.switched_on);
+        for pane in self.panes.values_mut() {
+            if close_find {
+                pane.close_find(tx);
+            }
+            pane.set_look(look.clone(), tx);
+        }
+        self.look_stale = false;
     }
 
     /// The names to hide, made again when the server list changed.
@@ -104,33 +142,21 @@ impl Shell {
         true
     }
 
-    /// The eye, and its shortcut: everything hidden, or shown again. Applies to what is
-    /// already on screen.
+    /// The eye, and its shortcut: everything hidden, or shown again, saved in Settings.
+    /// Applies to what is already on screen; Settings, when it is open, stays open.
     pub fn toggle_streamer(&mut self, tx: &mut Tx) {
-        self.streamer.on = !self.streamer.on;
-        self.refresh_names();
-        let look = self.look();
-        let on = self.streamer.on;
-        for pane in self.panes.values_mut() {
-            // What was typed into a find bar could be a name: it goes with the bar.
-            if on {
-                pane.close_find(tx);
-            }
-            pane.set_look(look.clone(), tx);
-        }
-        self.row.close_overlays();
-        self.settle(tx);
+        self.change_settings(tx, |st| st.set(|s| s.streamer_mode = !s.streamer_mode));
+        self.settle_in_place(tx);
     }
 
-    /// Before each frame while streaming: a server added or renamed meanwhile is hidden too.
+    /// Before each frame: a look changed where no `Tx` was at hand, and while streaming, a
+    /// server added or renamed meanwhile, are handed to the panes.
     pub(crate) fn keep_streaming(&mut self, tx: &mut Tx) -> bool {
-        if !self.streamer.on || !self.refresh_names() {
+        let renamed = self.streamer.on && self.refresh_names();
+        if !renamed && !self.look_stale {
             return false;
         }
-        let look = self.look();
-        for pane in self.panes.values_mut() {
-            pane.set_look(look.clone(), tx);
-        }
+        self.push_look(tx);
         true
     }
 }

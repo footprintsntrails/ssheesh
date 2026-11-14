@@ -8,7 +8,8 @@
 //! The rules of single screens: `home` (the main menu and a server's card), `palette` (the
 //! command palette: what it lists, how typing narrows it, which row Return picks), `servers`
 //! (the "Add a server" form, the imports, and what the window asks its backend to do with the
-//! list), `labels` (a server's icon, colour, label and name).
+//! list), `labels` (a server's icon, colour, label and name). `settings_store` holds a
+//! running 1.0's settings: the file, the rows of Settings, the shortcut and scheme tables.
 
 pub mod raw;
 pub mod legacy;
@@ -19,6 +20,7 @@ pub mod paths;
 pub mod files;
 pub mod dir_cache;
 pub mod transfers;
+pub mod settings_store;
 pub mod home;
 pub mod labels;
 pub mod palette;

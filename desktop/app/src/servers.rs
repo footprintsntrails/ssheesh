@@ -369,12 +369,26 @@ impl ServerStore {
 /// own folder to be read (the copy can hold what was typed into snippets, so it is private
 /// and deleted when read). Slow enough for a thread of its own.
 pub fn labels_of_0_10() -> Option<Labels> {
+    import_of_0_10().1.map(|imported| imported.state.labels)
+}
+
+/// What 0.10 left in its web view's storage, and what the import made of it when a storage
+/// was found: copied into this copy's own folder to be read (the copy can hold what was typed
+/// into snippets, so it is private and deleted when read). Slow enough for a thread of its
+/// own. The settings at a first start, and the labels of servers brought over, come from it.
+pub fn import_of_0_10() -> (sshee_app::legacy::Found, Option<sshee_app::import::Imported>) {
     let scratch = sshee_core::app_identity::current().dir().map(|d| d.join("import-scratch"));
     let places = sshee_app::legacy::Places { scratch, ..sshee_app::legacy::Places::this_computer() };
     let found = sshee_app::legacy::find(&places);
-    found.best()?;
-    let imported = sshee_app::import::import_found(&found, &sshee_app::import::ImportOptions::default());
-    Some(imported.state.labels)
+    let options = sshee_app::import::ImportOptions { tor_on: crate::settings::tor_left_on_in_0_10(), ..Default::default() };
+    let imported = found.best().is_some().then(|| sshee_app::import::import_found(&found, &options));
+    (found, imported)
+}
+
+/// Whether 0.10 ever ran on this computer: its data folder is there (its server list lives
+/// in it). Without one, 1.0 starting with no settings is a new install, not a doubt.
+pub fn ran_0_10_here() -> bool {
+    dirs::data_dir().map(|d| d.join(APP_IDENTIFIER)).is_some_and(|dir| dir.exists())
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ mod demo;
 mod files;
 mod live;
 mod servers;
+mod settings;
 mod tabs;
 mod vitals;
 
@@ -38,11 +39,38 @@ struct Live {
 
 impl Backend for Live {
     fn start(&mut self, remote: Remote) {
+        // At 1.0's first start here, the settings start from 0.10's, in its web view's
+        // storage: reading it copies a database, so it happens on a thread of its own, and
+        // the window takes them when done. A copy with its own settings file ignores the
+        // answer. 0.10's servers aren't copied: "Add a server" offers to bring them over.
+        let seeder = remote.clone();
+        let spawned = settings::first_start().then(|| std::thread::Builder::new().name("import".into()).spawn(move || {
+            let (found, imported) = servers::import_of_0_10();
+            let seed = settings::seed(&found, imported.as_ref(), servers::ran_0_10_here());
+            seeder.update(move |s| s.seed_settings(seed));
+        }));
+        if let Some(Err(e)) = spawned {
+            eprintln!("ssheesh-preview: 0.10's settings weren't read: {e}");
+            // Nothing will answer: the settings stay private, and say why.
+            remote.update(|s| s.seed_settings(sshee_app::settings_store::Seed::Doubt("the settings of SSHeesh 0.10 couldn't be looked for".into())));
+        }
         self.inner.start(remote);
     }
 
     fn servers(&mut self, ask: sshee_app::servers::Ask) {
         self.inner.servers(ask);
+    }
+
+    fn settings(&mut self) -> sshee_app::settings_store::SettingsStore {
+        self.inner.settings()
+    }
+
+    fn settings_changed(&mut self, settings: &sshee_app::model::Settings) {
+        self.inner.settings_changed(settings);
+    }
+
+    fn tor(&mut self, command: sshee_ui::screens::settings::TorCommand) {
+        self.inner.tor(command);
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &sshee_app::workbench::Tab) -> Box<dyn TermLink> {

@@ -33,7 +33,11 @@ use crate::theme::{self, Frame, Theme};
 
 /// The whole window.
 pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
-    let t = Theme::of(cx.env().system_dark);
+    // Dark or light as Settings says, else as the system is.
+    let t = Theme::of(s.dark(cx.env().system_dark));
+    if !s.settings.get().animations {
+        cx.reduced_motion(true);
+    }
     // The keyboard's focus ring, for every control that takes focus.
     cx.focus_ring(theme::RING, 0.0, t.ring);
     // Windows' minimize, maximize and close, which Rune draws over the end of the bar.
@@ -42,9 +46,13 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         return super::sheet::view(t);
     }
     let mut body = row().key("body").w_full().grow(1.0).min_h(0.0);
-    if s.bench.sidebar_shown() {
-        body = body.child(rail(s, t));
-    }
+    let main = col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t));
+    // The sidebar at the side Settings puts it.
+    body = match (s.bench.sidebar_shown(), s.sidebar_at_right()) {
+        (true, false) => body.child(rail(s, t)).child(main),
+        (true, true) => body.child(main).child(rail(s, t)),
+        (false, _) => body.child(main),
+    };
     col()
         .key("window")
         .w_full()
@@ -52,7 +60,7 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .fill(t.frame)
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(bar(s, t, cx))
-        .child(body.child(col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t))))
+        .child(body)
         // Over the window: uploads and downloads in progress, then a Files tab's menu or question.
         .children(screens::transfers::view(s, t))
         .children(screens::files::overlay(s, t, cx))
@@ -177,14 +185,25 @@ fn rail(s: &Shell, t: &'static Theme) -> El {
         .child(spacer())
         .child(rail_button(t, Icon::Shield, "Security check", RailState::Plain, false).key("check"))
         .child(rail_button(t, Icon::Tor, "Tor", tor, false).key("tor"))
-        .child(rail_button(t, Icon::Gear, "Settings", RailState::Plain, false).key("settings"))
+        .child(
+            rail_button(t, Icon::Gear, "Settings", if s.screens.settings.open { RailState::Selected } else { RailState::Plain }, false)
+                .key("settings-gear")
+                .on_press_tx(|s: &mut Shell, tx| s.toggle_settings(tx)),
+        )
 }
 
 /// The page: darker than the frame, its top-left corner rounded where it meets the sidebar.
 fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     let rounded = s.bench.sidebar_shown();
-    let corners = [if rounded { theme::PAGE_RADIUS } else { 0.0 }, 0.0, 0.0, 0.0];
+    // The page's corner is round where it meets the sidebar, and its edge runs down that side.
+    let right = s.sidebar_at_right();
+    let round = if rounded { theme::PAGE_RADIUS } else { 0.0 };
+    let corners = if right { [0.0, round, 0.0, 0.0] } else { [round, 0.0, 0.0, 0.0] };
+    let side = if rounded { 1.0 } else { 0.0 };
+    let edges = if right { [1.0, side, 0.0, 0.0] } else { [1.0, 0.0, 0.0, side] };
     let content = match s.bench.active() {
+        // Settings takes the page while it is open.
+        _ if s.screens.settings.open => screens::settings::view(s, t, cx),
         // Shown beside another tab: both, with a divider (`split.rs`).
         Some(_) if s.pair_on_screen().is_some() => super::split::page(s, t, cx).unwrap_or_else(el),
         Some(tab) => match s.pane(tab.id) {
@@ -206,6 +225,11 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         },
         None => screens::home::view(s, t, cx),
     };
+    // Privacy settings turned on as a precaution: said across the top of the page.
+    let content = match screens::settings::notice_bar(s, t) {
+        Some(notice) => col().key("page-with-notice").w_full().h_full().child(notice).child(el().w_full().grow(1.0).min_h(0.0).child(content)),
+        None => content,
+    };
     el().key("page")
         .w_full()
         .grow(1.0)
@@ -216,7 +240,7 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .child(content)
         // The line where the page meets the frame, drawn over the page's content: as padding
         // it would push the terminal's grid off whole pixels at 1.25x and 1.75x.
-        .child(el().key("page-edge").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).corners(corners).border_sides([1.0, 0.0, 0.0, if rounded { 1.0 } else { 0.0 }], t.edge))
+        .child(el().key("page-edge").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).corners(corners).border_sides(edges, t.edge))
 }
 
 /// The status bar: the machine on screen's vital signs, and Tor at the right while it's on.
@@ -232,9 +256,11 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         .border_sides([1.0, 0.0, 0.0, 0.0], t.hair2);
     if s.bench.sidebar_shown() {
         // The page's edge against the sidebar runs on down the status bar.
-        bar = bar.child(el().key("status-edge").absolute(0.0, 0.0).w(1.0).h_full().fill(t.edge));
+        let edge = el().key("status-edge").w(1.0).fill(t.edge);
+        bar = bar.child(if s.sidebar_at_right() { edge.pin(None, Some(0.0), Some(0.0), Some(0.0)) } else { edge.pin(Some(0.0), Some(0.0), None, Some(0.0)) });
     }
-    if let Some(vitals) = s.bench.current_vitals() {
+    // Settings' "Server vitals" hides the numbers; Tor's stays.
+    if let Some(vitals) = s.bench.current_vitals().filter(|_| s.settings.get().show_vitals) {
         for (i, v) in vitals.items().iter().enumerate() {
             bar = bar.child(status_item(t, &v.label, &v.value, v.warn).key(format!("vital-{i}")));
         }

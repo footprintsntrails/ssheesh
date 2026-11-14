@@ -71,8 +71,11 @@ pub struct PaneOptions {
     /// reach the shell as typed text ("6c" at the prompt, stray keys in vim), as 0.10 found.
     /// Every session on Windows goes through ConPTY today; later the link says.
     pub answer_da1: bool,
-    /// The colours: 0.10's, or the 1.0 design's.
+    /// The colours: 0.10's, the 1.0 design's, or a scheme picked in Settings.
     pub scheme: Scheme,
+    /// Dark or light whatever the system is set to (Settings' appearance); `None` follows the
+    /// system.
+    pub dark: Option<bool>,
 }
 
 impl Default for PaneOptions {
@@ -95,6 +98,7 @@ impl PaneOptions {
             history: 10_000,
             answer_da1: platform != Platform::Windows,
             scheme: Scheme::Classic,
+            dark: None,
         }
     }
 }
@@ -227,6 +231,34 @@ impl TermPane {
             over: super::overlays::Overlays::default(),
             said: None,
         }
+    }
+
+    /// New settings for a pane that is already there: its text size and line height (the
+    /// columns and rows are fitted again at the next poll), its cursor and whether it blinks,
+    /// its colours. What a session was started with (history, DA1) stays.
+    pub fn set_options(&mut self, options: PaneOptions) {
+        if options == self.options {
+            return;
+        }
+        if (options.line_height, options.cell_mode) != (self.options.line_height, self.options.cell_mode) {
+            // The view keeps the cell size by scale and text size: make it measure again.
+            self.metrics.set(self.metrics.get().map(|m| CellMetrics { size: f32::NAN, ..m }));
+        }
+        self.model.set_cursor_default(options.cursor_shape, options.blink);
+        if options.scheme != self.options.scheme {
+            let mut view = self.view.borrow_mut();
+            let dark = view.palette().dark;
+            view.set_scheme(options.scheme);
+            self.model.set_answer_colors(Palette::of(options.scheme, dark).answer_colors());
+        }
+        self.blink_dark = false;
+        self.options = options;
+        self.refit_soon();
+    }
+
+    /// Whether the pane draws dark in a window on a dark (`system_dark`) or a light system.
+    pub(crate) fn dark(&self, system_dark: bool) -> bool {
+        self.options.dark.unwrap_or(system_dark)
     }
 
     /// Measure this pane (`--metrics`, `--hud`).

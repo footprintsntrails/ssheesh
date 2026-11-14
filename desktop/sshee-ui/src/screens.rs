@@ -15,6 +15,7 @@ pub mod home;
 pub mod palette;
 pub mod server_card;
 pub mod server_menu;
+pub mod settings;
 pub mod stats;
 pub mod transfers;
 
@@ -48,6 +49,7 @@ pub struct States {
     pub transfers: sshee_app::transfers::Transfers,
     pub notices: Vec<sshee_app::files::Notice>,
     pub stats: HashMap<TabId, stats::State>,
+    pub settings: settings::State,
 }
 
 impl States {
@@ -75,11 +77,11 @@ impl States {
     }
 }
 
-/// What is drawn over the window, as last children of its root, in order: a server's card
-/// under the pointer, then whichever of the palette, a server's menu and "Add a server" is
-/// open. A screen that opens over the window adds its element here.
+/// What is drawn over the window, as last children of its root, in order: a pop-up menu open
+/// in Settings, a server's card under the pointer, then whichever of the palette, a server's
+/// menu and "Add a server" is open. A screen that opens over the window adds its element here.
 pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::shell::Shell>) -> Vec<El> {
-    let mut out: Vec<El> = server_card::view(s, t).into_iter().collect();
+    let mut out: Vec<El> = [settings::overlay(s, t), server_card::view(s, t)].into_iter().flatten().collect();
     // An agent's question under its tab, the list of agents.
     out.extend(agent::overlays(s, t, cx));
     out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t)].into_iter().flatten());

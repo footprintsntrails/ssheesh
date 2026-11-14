@@ -37,6 +37,16 @@ pub const ICON_RAIL: f32 = 18.0;
 pub const ICON_LINE: f32 = 1.4;
 /// The keyboard focus ring's width.
 pub const RING: f32 = 3.0;
+/// A control in a form: a push button, a pop-up button, a segmented control, a key cap.
+pub const FORM_CONTROL: f32 = 24.0;
+/// A switch's track, and the knob inside it.
+pub const SWITCH: (f32, f32) = (34.0, 20.0);
+pub const SWITCH_KNOB: f32 = 16.0;
+/// A slider's track and its knob.
+pub const SLIDER_TRACK: f32 = 4.0;
+pub const SLIDER_KNOB: f32 = 16.0;
+/// A box of grouped rows.
+pub const RADIUS_GROUP: f32 = 10.0;
 /// On macOS, the room the window's own buttons take at the start of the top row, and where the
 /// first of them sits.
 pub const LIGHTS_WIDTH: f32 = 78.0;
@@ -71,6 +81,16 @@ pub const SMALL: TextStyle = TextStyle::new(11.0, 400.0);
 pub const LIST_NUMBER: TextStyle = TextStyle::new(12.0, 400.0).features("'tnum' 1");
 /// Second lines, 12 pt.
 pub const NOTE: TextStyle = TextStyle::new(12.0, 400.0);
+/// A page's title (Settings' section name).
+pub const PAGE_TITLE: TextStyle = TextStyle::new(17.0, 600.0);
+/// The small heading over a group of rows.
+pub const GROUP_TITLE: TextStyle = TextStyle::new(12.0, 600.0);
+/// The word on a control: a segment, a push button, a key cap.
+pub const CONTROL_TEXT: TextStyle = TextStyle::new(12.0, 500.0);
+/// A number beside a slider: it changes while its width stays.
+pub const VALUE: TextStyle = TextStyle::new(12.0, 400.0).features("'tnum' 1");
+/// A line of help under a row, wrapping.
+pub const HELP: TextStyle = TextStyle::new(11.0, 400.0).lh(15.0);
 /// What is typed into the command palette's search field.
 pub const INPUT: TextStyle = TextStyle::new(15.0, 400.0);
 /// A command in a list row or a field, in the terminal's font.
@@ -141,6 +161,19 @@ pub struct Theme {
     pub on_color: Color,
     /// Windows' close button under the pointer.
     pub close_hover: Color,
+    /// A box of grouped rows on the page (a settings group).
+    pub group: Color,
+    /// A control at rest: a segmented control's track, a push button, a switch that is off;
+    /// under the pointer, `control_hover`; under a press, `control_down`.
+    pub control: Color,
+    pub control_hover: Color,
+    pub control_down: Color,
+    /// The picked segment of a segmented control.
+    pub raised: Color,
+    /// A switch that is on: the system's green, as on a Mac.
+    pub switch_on: Color,
+    /// A switch's and a slider's knob.
+    pub knob: Color,
 }
 
 fn c(hex: &str) -> Color {
@@ -193,6 +226,13 @@ impl Theme {
             secbg: c("#2a2a2d"),
             on_color: white,
             close_hover: c("#c42b1c"),
+            group: c("#242426"),
+            control: white.alpha(0.1),
+            control_hover: white.alpha(0.14),
+            control_down: white.alpha(0.19),
+            raised: c("#636366"),
+            switch_on: c("#30d158"),
+            knob: white,
         }
     }
 
@@ -230,6 +270,13 @@ impl Theme {
             secbg: c("#ececee"),
             on_color: c("#ffffff"),
             close_hover: c("#c42b1c"),
+            group: c("#f5f5f7"),
+            control: black.alpha(0.07),
+            control_hover: black.alpha(0.1),
+            control_down: black.alpha(0.14),
+            raised: c("#ffffff"),
+            switch_on: c("#34c759"),
+            knob: c("#ffffff"),
         }
     }
 
@@ -238,6 +285,15 @@ impl Theme {
         color.alpha(0.45)
     }
 
+    /// `color` a step darker, `by` of the way to black: a filled control under the pointer or
+    /// a press.
+    pub fn shade(&self, color: Color, by: f32) -> Color {
+        let k = 1.0 - by.clamp(0.0, 1.0);
+        Color { r: color.r * k, g: color.g * k, b: color.b * k, a: color.a }
+    }
+
+    /// A control that can't be used: this much of itself.
+    pub const DISABLED: f32 = 0.42;
     /// A text field's surface: the code colour at night, white by day (the design's `.field`).
     pub fn field(&self) -> Color {
         if self.dark {

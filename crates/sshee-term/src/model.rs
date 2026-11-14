@@ -577,6 +577,12 @@ impl<E: Engine> Model<E> {
         self.inner.lock().engine.set_answer_colors(colors);
     }
 
+    /// The cursor a program gets when it asks for none of its own, from now on (see
+    /// [`Engine::set_cursor_default`]). The next frame carries it.
+    pub fn set_cursor_default(&self, shape: crate::engine::CursorShape, blinking: bool) {
+        self.with_engine(|engine| engine.set_cursor_default(shape, blinking));
+    }
+
     /// Anything else, with the engine locked (fairly): selection, find, reading history rows.
     /// The next frame is taken as if output had come, since a selection isn't damage.
     pub fn with_engine<R>(&self, f: impl FnOnce(&mut E) -> R) -> R {

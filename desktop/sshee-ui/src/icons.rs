@@ -129,6 +129,13 @@ pub enum Icon {
     Swatch,
     /// Back to the page before.
     Back,
+    /// Appearance: a disc, half of it shaded.
+    Contrast,
+    Keyboard,
+    /// About.
+    Info,
+    /// A pop-up button's two arrows.
+    UpDown,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -158,7 +165,7 @@ const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 66] = [
+    pub const ALL: [Icon; 70] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -225,10 +232,14 @@ impl Icon {
         Icon::Reopen,
         Icon::Swatch,
         Icon::Back,
+        Icon::Contrast,
+        Icon::Keyboard,
+        Icon::Info,
+        Icon::UpDown,
     ];
 
     /// The signs that aren't a server's icon, for the component sheet.
-    pub const SIGNS: [Icon; 36] = [
+    pub const SIGNS: [Icon; 40] = [
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -265,6 +276,10 @@ impl Icon {
         Icon::FolderPlus,
         Icon::Download,
         Icon::Upload,
+        Icon::Contrast,
+        Icon::Keyboard,
+        Icon::Info,
+        Icon::UpDown,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -377,6 +392,10 @@ impl Icon {
             Icon::Reopen => (16.0, &[Path("M2.8 3v3.6h3.6M3 6.6a5.3 5.3 0 1 1 1.3 5.2")]),
             Icon::Swatch => (16.0, &[Oval(8.0, 8.0, 6.0, 6.0), Oval(8.0, 8.0, 2.2, 2.2)]),
             Icon::Back => (16.0, &[Path("M9.8 3.6 5.4 8l4.4 4.4")]),
+            Icon::Contrast => (16.0, &[Oval(8.0, 8.0, 6.0, 6.0), Path("M8 2v12M8 5h5.1M8 8h6M8 11h5.1")]),
+            Icon::Keyboard => (16.0, &[Rect(1.6, 4.0, 12.8, 8.0, 1.8), Path("M4.3 6.9h.2M6.8 6.9h.2M9.2 6.9h.2M11.6 6.9h.2M5.4 9.5h5.2")]),
+            Icon::Info => (16.0, &[Oval(8.0, 8.0, 6.0, 6.0), Path("M8 7.5v3.4M8 5v.2")]),
+            Icon::UpDown => (16.0, &[Path("M5.2 6.3 8 3.6l2.8 2.7M5.2 9.7 8 12.4l2.8-2.7")]),
         }
     }
 
