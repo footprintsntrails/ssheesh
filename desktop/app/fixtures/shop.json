@@ -1,0 +1,13 @@
+{
+ "note": "The 1.0 design's scene (research_notes/v1-plan/fresh-apple.html): a shop's server, with made-up names, addresses and secrets.",
+ "events": [
+  {
+   "t": 0.0,
+   "out": "\u001b[90mLast login: Fri Nov 13 22:07:41 2026 from 198.51.100.7\u001b[0m\r\n\u001b[32mdeploy@web-7731\u001b[0m:\u001b[34m~/shop\u001b[0m$ git log --oneline -3\r\n\u001b[33ma41c9e2\u001b[0m (\u001b[36mHEAD -> \u001b[0m\u001b[32mmain\u001b[0m, \u001b[31morigin/main\u001b[0m) Add migration 0042: orders index\r\n\u001b[33m7d03b18\u001b[0m Retry the payment provider twice before failing\r\n\u001b[33mc9e27f4\u001b[0m Move the checkout queue to Redis streams\r\n\u001b[32mdeploy@web-7731\u001b[0m:\u001b[34m~/shop\u001b[0m$ cat .env\r\nNODE_ENV=production\r\nDATABASE_URL=postgres://shop:{{SECRET_A:4:17}}@db-main:5432/shop\r\nSTRIPE_SECRET_KEY={{SECRET_B}}\r\nLOG_LEVEL=info\r\n\u001b[32mdeploy@web-7731\u001b[0m:\u001b[34m~/shop\u001b[0m$ docker compose ps\r\n\u001b[1;97mNAME            IMAGE              STATUS                        PORTS\u001b[0m\r\nshop-api-1      acme/shop:2.14.0   \u001b[32mUp 3 days (healthy)\u001b[0m           8080/tcp\r\nshop-worker-1   acme/shop:2.14.0   \u001b[33mRestarting (1) 4 seconds ago\u001b[0m\r\nshop-cache-1    redis:8-alpine     \u001b[32mUp 3 days\u001b[0m                     6379/tcp\r\n\u001b[32mdeploy@web-7731\u001b[0m:\u001b[34m~/shop\u001b[0m$ docker compose logs -f --no-log-prefix worker\r\n\u001b[90m22:11:02\u001b[0m \u001b[36mINFO \u001b[0m Starting worker 2.14.0\r\n\u001b[90m22:52:15\u001b[0m \u001b[1;31mERROR\u001b[0m Database schema is at 0041, this build needs 0042\r\n\u001b[90m22:52:15\u001b[0m \u001b[36mINFO \u001b[0m Exiting with code 1\r\n\u001b[32mdeploy@web-7731\u001b[0m:\u001b[34m~/shop\u001b[0m$ "
+  },
+  {
+   "t": 0.0,
+   "echo": true
+  }
+ ]
+}

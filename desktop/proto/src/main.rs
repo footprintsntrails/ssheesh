@@ -1,20 +1,20 @@
 //! SSHeesh 1.0's terminal prototype (Phase 1): one window, one pane.
 //!
 //! The window and its pane are sshee-ui's; this program picks the pane's session (sshee-core,
-//! `live.rs`, or a fixture played on Rune's clock, `replay.rs`) and the meter's options from
-//! its arguments (research_notes/v1-plan/prototype-design.md).
+//! `live.rs`, or a fixture played on Rune's clock) and the meter's options from
+//! its arguments (research_notes/v1-plan/prototype-design.md). The replay link itself is
+//! sshee-ui's (`terminal::replay`): the 1.0 window's demo and tests play fixtures with it too.
 
 mod args;
 mod live;
 mod meter;
-mod replay;
 
 use std::fs::File;
 use std::io::BufWriter;
 
 use sshee_core::AppIdentity;
 use sshee_ui::meter::MeterOptions;
-use sshee_ui::terminal::TermLink;
+use sshee_ui::terminal::{replay, TermLink};
 
 use args::{Args, Session};
 

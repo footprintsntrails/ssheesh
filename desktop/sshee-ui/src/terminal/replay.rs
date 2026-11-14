@@ -37,7 +37,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use sshee_term::engine::Size;
 use sshee_term::model::Model;
-use sshee_ui::terminal::{LinkStatus, StatusSink, TermLink};
+use super::{LinkStatus, StatusSink, TermLink};
 
 /// History a replayed terminal keeps (as a session without tmux).
 const HISTORY: usize = 10_000;
@@ -228,7 +228,7 @@ impl ReplayLink {
 impl TermLink for ReplayLink {
     fn open(&mut self, model: Arc<Model>, size: Size, status: StatusSink) {
         if let Some(want) = self.fixture.size.filter(|s| *s != size) {
-            eprintln!("ssheesh-proto: the fixture was made for {}×{}; the window holds {}×{}", want.cols, want.rows, size.cols, size.rows);
+            eprintln!("replay: the fixture was made for {}×{}; the window holds {}×{}", want.cols, want.rows, size.cols, size.rows);
         }
         model.connected(false, HISTORY);
         self.model = Some(model);

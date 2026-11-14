@@ -51,6 +51,19 @@ fn metrics_at(pane: &TermPane, scale: f32) -> CellMetrics {
 
 /// The pane, for a window whose state reaches it through `get`.
 pub fn pane_view<S: 'static>(pane: &TermPane, cx: &mut Cx<S>, get: fn(&mut S) -> &mut TermPane) -> El {
+    pane_view_with(pane, cx, move |s| Some(get(s)), |_, _, _| false)
+}
+
+/// The pane, for a window with several: `get` finds this one in the state, or `None` once it
+/// is gone (its tab closed between the frame that drew it and a handler it had queued).
+/// `before_key` sees each key before the terminal does and returns true to take it: the
+/// window's own shortcuts, which must work while the terminal has the keyboard.
+pub fn pane_view_with<S: 'static>(
+    pane: &TermPane,
+    cx: &mut Cx<S>,
+    get: impl Fn(&mut S) -> Option<&mut TermPane> + Copy + 'static,
+    before_key: fn(&mut S, &rune::KeyEvent, &mut rune::Tx) -> bool,
+) -> El {
     let env = cx.env();
     let m = metrics_at(pane, env.scale);
     let lit = pane.cursor_lit();
@@ -58,7 +71,7 @@ pub fn pane_view<S: 'static>(pane: &TermPane, cx: &mut Cx<S>, get: fn(&mut S) ->
     if view.palette().dark != env.system_dark {
         // A program asking for the colours (Claude Code picks light or dark by them) is told
         // the scheme it is drawn in.
-        pane.model.set_answer_colors(Palette::new(env.system_dark).answer_colors());
+        pane.model.set_answer_colors(Palette::of(view.palette().scheme, env.system_dark).answer_colors());
     }
     let rows = view.rows(m, env.system_dark, pane.focused);
     let palette = view.palette().clone();
@@ -80,14 +93,30 @@ pub fn pane_view<S: 'static>(pane: &TermPane, cx: &mut Cx<S>, get: fn(&mut S) ->
         .no_focus_ring()
         .instant_changes()
         .cursor(if pane.hover_secret { Cursor::Pointer } else { Cursor::Text })
-        .on_key(move |s: &mut S, ev, tx| get(s).key(ev, tx))
-        .on_physical_input(move |s: &mut S, input, tx| get(s).physical(input, tx))
-        .on_drag(move |s: &mut S, d, tx| get(s).drag(d, tx))
+        .on_key(move |s: &mut S, ev, tx| before_key(s, ev, tx) || get(s).is_some_and(|p| p.key(ev, tx)))
+        .on_physical_input(move |s: &mut S, input, tx| get(s).is_some_and(|p| p.physical(input, tx)))
+        .on_drag(move |s: &mut S, d, tx| {
+            if let Some(p) = get(s) {
+                p.drag(d, tx);
+            }
+        })
         .pointer_buttons([PointerButton::Middle])
-        .on_secondary_press_local(move |s: &mut S, p, tx| get(s).secondary(&p, tx))
-        .on_pointer_move_local(move |s: &mut S, p, tx| get(s).pointer_moved(&p, tx))
-        .on_wheel(move |s: &mut S, w, tx| get(s).wheel(&w, tx))
-        .on_layout_tx(move |s: &mut S, [_, _, w, h], tx| get(s).laid_out(w, h, tx))
+        .on_secondary_press_local(move |s: &mut S, e, tx| {
+            if let Some(p) = get(s) {
+                p.secondary(&e, tx);
+            }
+        })
+        .on_pointer_move_local(move |s: &mut S, e, tx| {
+            if let Some(p) = get(s) {
+                p.pointer_moved(&e, tx);
+            }
+        })
+        .on_wheel(move |s: &mut S, w, tx| get(s).is_some_and(|p| p.wheel(&w, tx)))
+        .on_layout_tx(move |s: &mut S, [_, _, w, h], tx| {
+            if let Some(p) = get(s) {
+                p.laid_out(w, h, tx);
+            }
+        })
         .child(g);
     // The input method's anchor: only while the window has the keyboard, and steady (#602).
     // Also while the program hides its cursor (vim, Claude Code): the input method is on only

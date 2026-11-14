@@ -4,7 +4,7 @@
 # are path dependencies. Build with `cargo build` here; the target folder is ../target/desktop
 # (.cargo/config.toml). scripts/check-desktop-workspace.sh keeps the two workspaces in step.
 [workspace]
-members = ["sshee-ui", "proto"]
+members = ["sshee-ui", "proto", "app"]
 # Rune's crate with our fixes (vendor/rune.patch): a dependency, not ours to build and test.
 exclude = ["vendor/rune"]
 resolver = "2"
@@ -24,6 +24,7 @@ publish = false
 rune = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095", default-features = false, features = ["accessibility", "dbus", "metal-backend", "tooling"] }
 sshee-core = { path = "../crates/sshee-core" }
 sshee-term = { path = "../crates/sshee-term" }
+sshee-app = { path = "../crates/sshee-app" }
 sshee-ui = { path = "sshee-ui" }
 # The version Rune already locks: cmap coverage and font metrics for the terminal's cells.
 swash = "0.2.10"

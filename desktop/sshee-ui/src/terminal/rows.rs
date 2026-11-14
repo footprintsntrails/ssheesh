@@ -154,10 +154,11 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, look: 
         let secret = hidden[c];
         let text = at[c].map_or("", |(s, e)| &shown.text[s..e]);
         let first = text.chars().next().unwrap_or(' ');
-        let default_fg = !secret && fg == sshee_term::engine::Color::Foreground && !flags.contains(CellFlags::DIM);
         let underline = flags.intersects(CellFlags::UNDERLINE | CellFlags::UNDERCURL | CellFlags::DOTTED_UNDERLINE | CellFlags::DASHED_UNDERLINE);
         let key = RunKey {
-            color: if secret { Some(p.accent) } else if default_fg { None } else { Some(fgc) },
+            // The default colour is written out too: a row has no colour of its own, and text
+            // without one would take the window's default instead of the scheme's.
+            color: Some(if secret { p.accent } else { fgc }),
             bold: flags.contains(CellFlags::BOLD),
             italic: flags.contains(CellFlags::ITALIC),
             underline: (underline && !secret).then_some(fgc),
@@ -480,12 +481,20 @@ impl PaneView {
         &self.palette
     }
 
+    /// Draws in `scheme` from the next rows on.
+    pub fn set_scheme(&mut self, scheme: super::palette::Scheme) {
+        if self.palette.scheme != scheme {
+            self.palette = Palette::of(scheme, self.palette.dark);
+            self.look = None;
+        }
+    }
+
     /// The rows to draw, at these metrics and in this scheme; `focused` picks the selection's
     /// colour.
     pub fn rows(&mut self, metrics: CellMetrics, dark: bool, focused: bool) -> Vec<Rc<GridRow>> {
         if self.look != Some((metrics, dark, focused)) {
-            if self.look.is_none_or(|l| l.1 != dark) {
-                self.palette = Palette::new(dark);
+            if self.palette.dark != dark {
+                self.palette = Palette::of(self.palette.scheme, dark);
             }
             self.look = Some((metrics, dark, focused));
             self.epoch += 1;
@@ -590,7 +599,11 @@ mod tests {
     fn plain_text_is_the_line_one_character_per_column() {
         let p = plan(&Row::from_text("web-7731:~$ ls", 20), None);
         assert_eq!(p.text, "web-7731:~$ ls      ");
-        assert!(p.spans.is_empty() && p.cells.is_empty() && p.fills.is_empty() && p.ops.is_empty());
+        // One run in the scheme's own text colour: without it the row would take the window's.
+        let fg = Palette::new(true).fg();
+        assert_eq!(p.spans.len(), 1, "{:?}", p.spans);
+        assert_eq!((p.spans[0].start, p.spans[0].end, p.spans[0].color, p.spans[0].bold), (0, 20, Some(fg), false));
+        assert!(p.cells.is_empty() && p.fills.is_empty() && p.ops.is_empty());
     }
 
     #[test]
@@ -606,10 +619,13 @@ mod tests {
         let red = Palette::new(true).color(TermColor::Indexed(1));
         let blue = Palette::new(true).color(TermColor::Indexed(4));
         assert_eq!(p.text, "ab cd ");
-        assert_eq!(p.spans.len(), 3, "{:?}", p.spans);
+        let fg = Palette::new(true).fg();
+        assert_eq!(p.spans.len(), 5, "{:?}", p.spans);
         assert_eq!((p.spans[0].start, p.spans[0].end, p.spans[0].color, p.spans[0].bold), (0, 1, Some(red), false));
         assert_eq!((p.spans[1].start, p.spans[1].end, p.spans[1].bold), (1, 2, true));
-        assert_eq!((p.spans[2].start, p.spans[2].end, p.spans[2].underline.is_some()), (4, 5, true));
+        assert_eq!((p.spans[2].start, p.spans[2].end, p.spans[2].color), (2, 4, Some(fg)));
+        assert_eq!((p.spans[3].start, p.spans[3].end, p.spans[3].underline.is_some()), (4, 5, true));
+        assert_eq!((p.spans[4].start, p.spans[4].end, p.spans[4].color), (5, 6, Some(fg)));
         assert_eq!(p.fills[0], (3, 5, blue));
         // The selection goes last, over the backgrounds.
         assert_eq!(p.fills[1], (1, 3, Palette::new(true).selection));

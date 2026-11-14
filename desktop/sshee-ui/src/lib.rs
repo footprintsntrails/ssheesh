@@ -3,6 +3,12 @@
 
 pub mod fonts;
 pub mod hygiene;
+pub mod icons;
+pub mod kit;
 pub mod meter;
 pub mod proto;
+pub mod screens;
+pub mod shell;
+pub mod svg;
 pub mod terminal;
+pub mod theme;

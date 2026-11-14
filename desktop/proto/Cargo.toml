@@ -15,9 +15,11 @@ path = "src/main.rs"
 sshee-ui.workspace = true
 sshee-core.workspace = true
 sshee-term.workspace = true
-# Replay fixtures and their records.
-serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]
 # The meter's process CPU, UI-thread CPU and page size.
 libc = "0.2"
+
+[dev-dependencies]
+# The headless tests write Rune scripts and read what a replay recorded.
+serde_json = "1"

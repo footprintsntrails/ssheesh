@@ -11,3 +11,9 @@ rune.workspace = true
 sshee-term.workspace = true
 # The font's character map and metrics for the terminal's cells (the version Rune locks).
 swash.workspace = true
+# The order of shortcuts changed in Settings, as sshee-app keeps them.
+indexmap = "2"
+# The app's state without screens: the window draws a `Workbench` and changes it through its methods.
+sshee-app.workspace = true
+# Replay fixtures (`terminal::replay`) and their records.
+serde_json = "1"

@@ -11,6 +11,7 @@ pub static TERMINAL_REGULAR: &[u8] = include_bytes!("../fonts/JetBrainsMono-Regu
 /// Every face, for `AppSpec::fonts` (which replaces Rune's built-in Inter).
 pub static FONTS: &[&[u8]] = &[
     include_bytes!("../fonts/Inter-Regular.ttf"),
+    include_bytes!("../fonts/Inter-Medium.ttf"),
     include_bytes!("../fonts/Inter-SemiBold.ttf"),
     TERMINAL_REGULAR,
     include_bytes!("../fonts/JetBrainsMono-Bold.ttf"),
@@ -21,6 +22,22 @@ pub static FONTS: &[&[u8]] = &[
 
 /// The sans and mono slots (`AppSpec::families`).
 pub const FAMILIES: (&str, &str) = ("Inter", "JetBrains Mono");
+
+/// The 1.0 window's slots: the interface in each system's own font (San Francisco on macOS,
+/// Segoe UI Variable on Windows 11 and Segoe UI before it), with the bundled Inter where the
+/// system has no font of its own to name (Linux) or lacks the one named. A slot is a CSS
+/// family list, tried in order. Not checked on a Mac or on Windows yet: only the Linux list
+/// has been drawn.
+pub const SYSTEM_FAMILIES: (&str, &str) = (
+    if cfg!(target_os = "macos") {
+        "system-ui, Inter"
+    } else if cfg!(target_os = "windows") {
+        "Segoe UI Variable, Segoe UI, Inter"
+    } else {
+        "Inter"
+    },
+    "JetBrains Mono",
+);
 
 /// The terminal's family list: JetBrains Mono, then the Nerd Font's icons (a comma makes
 /// `Family::Named` a CSS list).

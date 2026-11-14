@@ -1,0 +1,26 @@
+[package]
+name = "ssheesh-preview"
+version = "0.0.1"
+description = "SSHeesh Preview: the 1.0 window on Rune, beside the released app"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ssheesh-preview"
+path = "src/main.rs"
+
+[dependencies]
+# Rune only through sshee-ui.
+sshee-ui.workspace = true
+sshee-core.workspace = true
+sshee-term.workspace = true
+sshee-app.workspace = true
+# The demo's fixtures.
+serde_json = "1"
+# Where 0.10 kept its server list.
+dirs = "6"
+
+[dev-dependencies]
+# The headless snapshots, decoded to compare colours; the scripts and trees are JSON.
+png = "0.18"

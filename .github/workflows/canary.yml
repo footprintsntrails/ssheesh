@@ -25,13 +25,13 @@ jobs:
         include:
           - name: Linux
             os: ubuntu-24.04
-            exe: ssheesh-proto
+            ext: ""
           - name: Windows
             os: windows-latest
-            exe: ssheesh-proto.exe
+            ext: .exe
           - name: macOS
             os: macos-latest
-            exe: ssheesh-proto
+            ext: ""
     defaults:
       run:
         shell: bash
@@ -73,19 +73,30 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace
 
-      - name: Build the prototype
+      # The terminal prototype (one window, one pane, for measuring) and SSHeesh Preview (the
+      # 1.0 window: tabs for every server, the sidebar, the status bar).
+      - name: Build the prototype and SSHeesh Preview
         working-directory: desktop
-        run: cargo build --profile perf -p ssheesh-proto
+        run: cargo build --profile perf -p ssheesh-proto -p ssheesh-preview
 
       - name: Collect the files
         run: |
-          mkdir -p out
-          cp "target/desktop/perf/${{ matrix.exe }}" out/
+          mkdir -p out preview
+          cp "target/desktop/perf/ssheesh-proto${{ matrix.ext }}" out/
           cp -r desktop/kit out/kit
-          ls -la out
+          cp "target/desktop/perf/ssheesh-preview${{ matrix.ext }}" preview/
+          ls -la out preview
 
       - uses: actions/upload-artifact@v4
         with:
           name: ssheesh-proto-${{ matrix.name }}
           path: out
+          retention-days: 14
+
+      # Its own folder (~/.sshee-preview) and keychain name: it runs beside 0.10 and touches
+      # nothing of it. `--demo` starts it on made-up servers without connecting anywhere.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssheesh-preview-${{ matrix.name }}
+          path: preview
           retention-days: 14

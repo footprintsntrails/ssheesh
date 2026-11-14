@@ -12,12 +12,14 @@ use sshee_term::input::{
     KeyOptions, MouseAction, MouseButton, MouseEvent, MouseReporter, Platform, WheelDelta, WheelLines,
 };
 use sshee_term::model::{Due, Model};
+use sshee_term::osc::OscEvent;
 use sshee_term::present::Look;
 use sshee_term::select::{SelectionKind, Side};
 
 use super::ime::ImeState;
 use super::keys::{guarded_key, term_key, typed_run};
 use super::metrics::{CellMetrics, CellMode};
+use super::palette::{Palette, Scheme};
 use super::rows::PaneView;
 use super::wake::Coalesce;
 use super::{LinkStatus, StatusSink, TermLink};
@@ -64,6 +66,8 @@ pub struct PaneOptions {
     /// reach the shell as typed text ("6c" at the prompt, stray keys in vim), as 0.10 found.
     /// Every session on Windows goes through ConPTY today; later the link says.
     pub answer_da1: bool,
+    /// The colours: 0.10's, or the 1.0 design's.
+    pub scheme: Scheme,
 }
 
 impl Default for PaneOptions {
@@ -84,6 +88,7 @@ impl PaneOptions {
             copy_on_select: true,
             history: 10_000,
             answer_da1: platform != Platform::Windows,
+            scheme: Scheme::Classic,
         }
     }
 }
@@ -155,6 +160,8 @@ pub struct TermPane {
     /// When the newest output on screen was parsed.
     last_output: Option<Instant>,
     meter: Option<SharedMeter>,
+    /// A program rang the bell or sent a notification since the window last asked.
+    wants_you: bool,
 }
 
 impl TermPane {
@@ -170,14 +177,16 @@ impl TermPane {
             ..EngineConfig::default()
         };
         let model = Arc::new(Model::new(size, &config));
-        model.set_answer_colors(super::palette::Palette::new(true).answer_colors());
+        model.set_answer_colors(Palette::of(options.scheme, true).answer_colors());
+        let mut view = PaneView::new(size, Look { hide_secrets: true, ..Look::default() });
+        view.set_scheme(options.scheme);
         TermPane {
             model,
             link,
             status_sink: status,
             opened: false,
             wake: None,
-            view: RefCell::new(PaneView::new(size, Look { hide_secrets: true, ..Look::default() })),
+            view: RefCell::new(view),
             metrics: Cell::new(None),
             options,
             platform: Platform::current(),
@@ -204,6 +213,7 @@ impl TermPane {
             typed_at: None,
             last_output: None,
             meter: None,
+            wants_you: false,
         }
     }
 
@@ -382,6 +392,8 @@ impl TermPane {
                     self.link.note_copy(&text);
                     tx.copy(text);
                 }
+                // A program wants you: the bell, or a notification it sent (OSC 9, OSC 777).
+                TermEvent::Bell | TermEvent::Osc(OscEvent::Notify(_)) => self.wants_you = true,
                 _ => {}
             }
         }
@@ -877,6 +889,22 @@ impl TermPane {
             self.pull(tx);
         }
         true
+    }
+
+    /// Whether a program in the terminal asked for you (the bell, a notification) since this
+    /// was last called. The window marks the tab unless you're looking at it.
+    pub fn take_wants_you(&mut self) -> bool {
+        std::mem::take(&mut self.wants_you)
+    }
+
+    /// Connect again now: a click on a tab whose connection is gone.
+    pub fn reconnect(&mut self) {
+        self.link.reconnect();
+    }
+
+    /// The tab was closed on purpose: its session ends, on the server too.
+    pub fn end(&mut self) {
+        self.link.end();
     }
 
     /// The window closes.

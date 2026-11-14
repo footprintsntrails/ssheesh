@@ -156,7 +156,7 @@ impl Chrome {
         match status {
             LinkStatus::Idle | LinkStatus::Connecting => self.fg_3,
             LinkStatus::Connected { .. } => self.ok,
-            LinkStatus::Waiting { .. } => self.warn,
+            LinkStatus::Reconnecting { .. } | LinkStatus::Waiting { .. } => self.warn,
             LinkStatus::Gone { .. } => self.bad,
         }
     }

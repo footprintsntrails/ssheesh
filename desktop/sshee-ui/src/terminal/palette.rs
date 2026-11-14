@@ -1,12 +1,24 @@
-//! The colour scheme: theme "auto" follows the system's light or dark, with 0.10's
-//! SSHeesh Night and SSHeesh Day (src/lib/themes.ts).
+//! The colour scheme: theme "auto" follows the system's light or dark. Two pairs: 0.10's
+//! SSHeesh Night and SSHeesh Day (src/lib/themes.ts), which the prototype draws, and the 1.0
+//! design's (research_notes/v1-plan/fresh-apple.html), which the 1.0 window draws.
 
 use rune::Color;
 use sshee_term::engine::{AnswerColors, Color as TermColor, Rgb};
 
+/// Which pair of schemes a pane draws in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Scheme {
+    /// 0.10's SSHeesh Night and Day.
+    #[default]
+    Classic,
+    /// The 1.0 design's: Apple's dark and light greys, a green cursor, softer colours.
+    Fresh,
+}
+
 /// One scheme's colours, as bytes (what a program asking gets) and as Rune colours.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Palette {
+    pub scheme: Scheme,
     pub dark: bool,
     pub background: Rgb,
     pub foreground: Rgb,
@@ -47,6 +59,28 @@ const DAY: [Rgb; 20] = [
     hex(0x57606a), hex(0xa40e26), hex(0x2da44e), hex(0xbf8700), hex(0x218bff), hex(0xa475f9), hex(0x3192aa), hex(0x8c959f),
 ];
 
+/// The 1.0 design, dark: the page, the terminal's text, the green cursor, and the mockup's five
+/// colours (red, green, yellow, blue, cyan). The mockup has no magenta, no black or white and
+/// no bright row: those are picked here to sit with the rest.
+const FRESH_NIGHT: [Rgb; 20] = [
+    hex(0x1c1c1e),
+    hex(0xdcdce1),
+    hex(0x4eba65),
+    hex(0x1c1c1e),
+    hex(0x2c2c2e), hex(0xff6961), hex(0x7fc98b), hex(0xd9b563), hex(0x7aa7e8), hex(0xc49be8), hex(0x6cc4c0), hex(0xc7c7cc),
+    hex(0x8e8e93), hex(0xff8078), hex(0x9ad9a4), hex(0xe6c988), hex(0x9cc0f0), hex(0xd5b8f0), hex(0x8fd6d2), hex(0xffffff),
+];
+
+/// The 1.0 design, light.
+const FRESH_DAY: [Rgb; 20] = [
+    hex(0xffffff),
+    hex(0x1d1d1f),
+    hex(0x248a3d),
+    hex(0xffffff),
+    hex(0x1d1d1f), hex(0xc4251a), hex(0x1f7a3a), hex(0x8a6100), hex(0x1f5fbf), hex(0x8a3fb8), hex(0x0f6f78), hex(0x636366),
+    hex(0x515154), hex(0xc00012), hex(0x248a3d), hex(0xa84a00), hex(0x0071e3), hex(0xa550d0), hex(0x1a8a94), hex(0x8e8e93),
+];
+
 /// A byte colour as Rune's (linear light, straight alpha).
 pub fn rgb(c: Rgb) -> Color {
     let d = |v: u8| rune::color::srgb_decode(f32::from(v) / 255.0);
@@ -79,17 +113,38 @@ pub fn xterm_256(i: u8) -> Rgb {
 }
 
 impl Palette {
+    /// 0.10's scheme, dark or light.
     pub fn new(dark: bool) -> Palette {
-        let src = if dark { &NIGHT } else { &DAY };
+        Palette::of(Scheme::Classic, dark)
+    }
+
+    /// `scheme`'s dark or light colours.
+    pub fn of(scheme: Scheme, dark: bool) -> Palette {
+        let src = match (scheme, dark) {
+            (Scheme::Classic, true) => &NIGHT,
+            (Scheme::Classic, false) => &DAY,
+            (Scheme::Fresh, true) => &FRESH_NIGHT,
+            (Scheme::Fresh, false) => &FRESH_DAY,
+        };
         let mut ansi = [Rgb::default(); 16];
         ansi.copy_from_slice(&src[4..20]);
         let table = (0..=255u8).map(|i| rgb(if i < 16 { ansi[i as usize] } else { xterm_256(i) })).collect();
-        let (selection, selection_inactive) = if dark {
-            (rgb(hex(0x5b9dff)).alpha(0.32), Color::WHITE.alpha(0.12))
-        } else {
-            (rgb(hex(0x2f6fdb)).alpha(0.2), Color::BLACK.alpha(0.08))
+        // The selection is the scheme's blue: 0.10's cursor blue, the 1.0 design's focus blue.
+        let blue = match (scheme, dark) {
+            (Scheme::Classic, _) => src[2],
+            (Scheme::Fresh, true) => hex(0x0a84ff),
+            (Scheme::Fresh, false) => hex(0x0071e3),
+        };
+        let (selection, selection_inactive) =
+            if dark { (rgb(blue).alpha(0.32), Color::WHITE.alpha(0.12)) } else { (rgb(blue).alpha(0.2), Color::BLACK.alpha(0.08)) };
+        // A hidden secret's dots: 0.10's accent, the 1.0 design's quiet grey.
+        let accent = match (scheme, dark) {
+            (Scheme::Classic, _) => src[2],
+            (Scheme::Fresh, true) => hex(0xa1a1a6),
+            (Scheme::Fresh, false) => hex(0x636366),
         };
         Palette {
+            scheme,
             dark,
             background: src[0],
             foreground: src[1],
@@ -98,7 +153,7 @@ impl Palette {
             ansi,
             selection,
             selection_inactive,
-            accent: rgb(src[2]),
+            accent: rgb(accent),
             bg: rgb(src[0]),
             fg: rgb(src[1]),
             table,
@@ -150,6 +205,17 @@ mod tests {
     fn answers_follow_the_scheme() {
         assert_eq!(Palette::new(true).answer_colors().background, Rgb::new(0x0a, 0x0b, 0x0d));
         assert_eq!(Palette::new(false).answer_colors().background, Rgb::new(0xff, 0xff, 0xff));
+    }
+
+    #[test]
+    fn the_1_0_design_has_its_own_page_and_a_green_cursor() {
+        let night = Palette::of(Scheme::Fresh, true);
+        assert_eq!((night.background, night.cursor), (Rgb::new(0x1c, 0x1c, 0x1e), Rgb::new(0x4e, 0xba, 0x65)));
+        assert_eq!(night.color(TermColor::Indexed(2)), rgb(Rgb::new(0x7f, 0xc9, 0x8b)));
+        let day = Palette::of(Scheme::Fresh, false);
+        assert_eq!((day.background, day.foreground), (Rgb::new(0xff, 0xff, 0xff), Rgb::new(0x1d, 0x1d, 0x1f)));
+        assert_eq!(Palette::new(true), Palette::of(Scheme::Classic, true));
+        assert_ne!(night.selection, Palette::new(true).selection);
     }
 
     #[test]

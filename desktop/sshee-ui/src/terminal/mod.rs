@@ -15,6 +15,7 @@ pub mod keys;
 pub mod metrics;
 pub mod palette;
 pub mod pane;
+pub mod replay;
 pub mod rows;
 pub mod view;
 pub mod wake;
@@ -36,7 +37,9 @@ pub enum LinkStatus {
     Connecting,
     /// `durable`: the shell lives in tmux on the server.
     Connected { durable: bool },
-    /// Reconnecting, or asleep: it comes back.
+    /// The connection dropped and is being brought back by itself.
+    Reconnecting { note: String },
+    /// Disconnected or asleep: a key or a click brings it back.
     Waiting { note: String },
     /// Failed or ended: it doesn't.
     Gone { note: String },
@@ -49,13 +52,13 @@ impl LinkStatus {
             LinkStatus::Idle => "no session yet",
             LinkStatus::Connecting => "connecting",
             LinkStatus::Connected { .. } => "",
-            LinkStatus::Waiting { note } | LinkStatus::Gone { note } => note,
+            LinkStatus::Reconnecting { note } | LinkStatus::Waiting { note } | LinkStatus::Gone { note } => note,
         }
     }
 
-    /// The session is gone or waiting: a key should bring it back.
+    /// The session waits to come back: a key should bring it back now.
     pub fn wants_reconnect(&self) -> bool {
-        matches!(self, LinkStatus::Waiting { .. })
+        matches!(self, LinkStatus::Reconnecting { .. } | LinkStatus::Waiting { .. })
     }
 }
 
@@ -74,8 +77,14 @@ pub trait TermLink {
     fn resize(&self, size: Size);
     /// Connect again now (a key in a pane that dropped or sleeps).
     fn reconnect(&self);
-    /// The window closes.
+    /// The window closes: the connection goes, and a shell in tmux on the server stays to
+    /// come back to.
     fn close(&self);
+    /// The tab was closed on purpose: the connection goes and so does its shell on the server.
+    /// A link with nothing on a server just closes.
+    fn end(&self) {
+        self.close();
+    }
     /// The start of each frame, on the pane's clock (`clock` seconds, `now` as an `Instant`):
     /// a replay feeds the output that is due. Returns the clock at which it has more, so the
     /// window wakes then. A live session's output comes on its own thread: nothing to do.
