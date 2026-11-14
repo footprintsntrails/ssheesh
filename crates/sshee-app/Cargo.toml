@@ -31,3 +31,7 @@ crc32c = "0.6"
 # `O_NONBLOCK` and `O_NOFOLLOW`, so a FIFO or a link where a store file should be can't hold
 # up or redirect reading (already here through `dirs` and `tempfile`).
 libc = "0.2"
+
+# The program Windows opens .txt files with, for "the default text editor" (`editors`).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_Shell"] }

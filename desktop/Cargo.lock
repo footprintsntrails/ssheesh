@@ -5766,6 +5766,7 @@ dependencies = [
  "serde_json",
  "snap",
  "tempfile",
+ "windows",
  "zstd",
 ]
 
@@ -5778,8 +5779,11 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "humantime",
+ "imara-diff",
  "keyring",
+ "libc",
  "liblzma",
+ "notify",
  "portable-pty",
  "ring",
  "rustls",

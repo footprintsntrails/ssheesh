@@ -32,7 +32,18 @@ humantime = "2"
 # Tor's own account of what it's doing, in a file you can send when it won't start.
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
+# Watching a copy open in an outside editor (edit_bridge). Already here through Arti's
+# tor-config, with the same features, so nothing new is built.
+notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
+# Comparing the two versions of a file in a conflict, line by line (already in the lock file).
+imara-diff = { version = "0.2", default-features = false }
 
-# The folder under the pointer (the desktop, an Explorer window), for files dragged out of the window.
+# `openat` and friends, so the edit folder's clean-up never follows a link (already here
+# through many crates).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The folder under the pointer (the desktop, an Explorer window), for files dragged out of the
+# window; free disk space for the edit folder.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem"] }
