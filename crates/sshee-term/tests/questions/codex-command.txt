@@ -1,0 +1,17 @@
+# Codex asking before a command. Hand-made from Codex's layout (the question first, each
+# answer's key after it); not captured from a running agent, and the keys are as its screen
+# prints them, not tried.
+---
+• I'll run the migration.
+
+  Would you like to run the following command?
+
+  Reason: apply migration 0042 to the shop database
+
+  $ psql -h db-main -d shop -f migrations/0042_orders_index.sql
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `psql` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

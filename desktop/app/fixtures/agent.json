@@ -1,9 +1,9 @@
 {
- "note": "An AI agent waiting for an answer on a production database: made up.",
+ "note": "Claude Code waiting for an answer on a production database. Made up, and hand-made from Claude Code's layout: not captured from a running agent.",
  "events": [
   {
    "t": 0.0,
-   "out": "\u001b[32mpostgres@db-main\u001b[0m:\u001b[34m/srv/shop-db\u001b[0m$ claude\r\n\r\n\u001b[1mClaude Code\u001b[0m\u001b[90m  /srv/shop-db\u001b[0m\r\n\r\n> Apply migration 0042 to the shop database.\r\n\r\nI'll run the migration with psql.\r\n\r\n\u001b[90m  Bash\u001b[0m  psql -h db-main -d shop -f migrations/0042_orders_index.sql\r\n\r\n\u001b[1mDo you want to proceed?\u001b[0m\r\n  1. Yes\r\n  2. Yes, and don't ask again for psql in /srv/shop-db\r\n  3. No, and tell Claude what to do differently\r\n\r\n\u001b[90m> \u001b[0m"
+   "out": "\u001b]7;file://db-main/srv/shop-db\u0007\u001b[32mpostgres@db-main\u001b[0m:\u001b[34m/srv/shop-db\u001b[0m$ claude\r\n\r\n\u001b[1mClaude Code\u001b[0m\u001b[90m  /srv/shop-db\u001b[0m\r\n\r\n> Apply migration 0042 to the shop database.\r\n\r\n\u25cf I'll apply the migration with psql.\r\n\r\n\u25cf \u001b[1mBash\u001b[0m(psql -h db-main -d shop -f migrations/0042_orders_index.sql)\r\n  \u001b[90mRunning\u2026\u001b[0m\r\n\r\n\u001b[34m\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u001b[0m\r\n \u001b[1;34mBash command\u001b[0m\r\n\r\n   psql -h db-main -d shop -f migrations/0042_orders_index.sql\r\n\r\n Do you want to proceed?\r\n \u001b[34m\u276f 1. Yes\u001b[0m\r\n   2. Yes, and don't ask again for psql in /srv/shop-db\r\n   3. No, and tell Claude what to do differently \u001b[90m(esc)\u001b[0m\r\n"
   }
  ]
 }

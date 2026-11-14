@@ -1,0 +1,16 @@
+# Claude Code asking before an edit: the change between dashed rules. Hand-made; not
+# captured from a running agent.
+---
+● Update(migrations/0042_orders_index.sql)
+
+────────────────────────────────────────────────────────────────────────────────
+ Edit file
+ migrations/0042_orders_index.sql
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 1 -CREATE INDEX orders_created ON orders (created_at);
+ 1 +CREATE INDEX CONCURRENTLY orders_created ON orders (created_at);
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to make this edit to 0042_orders_index.sql?
+ ❯ 1. Yes
+   2. Yes, allow all edits during this session (shift+tab)
+   3. No, and tell Claude what to do differently (esc)

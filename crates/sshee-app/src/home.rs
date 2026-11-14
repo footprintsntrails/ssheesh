@@ -124,7 +124,7 @@ impl Home {
                 let server = bench.server(&t.server);
                 Running {
                     tab: t.id,
-                    label: t.label(),
+                    label: crate::agents::tab_label(t),
                     agent: t.agent.clone(),
                     server: server.map_or("Unknown server", |s| s.name.as_str()).to_owned(),
                     prod: server.is_some_and(|s| s.is_prod()),

@@ -19,3 +19,4 @@ pub mod home;
 pub mod labels;
 pub mod palette;
 pub mod servers;
+pub mod agents;

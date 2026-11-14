@@ -41,10 +41,13 @@ pub enum Shortcut {
     PaletteAlt,
     /// "Add a server".
     AddServer,
+    /// The list of agents on every server, the waiting ones first (new in 1.0).
+    Agents,
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 10] = [
+const NAMED: [(Shortcut, &str); 11] = [
+    (Shortcut::Agents, "agents"),
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
     (Shortcut::ReopenTab, "reopenTab"),
@@ -99,6 +102,8 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         Shortcut::PaletteAlt if mac => return None,
         Shortcut::PaletteAlt => ("k", false),
         Shortcut::AddServer => ("n", true),
+        // ⌘A selects all on a Mac, so the agents take ⌘⇧A there.
+        Shortcut::Agents => ("a", true),
         Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
     };
     Some(if mac { keys(key, false, true, mac_shift) } else { keys(key, true, false, true) })
@@ -177,6 +182,10 @@ mod tests {
         assert_eq!(hit("w", "cs", false), Some(Shortcut::CloseTab));
         assert_eq!(hit("z", "cs", false), Some(Shortcut::ReopenTab));
         assert_eq!(hit("b", "cs", false), Some(Shortcut::ToggleSidebar));
+        assert_eq!(hit("a", "cs", false), Some(Shortcut::Agents));
+        assert_eq!(hit("a", "ms", true), Some(Shortcut::Agents));
+        // ⌘A stays "select all" on a Mac, and Ctrl+A the start of the line everywhere.
+        assert_eq!((hit("a", "m", true), hit("a", "c", false), hit("a", "c", true)), (None, None, None));
         assert_eq!(hit("1", "cs", false), Some(Shortcut::JumpToTab(1)));
         // Ctrl+W deletes a word, Ctrl+T swaps letters, Ctrl+Z suspends, Ctrl+B goes back:
         // all the terminal's.

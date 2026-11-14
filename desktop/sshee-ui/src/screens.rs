@@ -8,6 +8,7 @@
 //! [`States`], so two screens never edit the same lines. How to add one, and the list of those
 //! still to build with the files each owns: desktop/ARCHITECTURE.md.
 
+pub mod agent;
 pub mod add_server;
 pub mod files;
 pub mod home;
@@ -36,6 +37,7 @@ pub struct States {
     pub add_server: add_server::State,
     pub server_card: server_card::State,
     pub server_menu: server_menu::State,
+    pub agent: agent::State,
     pub files: HashMap<TabId, files::State>,
     pub stats: HashMap<TabId, stats::State>,
 }
@@ -46,12 +48,13 @@ impl States {
         self.files.retain(|id, _| open(*id));
         self.stats.retain(|id, _| open(*id));
         self.palette.retain(&open);
+        self.agent.retain(&open);
     }
 
     /// Something is open over the window (the palette, a dialog, a menu): no shortcut fires
     /// behind it and no key reaches a terminal, as behind any dialog in 0.10.
     pub fn any_open(&self) -> bool {
-        self.palette.open || self.add_server.open || self.server_menu.open.is_some()
+        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard()
     }
 
     /// Closes what is open over the window, before something else opens there: one at a time.
@@ -60,6 +63,7 @@ impl States {
         self.add_server = add_server::State::default();
         self.server_menu.open = None;
         self.server_card.hide();
+        self.agent.close();
     }
 }
 
@@ -67,7 +71,11 @@ impl States {
 /// under the pointer, then whichever of the palette, a server's menu and "Add a server" is
 /// open. A screen that opens over the window adds its element here.
 pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::shell::Shell>) -> Vec<El> {
-    [server_card::view(s, t), palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t)].into_iter().flatten().collect()
+    let mut out: Vec<El> = server_card::view(s, t).into_iter().collect();
+    // An agent's question under its tab, the list of agents.
+    out.extend(agent::overlays(s, t, cx));
+    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t)].into_iter().flatten());
+    out
 }
 
 /// A page with nothing to show yet: an icon, a name and a line under it, in the middle.

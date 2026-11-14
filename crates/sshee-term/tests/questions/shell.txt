@@ -1,0 +1,5 @@
+# A shell, no agent. Made up.
+---
+postgres@db-main:/srv/shop-db$ ls migrations
+0041_orders.sql  0042_orders_index.sql
+postgres@db-main:/srv/shop-db$

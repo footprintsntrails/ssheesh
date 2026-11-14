@@ -160,9 +160,12 @@ never writes 0.10's. `--demo` reads and writes nothing.
 - A terminal tab is named after its shell's folder when the shell says it (OSC 7, or a
   `user@host: ~/dir` title). In tmux on a server neither reaches the window (tmux keeps both):
   the agents' watch reads `pane_current_path` and should call `Shell::set_folder`, and
-  `TermPane::set_foreground` with the program in front (until then Ctrl+F in tmux stays the
-  program's; Ctrl+Shift+F and ⌘F always find). The agent's name isn't wired
-  (`Workbench::set_agent` exists). "Needs you" comes from the bell and OSC 9/777 only.
+  `TermPane::set_foreground` with the program in front. The program in front is wired
+  (`app/src/agents.rs` asks tmux, `screens::agent::foreground` names the tab "Terminal N
+  (Claude Code)" and tells the pane); the folder isn't yet.
+- A system notification's text is made and handed to `Backend::notify`, which shows nothing
+  yet: the notification itself, and its click bringing the tab forward, are the desktop
+  crate's step.
 - A click on a file's path copies it: `Shell::open_path` waits for the Files screen. A web
   link whose text hides where it goes opens on a second Ctrl+click, not from a dialog.
 - Streamer mode doesn't know this computer's hostname (only its user, from the environment):
@@ -204,7 +207,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |
 | Zoom, a tab dragged out to its own window, more than two side by side (`Workspace.tsx`, `Pane.tsx`); the tab menu, drag and the pair are built | `shell/tabs.rs`, `shell/split.rs` | `workbench/layout.rs` |
 | Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
-| An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover) | `screens/agent.rs` | `agents.rs` |
+| An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key and password questions, reconnect and sleep notices (`TerminalPane.tsx` overlays) | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Tor: the switch, progress, log (`TorButton.tsx`) | `screens/tor.rs` | `tor.rs` |

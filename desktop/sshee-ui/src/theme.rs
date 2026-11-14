@@ -78,6 +78,8 @@ pub const TITLE: TextStyle = TextStyle::new(15.0, 600.0);
 /// A text field's and a push button's height; a list row is `ROW`.
 pub const FIELD: f32 = 28.0;
 pub const ROW: f32 = 30.0;
+/// A popover that holds an agent's question, and the list of agents.
+pub const CARD_WIDTH: f32 = 480.0;
 
 /// One appearance's colours. The names are the stylesheet's.
 #[derive(Clone, Debug, PartialEq)]

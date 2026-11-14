@@ -44,6 +44,8 @@ pub struct LiveBackend {
     /// `-F FILE` for every ssh, when the program was given a config of its own.
     ssh_config: Option<PathBuf>,
     watcher: Option<Watcher>,
+    /// The thread that asks servers what their terminals run (`crate::agents`).
+    agents: Option<crate::agents::Watcher>,
 }
 
 impl LiveBackend {
@@ -57,7 +59,7 @@ impl LiveBackend {
     }
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
-        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts: Arc::new(Mutex::new(by_key(hosts))), ssh_config, watcher: None, store: None, remote: None }
+        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts: Arc::new(Mutex::new(by_key(hosts))), ssh_config, watcher: None, agents: None, store: None, remote: None }
     }
 
     /// With this copy's own list of servers behind it (`Backend::servers`).
@@ -111,6 +113,7 @@ pub fn tor_shown(status: &TorStatus) -> Tor {
 impl Backend for LiveBackend {
     fn start(&mut self, remote: Remote) {
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
+        self.agents = Some(crate::agents::Watcher::start(self.env.clone(), remote.clone()));
         self.remote = Some(remote.clone());
         // The servers' colours, and what 0.10 and the ssh config still offer: files to read,
         // so on a thread, and the main menu says so when it's known.
@@ -165,6 +168,12 @@ impl Backend for LiveBackend {
     fn watch(&mut self, server: Option<&Server>) {
         if let Some(watcher) = &self.watcher {
             watcher.watch(server.and_then(|s| Some((s.key(), self.target(Some(s))?))));
+        }
+    }
+
+    fn agents_on(&mut self, servers: &[Server]) {
+        if let Some(agents) = &self.agents {
+            agents.watch(servers.iter().filter_map(|s| Some((s.key(), self.target(Some(s))?))).collect());
         }
     }
 }

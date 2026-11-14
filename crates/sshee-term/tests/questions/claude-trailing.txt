@@ -1,0 +1,13 @@
+# Something printed after the answers: the screen moved on. Hand-made.
+---
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   npm test
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for npm test commands in /srv/shop
+   3. No, and tell Claude what to do differently (esc)
+
+postgres@db-main:/srv/shop-db$

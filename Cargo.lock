@@ -6069,6 +6069,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snap",
+ "sshee-term",
  "tempfile",
  "zstd",
 ]

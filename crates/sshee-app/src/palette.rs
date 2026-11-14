@@ -358,7 +358,7 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
             TabKind::Files => Glyph::Folder,
             TabKind::Stats => Glyph::Stats,
         };
-        let mut r = row(Group::GoTo, glyph, tab.label(), Action::Tab(tab.id))
+        let mut r = row(Group::GoTo, glyph, crate::agents::tab_label(tab), Action::Tab(tab.id))
             .note(server.map_or("Unknown server", |s| s.name.as_str()))
             .words(&format!("tab {} {}", tab.agent.as_deref().unwrap_or(""), tab.kind.label()));
         r.needs_you = tab.needs_you;

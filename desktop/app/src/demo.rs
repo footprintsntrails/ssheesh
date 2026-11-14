@@ -160,6 +160,8 @@ impl Backend for DemoBackend {
             if let Some(waits) = s.bench.tabs().iter().find(|t| t.needs_you).map(|t| t.id) {
                 s.backdate_wait(waits, 2.0 * 60.0);
             }
+            // The agents' own clock of it: the card under the tab says "waiting 2 min" too.
+            sshee_ui::screens::agent::seed_wait(s, 130);
         });
         self.remote = Some(remote);
         self.show(None);

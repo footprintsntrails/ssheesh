@@ -36,7 +36,7 @@ fn sample_tab(t: &Theme, key: &'static str, spec: Tab) -> El {
 }
 
 pub fn view(t: &'static Theme) -> El {
-    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, active: false, window_active: true, compact: false };
+    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, active: false, window_active: true, compact: false };
     let term = Tab { icon: Icon::Terminal, name: "~/shop", server: Some("web-staging"), ..base.clone() };
     let tabs = vec![
         sample_tab(t, "t-rest", base.clone()),
@@ -88,7 +88,7 @@ pub fn view(t: &'static Theme) -> El {
     ];
     let icons: Vec<El> = Icon::SIGNS.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
     let server_icons: Vec<El> = sshee_app::labels::HOST_ICONS.iter().map(|(id, _)| icon(Icon::for_server(id), theme::ICON_RAIL, t.l2on)).collect();
-    col()
+    let mut page = col()
         .key("sheet")
         .w_full()
         .h_full()
@@ -102,5 +102,10 @@ pub fn view(t: &'static Theme) -> El {
         .child(line(t, "l-menu", "Popover and menu", vec![question]))
         .child(line(t, "l-status", "Status bar", status))
         .child(line(t, "l-icons", "Icons", icons))
-        .child(line(t, "l-server-icons", "Server icons", server_icons))
+        .child(line(t, "l-server-icons", "Server icons", server_icons));
+    // An agent's card in its states (below the fold of a window of the usual size).
+    for (key, label, cards) in crate::screens::agent::sheet(t) {
+        page = page.child(line(t, key, label, cards));
+    }
+    page
 }

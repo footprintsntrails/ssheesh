@@ -170,6 +170,8 @@ pub struct TermPane {
     wants_you: bool,
     /// The find bar, links, the scroll bar, the menu and "while you were away" (`overlays.rs`).
     pub(crate) over: super::overlays::Overlays,
+    /// What the last notification said (OSC 9, OSC 777), until the window takes it.
+    said: Option<String>,
 }
 
 impl TermPane {
@@ -223,6 +225,7 @@ impl TermPane {
             meter: None,
             wants_you: false,
             over: super::overlays::Overlays::default(),
+            said: None,
         }
     }
 
@@ -411,7 +414,11 @@ impl TermPane {
                 }
                 TermEvent::Copy(_) => {}
                 // A program wants you: the bell, or a notification it sent (OSC 9, OSC 777).
-                TermEvent::Bell | TermEvent::Osc(OscEvent::Notify(_)) => self.wants_you = true,
+                TermEvent::Bell => self.wants_you = true,
+                TermEvent::Osc(OscEvent::Notify(said)) => {
+                    self.wants_you = true;
+                    self.said = said;
+                }
                 _ => {}
             }
         }
@@ -929,6 +936,53 @@ impl TermPane {
     /// was last called. The window marks the tab unless you're looking at it.
     pub fn take_wants_you(&mut self) -> bool {
         std::mem::take(&mut self.wants_you)
+    }
+
+    /// What the notification that asked for you said, if it said anything. Taken once.
+    pub fn take_said(&mut self) -> Option<String> {
+        self.said.take()
+    }
+
+    /// The folder the shell said it's in (OSC 7), when it has.
+    pub fn cwd(&self) -> Option<&str> {
+        self.over.links.cwd.as_deref()
+    }
+
+    /// When a key was last typed here, on the pane's clock.
+    pub fn typed_at(&self) -> Option<f64> {
+        self.typed_at
+    }
+
+    /// Starts the session of a tab that hasn't been on screen, at `size` (its first layout
+    /// gives it its real one): an agent that waits there is read without going to it.
+    pub fn open_unseen(&mut self, size: Size) {
+        if !self.opened {
+            self.apply_size(size);
+            self.opened = true;
+            self.link.open(self.model.clone(), self.size(), self.status_sink.clone());
+            self.link_size = Some(self.size());
+        }
+    }
+
+    /// A key pressed for you from outside the terminal (an answer picked on an agent's card):
+    /// encoded and sent as that key typed here would be, so the program gets what the
+    /// keyboard would have sent. By what the key is alone: the event being handled is a
+    /// click, or another key. True when something was sent.
+    pub fn type_key(&mut self, ev: &rune::KeyEvent, tx: &mut Tx) -> bool {
+        self.clock = tx.clock();
+        let modes = self.view.borrow().modes;
+        if let Some(text) = typed_run(ev) {
+            self.send(typed_text(text, modes.bracketed_paste).as_bytes(), Some(Via::Key), tx);
+            return true;
+        }
+        let Some(k) = term_key(ev, None, None) else { return false };
+        match terminal_key(&k, &KeyOptions::new(self.platform, &modes)) {
+            KeyAction::Send(s) => {
+                self.send(s.as_bytes(), Some(Via::Key), tx);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Connect again now: a click on a tab whose connection is gone.

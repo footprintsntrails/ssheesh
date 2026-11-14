@@ -300,13 +300,16 @@ pub(crate) fn tab_icon(tab: &sshee_app::workbench::Tab) -> Icon {
 }
 
 /// How wide a tab is when nothing is squeezed, in points: for telling whether the row fits.
-fn natural_width(st: &StripTab, label: &str, server: &str) -> f32 {
+/// `working`: an agent is at work in it (the quiet ring after its name).
+fn natural_width(st: &StripTab, label: &str, server: &str, working: bool) -> f32 {
     let mut w = 10.0 + theme::ICON + 7.0 + rune::text::advance(label, theme::TAB_NAME) + 7.0 + rune::text::advance(server, theme::TAB_SERVER) + 10.0;
     if st.prod {
         w += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
     }
     if let Some(badge) = st.tab.badge() {
         w += 7.0 + 14.0 + rune::text::advance(badge.label(), theme::NEEDS);
+    } else if working {
+        w += 7.0 + 10.0;
     }
     if st.active {
         w += 7.0 + 14.0;
@@ -316,10 +319,12 @@ fn natural_width(st: &StripTab, label: &str, server: &str) -> f32 {
 
 /// How wide a crowded tab is at its narrowest, and what leads it (the divider and its
 /// machine's name, when it starts a group or the run in sight).
-fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bool) -> (f32, f32) {
+fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bool, working: bool) -> (f32, f32) {
     let mut own = 8.0 + theme::ICON + 6.0 + rune::text::advance(label, theme::TAB_NAME) + 8.0;
     if st.tab.badge().is_some() {
         own += 6.0 + 14.0;
+    } else if working {
+        own += 6.0 + 10.0;
     }
     if st.active {
         own += 6.0 + 14.0;
@@ -338,10 +343,14 @@ fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bo
 pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
     let strip = s.bench.strip();
     let row = &s.row;
-    // Every name as it may be drawn (streamer mode).
-    let names: Vec<(String, String)> =
-        strip.iter().map(|st| (s.text_shown(&st.tab.label()).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned())).collect();
-    let needed: f32 = strip.iter().zip(&names).map(|(st, (label, server))| natural_width(st, label, server)).sum::<f32>() + theme::CONTROL + 2.0;
+    // Every name as it may be drawn (streamer mode), an agent in front named after it
+    // ("Terminal 2 (Claude Code)", as in 0.10).
+    let names: Vec<(String, String)> = strip
+        .iter()
+        .map(|st| (s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned()))
+        .collect();
+    let working = |st: &StripTab| s.screens.agent.working(st.tab.id);
+    let needed: f32 = strip.iter().zip(&names).map(|(st, (label, server))| natural_width(st, label, server, working(st))).sum::<f32>() + theme::CONTROL + 2.0;
     // Crowded or roomy: as the widths say, but not changing under the pointer.
     let crowded = s.strip_width.is_some_and(|w| needed > w);
     let compact = row.held.as_ref().map_or(crowded, |h| h.compact) && !strip.is_empty();
@@ -360,7 +369,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
                 .zip(&names)
                 .enumerate()
                 .map(|(i, (st, (label, server)))| {
-                    let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st));
+                    let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st), working(st));
                     own + lead
                 })
                 .collect()
@@ -407,6 +416,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             server: (!compact).then_some(server.as_str()),
             prod: st.prod && !compact,
             badge: st.tab.badge(),
+            working: working(st),
             active: st.active,
             window_active,
             compact,
@@ -415,6 +425,8 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             .key(format!("tab-{}", id.0))
             .on_press_tx(move |s: &mut Shell, tx| s.focus_tab(id, tx))
             .on_middle_press(move |s: &mut Shell, tx| s.close_tab(id, tx))
+            // Resting on a waiting agent's tab brings up its question (`screens::agent`).
+            .on_hover_change(move |s: &mut Shell, over, tx| crate::screens::agent::tab_hover(s, id, over, tx))
             .on_secondary_press(move |s: &mut Shell, press, tx| s.open_tab_menu(id, [press.x, press.y], tx))
             .on_drag(move |s: &mut Shell, d, tx| s.tab_drag(id, d, tx))
             .on_layout_tx(move |s: &mut Shell, rect, tx| {
@@ -428,7 +440,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             e = e.fill(t.hov);
         }
         if compact {
-            let (own, _) = crowded_width(st, label, server, false, false);
+            let (own, _) = crowded_width(st, label, server, false, false, working(st));
             e = e.min_w(own - 2.0);
         }
         if let Some(width) = row.held.as_ref().and_then(|h| h.widths.get(&id)) {
@@ -510,7 +522,7 @@ fn tab_list(s: &Shell, t: &'static Theme) -> El {
         if st.starts_group {
             rows.push(menu_separator(t));
         }
-        let label = s.text_shown(&st.tab.label()).into_owned();
+        let label = s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned();
         let server = s.server_shown(&st.tab.server, st.server_name).into_owned();
         let said = st.tab.badge().map(|b| b.label());
         let ink = if st.tab.needs_you { t.orange } else { t.l2 };

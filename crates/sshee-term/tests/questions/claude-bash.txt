@@ -1,0 +1,21 @@
+# Claude Code asking before a shell command. Hand-made from Claude Code's layout (a rule
+# across the top, no sides); not captured from a running agent. Every name is made up.
+---
+> Apply migration 0042 to the shop database.
+
+● I'll apply the migration with psql.
+
+● Bash(psql -h db-main -d shop -f migrations/0042_orders_index.sql)
+  ⎿  Running…
+
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   psql -h db-main -d shop -f migrations/0042_orders_index.sql
+   Apply migration 0042: orders index
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for psql commands in /srv/shop-db
+   3. No, and tell Claude what to do differently (esc)
+

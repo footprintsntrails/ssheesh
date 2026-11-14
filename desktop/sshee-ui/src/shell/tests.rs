@@ -160,7 +160,13 @@ impl Window {
     /// Output from session `n`'s program.
     fn feed(&mut self, n: usize, bytes: &[u8]) {
         let model = self.session(n).lock().unwrap().model.clone().expect("the session opened");
-        model.feed(bytes);
+        // On the panes' own clock (virtual here), so a busy machine can't make a frame come
+        // "before" its output.
+        let pane = self.rt.state.panes.values().find(|p| Arc::ptr_eq(&p.model, &model));
+        match pane.map(|p| p.now()) {
+            Some(now) => model.feed_at(bytes, now),
+            None => model.feed(bytes),
+        }
         // The model's gate holds a first burst for a moment.
         for _ in 0..12 {
             self.rt.frame(1.0 / 60.0);

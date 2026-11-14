@@ -6,6 +6,8 @@ license = "CC-BY-NC-SA-4.0"
 description = "SSHeesh's app state without screens: settings, tabs, layout, snippets, and bringing them over from 0.10 (for 1.0)"
 
 [dependencies]
+# An agent's question as the terminal reads it off its screen, and "needs you" (`agents`).
+sshee-term = { path = "../sshee-term" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"

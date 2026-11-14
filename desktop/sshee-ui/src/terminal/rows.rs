@@ -534,6 +534,43 @@ impl PaneView {
         shown
     }
 
+    /// The screen as it may be shown outside the terminal, for reading an agent's question off
+    /// it (`sshee_term::question`): each row's text with every secret as dots (one you clicked
+    /// to show in the terminal too), and the runs of characters drawn on a highlight. `None`
+    /// while the view is scrolled back: what's on screen then isn't what the program shows now.
+    pub fn question_lines(&mut self) -> Option<Vec<sshee_term::question::Line>> {
+        if self.display_offset != 0 {
+            return None;
+        }
+        self.present();
+        let covered = Look { hide_secrets: true, ..self.presenter.look().clone() };
+        let texts: Vec<&str> = self.shown.iter().map(|r| r.text.as_str()).collect();
+        let safe = covered.safe_lines(&texts, self.edges.key_open_above);
+        let lines = self.shown.iter().zip(safe).zip(&self.mirror).map(|((shown, text), row)| {
+            // A highlight is a background unlike most of its row's (a program may paint a
+            // whole panel in a colour of its own).
+            let ground = |c: &sshee_term::engine::Cell| (c.bg, c.flags.contains(CellFlags::INVERSE));
+            let mut counts: HashMap<_, usize> = HashMap::new();
+            for cell in &row.cells {
+                *counts.entry(ground(cell)).or_default() += 1;
+            }
+            let usual = counts.into_iter().max_by_key(|(_, n)| *n).map(|(g, _)| g);
+            let lit_at = |col: u16| row.cells.get(col as usize).is_some_and(|c| Some(ground(c)) != usual);
+            let mut lit: Vec<Range<usize>> = Vec::new();
+            // Only where masking changed no character's place.
+            if text.chars().count() == shown.cols.len() {
+                for (i, _) in shown.cols.iter().enumerate().filter(|(_, col)| lit_at(**col)) {
+                    match lit.last_mut() {
+                        Some(run) if run.end == i => run.end = i + 1,
+                        _ => lit.push(i..i + 1),
+                    }
+                }
+            }
+            sshee_term::question::Line { text, lit }
+        });
+        Some(lines.collect())
+    }
+
     /// What copying goes through: the presentation pass's dots, never the secret.
     pub fn look(&self) -> &Look {
         self.presenter.look()
