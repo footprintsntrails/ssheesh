@@ -18,6 +18,10 @@ use sshee_ui::terminal::TermLink;
 
 const WEB: &str = "host:demo-web";
 const DB: &str = "host:demo-db";
+const STAGING: &str = "host:demo-staging";
+
+/// How many lines web-staging's log has: several screens of history.
+const LOG_LINES: usize = 240;
 
 /// The shop server's terminal, and the agent's on the database.
 const SHOP: &str = include_str!("../fixtures/shop.json");
@@ -65,6 +69,34 @@ fn prompt(user: &str, name: &str) -> Fixture {
     Fixture::from_json(&value, Path::new("."), 1).expect("a prompt reads")
 }
 
+/// web-staging's first terminal: a worker's log, long enough to scroll back through and with
+/// things to find and click in it (requests, warnings, errors, a web link, a link a program
+/// marked itself, file paths, a secret), then a prompt. The shell says which folder it is in
+/// (OSC 7), so the tab is named after it. Three seconds in, two more lines arrive: what "Jump to
+/// the bottom" is for when the view is scrolled up by then.
+fn log() -> Fixture {
+    let mut out = String::from("\u{1b}]7;file://web-staging/home/deploy/shop\u{7}");
+    out.push_str("\u{1b}[32mdeploy@web-staging\u{1b}[0m:\u{1b}[34m~/shop\u{1b}[0m$ tail -n 240 /var/log/shop/worker.log\r\n");
+    for n in 1..=LOG_LINES {
+        let time = format!("\u{1b}[90m14:{:02}:{:02}\u{1b}[0m", n / 60, n % 60);
+        let line = match n {
+            40 => "\u{1b}[33mWARN \u{1b}[0m Slow query (812 ms): see src/db/orders.rs:88".to_owned(),
+            90 => "\u{1b}[1;31mERROR\u{1b}[0m Payment provider timed out, details at https://status.shop.example/incidents/42".to_owned(),
+            120 => "\u{1b}[36mINFO \u{1b}[0m Reloaded /etc/shop/worker.toml".to_owned(),
+            150 => "\u{1b}[36mINFO \u{1b}[0m Token rotated: API_TOKEN={{SECRET_A}}".to_owned(),
+            200 => "\u{1b}[1;31mERROR\u{1b}[0m Payment provider timed out, retrying in 30 s".to_owned(),
+            230 => "\u{1b}[36mINFO \u{1b}[0m Runbook: \u{1b}]8;;https://docs.shop.example/runbooks/payments\u{1b}\\payments runbook\u{1b}]8;;\u{1b}\\".to_owned(),
+            _ => format!("\u{1b}[36mINFO \u{1b}[0m GET /api/orders/{} 200 {} ms", 1000 + n, 8 + n % 23),
+        };
+        out.push_str(&format!("{time} {line}\r\n"));
+    }
+    let prompt = "\u{1b}[32mdeploy@web-staging\u{1b}[0m:\u{1b}[34m~/shop\u{1b}[0m$ ";
+    out.push_str(prompt);
+    let late = format!("\r\n\u{1b}[90m14:04:12\u{1b}[0m \u{1b}[36mINFO \u{1b}[0m Worker restarted\r\n\u{1b}[90m14:04:13\u{1b}[0m \u{1b}[36mINFO \u{1b}[0m Listening on 8080\r\n{prompt}");
+    let value = serde_json::json!({ "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true }, { "t": 3.0, "out": late } ] });
+    Fixture::from_json(&value, Path::new("."), 1).expect("the log reads")
+}
+
 impl Backend for DemoBackend {
     fn start(&mut self, _: Remote) {}
 
@@ -72,6 +104,8 @@ impl Backend for DemoBackend {
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {
             (WEB, Some("~/shop")) => fixture(SHOP),
             (DB, Some("Migration 0042")) => fixture(AGENT),
+            // The first terminal there; the ones after it are plain prompts.
+            (STAGING, _) if tab.n == 1 => log(),
             _ => match server {
                 Some(s) if s.is_local() => prompt("dev", "laptop-7731"),
                 // The user is the made-up address's.
@@ -115,5 +149,11 @@ mod tests {
         }
         assert!(SHOP.contains("{{SECRET_A:4:17}}") && SHOP.contains("{{SECRET_B}}"));
         assert_eq!(prompt("deploy", "web-staging").steps.len(), 2);
+        // The shop's connection drops and comes back with two new lines, for the design's
+        // "While you were away" line; the log is long enough to scroll.
+        assert!(fixture(SHOP).durable && SHOP.contains("\"drop\"") && SHOP.contains("\"away_min\": 41"));
+        let log = log();
+        assert_eq!(log.steps.len(), 3);
+        assert!(matches!(&log.steps[0].1, sshee_ui::terminal::replay::Step::Out(bytes) if bytes.iter().filter(|b| **b == b'\n').count() > LOG_LINES));
     }
 }

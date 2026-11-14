@@ -3,19 +3,23 @@
 //! ```text
 //! root   column, the frame's colour
 //! ├── bar      44 pt, moves the window: [window buttons' room | logo] [sidebar toggle]
-//! │            [title, Prod] [tabs … +] [room for Windows' buttons]
+//! │            [title, Prod] [tabs … +] [streamer mode] [room for Windows' buttons]
 //! └── body     row
 //!     ├── rail     52 pt of icons: [logo] search ─ this computer, servers, + … check, Tor, settings
 //!     └── main     column
-//!         ├── page     the tab on screen: a terminal pane, or a placeholder
+//!         ├── page     the tab on screen: a terminal pane, or a placeholder; two side by
+//!         │            side (`split.rs`)
 //!         └── status   24 pt: CPU, Memory, Disk, Uptime, Down, Up … Tor
 //! ```
+//!
+//! The row of tabs is `tabs.rs`; its menu and the list of all tabs are drawn last, over the
+//! window. Names are drawn through `Shell::server_shown` (streamer mode, `streamer.rs`).
 //!
 //! Element keys are fixed words and tab numbers, never a server's name: Rune's traces carry
 //! element paths.
 
 use rune::{col, el, row, spacer, text, Cx, El};
-use sshee_app::workbench::{StripTab, TabId, TabKind, Tor};
+use sshee_app::workbench::{TabId, TabKind, Tor};
 
 use super::state::Shell;
 use crate::icons::{logo, Icon};
@@ -23,8 +27,6 @@ use crate::kit::button::toolbar_button;
 use crate::kit::chip::prod_chip;
 use crate::kit::rail::{rail_button, RailState};
 use crate::kit::status::{status_item, status_tor};
-use crate::kit::tab::{group_name, tab, Tab};
-use crate::kit::divider;
 use crate::screens;
 use crate::terminal::view::pane_view_with;
 use crate::theme::{self, Frame, Theme};
@@ -51,32 +53,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(bar(s, t, cx))
         .child(body.child(col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t))))
-}
-
-/// What a tab's icon is: an agent's spark when one runs in it, else its kind's.
-fn tab_icon(tab: &sshee_app::workbench::Tab) -> Icon {
-    match tab.kind {
-        TabKind::Terminal if tab.agent.is_some() => Icon::Agent,
-        TabKind::Terminal => Icon::Terminal,
-        TabKind::Files => Icon::Folder,
-        TabKind::Stats => Icon::Stats,
-    }
-}
-
-/// How wide a tab is when nothing is squeezed, in points: for telling whether the row fits.
-fn natural_width(st: &StripTab) -> f32 {
-    let label = st.tab.label();
-    let mut w = 10.0 + theme::ICON + 7.0 + rune::text::advance(&label, theme::TAB_NAME) + 7.0 + rune::text::advance(st.server_name, theme::TAB_SERVER) + 10.0;
-    if st.prod {
-        w += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
-    }
-    if let Some(badge) = st.tab.badge() {
-        w += 7.0 + 14.0 + rune::text::advance(badge.label(), theme::NEEDS);
-    }
-    if st.active {
-        w += 7.0 + 14.0;
-    }
-    w + 2.0 + if st.starts_group { 11.0 } else { 0.0 }
+        // Over the window: a tab's menu, the list of all tabs.
+        .children(super::tabs::overlays(s, t))
 }
 
 /// The top row.
@@ -110,8 +88,9 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         toolbar_button(t, "sidebar", Icon::Sidebar, if s.bench.sidebar_shown() { "Hide sidebar" } else { "Show sidebar" })
             .on_press_tx(|s: &mut Shell, tx| s.toggle_sidebar(tx)),
     );
-    // The machine on screen is the window's title.
+    // The machine on screen is the window's title (its alias in streamer mode).
     let (title, prod) = s.bench.window_title();
+    let title = s.server_shown(s.bench.current_key().unwrap_or("local"), title);
     let mut name = row().key("title").items_center().gap(8.0).ml(8.0).mr(16.0).child(
         text(title).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line(),
     );
@@ -120,51 +99,10 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     }
     bar = bar.child(name);
 
-    // The tabs: every machine's, in one row.
-    let strip = s.bench.strip();
-    let needed: f32 = strip.iter().map(natural_width).sum::<f32>() + theme::CONTROL + 2.0;
-    let compact = s.strip_width.is_some_and(|w| needed > w) && !strip.is_empty();
-    let mut tabs = row()
-        .key("tabs")
-        .grow(1.0)
-        .min_w(0.0)
-        .h_full()
-        .items_center()
-        .gap(2.0)
-        .role("tablist")
-        .on_layout(|s: &mut Shell, [_, _, w, _]| s.strip_width = Some(w));
-    let current = s.bench.current_key();
-    for (i, st) in strip.iter().enumerate() {
-        let id = st.tab.id;
-        if st.starts_group {
-            tabs = tabs.child(divider(t).key(format!("sep-{}", id.0)));
-        }
-        if compact && (i == 0 || st.starts_group) {
-            // Crowded: the server is named once, before its tabs.
-            let prod = s.bench.server(&st.tab.server).is_some_and(|sv| sv.is_prod());
-            tabs = tabs.child(group_name(t, st.server_name, prod, current == Some(st.tab.server.as_str())).key(format!("group-{}", id.0)));
-        }
-        let label = st.tab.label();
-        let spec = Tab {
-            icon: tab_icon(st.tab),
-            name: &label,
-            server: (!compact).then_some(st.server_name),
-            prod: st.prod && !compact,
-            badge: st.tab.badge(),
-            active: st.active,
-            window_active: active,
-            compact,
-        };
-        tabs = tabs.child(
-            tab(t, &spec, move |s: &mut Shell, tx| s.close_tab(id, tx))
-                .key(format!("tab-{}", id.0))
-                .on_press_tx(move |s: &mut Shell, tx| s.focus_tab(id, tx))
-                .on_middle_press(move |s: &mut Shell, tx| s.close_tab(id, tx)),
-        );
-    }
-    tabs = tabs.child(toolbar_button(t, "new-tab", Icon::Plus, "New terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)));
+    // The tabs: every machine's, in one row (`tabs.rs`); then streamer mode's switch.
+    let tabs = super::tabs::strip(s, t, active);
     // What's left of the row moves the window, and Windows' buttons take its end.
-    bar.child(tabs).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
+    bar.child(tabs).child(super::streamer::eye(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }
 
 /// The sidebar: icons only.
@@ -197,7 +135,7 @@ fn rail(s: &Shell, t: &'static Theme) -> El {
         let state = if current == Some(key.as_str()) { RailState::Selected } else { RailState::Plain };
         let waiting = s.bench.server_needs_you(&key);
         rail = rail.child(
-            rail_button(t, Icon::for_server(&server.icon), &server.name, state, waiting)
+            rail_button(t, Icon::for_server(&server.icon), &s.server_shown(&key, &server.name), state, waiting)
                 .key(format!("server-{i}"))
                 .on_press_tx(move |s: &mut Shell, tx| s.go_to(&key, tx)),
         );
@@ -220,6 +158,8 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     let rounded = s.bench.sidebar_shown();
     let corners = [if rounded { theme::PAGE_RADIUS } else { 0.0 }, 0.0, 0.0, 0.0];
     let content = match s.bench.active() {
+        // Shown beside another tab: both, with a divider (`split.rs`).
+        Some(_) if s.pair_on_screen().is_some() => super::split::page(s, t, cx).unwrap_or_else(el),
         Some(tab) => match s.pane(tab.id) {
             // Each tab's pane under its own key: a tab switched to is a new element, so its
             // first layout is told to it (and opens its session).

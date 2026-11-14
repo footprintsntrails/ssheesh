@@ -479,3 +479,6 @@ fn the_window_closing_closes_connections_but_ends_no_shell() {
         assert!(seen.closed && !seen.ended, "session {n}");
     }
 }
+
+/// What came after the first window: find, links, scrolling, the row of tabs, side by side.
+mod more;
