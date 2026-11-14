@@ -6,6 +6,9 @@
 //!
 //! Every name and address is made up: `web-7731`, `203.0.113.x` (a range set aside for
 //! documentation). Secrets in the output are made at run time, never written in a fixture.
+//! Each server's files are a made-up tree in memory (`files`).
+
+mod files;
 
 use std::path::Path;
 
@@ -17,6 +20,8 @@ use sshee_ui::terminal::replay::{Fixture, ReplayLink};
 use sshee_ui::terminal::TermLink;
 
 const WEB: &str = "host:demo-web";
+const STAGING: &str = "host:demo-staging";
+const BACKUPS: &str = "host:demo-backups";
 const DB: &str = "host:demo-db";
 
 /// The shop server's terminal, and the agent's on the database.
@@ -49,8 +54,17 @@ pub fn bench() -> Workbench {
     bench
 }
 
-/// Sessions that play fixtures.
-pub struct DemoBackend;
+/// Sessions that play fixtures, and files that live in memory.
+pub struct DemoBackend {
+    remote: Option<Remote>,
+    files: files::DemoFiles,
+}
+
+impl Default for DemoBackend {
+    fn default() -> Self {
+        DemoBackend { remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB) }
+    }
+}
 
 /// A fixture written in this crate: it reads, or the build is broken.
 fn fixture(json: &str) -> Fixture {
@@ -66,7 +80,20 @@ fn prompt(user: &str, name: &str) -> Fixture {
 }
 
 impl Backend for DemoBackend {
-    fn start(&mut self, _: Remote) {}
+    fn start(&mut self, remote: Remote) {
+        self.remote = Some(remote);
+    }
+
+    /// Answered at once from the made-up tree (nothing here waits), but still through the
+    /// window's queue, as a real backend's answers arrive: after the handler that asked.
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        let replies = self.files.answer(&ask);
+        if let Some(remote) = &self.remote {
+            for reply in replies {
+                remote.files(reply);
+            }
+        }
+    }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {

@@ -24,6 +24,8 @@ pub enum Shortcut {
     /// Brings back the tab closed last.
     ReopenTab,
     ToggleSidebar,
+    /// Files on the machine on screen (new in 1.0: 0.10 opened Files from menus only).
+    OpenFiles,
     /// Ctrl+Tab and Ctrl+Shift+Tab, on a Mac too: +1 or -1.
     StepTab(i32),
     /// The tab at this place in the row, 1 to 9.
@@ -31,11 +33,12 @@ pub enum Shortcut {
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 4] = [
+const NAMED: [(Shortcut, &str); 5] = [
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
     (Shortcut::ReopenTab, "reopenTab"),
     (Shortcut::ToggleSidebar, "sidebar"),
+    (Shortcut::OpenFiles, "files"),
 ];
 
 impl Shortcut {
@@ -69,6 +72,8 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         // Elsewhere Ctrl+Shift+T is a new tab, as in Windows Terminal; Z undoes a close.
         Shortcut::ReopenTab => (if mac { "t" } else { "z" }, true),
         Shortcut::ToggleSidebar => ("b", false),
+        // ⇧⌘F on a Mac (⌘F is Find), Ctrl+Shift+F elsewhere.
+        Shortcut::OpenFiles => ("f", true),
         Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
     };
     Some(if mac { keys(key, false, true, mac_shift) } else { keys(key, true, false, true) })

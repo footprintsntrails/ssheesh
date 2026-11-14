@@ -51,6 +51,9 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(bar(s, t, cx))
         .child(body.child(col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t))))
+        // Over the window: uploads and downloads in progress, then a Files tab's menu or question.
+        .children(screens::transfers::view(s, t))
+        .children(screens::files::overlay(s, t, cx))
 }
 
 /// What a tab's icon is: an agent's spark when one runs in it, else its kind's.
@@ -162,7 +165,12 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
                 .on_middle_press(move |s: &mut Shell, tx| s.close_tab(id, tx)),
         );
     }
-    tabs = tabs.child(toolbar_button(t, "new-tab", Icon::Plus, "New terminal").on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx)));
+    // A click: a new terminal. The other button: Files on that machine, until "+" has its menu.
+    tabs = tabs.child(
+        toolbar_button(t, "new-tab", Icon::Plus, "New terminal")
+            .on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx))
+            .on_secondary_press(|s: &mut Shell, _, tx| s.open_files(tx)),
+    );
     // What's left of the row moves the window, and Windows' buttons take its end.
     bar.child(tabs).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }

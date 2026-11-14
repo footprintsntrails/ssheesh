@@ -67,6 +67,8 @@ pub const KEY_CAP: TextStyle = TextStyle::new(11.0, 400.0);
 pub const GROUP: TextStyle = TextStyle::new(11.0, 600.0);
 /// Notes under things, 11 pt.
 pub const SMALL: TextStyle = TextStyle::new(11.0, 400.0);
+/// Sizes and dates in a list: 12 pt, every digit the same width so columns line up.
+pub const LIST_NUMBER: TextStyle = TextStyle::new(12.0, 400.0).features("'tnum' 1");
 /// Second lines, 12 pt.
 pub const NOTE: TextStyle = TextStyle::new(12.0, 400.0);
 

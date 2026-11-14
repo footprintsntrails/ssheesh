@@ -18,8 +18,11 @@ sshee-term.workspace = true
 sshee-app.workspace = true
 # The demo's fixtures.
 serde_json = "1"
-# Where 0.10 kept its server list.
+# Where 0.10 kept its server list, and the Downloads folder.
 dirs = "6"
+# This computer's distance from UTC, for the dates in Files (the version sshee-core's
+# dependencies already lock).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 # The headless snapshots, decoded to compare colours; the scripts and trees are JSON.

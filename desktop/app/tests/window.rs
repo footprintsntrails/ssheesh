@@ -203,9 +203,9 @@ fn clicks_and_shortcuts_drive_the_tabs() {
     // The agent's tab is db-main's first terminal, whatever it's called: the new one is its second.
     assert_eq!(run.label("tab-4"), "Terminal 2, db-main");
     assert!(run.element("waits").is_none(), "the agent's dot stayed after its tab was looked at");
-    // Files isn't built yet: its place says so, and no terminal is drawn.
+    // Files came up in the terminal's place, on its server's home folder.
     assert!(run.element("term").is_none());
-    assert!(run.tree_text.contains("This page isn't in the preview yet."));
+    assert!(run.element("files-list").is_some() && run.tree_text.contains("README.md"));
     // The machine on screen is still web-7731, labelled Production in the title.
     assert!(run.tree_text.contains("web-7731"));
 }
@@ -245,5 +245,131 @@ fn the_component_sheet_draws_every_state() {
     }
     for said in ["Reconnecting…", "Disconnected", "Needs you", "Esc to decide later", "Disk 92%"] {
         assert!(run.tree_text.contains(said), "{said}");
+    }
+}
+
+/// Geometry of the Files page at 1280x800: its toolbar is 40 pt under the bar, the header 26,
+/// then ".." and the rows, 26 pt each from y = 140; the Files tab of the demo is at (440, 22).
+#[test]
+fn files_lists_opens_and_asks_in_both_appearances() {
+    for (theme, page, blue) in [("dark", "#1c1c1e", [0x00, 0x71, 0xe3]), ("light", "#ffffff", [0x00, 0x71, 0xe3])] {
+        // The Files tab, then a click on deploy.sh: the list, one row selected.
+        let script = json!([{ "t": 0.3, "type": "tap", "x": 440.0, "y": 22.0 }, { "t": 0.8, "type": "tap", "x": 300.0, "y": 231.0 }, { "t": 1.4, "type": "mark", "name": "end" }]);
+        let Some(run) = run(&format!("files-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        assert_eq!(run.rect("files-toolbar"), [52.0, 44.0, 1228.0, 40.0], "{theme}");
+        assert_eq!(run.rect("files-status")[3], 24.0, "{theme}");
+        for said in ["Folder path", "backups", "logs", "shop", "deploy.sh", "nginx.conf", "README.md", "8 items, 4 hidden", "1 selected, 256 B", "Today 11:02", "Oct 10", "Bookmarks and places", "Upload files"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        // Dot files stay hidden until asked for.
+        assert!(!run.tree_text.contains(".bashrc"), "{theme}");
+        let px = run.pixels();
+        assert_eq!(at(&px, 700, 500), page, "{theme}: the list's background");
+        assert!(near(&px, [60, 220, 1270, 242], blue) > 20_000, "{theme}: the selected row isn't blue");
+        assert_eq!(near(&px, [60, 246, 1270, 268], blue), 0, "{theme}: a second row is blue");
+    }
+    // A double click opens a file beside the list; typing and saving the one that changed on
+    // the server offers the three ways out, and Delete asks first, naming what goes.
+    let script = json!([
+        { "t": 0.3, "type": "tap", "x": 440.0, "y": 22.0 },
+        { "t": 0.8, "type": "double-click", "x": 300.0, "y": 205.0 },
+        { "t": 1.3, "type": "type", "text": "ch" },
+        key(1.6, "Enter", ""),
+        { "t": 2.0, "type": "tap", "x": 1000.0, "y": 300.0 },
+        { "t": 2.3, "type": "type", "text": "x" },
+        key(2.6, "s", "c"),
+        { "t": 3.2, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = self::run("files-conflict", &["--demo"], Some(script)) else { return };
+    assert_eq!(run.rect("files-preview")[2], 480.0);
+    for said in ["CHANGELOG.md", "This file changed on the server since you opened it, so it wasn't saved over.", "Save over it", "Load what's there", "Save mine as a copy", "Unsaved changes"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    let script = json!([
+        { "t": 0.3, "type": "tap", "x": 440.0, "y": 22.0 },
+        { "t": 0.8, "type": "tap", "x": 300.0, "y": 231.0 },
+        key(1.0, "Delete", ""),
+        { "t": 1.6, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = self::run("files-delete", &["--demo"], Some(script)) else { return };
+    assert_eq!(run.fill("files-question"), "#2c2c2eff");
+    for said in ["Delete “deploy.sh”?", "It's deleted on the server right away. This can't be undone.", "Cancel"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+}
+
+#[test]
+fn a_download_shows_its_card_until_it_is_stopped() {
+    // Into backups, the menu on its one file, Download: the demo's endless download.
+    let events = |stop: bool| {
+        let mut e = vec![
+            json!({ "t": 0.3, "type": "tap", "x": 440.0, "y": 22.0 }),
+            json!({ "t": 0.8, "type": "double-click", "x": 300.0, "y": 153.0 }),
+            json!({ "t": 1.4, "type": "secondary-click", "x": 300.0, "y": 153.0 }),
+            json!({ "t": 1.8, "type": "tap", "x": 340.0, "y": 198.0 }),
+        ];
+        if stop {
+            // The card's cross.
+            e.push(json!({ "t": 2.4, "type": "tap", "x": 1254.0, "y": 715.0 }));
+        }
+        e.push(json!({ "t": 3.0, "type": "mark", "name": "end" }));
+        Value::Array(e)
+    };
+    let Some(run) = run("files-download", &["--demo"], Some(events(false))) else { return };
+    assert!(run.element("transfer-1").is_some(), "no card for the download");
+    for said in ["shop-db.sql.gz", "38%", "1.2 MB/s"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    let [x, y, w, h] = run.rect("transfer-stop-1");
+    assert!((x + w / 2.0 - 1254.0).abs() < 10.0 && (y + h / 2.0 - 715.0).abs() < 10.0, "the stop button moved: {x} {y}");
+    let Some(run) = self::run("files-download-stop", &["--demo"], Some(events(true))) else { return };
+    assert!(run.element("transfer-1").is_none(), "the card stayed after Stop");
+    assert!(run.tree_text.contains("Download stopped"), "nothing says the download stopped");
+}
+
+#[test]
+fn files_move_by_dragging_rename_and_upload() {
+    let files = json!({ "t": 0.3, "type": "tap", "x": 440.0, "y": 22.0 });
+    // deploy.sh dragged onto logs: while held the folder is ringed, let go it moves there.
+    let drag = |up: bool| {
+        let mut e = vec![
+            files.clone(),
+            json!({ "t": 0.8, "type": "down", "x": 300.0, "y": 231.0 }),
+            json!({ "t": 0.9, "type": "move", "x": 310.0, "y": 210.0 }),
+            json!({ "t": 1.0, "type": "move", "x": 320.0, "y": 180.0 }),
+        ];
+        if up {
+            e.push(json!({ "t": 1.2, "type": "up", "x": 320.0, "y": 180.0 }));
+        }
+        e.push(json!({ "t": 1.8, "type": "mark", "name": "end" }));
+        Value::Array(e)
+    };
+    let Some(run) = run("files-dragging", &["--demo"], Some(drag(false))) else { return };
+    assert!(run.tree_text.contains("Let go to move deploy.sh here"), "the folder under the pointer doesn't take the file");
+    let Some(run) = self::run("files-dropped", &["--demo"], Some(drag(true))) else { return };
+    for said in ["Moved deploy.sh to logs", "Undo", "7 items, 4 hidden"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    // F2 on nginx.conf, a new name for all but its ending, Return.
+    let script = json!([
+        files.clone(),
+        { "t": 0.8, "type": "tap", "x": 300.0, "y": 283.0 },
+        key(1.0, "F2", ""),
+        { "t": 1.3, "type": "type", "text": "site" },
+        key(1.6, "Enter", ""),
+        { "t": 2.2, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = self::run("files-rename", &["--demo"], Some(script)) else { return };
+    assert!(run.tree_text.contains("site.conf") && !run.tree_text.contains("nginx.conf"), "the file wasn't renamed");
+    // Upload: the system's picker, answered by the script; the file is in the list afterwards.
+    let script = json!([
+        files,
+        { "t": 0.8, "type": "tap", "x": 1258.0, "y": 64.0 },
+        { "t": 1.2, "type": "file-dialog", "path": "/home/dev/notes.txt" },
+        { "t": 1.8, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = self::run("files-upload", &["--demo"], Some(script)) else { return };
+    for said in ["Uploaded notes.txt", "notes.txt", "9 items, 4 hidden"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
     }
 }

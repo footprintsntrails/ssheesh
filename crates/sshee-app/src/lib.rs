@@ -10,3 +10,7 @@ pub mod legacy;
 pub mod model;
 pub mod import;
 pub mod workbench;
+pub mod paths;
+pub mod files;
+pub mod dir_cache;
+pub mod transfers;

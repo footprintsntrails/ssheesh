@@ -5,7 +5,7 @@
 //! Every terminal has its own session with one shared `SessionManager`, under its tab's
 //! number. Output is parsed into the pane's model on the session's reader thread
 //! (`Delivery::Direct`), which wakes the window; status goes to the tab through the pane's
-//! status sink.
+//! status sink. What a Files tab asks for is done in `crate::files`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,6 +38,7 @@ pub struct LiveBackend {
     /// `-F FILE` for every ssh, when the program was given a config of its own.
     ssh_config: Option<PathBuf>,
     watcher: Option<Watcher>,
+    files: crate::files::Files,
 }
 
 impl LiveBackend {
@@ -52,17 +53,22 @@ impl LiveBackend {
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
         let hosts = hosts.iter().map(|h| (format!("host:{}", h.id), h.clone())).collect();
-        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts, ssh_config, watcher: None }
+        let files = crate::files::Files::new(env.clone());
+        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts, ssh_config, watcher: None, files }
     }
 
     /// Where a machine's shells run: this computer, or ssh's target for a server. `None`: a
     /// server that isn't in the list anymore.
     fn target(&self, server: Option<&Server>) -> Option<Target> {
-        let server = server?;
-        if server.is_local() {
+        self.target_of(&server?.key())
+    }
+
+    /// [`Self::target`] by a machine's key in the sidebar.
+    fn target_of(&self, key: &str) -> Option<Target> {
+        if key == "local" {
             return Some(Target::Local);
         }
-        let mut target = self.hosts.get(&server.key())?.target();
+        let mut target = self.hosts.get(key)?.target();
         if let Some(config) = &self.ssh_config {
             target.extra_args.extend(["-F".to_owned(), config.display().to_string()]);
         }
@@ -84,6 +90,7 @@ pub fn tor_shown(status: &TorStatus) -> Tor {
 impl Backend for LiveBackend {
     fn start(&mut self, remote: Remote) {
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
+        self.files.start(remote.clone());
         // Tor, if it was left on in this copy (`~/.sshee-preview/tor/on`): every connection
         // from here on goes through it. The ports are the servers' own.
         let ports = self.hosts.values().filter_map(|h| h.port).collect();
@@ -106,6 +113,11 @@ impl Backend for LiveBackend {
         if let Some(watcher) = &self.watcher {
             watcher.watch(server.and_then(|s| Some((s.key(), self.target(Some(s))?))));
         }
+    }
+
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        let target = self.target_of(&ask.server);
+        self.files.ask(ask, target);
     }
 }
 

@@ -12,6 +12,7 @@
 
 mod args;
 mod demo;
+mod files;
 mod live;
 mod servers;
 mod tabs;
@@ -60,6 +61,10 @@ impl Backend for Live {
         self.inner.watch(server);
     }
 
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        self.inner.files(ask);
+    }
+
     fn tabs_changed(&mut self, saved: &SavedTabs) {
         if let Some(dir) = sshee_core::app_identity::current().dir() {
             if let Err(e) = tabs::save(dir, saved) {
@@ -94,7 +99,7 @@ fn main() {
     };
     let options = Options { sheet: args.sheet, ..Options::default() };
     let launch = if args.demo {
-        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend), options }
+        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::default()), options }
     } else {
         // The server list is a couple of small files: read before the window opens, so the
         // sidebar is there in the first frame.

@@ -11,6 +11,7 @@
 pub mod files;
 pub mod home;
 pub mod stats;
+pub mod transfers;
 
 use std::collections::HashMap;
 
@@ -26,6 +27,13 @@ use crate::theme::{self, Theme};
 pub struct States {
     pub home: home::State,
     pub files: HashMap<TabId, files::State>,
+    /// Files, window-wide: folders seen lately, pinned and recent folders, uploads and
+    /// downloads in progress, and notes about what finished or failed (oldest first, until the
+    /// screen dismisses them).
+    pub dirs: sshee_app::dir_cache::DirCache,
+    pub bookmarks: sshee_app::model::Bookmarks,
+    pub transfers: sshee_app::transfers::Transfers,
+    pub notices: Vec<sshee_app::files::Notice>,
     pub stats: HashMap<TabId, stats::State>,
 }
 
