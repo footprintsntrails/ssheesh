@@ -1,0 +1,13 @@
+# An agent's message that ends in a numbered list: no cursor is on it, so it's no question.
+# Hand-made.
+---
+● The migration can go two ways. Do you want to proceed?
+
+  1. Yes, in a transaction
+  2. Yes, with CREATE INDEX CONCURRENTLY
+  3. No, leave it for tonight
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ >                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ? for shortcuts

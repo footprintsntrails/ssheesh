@@ -1,0 +1,14 @@
+# Claude Code at work: nothing is asked. Hand-made.
+---
+> Apply migration 0042 to the shop database.
+
+● I'll look at the migration first.
+
+● Read(migrations/0042_orders_index.sql)
+  ⎿  Read 14 lines
+
+✻ Pondering… (12s · esc to interrupt)
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ >                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯

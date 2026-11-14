@@ -66,7 +66,10 @@ fn prompt(user: &str, name: &str) -> Fixture {
 }
 
 impl Backend for DemoBackend {
-    fn start(&mut self, _: Remote) {}
+    fn start(&mut self, remote: Remote) {
+        // The agent on db-main asked a while ago, as in the design's picture.
+        remote.update(|s| sshee_ui::screens::agent::seed_wait(s, 130));
+    }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {

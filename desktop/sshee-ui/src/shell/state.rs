@@ -62,6 +62,12 @@ impl Remote {
     pub fn set_servers(&self, servers: Vec<Server>) {
         self.update(move |s| s.bench.set_servers(servers));
     }
+
+    /// The program in front in each of a server's terminals, by session key (tmux's answer):
+    /// tabs are named after the agent working in them.
+    pub fn set_foreground(&self, server: ServerKey, running: Vec<(String, String)>) {
+        self.update(move |s| crate::screens::agent::foreground(s, &server, &running));
+    }
 }
 
 /// What the window needs from outside: sessions for its terminals and news of its machines.
@@ -85,6 +91,21 @@ pub trait Backend {
     /// keep for the next run.
     fn tabs_changed(&mut self, saved: &SavedTabs) {
         let _ = saved;
+    }
+
+    /// The servers with a connected terminal changed: whose terminals to ask about their
+    /// foreground programs, every few seconds. The answers come back through
+    /// [`Remote::set_foreground`].
+    fn agents_on(&mut self, servers: &[Server]) {
+        let _ = servers;
+    }
+
+    /// A terminal needs you, or went quiet, while the window was in the background: the
+    /// system notification for it. The text is already safe to leave the app (secrets
+    /// dotted, names too while streaming: `sshee_term::attention`). The seam for the step
+    /// that shows it and brings `tab` forward on a click; until then nothing is shown.
+    fn notify(&mut self, tab: &Tab, note: &sshee_term::attention::Notification) {
+        let _ = (tab, note);
     }
 
     /// Sessions are replays on the window's own clock (a demo, a test): panes then run on
@@ -229,6 +250,22 @@ impl Shell {
         pane
     }
 
+    /// The backend, for a screen that has something to tell it.
+    pub(crate) fn backend_mut(&mut self) -> &mut dyn Backend {
+        &mut *self.backend
+    }
+
+    /// Starts the terminal of a tab that hasn't been on screen (an agent waits there and its
+    /// question is read without going to it).
+    pub(crate) fn open_unseen(&mut self, id: TabId) {
+        if let Some(tab) = self.bench.tab(id).filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&id)).cloned() {
+            let mut pane = self.make_pane(&tab);
+            pane.focused = false;
+            pane.open_unseen(sshee_term::engine::Size::new(80, 24));
+            self.panes.insert(id, pane);
+        }
+    }
+
     /// Ends the panes of tabs that are gone, and makes the pane of the tab on screen.
     fn sync_panes(&mut self) {
         let gone: Vec<TabId> = self.panes.keys().filter(|id| self.bench.tab(**id).is_none()).copied().collect();
@@ -296,6 +333,7 @@ impl Shell {
             self.backend.tabs_changed(&saved);
             self.kept = saved;
         }
+        crate::screens::agent::settled(self, tx);
         if self.active_pane().is_some() {
             tx.focus("term", false);
         }
@@ -375,6 +413,7 @@ impl Shell {
             Shortcut::ToggleSidebar => self.toggle_sidebar(tx),
             Shortcut::StepTab(step) => self.step_tab(step, tx),
             Shortcut::JumpToTab(n) => self.jump_to_tab(n, tx),
+            Shortcut::Agents => crate::screens::agent::toggle_list(self, tx),
         }
     }
 
@@ -426,6 +465,7 @@ impl Shell {
             pane.status = status;
         }
         self.sync_watch();
+        crate::screens::agent::linked(self);
     }
 
     /// The start of every frame (`AppSpec::poll`): every pane takes what its session sent, the
@@ -445,10 +485,11 @@ impl Shell {
         // A program rang or sent a notification: its tab says so, unless you're looking at it.
         for id in asked {
             let before = self.bench.tab(id).is_some_and(|t| t.needs_you);
-            self.bench.set_needs_you(id, true);
+            crate::screens::agent::asked(self, id, clock);
             changed |= self.bench.tab(id).is_some_and(|t| t.needs_you) != before;
         }
-        changed
+        // Agents: who works, who went quiet, and the card of the one being answered.
+        changed | crate::screens::agent::poll(self, clock, tx)
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

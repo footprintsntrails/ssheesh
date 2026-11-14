@@ -118,9 +118,12 @@ never writes 0.10's. `--demo` reads and writes nothing.
   been run yet, nor have their system fonts (`fonts::SYSTEM_FAMILIES`).
 - The row of tabs has no drag to reorder (`Workbench::move_tab` exists), no context menu, and
   when crowded it shrinks tabs and names each server once, but doesn't scroll.
-- A terminal tab's title is "Terminal N": the working folder (OSC 7) and the agent's name
-  aren't wired (`Workbench::set_title`, `set_agent` exist). "Needs you" comes from the bell
-  and OSC 9/777 only; sshee-core's agent watch isn't wired.
+- A terminal tab's title is "Terminal N", or "Terminal N (Claude Code)" while an agent is in
+  front (`sshee_app::agents`, asked from tmux by `app/src/agents.rs`); the working folder
+  (OSC 7) isn't a title yet (`Workbench::set_title` exists; the pane keeps it, `TermPane::cwd`).
+- A system notification's text is made and handed to `Backend::notify`, which shows nothing
+  yet: the notification itself, and its click bringing the tab forward, are the desktop
+  crate's step.
 - Saved passwords aren't read (0.10's keychain needs the owner's yes); a server that asks for
   one asks in the terminal. Host-key questions have no screen.
 - Tor's round-trip time isn't measured; the status bar shows "Tor" without it.
@@ -147,7 +150,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |
 | Tab menu, drag to reorder, side by side, zoom (`Tabs.tsx`, `Workspace.tsx`, `Pane.tsx`) | `shell/tabs.rs` (split out of `view.rs`), `shell/split.rs` | `workbench/layout.rs` (port of `layout.ts`) |
 | Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
-| An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover) | `screens/agent.rs` | `agents.rs` |
+| An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key and password questions, reconnect and sleep notices (`TerminalPane.tsx` overlays) | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal: find, links, "while you were away", streamer mode, scroll bar, context menu (`termFind.ts`, `terminalLinks.ts`, `away.ts`) | `terminal/find.rs`, `terminal/links.rs`, `terminal/away.rs`, `terminal/menu.rs` | none (sshee-term has them) |
 | Tor: the switch, progress, log (`TorButton.tsx`) | `screens/tor.rs` | `tor.rs` |

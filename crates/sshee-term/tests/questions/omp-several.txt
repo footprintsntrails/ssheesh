@@ -1,0 +1,12 @@
+# oh-my-pi asking for several answers at once (tick boxes). Hand-drawn.
+---
+╭─ Question ───────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│ Which checks should run after the migration?                                 │
+│                                                                              │
+│ ❯ ☐ Row counts                                                               │
+│   ☑ Index is valid                                                           │
+│   ☐ Slow query log                                                           │
+│                                                                              │
+│ ↑/↓ answer · space tick · enter select · esc cancel                          │
+╰──────────────────────────────────────────────────────────────────────────────╯

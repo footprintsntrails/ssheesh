@@ -1,0 +1,8 @@
+# OpenCode after "Allow always": it asks once more. Hand-drawn from OpenCode 1.18's source.
+---
+  △ Always allow
+
+   This will allow the following patterns until OpenCode is restarted.
+   - psql *
+
+  ⟦ Confirm ⟧  Cancel                             ⇆ select  enter confirm  esc cancel

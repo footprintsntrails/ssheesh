@@ -1,0 +1,5 @@
+# Answers with no question worded above them. Hand-made.
+---
+────────────────────────────────────────────────────────────────────────────────
+ ❯ 1. Yes
+   2. No, and tell Claude what to do differently (esc)

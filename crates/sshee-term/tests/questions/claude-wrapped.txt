@@ -1,0 +1,15 @@
+# Claude Code in a narrow terminal: long answers wrap under their own start. Hand-made.
+---
+────────────────────────────────────────────────
+ Bash command
+
+   docker compose -f deploy/compose.yml restart
+   shop-worker-1
+   Restart the worker
+
+ Do you want to proceed?
+   1. Yes
+ ❯ 2. Yes, and don't ask again for docker
+      compose commands in /srv/shop
+   3. No, and tell Claude what to do
+      differently (esc)

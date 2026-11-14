@@ -36,7 +36,7 @@ fn sample_tab(t: &Theme, key: &'static str, spec: Tab) -> El {
 }
 
 pub fn view(t: &'static Theme) -> El {
-    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, active: false, window_active: true, compact: false };
+    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, active: false, window_active: true, compact: false };
     let term = Tab { icon: Icon::Terminal, name: "~/shop", server: Some("web-staging"), ..base.clone() };
     let tabs = vec![
         sample_tab(t, "t-rest", base.clone()),
@@ -87,7 +87,7 @@ pub fn view(t: &'static Theme) -> El {
         status_tor(t, Some(84)),
     ];
     let icons: Vec<El> = Icon::ALL.iter().map(|i| icon(*i, theme::ICON_RAIL, t.l2on)).collect();
-    col()
+    let mut page = col()
         .key("sheet")
         .w_full()
         .h_full()
@@ -100,5 +100,10 @@ pub fn view(t: &'static Theme) -> El {
         .child(line(t, "l-buttons", "Button, chip, logo", buttons))
         .child(line(t, "l-menu", "Popover and menu", vec![question]))
         .child(line(t, "l-status", "Status bar", status))
-        .child(line(t, "l-icons", "Icons", icons))
+        .child(line(t, "l-icons", "Icons", icons));
+    // An agent's card in its states (below the fold of a window of the usual size).
+    for (key, label, cards) in crate::screens::agent::sheet(t) {
+        page = page.child(line(t, key, label, cards));
+    }
+    page
 }

@@ -8,6 +8,7 @@
 //! [`States`], so two screens never edit the same lines. How to add one, and the list of those
 //! still to build with the files each owns: desktop/ARCHITECTURE.md.
 
+pub mod agent;
 pub mod files;
 pub mod home;
 pub mod stats;
@@ -25,6 +26,7 @@ use crate::theme::{self, Theme};
 #[derive(Default)]
 pub struct States {
     pub home: home::State,
+    pub agent: agent::State,
     pub files: HashMap<TabId, files::State>,
     pub stats: HashMap<TabId, stats::State>,
 }
@@ -34,6 +36,7 @@ impl States {
     pub fn retain(&mut self, open: impl Fn(TabId) -> bool) {
         self.files.retain(|id, _| open(*id));
         self.stats.retain(|id, _| open(*id));
+        self.agent.retain(&open);
     }
 }
 

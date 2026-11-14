@@ -38,6 +38,8 @@ pub struct LiveBackend {
     /// `-F FILE` for every ssh, when the program was given a config of its own.
     ssh_config: Option<PathBuf>,
     watcher: Option<Watcher>,
+    /// The thread that asks servers what their terminals run (`crate::agents`).
+    agents: Option<crate::agents::Watcher>,
 }
 
 impl LiveBackend {
@@ -52,7 +54,7 @@ impl LiveBackend {
 
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
         let hosts = hosts.iter().map(|h| (format!("host:{}", h.id), h.clone())).collect();
-        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts, ssh_config, watcher: None }
+        LiveBackend { manager: Arc::new(SessionManager::new()), env, hosts, ssh_config, watcher: None, agents: None }
     }
 
     /// Where a machine's shells run: this computer, or ssh's target for a server. `None`: a
@@ -84,6 +86,7 @@ pub fn tor_shown(status: &TorStatus) -> Tor {
 impl Backend for LiveBackend {
     fn start(&mut self, remote: Remote) {
         self.watcher = Some(Watcher::start(self.env.clone(), remote.clone()));
+        self.agents = Some(crate::agents::Watcher::start(self.env.clone(), remote.clone()));
         // Tor, if it was left on in this copy (`~/.sshee-preview/tor/on`): every connection
         // from here on goes through it. The ports are the servers' own.
         let ports = self.hosts.values().filter_map(|h| h.port).collect();
@@ -105,6 +108,12 @@ impl Backend for LiveBackend {
     fn watch(&mut self, server: Option<&Server>) {
         if let Some(watcher) = &self.watcher {
             watcher.watch(server.and_then(|s| Some((s.key(), self.target(Some(s))?))));
+        }
+    }
+
+    fn agents_on(&mut self, servers: &[Server]) {
+        if let Some(agents) = &self.agents {
+            agents.watch(servers.iter().filter_map(|s| Some((s.key(), self.target(Some(s))?))).collect());
         }
     }
 }

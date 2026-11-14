@@ -10,3 +10,4 @@ pub mod legacy;
 pub mod model;
 pub mod import;
 pub mod workbench;
+pub mod agents;

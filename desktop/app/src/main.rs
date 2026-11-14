@@ -10,6 +10,7 @@
 // Hides the extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agents;
 mod args;
 mod demo;
 mod live;
@@ -58,6 +59,10 @@ impl Backend for Live {
 
     fn watch(&mut self, server: Option<&Server>) {
         self.inner.watch(server);
+    }
+
+    fn agents_on(&mut self, servers: &[Server]) {
+        self.inner.agents_on(servers);
     }
 
     fn tabs_changed(&mut self, saved: &SavedTabs) {

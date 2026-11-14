@@ -1,0 +1,9 @@
+# OpenCode's buttons with no highlight to be seen (a theme that draws none, or a frame
+# caught half-way). Hand-drawn.
+---
+  △ Permission required
+    $ Apply migration 0042
+
+   psql -h db-main -d shop -f migrations/0042_orders_index.sql
+
+   Allow once    Allow always    Reject           ⇆ select  enter confirm  esc reject

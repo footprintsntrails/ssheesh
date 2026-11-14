@@ -51,6 +51,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(bar(s, t, cx))
         .child(body.child(col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t))))
+        // Over the window: an agent's question under its tab, the list of agents.
+        .children(screens::agent::overlays(s, t, cx))
 }
 
 /// What a tab's icon is: an agent's spark when one runs in it, else its kind's.
@@ -65,7 +67,7 @@ fn tab_icon(tab: &sshee_app::workbench::Tab) -> Icon {
 
 /// How wide a tab is when nothing is squeezed, in points: for telling whether the row fits.
 fn natural_width(st: &StripTab) -> f32 {
-    let label = st.tab.label();
+    let label = sshee_app::agents::tab_label(st.tab);
     let mut w = 10.0 + theme::ICON + 7.0 + rune::text::advance(&label, theme::TAB_NAME) + 7.0 + rune::text::advance(st.server_name, theme::TAB_SERVER) + 10.0;
     if st.prod {
         w += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
@@ -144,13 +146,15 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             let prod = s.bench.server(&st.tab.server).is_some_and(|sv| sv.is_prod());
             tabs = tabs.child(group_name(t, st.server_name, prod, current == Some(st.tab.server.as_str())).key(format!("group-{}", id.0)));
         }
-        let label = st.tab.label();
+        // "Terminal 2 (Claude Code)": an agent in front is named, as in 0.10.
+        let label = sshee_app::agents::tab_label(st.tab);
         let spec = Tab {
             icon: tab_icon(st.tab),
             name: &label,
             server: (!compact).then_some(st.server_name),
             prod: st.prod && !compact,
             badge: st.tab.badge(),
+            working: s.screens.agent.working(id),
             active: st.active,
             window_active: active,
             compact,
@@ -159,6 +163,7 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             tab(t, &spec, move |s: &mut Shell, tx| s.close_tab(id, tx))
                 .key(format!("tab-{}", id.0))
                 .on_press_tx(move |s: &mut Shell, tx| s.focus_tab(id, tx))
+                .on_hover_change(move |s: &mut Shell, over, tx| screens::agent::tab_hover(s, id, over, tx))
                 .on_middle_press(move |s: &mut Shell, tx| s.close_tab(id, tx)),
         );
     }

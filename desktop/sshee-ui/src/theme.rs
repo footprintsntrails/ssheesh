@@ -8,7 +8,7 @@
 
 use std::sync::OnceLock;
 
-use rune::tok::TextStyle;
+use rune::tok::{Family, TextStyle};
 use rune::Color;
 
 /// The top row: window buttons, the title, the tabs.
@@ -69,6 +69,10 @@ pub const GROUP: TextStyle = TextStyle::new(11.0, 600.0);
 pub const SMALL: TextStyle = TextStyle::new(11.0, 400.0);
 /// Second lines, 12 pt.
 pub const NOTE: TextStyle = TextStyle::new(12.0, 400.0);
+/// A command in a popover's quiet box, in the terminal's font, each character on its own.
+pub const CODE: TextStyle = TextStyle::new(12.0, 400.0).lh(17.0).family(Family::Named(crate::fonts::TERMINAL_FAMILY)).features("'calt' 0, 'liga' 0");
+/// A popover that holds an agent's question, and the list of agents.
+pub const CARD_WIDTH: f32 = 480.0;
 
 /// One appearance's colours. The names are the stylesheet's.
 #[derive(Clone, Debug, PartialEq)]

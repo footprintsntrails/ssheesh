@@ -26,6 +26,8 @@ pub struct Tab<'a> {
     /// The red "Prod" chip goes on this tab.
     pub prod: bool,
     pub badge: Option<Badge>,
+    /// An agent is at work in it: a quiet ring after its name, when it has nothing else to say.
+    pub working: bool,
     /// The tab you're on.
     pub active: bool,
     /// The window is in front.
@@ -103,6 +105,7 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
         .role("tab")
         .label(match (spec.server, spec.badge) {
             (Some(server), Some(b)) => format!("{}, {server}, {}", spec.name, b.label()),
+            (Some(server), None) if spec.working => format!("{}, {server}, working", spec.name),
             (Some(server), None) => format!("{}, {server}", spec.name),
             (None, Some(b)) => format!("{}, {}", spec.name, b.label()),
             (None, None) => spec.name.to_owned(),
@@ -140,6 +143,8 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     }
     if let Some(b) = spec.badge {
         e = e.child(badge(t, b, compact));
+    } else if spec.working {
+        e = e.child(rune::row().key("working").items_center().label_static("Working").child(progress_ring(10.0, 1.5, t.l2)));
     }
     if let Some(close) = end_close {
         e = e.child(close_button(t, close));

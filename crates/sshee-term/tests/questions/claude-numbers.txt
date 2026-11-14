@@ -1,0 +1,10 @@
+# An answer is missing: the list is half-drawn. Hand-made.
+---
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   npm test
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   3. No, and tell Claude what to do differently (esc)

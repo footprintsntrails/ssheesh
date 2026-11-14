@@ -1,0 +1,18 @@
+# oh-my-pi asking a question with its ask dialog. Drawn by hand from the rows in
+# oh-my-pi 18.18's own source (a cursor, a radio mark, the answer; notes under it); the
+# frame around them is a guess. Not captured from a running agent.
+---
+╭─ Question ───────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│ Migration 0042 builds an index on orders.                                    │
+│                                                                              │
+│ How should I run it on db-main?                                              │
+│                                                                              │
+│ ❯ ○ In one transaction (Recommended)                                         │
+│       Locks orders while the index builds                                    │
+│   ○ With CREATE INDEX CONCURRENTLY                                           │
+│       Slower, and writes keep going                                          │
+│   ○ Other (type your own)                                                    │
+│                                                                              │
+│ ↑/↓ answer · enter select · esc cancel                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
