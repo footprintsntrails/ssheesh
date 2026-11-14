@@ -107,6 +107,8 @@ fn run_in(name: &str, args: &[&str], script: Option<Value>, prepare: impl FnOnce
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ssheesh-preview"));
     // A home of its own: whatever the window writes or reads, it isn't this machine's.
     cmd.env("HOME", &home).env("XDG_DATA_HOME", home.join("data")).env("XDG_CONFIG_HOME", home.join("config"));
+    // Windows finds the home folder without HOME: the copy's own folder is named outright.
+    cmd.env("SSHEE_PREVIEW_DIR", home.join(".sshee-preview"));
     cmd.args(args).arg("--snap").arg(&png).arg("--tree").arg(&tree).args(["--scale", "1", "--size", "1280x800"]);
     match script {
         Some(script) => {

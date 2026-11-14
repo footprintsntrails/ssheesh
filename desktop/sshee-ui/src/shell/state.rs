@@ -312,6 +312,14 @@ impl Shell {
             None => Arc::new(|_| {}),
         };
         let mut pane = TermPane::new(link, status, self.options.pane.clone());
+        // The window's key rules are the pane's too: a test of a Linux window running on a Mac
+        // gets Ctrl+click and Shift+drag, as a real Mac window gets Cmd+click.
+        let here = sshee_term::input::Platform::current();
+        pane.set_platform(match (self.options.mac_keys, here) {
+            (true, _) => sshee_term::input::Platform::Mac,
+            (false, sshee_term::input::Platform::Mac) => sshee_term::input::Platform::Other,
+            (false, other) => other,
+        });
         // Side by side there are two terminals on the page: each takes the keyboard by its own name.
         pane.set_focus_key(format!("pane-{}", id.0));
         pane.view.borrow_mut().set_look(self.look());

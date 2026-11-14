@@ -87,6 +87,8 @@ fn run(name: &str, args: &[&str], size: &str, script: Option<Value>) -> Option<R
     let (png, tree) = (dir.join("end.png"), dir.join("tree.json"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ssheesh-preview"));
     cmd.env("HOME", &home).env("XDG_DATA_HOME", home.join("data")).env("XDG_CONFIG_HOME", home.join("config"));
+    // Windows finds the home folder without HOME: the copy's own folder is named outright.
+    cmd.env("SSHEE_PREVIEW_DIR", home.join(".sshee-preview"));
     cmd.args(args).arg("--snap").arg(&png).arg("--tree").arg(&tree).args(["--scale", "1", "--size", size]);
     match script {
         Some(script) => {

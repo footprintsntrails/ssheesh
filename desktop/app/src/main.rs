@@ -101,7 +101,14 @@ impl Backend for Live {
 fn main() {
     // Which copy this is, before anything asks sshee-core where its files are: the helper
     // roles below find the app's Tor door and passwords through it.
-    let _ = sshee_core::app_identity::set(AppIdentity::preview());
+    // SSHEE_PREVIEW_DIR puts the copy's folder elsewhere: the window tests give each run its
+    // own, since Windows finds the home folder without asking HOME. Child processes (the Tor
+    // and askpass helpers) inherit it, so they find the same folder.
+    let identity = match std::env::var_os("SSHEE_PREVIEW_DIR").filter(|d| !d.is_empty()) {
+        Some(dir) => AppIdentity::in_dir(dir.into(), AppIdentity::preview().keychain_service()),
+        None => AppIdentity::preview(),
+    };
+    let _ = sshee_core::app_identity::set(identity);
     // ssh starts this executable to carry a connection through Tor. First: askpass's
     // variables reach it too.
     if let Some(code) = sshee_core::tor::proxy_main() {
