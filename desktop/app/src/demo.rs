@@ -10,7 +10,9 @@
 use std::path::Path;
 
 use serde_json::Value;
+use sshee_app::labels::{Listed, Looks};
 use sshee_app::model::EnvLabel;
+use sshee_app::servers::{Ask, Book, Candidate, Sources};
 use sshee_app::workbench::{Open, Server, Tab, TabKind, Tor, Vitals, Workbench};
 use sshee_ui::shell::{Backend, Remote};
 use sshee_ui::terminal::replay::{Fixture, ReplayLink};
@@ -23,15 +25,38 @@ const DB: &str = "host:demo-db";
 const SHOP: &str = include_str!("../fixtures/shop.json");
 const AGENT: &str = include_str!("../fixtures/agent.json");
 
+/// The made-up list of servers: four in the sidebar, two more in a made-up `~/.ssh/config`
+/// not picked yet, two XPipe would offer and one 0.10 would. All in memory.
+pub fn book() -> Book {
+    let host = |id: &str, name: &str, address: &str, from_config: bool| Listed { id: id.into(), name: name.into(), address: address.into(), from_config };
+    let hosts = vec![
+        host("demo-web", "web-7731", "deploy@203.0.113.17", false),
+        host("demo-staging", "web-staging", "deploy@203.0.113.18", false),
+        host("demo-backups", "backups", "backup@203.0.113.24", false),
+        host("demo-db", "db-main", "postgres@203.0.113.31", false),
+        host("cfg:cache-7731", "cache-7731", "deploy@203.0.113.40", true),
+        host("cfg:build-box", "build-box", "ci@203.0.113.52:2222", true),
+    ];
+    let mut looks = Looks::default();
+    for (id, icon, env) in [("demo-web", "globe", Some(EnvLabel::Prod)), ("demo-staging", "flask", Some(EnvLabel::Staging)), ("demo-backups", "backup", None), ("demo-db", "database", Some(EnvLabel::Prod))] {
+        looks.set_icon(id, icon);
+        looks.set_env(id, env);
+    }
+    let offer = |name: &str, address: &str, had_password: bool| Candidate { id: address.into(), name: name.into(), address: address.into(), identity_file: None, had_password, picked: true };
+    let sources = Sources {
+        xpipe: vec![offer("mail-7731", "root@203.0.113.25", true), offer("git-7731", "git@203.0.113.26:2200", false)],
+        xpipe_through_jump: 1,
+        old: vec![offer("metrics", "ops@203.0.113.60", false)],
+        ..Sources::default()
+    };
+    Book::new(hosts, looks, sources)
+}
+
 /// The made-up servers, tabs and numbers.
 pub fn bench() -> Workbench {
-    let mut bench = Workbench::new(vec![
-        Server::this_computer(),
-        Server::host("demo-web", "web-7731", "deploy@203.0.113.17").env(EnvLabel::Prod).icon("globe"),
-        Server::host("demo-staging", "web-staging", "deploy@203.0.113.18").env(EnvLabel::Staging).icon("flask"),
-        Server::host("demo-backups", "backups", "backup@203.0.113.24").icon("backup"),
-        Server::host("demo-db", "db-main", "postgres@203.0.113.31").env(EnvLabel::Prod).icon("database"),
-    ]);
+    let mut servers = vec![Server::this_computer()];
+    servers.extend(book().servers());
+    let mut bench = Workbench::new(servers);
     let shop = bench.open_with(TabKind::Terminal, WEB, Open { title: Some("~/shop".into()), ..Open::default() });
     bench.open(TabKind::Files, WEB);
     let agent = bench.open_with(TabKind::Terminal, DB, Open { title: Some("Migration 0042".into()), agent: Some("Claude Code".into()), ..Open::default() });
@@ -49,8 +74,39 @@ pub fn bench() -> Workbench {
     bench
 }
 
-/// Sessions that play fixtures.
-pub struct DemoBackend;
+/// Sessions that play fixtures, and a list of servers kept in memory: adding, importing and
+/// renaming work, and are gone when the window closes.
+pub struct DemoBackend {
+    book: Book,
+    remote: Option<Remote>,
+}
+
+impl Default for DemoBackend {
+    fn default() -> Self {
+        DemoBackend::new()
+    }
+}
+
+impl DemoBackend {
+    pub fn new() -> DemoBackend {
+        DemoBackend { book: book(), remote: None }
+    }
+
+    /// Tells the window what the list holds now.
+    fn show(&self, answer: Option<sshee_app::servers::Answer>) {
+        let Some(remote) = &self.remote else { return };
+        let (servers, colors, config_new, old_new) = (self.book.servers(), self.book.colors(), self.book.config_new(), self.book.sources.old.len());
+        remote.update(move |s| {
+            let mut all = vec![Server::this_computer()];
+            all.extend(servers);
+            s.bench.set_servers(all);
+            s.set_server_looks(colors, config_new, old_new);
+            if let Some(answer) = answer {
+                s.servers_answer(answer);
+            }
+        });
+    }
+}
 
 /// A fixture written in this crate: it reads, or the build is broken.
 fn fixture(json: &str) -> Fixture {
@@ -66,7 +122,21 @@ fn prompt(user: &str, name: &str) -> Fixture {
 }
 
 impl Backend for DemoBackend {
-    fn start(&mut self, _: Remote) {}
+    fn start(&mut self, remote: Remote) {
+        // The scene's agent has waited two minutes, as the design's card says.
+        remote.update(|s| {
+            if let Some(waits) = s.bench.tabs().iter().find(|t| t.needs_you).map(|t| t.id) {
+                s.backdate_wait(waits, 2.0 * 60.0);
+            }
+        });
+        self.remote = Some(remote);
+        self.show(None);
+    }
+
+    fn servers(&mut self, ask: Ask) {
+        let answer = self.book.handle(ask);
+        self.show(Some(answer));
+    }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {

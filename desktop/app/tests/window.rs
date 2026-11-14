@@ -247,3 +247,126 @@ fn the_component_sheet_draws_every_state() {
         assert!(run.tree_text.contains(said), "{said}");
     }
 }
+
+/// The surface popovers are drawn on, and the page, in each appearance.
+const LOOKS: [(&str, &str, &str); 2] = [("dark", "#2c2c2e", "#1c1c1e"), ("light", "#f6f6f8", "#ffffff")];
+
+#[test]
+fn the_main_menu_lists_servers_agents_and_closed_tabs_in_both_appearances() {
+    for (theme, pop, page) in LOOKS {
+        let script = json!([
+            // A middle click closes Files, then the logo: the main menu.
+            { "t": 0.3, "type": "tap", "x": 440.0, "y": 22.0, "button": "middle" },
+            { "t": 0.7, "type": "tap", "key": "home" },
+            // An arrow shows the keyboard's highlight on the first tile.
+            { "t": 1.0, "type": "key", "name": "Down" },
+            { "t": 1.5, "type": "mark", "name": "end" }
+        ]);
+        let Some(run) = run(&format!("home-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        // The search field in the middle, as wide as the palette, on the popover's surface.
+        let search = run.rect("home-search");
+        assert_eq!((search[2], search[3]), (560.0, 44.0), "{theme}");
+        assert!((search[0] + search[2] / 2.0 - (52.0 + 1228.0 / 2.0)).abs() < 1.0, "{theme}: the field isn't centred: {search:?}");
+        assert_eq!(run.fill("home-search"), format!("{pop}ff"), "{theme}");
+        // Five machines and "Add a server", in one row; the agent's dot on db-main.
+        for (i, name) in ["This computer", "web-7731", "web-staging", "backups", "db-main"].iter().enumerate() {
+            assert_eq!(run.label(&format!("tile-{i}")), *name);
+        }
+        assert_eq!(run.label("tile-add"), "Add a server");
+        assert_eq!(run.rect("tile-0")[1], run.rect("tile-add")[1], "{theme}: the tiles wrapped");
+        let dots: Vec<&str> = run.tree["elements"].as_array().unwrap().iter().filter(|e| e["key"] == "waits").filter_map(|e| e["path"].as_str()).collect();
+        assert!(dots.iter().any(|path| path.contains("tile-4")), "{theme}: {dots:?}");
+        // What the agent is doing, the tab closed a moment ago, and what waits to be brought in.
+        for said in ["Running now", "Migration 0042", "on db-main", "Needs you", "Recently closed", "on web-7731", "Reopen", "2 servers in ~/.ssh/config to pick from", "1 server from SSHeesh 0.10 to bring over", "Prod", "Staging"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't on the main menu");
+        }
+        assert!(run.element("run-0").is_some() && run.element("closed-0").is_some() && run.element("term").is_none(), "{theme}");
+        // The page under it all is the page's colour.
+        assert_eq!(at(&run.pixels(), 1200, 700), page, "{theme}");
+    }
+}
+
+#[test]
+fn the_palette_hangs_under_the_title_with_files_first_in_both_appearances() {
+    for (theme, pop, _) in LOOKS {
+        let script = json!([key(0.3, "l", "cs"), { "t": 0.9, "type": "mark", "name": "end" }]);
+        let Some(run) = run(&format!("palette-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        let (title, palette) = (run.rect("title"), run.rect("palette"));
+        assert_eq!(palette[2], 560.0, "{theme}");
+        assert!((palette[0] - title[0]).abs() < 1.0 && palette[1] > title[1] + title[3], "{theme}: {title:?} {palette:?}");
+        assert_eq!(run.fill("palette"), format!("{pop}ff"), "{theme}");
+        // One blue row, the first: Files.
+        assert_eq!(run.fill("pal-0"), "#0071e3ff", "{theme}");
+        assert_ne!(run.fill("pal-1"), "#0071e3ff", "{theme}");
+        for said in ["Search or run on web-7731", "On web-7731", "Files", "df -h -x tmpfs -x devtmpfs", "snippet", "Go to", "Migration 0042", "Needs you", "Window", "Settings"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the palette");
+        }
+        // The terminal is still under it.
+        assert!(run.element("term").is_some(), "{theme}");
+    }
+}
+
+#[test]
+fn a_typed_command_is_offered_for_the_production_server_and_not_chosen() {
+    let script = json!([
+        key(0.3, "l", "cs"),
+        { "t": 0.6, "type": "type", "text": "docker compose ps" },
+        { "t": 1.6, "type": "key", "name": "Enter" },
+        { "t": 2.0, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = run("palette-run", &["--demo"], Some(script)) else { return };
+    // Return did nothing: the palette is open, its one row isn't the blue one, and it says why.
+    assert!(run.element("palette").is_some());
+    assert_ne!(run.fill("pal-0"), "#0071e3ff");
+    assert!(run.element("pal-1").is_none());
+    for said in ["docker compose ps", "run on web-7731", "Prod", "Nothing runs by itself"] {
+        assert!(run.tree_text.contains(said), "{said}");
+    }
+}
+
+#[test]
+fn add_a_server_shows_its_form_and_its_sources_in_both_appearances() {
+    for (theme, pop, _) in LOOKS {
+        let script = json!([
+            { "t": 0.3, "type": "tap", "key": "add-server" },
+            { "t": 0.8, "type": "type", "text": "ssh root@203.0.113.77 -p 2222" },
+            { "t": 2.2, "type": "mark", "name": "end" }
+        ]);
+        let Some(run) = run(&format!("add-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        let dialog = run.rect("add-dialog");
+        assert_eq!(dialog[2], 520.0, "{theme}");
+        assert!((dialog[0] + dialog[2] / 2.0 - 640.0).abs() < 1.0, "{theme}: the dialog isn't centred: {dialog:?}");
+        assert_eq!(run.fill("add-dialog"), format!("{pop}ff"), "{theme}");
+        for said in ["Add a server", "Bring over your servers from 0.10", "From ~/.ssh/config", "2 new", "Import from XPipe", "Reads as root@203.0.113.77:2222", "SSH key", "Password", "Cancel", "Add and connect"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the dialog");
+        }
+        for key in ["add-address", "add-port", "add-user", "add-key-file", "add-name", "add-save", "add-cancel"] {
+            assert!(run.element(key).is_some(), "{theme}: {key}");
+        }
+    }
+}
+
+#[test]
+fn a_servers_menu_and_card_open_beside_its_icon_in_both_appearances() {
+    for (theme, pop, _) in LOOKS {
+        // The card: the pointer rests on db-main's icon.
+        let script = json!([{ "t": 0.3, "type": "move", "key": "server-4" }, { "t": 1.4, "type": "mark", "name": "end" }]);
+        let Some(run) = run(&format!("card-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        let (icon, card) = (run.rect("server-4"), run.rect("server-card"));
+        assert_eq!(card[2], 262.0, "{theme}");
+        assert!(card[0] >= icon[0] + icon[2] && (card[1] - icon[1]).abs() < 40.0, "{theme}: {icon:?} {card:?}");
+        assert_eq!(run.fill("server-card"), format!("{pop}ff"), "{theme}");
+        for said in ["db-main", "Prod", "postgres@203.0.113.31, through Tor", "1 tab open", "Claude Code needs you, 2 min"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't on the card");
+        }
+        // The menu: a right click there.
+        let script = json!([{ "t": 0.3, "type": "secondary-click", "key": "server-4" }, { "t": 0.6, "type": "key", "name": "Down" }, { "t": 1.0, "type": "mark", "name": "end" }]);
+        let Some(run) = self::run(&format!("menu-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        assert_eq!(run.fill("server-menu"), format!("{pop}ff"), "{theme}");
+        assert_eq!(run.fill("sm-0"), "#0071e3ff", "{theme}: the arrow didn't highlight the first row");
+        for said in ["New terminal", "Files", "Rename…", "Icon and colour…", "Production", "Staging", "Development", "Remove server…"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the menu");
+        }
+        assert!(run.element("server-card").is_none(), "{theme}: the card stayed under the menu");
+    }
+}

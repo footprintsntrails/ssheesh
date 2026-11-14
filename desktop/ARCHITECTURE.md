@@ -67,7 +67,7 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
 - `sshee-ui/src/icons.rs`: `Icon` and `icon(Icon, size, colour)`; a new icon is one arm of
   `Icon::drawing` with SVG path data (`svg.rs` reads it), on the 16-unit grid, 1.4 pt line.
 - `sshee-ui/src/kit/`: one module per component (`button`, `tab`, `rail`, `chip`, `menu`,
-  `popover`, `status`). A component is a function from what it shows to an `El`; the caller
+  `popover`, `status`, and for forms and lists `field`, `list`, `tile`, `push`). A component is a function from what it shows to an `El`; the caller
   chains `.key(..)` and handlers. Add states to the component, not at the call site.
 - From Rune itself, used as is: tooltips (`El::help`), focus rings and Tab order, text fields
   (`rune::text_input`), native pop-up menus, virtual lists (`El::virtual_rows`). **rune-kit**
@@ -85,8 +85,12 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
    `shell/view.rs::tab_icon`, its page in `page`, its module in `screens/`.
 3. **Something over the window** (the command palette, settings, an agent's question, a
    server's card): a module in `screens/` with its `State` in `screens::States`, drawn as a
-   last child of the root in `shell/view.rs::view` (Rune's `El::modal` traps focus and closes
-   on a click outside), opened by a `Shell` method. Use `kit::popover` and `kit::menu`.
+   last child of the root (Rune's `El::modal` traps focus and closes on a click outside),
+   opened by a `Shell` method. Its element goes in `screens::overlays`, its "is it open" in
+   `States::any_open` (no shortcut fires and no key reaches a terminal behind it) and its
+   closing in `States::close_all` (one thing over the window at a time). Use `kit::popover`,
+   `kit::list` and `kit::push`; the palette (`screens/palette.rs`) is the one to copy for a
+   list with one moving highlight, "Add a server" for a form.
 4. Keys are fixed words and tab numbers (`format!("tab-{}", id.0)`), never a server's name.
 5. Tests: rules in sshee-app; the screen in `Runtime::with_text` (see `shell/tests.rs`: a fake
    `Backend`, clicks by element key, the screen reader's tree); one headless picture in
@@ -127,6 +131,21 @@ never writes 0.10's. `--demo` reads and writes nothing.
 - Every hidden pane still takes its frames in `poll` (so a switch shows it at once); with
   dozens of busy tabs that wants a "drain replies only" mode in `TermPane`.
 
+## Screens that are built
+
+| Screen | In `sshee-ui/src/` | Rules in `crates/sshee-app/src/` |
+|---|---|---|
+| Main menu: search field, server tiles, agents at work, closed tabs | `screens/home.rs` | `home.rs` |
+| Command palette (`srv:` `cmd:` `file:` `set:`; a command for a server is never preselected) | `screens/palette.rs` | `palette.rs` |
+| Add a server: by hand, from the ssh config, XPipe and 0.10 | `screens/add_server.rs` | `servers.rs` (`Form`, `Ask`, `Answer`, and `Book`, the list in memory a demo and the tests answer from) |
+| A server's menu (rename, icon and colour, label, remove) and its card under the pointer | `screens/server_menu.rs`, `screens/server_card.rs` | `labels.rs`, `home.rs` (`Card`) |
+
+The list of servers is this copy's own: `desktop/app/src/servers.rs` keeps `hosts.json` and
+`looks.json` in `~/.sshee-preview` and passwords under the copy's keychain name. The window
+never touches it: a screen calls `Backend::servers(Ask)`, the backend does the work on a
+thread and answers through `Remote` (`Shell::servers_answer`, with the new list). 0.10's list
+is only read, to offer "Bring over your servers from 0.10".
+
 ## Screens still to port, and the files each owns
 
 Each row can be built by itself. "Owns" are files only that screen's author edits; the shared
@@ -136,14 +155,10 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 
 | Screen (0.10's source) | Owns in `sshee-ui/src/` | Owns in `crates/sshee-app/src/` |
 |---|---|---|
-| Main menu: servers, running now, "Where to?" (`Home.tsx`) | `screens/home.rs` | `home.rs` |
 | Files: folders, previews, editor, drag in and out (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `paths.rs`, `dir_cache.rs` |
 | Transfers (`Transfers.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
-| Command palette, search (`Overlays.tsx` palette, `cmdk`) | `screens/palette.rs` | `palette.rs` |
 | Settings and its sections (`SettingsDialog.tsx`, `ShortcutsEditor`, `ThemeEditor`, `ColorPicker`) | `screens/settings.rs`, `screens/settings/` | `model/settings.rs` (exists), `settings_store.rs` |
-| Add a server, import from ssh config and XPipe (`AddServerDialog.tsx`, `ConfigImport`, `XpipeImport`) | `screens/add_server.rs` | `servers.rs` |
-| A server's card and menu, labels and looks (`Sidebar.tsx` menus, `LookPicker`, `HostIcon`) | `screens/server_card.rs`, `screens/server_menu.rs`; more arms in `icons.rs` | `labels.rs` |
 | The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |
 | Tab menu, drag to reorder, side by side, zoom (`Tabs.tsx`, `Workspace.tsx`, `Pane.tsx`) | `shell/tabs.rs` (split out of `view.rs`), `shell/split.rs` | `workbench/layout.rs` (port of `layout.ts`) |
 | Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
@@ -160,5 +175,6 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Second window, the mini window (`windows.ts`, `MiniApp.tsx`) | `shell/windows.rs` | `windows.rs` |
 | Notifications with a click, tray (outside the window) | none | a new Rune-free crate, `crates/sshee-desktop` |
 
-Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) is wired only
-for labels and looks so far (`desktop/app/src/servers.rs`).
+Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) isn't wired.
+Servers, with their labels and looks, come over when you pick them in "Add a server"
+(`desktop/app/src/servers.rs`); snippets are still 0.10's starters (`screens::palette::State`).

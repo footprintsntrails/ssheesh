@@ -28,14 +28,22 @@ pub enum Shortcut {
     StepTab(i32),
     /// The tab at this place in the row, 1 to 9.
     JumpToTab(usize),
+    /// The command palette; `PaletteAlt` is its second shortcut off a Mac (0.10's `paletteAlt`).
+    Palette,
+    PaletteAlt,
+    /// "Add a server".
+    AddServer,
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 4] = [
+const NAMED: [(Shortcut, &str); 7] = [
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
     (Shortcut::ReopenTab, "reopenTab"),
     (Shortcut::ToggleSidebar, "sidebar"),
+    (Shortcut::Palette, "palette"),
+    (Shortcut::PaletteAlt, "paletteAlt"),
+    (Shortcut::AddServer, "addHost"),
 ];
 
 impl Shortcut {
@@ -69,6 +77,11 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         // Elsewhere Ctrl+Shift+T is a new tab, as in Windows Terminal; Z undoes a close.
         Shortcut::ReopenTab => (if mac { "t" } else { "z" }, true),
         Shortcut::ToggleSidebar => ("b", false),
+        // ⌘K clears the terminal on a Mac, so the palette has one shortcut there.
+        Shortcut::Palette => ("l", false),
+        Shortcut::PaletteAlt if mac => return None,
+        Shortcut::PaletteAlt => ("k", false),
+        Shortcut::AddServer => ("n", true),
         Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
     };
     Some(if mac { keys(key, false, true, mac_shift) } else { keys(key, true, false, true) })
@@ -198,5 +211,19 @@ mod tests {
         assert_eq!(default_keys(Shortcut::ReopenTab, true), Some(keys("t", false, true, true)));
         assert_eq!(default_keys(Shortcut::ReopenTab, false), Some(keys("z", true, false, true)));
         assert_eq!(default_keys(Shortcut::JumpToTab(1), true), None);
+    }
+
+    #[test]
+    fn the_palette_and_add_a_server_keep_0_10s_keys() {
+        assert_eq!(hit("l", "cs", false), Some(Shortcut::Palette));
+        assert_eq!(hit("k", "cs", false), Some(Shortcut::PaletteAlt));
+        assert_eq!(hit("n", "cs", false), Some(Shortcut::AddServer));
+        assert_eq!(hit("l", "m", true), Some(Shortcut::Palette));
+        assert_eq!(hit("n", "ms", true), Some(Shortcut::AddServer));
+        // ⌘K clears the terminal on a Mac; Ctrl+L and Ctrl+K are the shell's everywhere.
+        assert_eq!(hit("k", "m", true), None);
+        assert_eq!(hit("l", "c", false), None);
+        assert_eq!(hit("k", "c", true), None);
+        assert_eq!((Shortcut::Palette.id(), Shortcut::PaletteAlt.id(), Shortcut::AddServer.id()), (Some("palette"), Some("paletteAlt"), Some("addHost")));
     }
 }
