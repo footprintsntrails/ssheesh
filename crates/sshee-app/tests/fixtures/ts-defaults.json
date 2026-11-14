@@ -1,0 +1,446 @@
+{
+  "linux": {
+    "sshee-settings": {
+      "state": {
+        "theme": "ssheesh",
+        "themeFollowsSystem": false,
+        "lightTheme": "daylight",
+        "darkTheme": "ssheesh",
+        "customThemes": [],
+        "shortcuts": {},
+        "uiZoom": 100,
+        "dimInactive": 0,
+        "animations": true,
+        "logo": "winking",
+        "compactMode": "off",
+        "compactLast": "both",
+        "onboarded": false,
+        "onboardingVersion": 0,
+        "hintsSeen": [],
+        "envStripe": false,
+        "tabsPlacement": "top",
+        "lastSeenVersion": "",
+        "accent": "#4eba65",
+        "terminalScheme": "auto",
+        "terminalColors": null,
+        "terminalFont": "system",
+        "terminalFontSize": 13,
+        "terminalLineHeight": 1.22,
+        "cursorStyle": "bar",
+        "cursorBlink": true,
+        "gpuRendering": false,
+        "copyOnSelect": true,
+        "countTyping": false,
+        "terminalPadding": 12,
+        "reconnectMode": "ask",
+        "idleSleep": 20,
+        "sidebarSide": "left",
+        "sidebarVisible": true,
+        "sidebarWidth": 232,
+        "sidebarMode": "narrow",
+        "iconPack": "line",
+        "railStatus": "off",
+        "expanded": [],
+        "viewMode": "tabs",
+        "hiddenPlaces": [],
+        "previewWidth": 420,
+        "paneGap": 6,
+        "paneRadius": 11,
+        "showVitals": true,
+        "updateMode": "auto",
+        "streamerMode": false,
+        "hideSecrets": true,
+        "cleanUploads": true,
+        "highlightErrors": true,
+        "highlightWarnings": true,
+        "highlightAddresses": false,
+        "highlightRules": [],
+        "notifyAttention": true,
+        "torHideTyping": false,
+        "welcomeMode": "auto",
+        "welcomeParts": [
+          "logo",
+          "system",
+          "usage",
+          "status"
+        ],
+        "welcomeNote": "",
+        "welcomedHosts": [],
+        "nativeTitleBar": false
+      },
+      "version": 4
+    },
+    "sshee-labels": {
+      "state": {
+        "env": {},
+        "hidden": [],
+        "configSeen": [],
+        "looks": {},
+        "autoLooks": {}
+      },
+      "version": 2
+    },
+    "sshee-workspace": {
+      "state": {
+        "layouts": {},
+        "splitOn": {},
+        "panes": {},
+        "focused": "",
+        "hidden": [],
+        "tabOrder": [],
+        "home": true,
+        "lastFocusedFor": {},
+        "frontOf": {},
+        "closedTabs": []
+      },
+      "version": 2
+    },
+    "sshee-snippets": {
+      "state": {
+        "snippets": [
+          {
+            "id": "s-disk",
+            "name": "How full the disks are",
+            "command": "df -h -x tmpfs -x devtmpfs"
+          },
+          {
+            "id": "s-logs",
+            "name": "Follow a container's log",
+            "command": "docker logs -f --tail {{lines:100}} {{container}}"
+          },
+          {
+            "id": "s-restart",
+            "name": "Restart a service",
+            "command": "sudo systemctl restart {{service}} && systemctl status --no-pager {{service}}"
+          },
+          {
+            "id": "s-ports",
+            "name": "What's listening on which port",
+            "command": "sudo ss -ltnp"
+          },
+          {
+            "id": "s-big",
+            "name": "Biggest folders here",
+            "command": "du -xh --max-depth=1 {{folder:.}} 2>/dev/null | sort -rh | head -n 15"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "sshee-bookmarks": {
+      "state": {
+        "pins": {},
+        "recent": {}
+      },
+      "version": 1
+    },
+    "sshee-tunnels": {
+      "state": {
+        "byHost": {}
+      },
+      "version": 1
+    },
+    "sshee-typing-counts": {
+      "state": {
+        "saved": {}
+      },
+      "version": 0
+    }
+  },
+  "mac": {
+    "sshee-settings": {
+      "state": {
+        "theme": "ssheesh",
+        "themeFollowsSystem": false,
+        "lightTheme": "daylight",
+        "darkTheme": "ssheesh",
+        "customThemes": [],
+        "shortcuts": {},
+        "uiZoom": 100,
+        "dimInactive": 0,
+        "animations": true,
+        "logo": "winking",
+        "compactMode": "off",
+        "compactLast": "both",
+        "onboarded": false,
+        "onboardingVersion": 0,
+        "hintsSeen": [],
+        "envStripe": false,
+        "tabsPlacement": "top",
+        "lastSeenVersion": "",
+        "accent": "#4eba65",
+        "terminalScheme": "auto",
+        "terminalColors": null,
+        "terminalFont": "system",
+        "terminalFontSize": 13,
+        "terminalLineHeight": 1.22,
+        "cursorStyle": "bar",
+        "cursorBlink": true,
+        "gpuRendering": true,
+        "copyOnSelect": true,
+        "countTyping": false,
+        "terminalPadding": 12,
+        "reconnectMode": "ask",
+        "idleSleep": 20,
+        "sidebarSide": "left",
+        "sidebarVisible": true,
+        "sidebarWidth": 232,
+        "sidebarMode": "narrow",
+        "iconPack": "line",
+        "railStatus": "off",
+        "expanded": [],
+        "viewMode": "tabs",
+        "hiddenPlaces": [],
+        "previewWidth": 420,
+        "paneGap": 6,
+        "paneRadius": 11,
+        "showVitals": true,
+        "updateMode": "auto",
+        "streamerMode": false,
+        "hideSecrets": true,
+        "cleanUploads": true,
+        "highlightErrors": true,
+        "highlightWarnings": true,
+        "highlightAddresses": false,
+        "highlightRules": [],
+        "notifyAttention": true,
+        "torHideTyping": false,
+        "welcomeMode": "auto",
+        "welcomeParts": [
+          "logo",
+          "system",
+          "usage",
+          "status"
+        ],
+        "welcomeNote": "",
+        "welcomedHosts": [],
+        "nativeTitleBar": false
+      },
+      "version": 4
+    },
+    "sshee-labels": {
+      "state": {
+        "env": {},
+        "hidden": [],
+        "configSeen": [],
+        "looks": {},
+        "autoLooks": {}
+      },
+      "version": 2
+    },
+    "sshee-workspace": {
+      "state": {
+        "layouts": {},
+        "splitOn": {},
+        "panes": {},
+        "focused": "",
+        "hidden": [],
+        "tabOrder": [],
+        "home": true,
+        "lastFocusedFor": {},
+        "frontOf": {},
+        "closedTabs": []
+      },
+      "version": 2
+    },
+    "sshee-snippets": {
+      "state": {
+        "snippets": [
+          {
+            "id": "s-disk",
+            "name": "How full the disks are",
+            "command": "df -h -x tmpfs -x devtmpfs"
+          },
+          {
+            "id": "s-logs",
+            "name": "Follow a container's log",
+            "command": "docker logs -f --tail {{lines:100}} {{container}}"
+          },
+          {
+            "id": "s-restart",
+            "name": "Restart a service",
+            "command": "sudo systemctl restart {{service}} && systemctl status --no-pager {{service}}"
+          },
+          {
+            "id": "s-ports",
+            "name": "What's listening on which port",
+            "command": "sudo ss -ltnp"
+          },
+          {
+            "id": "s-big",
+            "name": "Biggest folders here",
+            "command": "du -xh --max-depth=1 {{folder:.}} 2>/dev/null | sort -rh | head -n 15"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "sshee-bookmarks": {
+      "state": {
+        "pins": {},
+        "recent": {}
+      },
+      "version": 1
+    },
+    "sshee-tunnels": {
+      "state": {
+        "byHost": {}
+      },
+      "version": 1
+    },
+    "sshee-typing-counts": {
+      "state": {
+        "saved": {}
+      },
+      "version": 0
+    }
+  },
+  "windows": {
+    "sshee-settings": {
+      "state": {
+        "theme": "ssheesh",
+        "themeFollowsSystem": false,
+        "lightTheme": "daylight",
+        "darkTheme": "ssheesh",
+        "customThemes": [],
+        "shortcuts": {},
+        "uiZoom": 100,
+        "dimInactive": 0,
+        "animations": true,
+        "logo": "winking",
+        "compactMode": "off",
+        "compactLast": "both",
+        "onboarded": false,
+        "onboardingVersion": 0,
+        "hintsSeen": [],
+        "envStripe": false,
+        "tabsPlacement": "top",
+        "lastSeenVersion": "",
+        "accent": "#4eba65",
+        "terminalScheme": "auto",
+        "terminalColors": null,
+        "terminalFont": "system",
+        "terminalFontSize": 13,
+        "terminalLineHeight": 1.22,
+        "cursorStyle": "bar",
+        "cursorBlink": true,
+        "gpuRendering": true,
+        "copyOnSelect": true,
+        "countTyping": false,
+        "terminalPadding": 12,
+        "reconnectMode": "ask",
+        "idleSleep": 20,
+        "sidebarSide": "left",
+        "sidebarVisible": true,
+        "sidebarWidth": 232,
+        "sidebarMode": "narrow",
+        "iconPack": "line",
+        "railStatus": "off",
+        "expanded": [],
+        "viewMode": "tabs",
+        "hiddenPlaces": [],
+        "previewWidth": 420,
+        "paneGap": 6,
+        "paneRadius": 11,
+        "showVitals": true,
+        "updateMode": "auto",
+        "streamerMode": false,
+        "hideSecrets": true,
+        "cleanUploads": true,
+        "highlightErrors": true,
+        "highlightWarnings": true,
+        "highlightAddresses": false,
+        "highlightRules": [],
+        "notifyAttention": true,
+        "torHideTyping": false,
+        "welcomeMode": "auto",
+        "welcomeParts": [
+          "logo",
+          "system",
+          "usage",
+          "status"
+        ],
+        "welcomeNote": "",
+        "welcomedHosts": [],
+        "nativeTitleBar": false
+      },
+      "version": 4
+    },
+    "sshee-labels": {
+      "state": {
+        "env": {},
+        "hidden": [],
+        "configSeen": [],
+        "looks": {},
+        "autoLooks": {}
+      },
+      "version": 2
+    },
+    "sshee-workspace": {
+      "state": {
+        "layouts": {},
+        "splitOn": {},
+        "panes": {},
+        "focused": "",
+        "hidden": [],
+        "tabOrder": [],
+        "home": true,
+        "lastFocusedFor": {},
+        "frontOf": {},
+        "closedTabs": []
+      },
+      "version": 2
+    },
+    "sshee-snippets": {
+      "state": {
+        "snippets": [
+          {
+            "id": "s-disk",
+            "name": "How full the disks are",
+            "command": "df -h -x tmpfs -x devtmpfs"
+          },
+          {
+            "id": "s-logs",
+            "name": "Follow a container's log",
+            "command": "docker logs -f --tail {{lines:100}} {{container}}"
+          },
+          {
+            "id": "s-restart",
+            "name": "Restart a service",
+            "command": "sudo systemctl restart {{service}} && systemctl status --no-pager {{service}}"
+          },
+          {
+            "id": "s-ports",
+            "name": "What's listening on which port",
+            "command": "sudo ss -ltnp"
+          },
+          {
+            "id": "s-big",
+            "name": "Biggest folders here",
+            "command": "du -xh --max-depth=1 {{folder:.}} 2>/dev/null | sort -rh | head -n 15"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "sshee-bookmarks": {
+      "state": {
+        "pins": {},
+        "recent": {}
+      },
+      "version": 1
+    },
+    "sshee-tunnels": {
+      "state": {
+        "byHost": {}
+      },
+      "version": 1
+    },
+    "sshee-typing-counts": {
+      "state": {
+        "saved": {}
+      },
+      "version": 0
+    }
+  }
+}

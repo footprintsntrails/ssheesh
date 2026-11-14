@@ -35,7 +35,8 @@ pub struct SshTarget {
 pub struct SshEnv {
     /// Directory for connection-sharing sockets. With it, the file browser
     /// and metrics reuse the terminal's login instead of signing in again.
-    /// Not supported by Windows OpenSSH, so it's ignored there.
+    /// Not supported by Windows OpenSSH, so it's ignored there. Connections
+    /// through Tor are shared only within this process (see `tor_shared_prefix`).
     pub control_dir: Option<PathBuf>,
     /// The program ssh runs to ask for a password: the app itself.
     pub askpass: Option<PathBuf>,
@@ -109,10 +110,21 @@ fn args(t: &SshTarget, env: &SshEnv, tor: Option<String>) -> Vec<String> {
     }
     if cfg!(unix) {
         if let Some(dir) = &env.control_dir {
-            opt("ControlMaster=auto");
-            // Connections through Tor share only with each other.
-            opt(&format!("ControlPath={}/{}%C", dir.display(), if tor.is_some() { TOR_SHARED } else { "" }));
-            opt("ControlPersist=300");
+            match control_path(dir, tor.is_some().then(tor_shared_prefix)) {
+                Some(path) => {
+                    opt("ControlMaster=auto");
+                    opt(&format!("ControlPath={path}"));
+                    opt("ControlPersist=300");
+                }
+                // ssh gives up on a connection once it can't make its
+                // socket at a path too long for one, and one of your own
+                // config could share a connection through Tor with one
+                // that isn't: none at all.
+                None => {
+                    opt("ControlMaster=no");
+                    opt("ControlPath=none");
+                }
+            }
         }
     }
     if let Some(cmd) = &tor {
@@ -146,21 +158,69 @@ fn args(t: &SshTarget, env: &SshEnv, tor: Option<String>) -> Vec<String> {
     a
 }
 
-/// What starts the name of a shared connection that goes through Tor.
-const TOR_SHARED: &str = "t";
+/// The longest path a unix socket may have, its closing zero included:
+/// `sun_path` is 108 bytes on Linux and 104 on macOS and the BSDs.
+const SOCKET_PATH_MAX: usize = if cfg!(any(target_os = "linux", target_os = "android")) { 108 } else { 104 };
+
+/// What ssh adds to the path while it makes a shared connection's socket:
+/// a dot and 16 random letters, before it moves it to its name.
+const SOCKET_TEMP_SUFFIX: usize = 17;
+
+/// The ControlPath for connections shared in `dir`, named by ssh's 40-digit
+/// hash of the server (%C) after `prefix`, if there's one. None when that's
+/// too long for a socket: ssh would sign in, fail to make it, and quit.
+fn control_path(dir: &std::path::Path, prefix: Option<&str>) -> Option<String> {
+    let prefix = prefix.unwrap_or_default();
+    let path = format!("{}/{prefix}%C", dir.display());
+    let bytes = dir.as_os_str().len() + 1 + prefix.len() + 40 + SOCKET_TEMP_SUFFIX;
+    (bytes < SOCKET_PATH_MAX).then_some(path)
+}
+
+/// What starts the name of a shared connection that goes through Tor: "t",
+/// a mark of this process, and "-". Such a connection is carried by this
+/// process's Tor (through its door, see `tor::door_file`) and ends with it,
+/// so another process mustn't use it: a copy starting while another quits
+/// (during an update) would see its terminals drop the moment the other
+/// one is gone. The mark is random rather than the process id, which can
+/// repeat inside a sandbox (a PID namespace), and short, for the socket's
+/// sake (see `control_path`). Versions up to 0.10.14 named them "t" and the
+/// hash alone; this process never uses or ends those.
+fn tor_shared_prefix() -> &'static str {
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    PREFIX.get_or_init(|| {
+        let mut bytes = [0u8; 3];
+        let mark = match getrandom::fill(&mut bytes) {
+            Ok(()) => bytes.iter().map(|b| format!("{b:02x}")).collect(),
+            Err(_) => format!("{:06x}", std::process::id() & 0xff_ffff),
+        };
+        format!("t{mark}-")
+    })
+}
+
+/// Whether `close_shared` ends the shared connection whose socket is named
+/// `name`: one through Tor whose name starts with `tor_prefix` (this
+/// process's), or, when `tor_prefix` is None, one that doesn't go through Tor.
+fn ends_shared(name: &str, tor_prefix: Option<&str>) -> bool {
+    let hash = match tor_prefix {
+        Some(prefix) => name.strip_prefix(prefix),
+        None => Some(name),
+    };
+    // ssh names them by a 40-digit hash (%C).
+    hash.is_some_and(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+}
 
 /// Ends the shared connections (see `SshEnv::control_dir`) that go through
 /// Tor, or the ones that don't: after Tor is turned on or off, nothing
-/// lingers on the old way. Sessions still using one end with it.
+/// lingers on the old way. Sessions still using one end with it. Of those
+/// through Tor, only this process's: another one's are carried by its own
+/// Tor, which it turns on and off itself.
 pub fn close_shared(env: &SshEnv, tor: bool) {
     let Some(dir) = env.control_dir.as_ref().filter(|_| cfg!(unix)) else { return };
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let mut waiting = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        // ssh names them by a 40-digit hash (%C).
-        let hash = name.strip_prefix(TOR_SHARED).filter(|_| tor).unwrap_or(&name);
-        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) || (hash.len() == name.len()) == tor {
+        if !ends_shared(&name, tor.then(tor_shared_prefix)) {
             continue;
         }
         let mut cmd = Command::new(ssh_program());
@@ -464,25 +524,48 @@ fn succeeds_within(mut cmd: Command, limit: std::time::Duration) -> bool {
 /// Runs a script on the server and returns its stdout. Without input it
 /// goes through a shell that's already signed in (see `shell_pool`).
 pub fn run_remote(t: &SshTarget, env: &SshEnv, script: &str, stdin: Option<Vec<u8>>) -> Result<Vec<u8>, OpError> {
-    if stdin.is_none() {
-        return crate::shell_pool::run(t, env, script, None);
+    match stdin {
+        None => crate::shell_pool::run(t, env, script, None),
+        Some(data) => run_remote_fed(t, env, script, data)?.into_result(),
     }
+}
+
+/// What a script run on the server left: its exit code (None when ssh was
+/// ended by a signal) and everything it printed.
+#[derive(Debug)]
+pub struct RemoteRun {
+    pub code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl RemoteRun {
+    /// What it printed if it succeeded, else why it failed, as a person can
+    /// act on it (see `OpError::from_ssh`).
+    pub fn into_result(self) -> Result<Vec<u8>, OpError> {
+        if self.code == Some(0) {
+            Ok(self.stdout)
+        } else {
+            Err(OpError::from_ssh(self.code, &String::from_utf8_lossy(&self.stderr)))
+        }
+    }
+}
+
+/// Runs a script on the server with `stdin` as its input and hands back
+/// all it left, for a caller that reads the script's own exit code and
+/// words: what else the server prints (a login file that complains on every
+/// command, say) can't then be taken for them. Err only when ssh can't start.
+pub fn run_remote_fed(t: &SshTarget, env: &SshEnv, script: &str, stdin: Vec<u8>) -> Result<RemoteRun, OpError> {
     let mut cmd = remote_command(t, env, script);
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(spawn_error)?;
-    if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
+    if let Some(mut pipe) = child.stdin.take() {
         std::thread::spawn(move || {
-            let _ = pipe.write_all(&data);
+            let _ = pipe.write_all(&stdin);
         });
     }
     let out = child.wait_with_output()?;
-    if out.status.success() {
-        Ok(out.stdout)
-    } else {
-        Err(OpError::from_ssh(out.status.code(), &String::from_utf8_lossy(&out.stderr)))
-    }
+    Ok(RemoteRun { code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
 }
 
 /// Like `run_remote`, for commands that only look: if the shell turns out to
@@ -529,10 +612,11 @@ pub fn hide_console(_cmd: &mut Command) {
     }
 }
 
-/// Default directory for connection-sharing sockets. Kept short on purpose:
-/// unix socket paths are limited to ~104 bytes.
+/// Default directory for connection-sharing sockets: this copy's own (see
+/// `app_identity`), `~/.sshee/cm` for the standard one. Kept short on
+/// purpose: unix socket paths are limited to ~104 bytes.
 pub fn default_control_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".sshee").join("cm")
+    crate::app_identity::current().control_dir()
 }
 
 #[cfg(test)]
@@ -628,6 +712,68 @@ mod tests {
         assert!(durable_command_for("k", None, &welcome, true).contains(&format!("escape-time {ANSWERS_MS}")));
         let elsewhere = durable_command_for("k", None, &welcome, false);
         assert!(elsewhere.contains("escape-time 10 ") && !elsewhere.contains("run-shell"), "{elsewhere}");
+    }
+
+    /// The value of option `key` in ssh arguments.
+    fn option<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
+        args.windows(2).find_map(|w| (w[0] == "-o").then(|| w[1].strip_prefix(key)?.strip_prefix('=')).flatten())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connections_through_tor_are_shared_only_within_this_process() {
+        let t = SshTarget { destination: "db-main".into(), ..Default::default() };
+        let env = SshEnv { control_dir: Some("/home/me/.sshee/cm".into()), askpass: None };
+        let direct = args(&t, &env, None);
+        assert_eq!(option(&direct, "ControlPath"), Some("/home/me/.sshee/cm/%C"));
+        assert_eq!(option(&direct, "ControlMaster"), Some("auto"));
+        let tor = args(&t, &env, Some("x --tor-proxy %h %p".into()));
+        let path = option(&tor, "ControlPath").unwrap();
+        let mark = path.strip_prefix("/home/me/.sshee/cm/t").and_then(|p| p.strip_suffix("-%C")).unwrap();
+        assert_eq!(mark.len(), 6, "{path}");
+        assert!(mark.bytes().all(|b| b.is_ascii_hexdigit()), "{path}");
+        // The same mark for every connection of this process.
+        assert_eq!(option(&args(&t, &env, Some("y".into())), "ControlPath"), Some(path));
+    }
+
+    #[test]
+    fn only_this_processs_tor_connections_are_ended_with_its_tor() {
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let mine = "t1a2b3c-";
+        assert!(ends_shared(&format!("{mine}{hash}"), Some(mine)));
+        // Another process's, or one of a version up to 0.10.14, carried by its own Tor.
+        assert!(!ends_shared(&format!("t9f8e7d-{hash}"), Some(mine)));
+        assert!(!ends_shared(&format!("t{hash}"), Some(mine)));
+        assert!(!ends_shared(hash, Some(mine)));
+        // Turning Tor on ends the direct ones only.
+        assert!(ends_shared(hash, None));
+        assert!(!ends_shared(&format!("{mine}{hash}"), None));
+        assert!(!ends_shared(&format!("t{hash}"), None));
+        // ssh's socket on its way to its name, and anything else.
+        assert!(!ends_shared(&format!("{hash}.AbCdEfGhIjKlMnOp"), None));
+        assert!(!ends_shared(&format!("{mine}{hash}.AbCdEfGhIjKlMnOp"), Some(mine)));
+        assert!(!ends_shared("notes.txt", None));
+    }
+
+    #[test]
+    fn a_folder_too_deep_for_a_socket_shares_nothing() {
+        let prefix = "t1a2b3c-";
+        // The longest folder that still fits: ssh's socket on its way, and its zero, take the rest.
+        let fits = SOCKET_PATH_MAX - 1 - (1 + prefix.len() + 40 + SOCKET_TEMP_SUFFIX);
+        let dir = |n: usize| PathBuf::from(format!("/{}", "d".repeat(n - 1)));
+        assert_eq!(control_path(&dir(fits), Some(prefix)), Some(format!("{}/{prefix}%C", dir(fits).display())));
+        assert_eq!(control_path(&dir(fits + 1), Some(prefix)), None);
+        assert!(control_path(&dir(fits + 1), None).is_some(), "without Tor's mark it still fits");
+        // A usual home folder fits, for the standard copy and a Preview.
+        for dir in ["/Users/firstname.lastname/.sshee/cm", "/home/firstname.lastname/.sshee/cm", "/Users/alexandra/.sshee-preview/cm"] {
+            assert!(control_path(&PathBuf::from(dir), Some(prefix)).is_some(), "{dir}");
+        }
+        let t = SshTarget { destination: "db-main".into(), ..Default::default() };
+        let deep = args(&t, &SshEnv { control_dir: Some(dir(fits + 1)), askpass: None }, Some("x %h %p".into()));
+        if cfg!(unix) {
+            assert_eq!(option(&deep, "ControlMaster"), Some("no"));
+            assert_eq!(option(&deep, "ControlPath"), Some("none"));
+        }
     }
 
     #[test]

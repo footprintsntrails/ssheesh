@@ -4,7 +4,7 @@
 use crate::error::{ErrorCode, OpError};
 use crate::scrub::{self, CleanCopy, Cleaning};
 use crate::ssh::{remote_command, run_remote, run_remote_read, shell_quote, spawn_error, transfer_command, SshEnv, SshTarget, Target};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -268,28 +268,402 @@ fn decode_text(path: &str, size: u64, bytes: Vec<u8>) -> TextFile {
     file
 }
 
-/// The script `write_text` runs on a server; the content comes on stdin.
-/// It lands in a temporary file first and is copied over the file only once
+/// What a save checks on the server just before it writes.
+#[derive(Clone, Copy)]
+enum Guard<'a> {
+    /// Nothing: it writes over whatever is there (`write_text`).
+    Off,
+    /// The file is still the one stamped (`save_guarded`).
+    Same(&'a Stamp),
+    /// Nothing is there yet (`save_guarded` with no stamp).
+    Absent,
+}
+
+/// The script a save runs on a server; the content comes on stdin. It
+/// lands in a temporary file first and is copied over the file only once
 /// all of it arrived, so a dropped connection never leaves the file cut off.
 /// Copying (not moving) keeps the file's owner and permissions.
-fn save_script(path: &str, size: usize) -> String {
-    format!(
-        r#"u=$(umask); umask 077; S=$(mktemp 2>/dev/null) || S="${{TMPDIR:-/tmp}}/.sshee-save.$$"
-cat > "$S" || {{ rm -f -- "$S"; exit 1; }}
+///
+/// With a guard, the file is checked once everything arrived, right before
+/// the copy: if it isn't what the guard expects, nothing is written, and the
+/// script says CHANGED with the file's stamp as it is now (`size:time:hash`,
+/// the hash "-" when there's no telling; nothing at all when the file is
+/// gone) on its last line of stderr and exits `CHANGED_EXIT`. A guarded save
+/// ends by printing the saved file's `size:time`.
+fn save_script(path: &str, size: usize, guard: Guard) -> String {
+    let f = shell_quote(path);
+    // The temporary file is in a folder of its own, made new and private:
+    // mktemp's, or where there's no mktemp one named after this shell. mkdir
+    // refuses a name that's taken by anything, where a file opened with set
+    // -C would still be someone else's pipe or device: in a folder others can
+    // write to (/tmp), what you saved would go to them, and what they sent
+    // back over your file.
+    let receive = format!(
+        r#"u=$(umask); umask 077; D=$(mktemp -d 2>/dev/null) && [ -n "$D" ] || {{ D="${{TMPDIR:-/tmp}}/.sshee-save.$$"; mkdir -m 700 "$D" 2>/dev/null || {{ echo "Couldn't make a temporary folder to save through." >&2; exit 1; }}; }}; S="$D/f"
+cat > "$S" || {{ rm -rf -- "$D"; exit 1; }}
 umask "$u"
-[ $(($(wc -c < "$S"))) -eq {size} ] || {{ rm -f -- "$S"; echo 'Saving stopped before the end. The file was left as it was.' >&2; exit 7; }}
-cat -- "$S" > {f}; r=$?; rm -f -- "$S"; exit $r"#,
-        f = shell_quote(path)
-    )
+[ $(($(wc -c < "$S"))) -eq {size} ] || {{ rm -rf -- "$D"; echo 'Saving stopped before the end. The file was left as it was.' >&2; exit 7; }}"#
+    );
+    let ident = ident_script(path);
+    // The file's stamp as it is now, in N (`size:time`, empty when there's
+    // nothing) and H (the hash, empty when there's no telling). Only a
+    // regular file is read for it: a pipe would never end.
+    let now = format!(r#"N=$({{ {ident}; }} 2>/dev/null); H=; [ -n "$N" ] && [ -f {f} ] && H=$(h {f})"#);
+    let changed = format!(r#"rm -rf -- "$D"; if [ -n "$N" ]; then echo "CHANGED $N:${{H:--}}" >&2; else echo CHANGED >&2; fi; exit {CHANGED_EXIT}"#);
+    match guard {
+        Guard::Off => format!("{receive}\ncat -- \"$S\" > {f}; r=$?; rm -rf -- \"$D\"; exit $r"),
+        Guard::Same(stamp) => {
+            // The hash decides when both sides have one; else the size and time.
+            let by_time = format!(r#"[ "$N" = '{}:{}' ]"#, stamp.size, stamp.modified);
+            let same = match stamp.hash() {
+                Some(hash) => format!(r#"if [ -n "$H" ]; then [ "$H" = '{hash}' ]; else {by_time}; fi"#),
+                None => by_time,
+            };
+            format!(
+                "{receive}\n{HASH_FN}\n{now}\n[ -n \"$N\" ] && {same} || {{ {changed}; }}\ncat -- \"$S\" > {f}; r=$?; rm -rf -- \"$D\"; [ $r -eq 0 ] || exit $r\n{{ {ident}; }} 2>/dev/null; exit 0"
+            )
+        }
+        // The name is taken first, made new (set -C), so one that turns up
+        // between the check and the copy isn't written over either; and
+        // only then filled. A copy that fails partway (a full disk) is then
+        // only a failure, and the file this save made goes with it. Taking
+        // the name keeps what the shell said when it can't (no such folder,
+        // no permission), but not when it's because the name is taken.
+        Guard::Absent => format!(
+            "{receive}\n{HASH_FN}\nif [ -e {f} ] || [ -L {f} ]; then {now}; {changed}; fi\nif ! E=$( (set -C; : > {f}) 2>&1 ); then if [ -e {f} ] || [ -L {f} ]; then {now}; {changed}; fi; rm -rf -- \"$D\"; printf '%s\\n' \"$E\" >&2; exit 1; fi\ncat -- \"$S\" > {f}; r=$?; rm -rf -- \"$D\"; [ $r -eq 0 ] || {{ rm -f -- {f}; exit $r; }}\n{{ {ident}; }} 2>/dev/null; exit 0"
+        ),
+    }
 }
+
+/// How a save script says the file isn't what the save expected.
+const CHANGED_EXIT: i32 = 6;
+
+/// A shell function `h FILE` that prints the file's SHA-256 in hex, with
+/// whichever tool the server has (GNU and BusyBox, macOS, the BSDs, OpenSSL),
+/// or nothing when it has none or can't read the file.
+const HASH_FN: &str = r#"h() { { sha256sum < "$1" || shasum -a 256 < "$1" || sha256 < "$1" || openssl dgst -sha256 < "$1"; } 2>/dev/null | sed -n 's/.*\([0-9a-f]\{64\}\).*/\1/p' | head -n 1; }"#;
 
 pub fn write_text(target: &Target, env: &SshEnv, path: &str, content: &str) -> Result<(), OpError> {
     match ssh_only(target) {
         Some(t) => {
-            run_remote(t, env, &save_script(path, content.len()), Some(content.as_bytes().to_vec()))?;
+            run_remote(t, env, &save_script(path, content.len(), Guard::Off), Some(content.as_bytes().to_vec()))?;
             Ok(())
         }
         None => Ok(std::fs::write(resolve_local(path), content)?),
+    }
+}
+
+// ---------------------------------------------------------------- saving only over what you opened
+
+/// What a file was when SSHeesh read or saved it. `save_guarded` compares it
+/// with the file on the server, so a change made there in the meantime (by
+/// you in a terminal, a program, a colleague) isn't silently written over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stamp {
+    pub size: u64,
+    /// Unix seconds, as the server's `stat` has them: BusyBox's only has
+    /// whole seconds.
+    pub modified: i64,
+    /// SHA-256 of the content, in hex. None when there was no telling (a
+    /// server with no tool for it): then the size and the time decide.
+    pub sha256: Option<String>,
+}
+
+impl Stamp {
+    /// A stamp for `bytes`, last changed at `modified`.
+    fn of(bytes: &[u8], modified: i64) -> Self {
+        Stamp { size: bytes.len() as u64, modified, sha256: Some(sha256_hex(bytes)) }
+    }
+
+    /// The hash, when it's one: 64 hex digits, in lower case. Anything else
+    /// (a stamp that went through the UI and came back altered) counts as
+    /// none, and never reaches a script.
+    fn hash(&self) -> Option<String> {
+        let h = self.sha256.as_deref()?.to_ascii_lowercase();
+        (h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).then_some(h)
+    }
+
+    /// Whether `now` is the file this stamp was taken of: the same content
+    /// when both have a hash, else the same size and time.
+    pub fn matches(&self, now: &Stamp) -> bool {
+        match (self.hash(), now.hash()) {
+            (Some(a), Some(b)) => a == b,
+            _ => self.size == now.size && self.modified == now.modified,
+        }
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A file on the server isn't what it was when you opened it, so
+/// `save_guarded` wrote nothing. The UI offers to save over it anyway (save
+/// again with `now` as the stamp), to load what's there now, or to save what
+/// you have as a copy beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Conflict {
+    pub path: String,
+    /// What's there now: None when nothing is (it was deleted or moved).
+    pub now: Option<Stamp>,
+}
+
+impl Conflict {
+    fn message(&self) -> &'static str {
+        match self.now {
+            Some(_) => "This file changed on the server since you opened it, so it wasn't saved over.",
+            None => "This file isn't on the server anymore (it was deleted or moved), so it wasn't saved.",
+        }
+    }
+}
+
+/// Why `save_guarded` didn't save.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SaveError {
+    Conflict(Conflict),
+    Failed(OpError),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SaveError::Conflict(c) => f.write_str(c.message()),
+            SaveError::Failed(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {}
+
+impl From<OpError> for SaveError {
+    fn from(e: OpError) -> Self {
+        SaveError::Failed(e)
+    }
+}
+
+impl From<io::Error> for SaveError {
+    fn from(e: io::Error) -> Self {
+        SaveError::Failed(e.into())
+    }
+}
+
+/// For callers that only pass errors on: a conflict becomes
+/// `ErrorCode::Conflict`.
+impl From<SaveError> for OpError {
+    fn from(e: SaveError) -> Self {
+        match e {
+            SaveError::Conflict(c) => OpError::new(ErrorCode::Conflict, c.message()),
+            SaveError::Failed(e) => e,
+        }
+    }
+}
+
+/// Reads a whole file, with a stamp of what was read: hand the stamp to
+/// `save_guarded` to save it back. A file over `limit` bytes is refused
+/// (`ErrorCode::TooLarge`); for those there's `download`.
+///
+/// The stamp's time is taken before the content is read, and its hash is of
+/// the bytes that arrived, so a file that changes while it's read can make
+/// a later save say it changed when it didn't, never the other way round.
+pub fn read_stamped(target: &Target, env: &SshEnv, path: &str, limit: u64) -> Result<(Vec<u8>, Stamp), OpError> {
+    let too_large = || OpError::new(ErrorCode::TooLarge, format!("This file is too large to open here (over {}).", size_words(limit)));
+    let (bytes, modified) = match ssh_only(target) {
+        Some(t) => {
+            let script = read_stamped_script(path, limit);
+            // A small file is only looked at, so it can be asked again on a
+            // fresh connection; a big one may take longer than a look may.
+            let out = if limit <= MAX_TEXT { run_remote_read(t, env, &script) } else { run_remote(t, env, &script, None) };
+            let out = out.map_err(|e| if e.message == "TOOLARGE" { too_large() } else { e })?;
+            parse_stamped(&out).ok_or_else(|| OpError::failed("Couldn't read the file's details from the server."))?
+        }
+        None => {
+            let p = resolve_local(path);
+            let meta = std::fs::metadata(&p)?;
+            // A device or a pipe (/dev/zero, a FIFO) never ends.
+            if !meta.is_file() {
+                return Err(OpError::failed("This isn't a regular file."));
+            }
+            if meta.len() > limit {
+                return Err(too_large());
+            }
+            let mut bytes = Vec::new();
+            // One byte past the limit tells a file that grew since.
+            File::open(&p)?.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+            (bytes, unix_seconds(&meta))
+        }
+    };
+    if bytes.len() as u64 > limit {
+        return Err(too_large());
+    }
+    let stamp = Stamp::of(&bytes, modified);
+    Ok((bytes, stamp))
+}
+
+/// `read_stamped` for the text editor: the file as `read_text` shows it,
+/// up to `MAX_TEXT`, with its stamp.
+pub fn read_text_stamped(target: &Target, env: &SshEnv, path: &str) -> Result<(TextFile, Stamp), OpError> {
+    let (bytes, stamp) = read_stamped(target, env, path, MAX_TEXT)?;
+    Ok((decode_text(path, stamp.size, bytes), stamp))
+}
+
+/// The script `read_stamped` runs on a server: the file's `size:time` on a
+/// line, then the file. One over `limit` says TOOLARGE and exits 5.
+fn read_stamped_script(path: &str, limit: u64) -> String {
+    format!(
+        r#"F={f}; [ -e "$F" ] || {{ echo "No such file or directory" >&2; exit 4; }}; [ -f "$F" ] || {{ echo "This isn't a regular file." >&2; exit 4; }}
+I=$({ident}) || exit 1
+echo "$I"
+[ "${{I%%:*}}" -le {limit} ] || {{ echo TOOLARGE >&2; exit 5; }}
+cat -- "$F""#,
+        f = shell_quote(path),
+        ident = ident_script(path)
+    )
+}
+
+/// Reads "size:time\n" and the file after it.
+fn parse_stamped(out: &[u8]) -> Option<(Vec<u8>, i64)> {
+    let nl = out.iter().position(|&b| b == b'\n')?;
+    let (_, modified) = parse_ident(&String::from_utf8_lossy(&out[..nl]))?;
+    Some((out[nl + 1..].to_vec(), modified))
+}
+
+/// "size:time", as `ident_script` prints it.
+fn parse_ident(line: &str) -> Option<(u64, i64)> {
+    let (size, time) = line.trim().split_once(':')?;
+    Some((size.parse().ok()?, time.parse().ok()?))
+}
+
+/// Saves `bytes` as the file at `path`, but only over the file `expected`
+/// was taken of (see `read_stamped`); with no stamp, only where there's no
+/// file yet (a new file, or a copy beside one). Otherwise nothing is written
+/// and the answer is a `Conflict` saying what's there now. Returns the stamp
+/// of what was saved, for the next save.
+///
+/// Like `write_text` it never leaves a file cut off and keeps its owner and
+/// permissions. The check comes once everything has arrived, right before
+/// the file is written; a change in the moment between the two can still be
+/// written over. A server with no SHA-256 tool is checked by size and time,
+/// which can miss a change of the same size within the same second.
+pub fn save_guarded(target: &Target, env: &SshEnv, path: &str, bytes: &[u8], expected: Option<&Stamp>) -> Result<Stamp, SaveError> {
+    let guard = expected.map_or(Guard::Absent, Guard::Same);
+    let modified = match ssh_only(target) {
+        Some(t) => save_outcome(path, crate::ssh::run_remote_fed(t, env, &save_script(path, bytes.len(), guard), bytes.to_vec())?)?,
+        None => save_guarded_local(&resolve_local(path), path, bytes, guard)?,
+    };
+    Ok(Stamp::of(bytes, modified))
+}
+
+/// What a save script's run comes to: the saved file's time, a conflict or
+/// a failure. The conflict is read from the script's own exit code and
+/// CHANGED line, before anything sums up what the server said: its stderr
+/// can hold more (a login file that complains on every command, about a
+/// file that doesn't exist, say), which mustn't hide that the file changed.
+fn save_outcome(path: &str, run: crate::ssh::RemoteRun) -> Result<i64, SaveError> {
+    if run.code == Some(0) {
+        return Ok(String::from_utf8_lossy(&run.stdout).lines().rev().find_map(parse_ident).map_or(0, |(_, time)| time));
+    }
+    if run.code == Some(CHANGED_EXIT) {
+        if let Some(now) = String::from_utf8_lossy(&run.stderr).lines().rev().find_map(|line| parse_changed(line.trim())) {
+            return Err(SaveError::Conflict(Conflict { path: path.into(), now }));
+        }
+    }
+    Err(SaveError::Failed(OpError::from_ssh(run.code, &String::from_utf8_lossy(&run.stderr))))
+}
+
+/// What a guarded save's CHANGED line says the file is now: Some(None) when
+/// it's gone, None when the line isn't a CHANGED at all.
+fn parse_changed(message: &str) -> Option<Option<Stamp>> {
+    let rest = message.strip_prefix("CHANGED")?;
+    if rest.trim().is_empty() {
+        return Some(None);
+    }
+    let mut parts = rest.trim().splitn(3, ':');
+    let (size, modified) = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+    let sha256 = parts.next().filter(|h| *h != "-").map(str::to_string);
+    Some(Some(Stamp { size, modified, sha256 }))
+}
+
+/// `save_guarded` on this computer. Returns the saved file's time.
+fn save_guarded_local(p: &Path, path: &str, bytes: &[u8], guard: Guard) -> Result<i64, SaveError> {
+    let conflict = |now| SaveError::Conflict(Conflict { path: path.into(), now });
+    match guard {
+        Guard::Off => std::fs::write(p, bytes)?,
+        Guard::Same(expected) => {
+            let now = match std::fs::metadata(p) {
+                // The content is worth reading only when the size alone doesn't tell.
+                Ok(meta) => Some(local_stamp(p, &meta, meta.len() == expected.size)?),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e.into()),
+            };
+            match now {
+                Some(now) if expected.matches(&now) => std::fs::write(p, bytes)?,
+                now => return Err(conflict(now)),
+            }
+        }
+        Guard::Absent => match std::fs::OpenOptions::new().write(true).create_new(true).open(p) {
+            Ok(file) => fill_new(p, file, bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                // Hashed up to what the editor opens, for "save over it anyway".
+                let now = std::fs::metadata(p).ok().map(|meta| local_stamp(p, &meta, meta.len() <= MAX_TEXT)).transpose()?;
+                return Err(conflict(now));
+            }
+            Err(e) => return Err(e.into()),
+        },
+    }
+    Ok(std::fs::metadata(p).map(|meta| unix_seconds(&meta)).unwrap_or(0))
+}
+
+/// Writes `bytes` into `file`, which a save just made at `p`. If that fails
+/// partway (a full disk), the file goes again: a cut-off file left behind
+/// would be taken for one someone else put there by the next try.
+fn fill_new(p: &Path, mut file: impl Write, bytes: &[u8]) -> io::Result<()> {
+    let written = file.write_all(bytes).and_then(|_| file.flush());
+    drop(file);
+    if written.is_err() {
+        let _ = std::fs::remove_file(p);
+    }
+    written
+}
+
+/// The stamp of a file on this computer as it is now. Its content is
+/// hashed only with `hash`, and read a piece at a time: a file you opened
+/// small may since be a log or an image of gigabytes.
+fn local_stamp(p: &Path, meta: &std::fs::Metadata, hash: bool) -> io::Result<Stamp> {
+    let modified = unix_seconds(meta);
+    if !meta.is_file() || !hash {
+        return Ok(Stamp { size: meta.len(), modified, sha256: None });
+    }
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    let (mut file, mut buf, mut size) = (File::open(p)?, vec![0u8; 64 * 1024], 0u64);
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                digest.update(&buf[..n]);
+                size += n as u64;
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    let sha256 = digest.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    Ok(Stamp { size, modified, sha256: Some(sha256) })
+}
+
+fn unix_seconds(meta: &std::fs::Metadata) -> i64 {
+    meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64)
+}
+
+/// "2 MB", "640 KB": a limit as people say it.
+fn size_words(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB {
+        format!("{} MB", bytes.div_ceil(MB))
+    } else {
+        format!("{} KB", bytes.div_ceil(1024).max(1))
     }
 }
 
@@ -2535,11 +2909,11 @@ mod tests {
         std::fs::write(&f, "OLD=1\n").unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
         let p = f.to_string_lossy();
-        assert!(sh_with_input(&save_script(&p, 6), b"NEW=2\n").success());
+        assert!(sh_with_input(&save_script(&p, 6, Guard::Off), b"NEW=2\n").success());
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "NEW=2\n");
         assert_eq!(mode_of(&f), 0o600);
         // Cut off on the way: the file stays as it was.
-        assert!(!sh_with_input(&save_script(&p, 100), b"NEW=3\n").success());
+        assert!(!sh_with_input(&save_script(&p, 100, Guard::Off), b"NEW=3\n").success());
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "NEW=2\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2965,5 +3339,555 @@ mod unpack_tests {
         assert_eq!(free_name(&dir, "notes.txt", true), "notes 2.txt");
         assert_eq!(free_name(&dir, "v1.2", false), "v1.2");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod guarded_save_tests {
+    use super::*;
+
+    fn folder(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sshee-guard-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Runs a script as a server's `sh` would, with `input` on stdin and
+    /// `path` as PATH when given; what came back, as `run_remote` makes of it.
+    #[cfg(unix)]
+    fn on_server(script: &str, input: &[u8], path: Option<&Path>) -> Result<Vec<u8>, OpError> {
+        on_server_with(&["/bin/sh"], script, input, path)
+    }
+
+    /// `on_server` with another shell, such as BusyBox's.
+    #[cfg(unix)]
+    fn on_server_with(shell: &[&str], script: &str, input: &[u8], path: Option<&Path>) -> Result<Vec<u8>, OpError> {
+        run_on_server(shell, script, input, path, None).into_result()
+    }
+
+    /// Runs a script as a server's `shell` would, with `input` on stdin,
+    /// `path` as PATH and `tmp` as TMPDIR when given; all it left, as
+    /// `run_remote_fed` hands it back.
+    #[cfg(unix)]
+    fn run_on_server(shell: &[&str], script: &str, input: &[u8], path: Option<&Path>, tmp: Option<&Path>) -> crate::ssh::RemoteRun {
+        let mut cmd = Command::new(shell[0]);
+        cmd.args(&shell[1..]).arg("-c").arg(script).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Some(p) = path {
+            cmd.env("PATH", p);
+        }
+        if let Some(t) = tmp {
+            cmd.env("TMPDIR", t);
+        }
+        let mut child = cmd.spawn().unwrap();
+        // A script that stops before reading it all (a conflict found first) closes the pipe.
+        let _ = child.stdin.take().unwrap().write_all(input);
+        let out = child.wait_with_output().unwrap();
+        crate::ssh::RemoteRun { code: out.status.code(), stdout: out.stdout, stderr: out.stderr }
+    }
+
+    /// `save_guarded`'s remote half against a folder here.
+    #[cfg(unix)]
+    fn save_on_server(path: &Path, bytes: &[u8], expected: Option<&Stamp>, tools: Option<&Path>) -> Result<Stamp, SaveError> {
+        save_on_server_as(&["/bin/sh"], "", path, bytes, expected, tools, None)
+    }
+
+    /// `save_on_server` with a shell, words the server says first (as a
+    /// login file might) and a TMPDIR.
+    #[cfg(unix)]
+    fn save_on_server_as(shell: &[&str], first: &str, path: &Path, bytes: &[u8], expected: Option<&Stamp>, tools: Option<&Path>, tmp: Option<&Path>) -> Result<Stamp, SaveError> {
+        let p = path.to_string_lossy();
+        let guard = expected.map_or(Guard::Absent, Guard::Same);
+        let script = format!("{first}{}", save_script(&p, bytes.len(), guard));
+        let modified = save_outcome(&p, run_on_server(shell, &script, bytes, tools, tmp))?;
+        Ok(Stamp::of(bytes, modified))
+    }
+
+    /// `read_stamped`'s remote half against a file here.
+    #[cfg(unix)]
+    fn read_on_server(path: &Path, limit: u64) -> Result<(Vec<u8>, Stamp), OpError> {
+        let out = on_server(&read_stamped_script(&path.to_string_lossy(), limit), b"", None)?;
+        let (bytes, modified) = parse_stamped(&out).unwrap();
+        let stamp = Stamp::of(&bytes, modified);
+        Ok((bytes, stamp))
+    }
+
+    /// Sets a file's modification time, as `touch -d` would.
+    fn set_time(path: &Path, unix: u64) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(unix)).unwrap();
+    }
+
+    fn conflict(r: Result<Stamp, SaveError>) -> Option<Stamp> {
+        match r {
+            Err(SaveError::Conflict(c)) => c.now,
+            other => panic!("expected a conflict, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_save_on_a_server_writes_only_over_the_file_you_opened() {
+        let dir = folder("server");
+        let f = dir.join("app.env");
+        std::fs::write(&f, "PORT=8080\n").unwrap();
+        let (bytes, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        assert_eq!(bytes, b"PORT=8080\n");
+        assert_eq!(opened.size, 10);
+        assert_eq!(opened.sha256.as_deref(), Some(sha256_hex(b"PORT=8080\n").as_str()));
+        // Unchanged on the server: saved, and the new stamp is the next save's.
+        let saved = save_on_server(&f, b"PORT=9090\n", Some(&opened), None).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"PORT=9090\n");
+        assert_eq!(saved.sha256.as_deref(), Some(sha256_hex(b"PORT=9090\n").as_str()));
+        // Someone changes it on the server: the old stamp no longer saves.
+        std::fs::write(&f, "PORT=7070\nDEBUG=1\n").unwrap();
+        let now = conflict(save_on_server(&f, b"PORT=1\n", Some(&saved), None)).expect("what's there now");
+        assert_eq!(std::fs::read(&f).unwrap(), b"PORT=7070\nDEBUG=1\n", "left as the server had it");
+        assert_eq!(now.size, 18);
+        assert_eq!(now.sha256.as_deref(), Some(sha256_hex(b"PORT=7070\nDEBUG=1\n").as_str()));
+        // "Save mine anyway": with what's there now as the stamp.
+        save_on_server(&f, b"PORT=1\n", Some(&now), None).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"PORT=1\n");
+        // Deleted on the server: a conflict with nothing there.
+        let last = read_on_server(&f, MAX_TEXT).unwrap().1;
+        std::fs::remove_file(&f).unwrap();
+        assert_eq!(conflict(save_on_server(&f, b"x", Some(&last), None)), None);
+        assert!(!f.exists(), "not made again behind your back");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_content_decides_not_the_clock() {
+        let dir = folder("clock");
+        let f = dir.join("unit.conf");
+        std::fs::write(&f, "a=1\n").unwrap();
+        set_time(&f, 1_700_000_000);
+        let (_, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        // Same size, same second, other content: still a change.
+        std::fs::write(&f, "a=2\n").unwrap();
+        set_time(&f, 1_700_000_000);
+        assert!(conflict(save_on_server(&f, b"a=3\n", Some(&opened), None)).is_some());
+        // Touched but the same content: no change.
+        std::fs::write(&f, "a=1\n").unwrap();
+        set_time(&f, 1_800_000_000);
+        save_on_server(&f, b"a=3\n", Some(&opened), None).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"a=3\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A folder of links to only `tools`, to stand for a server that has
+    /// nothing else.
+    #[cfg(unix)]
+    fn only(dir: &Path, tools: &[&str]) -> Option<PathBuf> {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for tool in tools {
+            let found = Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().unwrap();
+            let path = String::from_utf8_lossy(&found.stdout).trim().to_string();
+            if !path.starts_with('/') {
+                return None;
+            }
+            std::os::unix::fs::symlink(&path, bin.join(tool)).unwrap();
+        }
+        Some(bin)
+    }
+
+    const BASICS: [&str; 7] = ["stat", "cat", "wc", "mktemp", "sed", "head", "rm"];
+
+    #[cfg(unix)]
+    #[test]
+    fn a_server_without_a_hash_tool_goes_by_size_and_time() {
+        let dir = folder("nohash");
+        let Some(bin) = only(&dir, &BASICS) else { return };
+        let f = dir.join("motd");
+        std::fs::write(&f, "hello\n").unwrap();
+        set_time(&f, 1_700_000_000);
+        let (_, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        save_on_server(&f, b"hi all\n", Some(&opened), Some(&bin)).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"hi all\n");
+        // A change it can see: another time.
+        set_time(&f, 1_700_000_100);
+        let now = conflict(save_on_server(&f, b"x\n", Some(&opened), Some(&bin))).unwrap();
+        assert_eq!(now, Stamp { size: 7, modified: 1_700_000_100, sha256: None });
+        // Saving over it with that stamp works without a hash too.
+        save_on_server(&f, b"x\n", Some(&now), Some(&bin)).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"x\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_hash_tool_reads_the_same() {
+        let dir = folder("tools");
+        let f = dir.join("data.bin");
+        let content: Vec<u8> = (0..=255u8).cycle().take(5000).collect();
+        std::fs::write(&f, &content).unwrap();
+        let want = sha256_hex(&content);
+        let mut tried = 0;
+        for tool in ["sha256sum", "shasum", "sha256", "openssl"] {
+            let sub = dir.join(tool);
+            std::fs::create_dir_all(&sub).unwrap();
+            // shasum is a Perl script: it needs perl beside it.
+            let tools: Vec<&str> = [tool, "sed", "head", "perl"].into_iter().filter(|t| *t != "perl" || tool == "shasum").collect();
+            let Some(bin) = only(&sub, &tools) else { continue };
+            let script = format!("{HASH_FN}\nh {}", shell_quote(&f.to_string_lossy()));
+            let out = on_server(&script, b"", Some(&bin)).unwrap();
+            assert_eq!(String::from_utf8_lossy(&out).trim(), want, "{tool}");
+            tried += 1;
+        }
+        assert!(tried > 0, "no SHA-256 tool here to try");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A server with BusyBox alone (Alpine, a router): its shell, its
+    /// `stat` with whole seconds, its `sha256sum`.
+    #[cfg(unix)]
+    #[test]
+    fn a_busybox_server_saves_the_same_way() {
+        let dir = folder("busybox");
+        let Some(busybox) = only(&dir, &["busybox"]) else { return };
+        let busybox = busybox.join("busybox");
+        let bin = dir.join("applets");
+        std::fs::create_dir_all(&bin).unwrap();
+        for applet in BASICS.iter().chain(&["sha256sum"]) {
+            std::os::unix::fs::symlink(&busybox, bin.join(applet)).unwrap();
+        }
+        let shell = [busybox.to_str().unwrap(), "sh"];
+        let f = dir.join("it's a.conf");
+        std::fs::write(&f, "x=1\n").unwrap();
+        let p = f.to_string_lossy();
+        let out = on_server_with(&shell, &read_stamped_script(&p, 100), b"", Some(&bin)).unwrap();
+        let (bytes, modified) = parse_stamped(&out).unwrap();
+        let opened = Stamp::of(&bytes, modified);
+        let saved = on_server_with(&shell, &save_script(&p, 4, Guard::Same(&opened)), b"x=2\n", Some(&bin)).unwrap();
+        assert!(String::from_utf8_lossy(&saved).lines().rev().find_map(parse_ident).is_some());
+        assert_eq!(std::fs::read(&f).unwrap(), b"x=2\n");
+        let now = conflict(save_on_server_as(&shell, "", &f, b"x=3\n", Some(&opened), Some(&bin), None)).unwrap();
+        assert_eq!(now.sha256.as_deref(), Some(sha256_hex(b"x=2\n").as_str()));
+        let copy = dir.join("it's a.mine.conf");
+        save_on_server_as(&shell, "", &copy, b"x=3\n", None, Some(&bin), None).unwrap();
+        let there = conflict(save_on_server_as(&shell, "", &copy, b"x=4\n", None, Some(&bin), None)).unwrap();
+        assert_eq!(there.sha256.as_deref(), Some(sha256_hex(b"x=3\n").as_str()));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"x=3\n");
+        // Without mktemp, through a folder of its own in TMPDIR, which is left as it was.
+        let tmp = dir.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::remove_file(bin.join("mktemp")).unwrap();
+        std::os::unix::fs::symlink(&busybox, bin.join("mkdir")).unwrap();
+        let saved = save_on_server_as(&shell, "", &f, b"x=5\n", Some(&now), Some(&bin), Some(&tmp)).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"x=5\n");
+        assert_eq!(saved.size, 4);
+        assert_eq!(std::fs::read_dir(&tmp).unwrap().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_is_never_saved_over_one_that_turned_up() {
+        let dir = folder("new");
+        let f = dir.join("notes.mine.txt");
+        let made = save_on_server(&f, b"draft\n", None, None).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"draft\n");
+        assert_eq!(made.size, 6);
+        let now = conflict(save_on_server(&f, b"other\n", None, None)).unwrap();
+        assert_eq!(now.sha256.as_deref(), Some(sha256_hex(b"draft\n").as_str()));
+        assert_eq!(std::fs::read(&f).unwrap(), b"draft\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_save_cut_off_on_the_way_leaves_the_file_alone() {
+        let dir = folder("cut");
+        let f = dir.join("app.env");
+        std::fs::write(&f, "OLD=1\n").unwrap();
+        let (_, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        let p = f.to_string_lossy();
+        // Says 100 bytes are coming, 6 arrive.
+        let cut = on_server(&save_script(&p, 100, Guard::Same(&opened)), b"NEW=2\n", None).unwrap_err();
+        assert!(cut.message.contains("stopped before the end"), "{}", cut.message);
+        assert_eq!(std::fs::read(&f).unwrap(), b"OLD=1\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reading_refuses_what_it_shouldnt_open() {
+        let dir = folder("read");
+        let big = dir.join("big.log");
+        std::fs::write(&big, vec![b'x'; 2000]).unwrap();
+        let e = read_on_server(&big, 1000).unwrap_err();
+        assert_eq!(e.message, "TOOLARGE");
+        assert_eq!(read_on_server(&dir.join("missing"), 1000).unwrap_err().code, ErrorCode::NotFound);
+        assert!(read_on_server(&dir, 1000).unwrap_err().message.contains("regular file"));
+        // A name a shell would act on stays a name.
+        let odd = dir.join("it's $(x) a;b.txt");
+        std::fs::write(&odd, "fine").unwrap();
+        assert_eq!(read_on_server(&odd, 1000).unwrap().0, b"fine");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stamp_from_outside_never_reaches_the_script() {
+        let forged = Stamp { size: 3, modified: 5, sha256: Some("'; touch /tmp/sshee-owned; '".into()) };
+        let script = save_script("/srv/a", 3, Guard::Same(&forged));
+        assert!(!script.contains("sshee-owned"), "{script}");
+        assert!(script.contains("[ \"$N\" = '3:5' ]"));
+        // An upper-case hash is still a hash.
+        let upper = Stamp { sha256: Some("AB".repeat(32)), ..forged };
+        assert!(save_script("/srv/a", 3, Guard::Same(&upper)).contains(&"ab".repeat(32)));
+    }
+
+    #[test]
+    fn stamps_match_by_content_when_both_have_one() {
+        let a = Stamp { size: 4, modified: 10, sha256: Some("aa".repeat(32)) };
+        assert!(a.matches(&Stamp { modified: 99, ..a.clone() }));
+        assert!(!a.matches(&Stamp { sha256: Some("bb".repeat(32)), ..a.clone() }));
+        // Without one on either side, the size and time.
+        let bare = Stamp { sha256: None, ..a.clone() };
+        assert!(a.matches(&bare) && bare.matches(&a));
+        assert!(!bare.matches(&Stamp { modified: 11, ..bare.clone() }));
+        assert!(!bare.matches(&Stamp { size: 5, ..bare.clone() }));
+    }
+
+    #[test]
+    fn reads_what_a_save_that_was_refused_says() {
+        assert_eq!(parse_changed("CHANGED"), Some(None));
+        assert_eq!(parse_changed("CHANGED 17:1700000000:-"), Some(Some(Stamp { size: 17, modified: 1_700_000_000, sha256: None })));
+        let h = "0f".repeat(32);
+        assert_eq!(parse_changed(&format!("CHANGED 3:4:{h}")), Some(Some(Stamp { size: 3, modified: 4, sha256: Some(h) })));
+        assert_eq!(parse_changed("Permission denied"), None);
+        assert_eq!(parse_changed("CHANGED x:y"), None);
+    }
+
+    #[test]
+    fn a_conflict_passed_on_keeps_its_code() {
+        let e: OpError = SaveError::Conflict(Conflict { path: "/srv/a".into(), now: None }).into();
+        assert_eq!(e.code, ErrorCode::Conflict);
+        let json = serde_json::to_value(SaveError::Conflict(Conflict { path: "/srv/a".into(), now: Some(Stamp { size: 1, modified: 2, sha256: None }) })).unwrap();
+        assert_eq!(json["kind"], "conflict");
+        assert_eq!(json["now"]["modified"], 2);
+        let stamp: Stamp = serde_json::from_value(json["now"].clone()).unwrap();
+        assert_eq!(stamp.size, 1);
+    }
+
+    #[test]
+    fn on_this_computer_too() {
+        let dir = folder("local");
+        let f = dir.join("todo.txt");
+        let p = f.to_string_lossy().into_owned();
+        std::fs::write(&f, "one\n").unwrap();
+        let (bytes, opened) = read_stamped(&Target::Local, &SshEnv::default(), &p, 100).unwrap();
+        assert_eq!(bytes, b"one\n");
+        let saved = save_guarded(&Target::Local, &SshEnv::default(), &p, b"two\n", Some(&opened)).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"two\n");
+        std::fs::write(&f, "three\n").unwrap();
+        let now = conflict(save_guarded(&Target::Local, &SshEnv::default(), &p, b"four\n", Some(&saved))).unwrap();
+        assert_eq!(now.size, 6);
+        assert_eq!(std::fs::read(&f).unwrap(), b"three\n");
+        // A new file only where there's none.
+        let copy = dir.join("todo.mine.txt").to_string_lossy().into_owned();
+        save_guarded(&Target::Local, &SshEnv::default(), &copy, b"four\n", None).unwrap();
+        assert!(conflict(save_guarded(&Target::Local, &SshEnv::default(), &copy, b"five\n", None)).is_some());
+        assert_eq!(std::fs::read(&copy).unwrap(), b"four\n");
+        // Too large, and the text editor's way in.
+        assert_eq!(read_stamped(&Target::Local, &SshEnv::default(), &p, 3).unwrap_err().code, ErrorCode::TooLarge);
+        let (text, stamp) = read_text_stamped(&Target::Local, &SshEnv::default(), &p).unwrap();
+        assert_eq!(text.content.as_deref(), Some("three\n"));
+        // The conflict's stamp went without a hash: the size already told.
+        assert_eq!(Stamp { sha256: None, ..stamp }, now);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A folder of `tools` as `only` makes it, with `cat` standing for one
+    /// that runs out of room: copying a file (`cat -- FILE`) stops after 3
+    /// bytes, as on a full disk.
+    #[cfg(unix)]
+    fn with_a_full_disk(dir: &Path, tools: &[&str]) -> Option<PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+        let real = String::from_utf8_lossy(&Command::new("sh").arg("-c").arg("command -v cat").output().unwrap().stdout).trim().to_string();
+        let bin = only(dir, tools)?;
+        let cat = bin.join("cat");
+        let script = format!("#!/bin/sh\nif [ \"$1\" = -- ]; then head -c 3 -- \"$2\"; echo 'cat: write error: No space left on device' >&2; exit 1; fi\nexec {} \"$@\"\n", shell_quote(&real));
+        std::fs::write(&cat, script).unwrap();
+        std::fs::set_permissions(&cat, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Some(bin)
+    }
+
+    /// "Save as a copy beside it" on a full disk: a failure, not a change
+    /// someone made, and no cut-off copy left to be taken for one.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_cut_off_by_a_full_disk_is_a_failure_and_goes() {
+        let dir = folder("full");
+        let Some(bin) = with_a_full_disk(&dir, &["stat", "wc", "mktemp", "sed", "head", "rm", "sha256sum"]) else { return };
+        let tmp = dir.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let copy = dir.join("app.mine.env");
+        let failed = save_on_server_as(&["/bin/sh"], "", &copy, b"PORT=9090\n", None, Some(&bin), Some(&tmp)).unwrap_err();
+        match failed {
+            SaveError::Failed(e) => assert!(e.message.contains("No space left"), "{}", e.message),
+            other => panic!("expected a failure, got {other:?}"),
+        }
+        assert!(!copy.exists(), "the cut-off copy is gone");
+        assert_eq!(std::fs::read_dir(&tmp).unwrap().count(), 0, "and so is what it was saved through");
+        // Room again: the next try makes it, rather than finding "a change".
+        save_on_server(&copy, b"PORT=9090\n", None, None).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"PORT=9090\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_where_it_cant_be_made_says_why() {
+        let dir = folder("nofolder");
+        let e = match save_on_server(&dir.join("gone").join("x.conf"), b"x\n", None, None) {
+            Err(SaveError::Failed(e)) => e,
+            other => panic!("expected a failure, got {other:?}"),
+        };
+        // As the shell says it: bash "No such file or directory", dash "Directory nonexistent".
+        assert!(e.code == ErrorCode::NotFound || e.message.contains("nonexistent"), "{e:?}");
+        // A link to nowhere under the name: it's taken, and stays as it was.
+        let link = dir.join("x.mine.conf");
+        std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
+        assert_eq!(conflict(save_on_server(&link, b"x\n", None, None)), None);
+        assert!(!dir.join("nowhere").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A server whose login file complains on every command (it sources a
+    /// file that's gone): what it says first doesn't hide a conflict.
+    #[cfg(unix)]
+    #[test]
+    fn a_login_file_that_complains_doesnt_hide_a_change() {
+        let dir = folder("bashrc");
+        let f = dir.join("app.env");
+        std::fs::write(&f, "PORT=8080\n").unwrap();
+        let (_, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        std::fs::write(&f, "PORT=7070\n").unwrap();
+        let complains = "echo 'bash: /opt/venv-old/bin/activate: No such file or directory' >&2\n";
+        let now = conflict(save_on_server_as(&["/bin/sh"], complains, &f, b"PORT=1\n", Some(&opened), None, None)).unwrap();
+        assert_eq!(now.sha256.as_deref(), Some(sha256_hex(b"PORT=7070\n").as_str()));
+        // Gone on the server: a conflict with nothing there, not "doesn't exist".
+        std::fs::remove_file(&f).unwrap();
+        assert_eq!(conflict(save_on_server_as(&["/bin/sh"], complains, &f, b"PORT=1\n", Some(&opened), None, None)), None);
+        // The same words from a script that didn't say CHANGED are only a failure.
+        let run = crate::ssh::RemoteRun { code: Some(CHANGED_EXIT), stdout: Vec::new(), stderr: b"No such file or directory\n".to_vec() };
+        assert!(matches!(save_outcome("/srv/a", run), Err(SaveError::Failed(e)) if e.code == ErrorCode::NotFound));
+        // And CHANGED in a run that ended otherwise isn't taken for one.
+        let run = crate::ssh::RemoteRun { code: Some(1), stdout: Vec::new(), stderr: b"CHANGED 1:2:-\n".to_vec() };
+        assert!(matches!(save_outcome("/srv/a", run), Err(SaveError::Failed(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A server without mktemp, and another user who made a pipe under the
+    /// name SSHeesh saves through: nothing goes into it, and nothing comes
+    /// back out of it over your file.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_the_way_of_the_temporary_folder_gets_nothing() {
+        let dir = folder("fifo");
+        let Some(bin) = only(&dir, &["stat", "cat", "wc", "mkdir", "mkfifo", "sed", "head", "rm", "sha256sum"]) else { return };
+        let tmp = dir.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = dir.join("app.env");
+        std::fs::write(&f, "SECRET=1\n").unwrap();
+        let (_, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        // Made in the same shell, so with the name it'll pick.
+        let trap = "mkfifo \"$TMPDIR/.sshee-save.$$\"\n";
+        let refused = save_on_server_as(&["/bin/sh"], trap, &f, b"SECRET=2\n", Some(&opened), Some(&bin), Some(&tmp)).unwrap_err();
+        assert!(refused.to_string().contains("temporary folder"), "{refused}");
+        assert_eq!(std::fs::read(&f).unwrap(), b"SECRET=1\n");
+        // With the name free it goes through a private folder, removed after.
+        save_on_server_as(&["/bin/sh"], "", &f, b"SECRET=2\n", Some(&opened), Some(&bin), Some(&tmp)).unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"SECRET=2\n");
+        let left: Vec<_> = std::fs::read_dir(&tmp).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left.len(), 1, "only the pipe: {left:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Whatever way a save ends, the folder it saved through goes.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_leaves_nothing_in_the_temporary_folder() {
+        let dir = folder("tmpclean");
+        let tmp = dir.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = dir.join("unit.conf");
+        std::fs::write(&f, "a=1\n").unwrap();
+        let (_, opened) = read_on_server(&f, MAX_TEXT).unwrap();
+        let save = |bytes: &[u8], expected: Option<&Stamp>| save_on_server_as(&["/bin/sh"], "", &f, bytes, expected, None, Some(&tmp));
+        let saved = save(b"a=2\n", Some(&opened)).unwrap();
+        assert!(conflict(save(b"a=3\n", Some(&opened))).is_some());
+        assert!(conflict(save(b"a=3\n", None)).is_some());
+        let cut = run_on_server(&["/bin/sh"], &save_script(&f.to_string_lossy(), 100, Guard::Same(&saved)), b"a=3\n", None, Some(&tmp));
+        assert_eq!(cut.code, Some(7));
+        let off = run_on_server(&["/bin/sh"], &save_script(&f.to_string_lossy(), 4, Guard::Off), b"a=4\n", None, Some(&tmp));
+        assert_eq!(off.code, Some(0));
+        assert_eq!(std::fs::read(&f).unwrap(), b"a=4\n");
+        assert_eq!(std::fs::read_dir(&tmp).unwrap().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A file you opened small that's since a big one isn't read in full
+    /// to tell it changed: its size says so.
+    #[test]
+    fn a_local_file_is_hashed_only_when_its_size_doesnt_tell() {
+        let dir = folder("localhash");
+        let f = dir.join("notes.txt");
+        let p = f.to_string_lossy().into_owned();
+        std::fs::write(&f, "one\n").unwrap();
+        let (_, opened) = read_stamped(&Target::Local, &SshEnv::default(), &p, 100).unwrap();
+        std::fs::write(&f, vec![b'x'; 300_000]).unwrap();
+        let now = conflict(save_guarded(&Target::Local, &SshEnv::default(), &p, b"two\n", Some(&opened))).unwrap();
+        assert_eq!((now.size, now.sha256), (300_000, None));
+        // The same size, other content: the hash tells, read a piece at a time.
+        std::fs::write(&f, "eno\n").unwrap();
+        let now = conflict(save_guarded(&Target::Local, &SshEnv::default(), &p, b"two\n", Some(&opened))).unwrap();
+        assert_eq!(now.sha256.as_deref(), Some(sha256_hex(b"eno\n").as_str()));
+        let meta = std::fs::metadata(&f).unwrap();
+        let big: Vec<u8> = (0..=255u8).cycle().take(200_000).collect();
+        std::fs::write(&f, &big).unwrap();
+        let streamed = local_stamp(&f, &std::fs::metadata(&f).unwrap(), true).unwrap();
+        assert_eq!(streamed.sha256.as_deref(), Some(sha256_hex(&big).as_str()));
+        assert_eq!(streamed.size, 200_000);
+        assert_eq!(local_stamp(&f, &meta, false).unwrap().sha256, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A new file on this computer that can't be written in full goes again.
+    #[test]
+    fn a_new_local_file_cut_off_goes() {
+        struct Full(usize);
+        impl Write for Full {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.0 == 0 {
+                    return Err(io::Error::other("No space left on device"));
+                }
+                let n = buf.len().min(self.0);
+                self.0 -= n;
+                Ok(n)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let dir = folder("localfull");
+        let f = dir.join("todo.mine.txt");
+        std::fs::write(&f, "on").unwrap();
+        assert!(fill_new(&f, Full(2), b"four\n").is_err());
+        assert!(!f.exists());
+        std::fs::write(&f, "").unwrap();
+        fill_new(&f, Full(10), b"four\n").unwrap();
+        assert!(f.exists(), "written in full: stays");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn limits_read_as_people_say_them() {
+        assert_eq!(size_words(MAX_TEXT), "2 MB");
+        assert_eq!(size_words(64 * 1024 * 1024), "64 MB");
+        assert_eq!(size_words(1000), "1 KB");
     }
 }

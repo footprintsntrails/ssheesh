@@ -1,0 +1,66 @@
+# SSHeesh 1.0's own workspace: the program on Rune and its screen layer. It's a workspace of its
+# own because `[patch]` only works from a workspace root, and Rune's patched crates must not
+# reach the 0.10 app (src-tauri) in the root workspace. sshee-core and sshee-term stay there and
+# are path dependencies. Build with `cargo build` here; the target folder is ../target/desktop
+# (.cargo/config.toml). scripts/check-desktop-workspace.sh keeps the two workspaces in step.
+[workspace]
+members = ["sshee-ui", "proto"]
+# Rune's crate with our fixes (vendor/rune.patch): a dependency, not ours to build and test.
+exclude = ["vendor/rune"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+publish = false
+
+[workspace.dependencies]
+# Rune is pre-release: pin a rev of `dev` and bump it on purpose, together with the patch
+# list below (Rune's crates/rune/README.md "Depending on Rune"). Features: `tooling` gives
+# --script/--snap/--tree in release builds (the prototype's CI; 1.0 release builds drop it),
+# `dbus` Linux's light/dark preference, `accessibility` the screen-reader tree,
+# `metal-backend` macOS's default renderer. Off on purpose: `embedded-fonts` (we register our
+# own, sshee-ui/fonts), `svg` (hostile SVGs, Rune #587/#888) and `ogg-audio`.
+rune = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095", default-features = false, features = ["accessibility", "dbus", "metal-backend", "tooling"] }
+sshee-core = { path = "../crates/sshee-core" }
+sshee-term = { path = "../crates/sshee-term" }
+sshee-ui = { path = "sshee-ui" }
+# The version Rune already locks: cmap coverage and font metrics for the terminal's cells.
+swash = "0.2.10"
+
+[patch.crates-io]
+# Ours, as in ../Cargo.toml: Arti's copy never finishes on Windows, which hung Tor at 15%
+# (crates/saturating-time/PATCHED.md). Patches work only from a workspace root, so every
+# workspace that builds sshee-core repeats it.
+saturating-time = { path = "../crates/saturating-time" }
+# Rune's, from the same rev as `rune` above: the [patch.crates-io] table of Rune's root
+# Cargo.toml at that rev. A dependency's [patch] doesn't reach us; without these we'd build
+# against stock crates (winit without its macOS input-method and Windows window fixes,
+# parley_engine without its bidi and shaping fixes).
+winit = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
+
+# Rune's own crate, with the fixes it doesn't have yet at the rev above (Rune #225's redraw loop,
+# frames for input that changes nothing, the layout's letter for keys taken before Rune's): a
+# copy made by scripts/vendor-rune.sh from that same rev, and vendor/rune.patch. A Rune bump
+# runs the script again; once Rune has the fixes, this goes.
+[patch."https://github.com/anomalyco/rune"]
+rune = { path = "vendor/rune" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+# Rune, parley, swash and alacritty at -O0 make debug windows crawl.
+opt-level = 2
+
+[profile.release]
+codegen-units = 16
+
+# Numbers for the terminal targets come from this profile only, as Rune's own benches do.
+[profile.perf]
+inherits = "release"
+incremental = false

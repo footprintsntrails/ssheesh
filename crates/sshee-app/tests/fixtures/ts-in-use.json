@@ -1,0 +1,488 @@
+{
+  "platform": "linux",
+  "stores": {
+    "sshee-settings": {
+      "state": {
+        "theme": "custom-r8t2w6yz",
+        "themeFollowsSystem": false,
+        "lightTheme": "daylight",
+        "darkTheme": "ssheesh",
+        "customThemes": [
+          {
+            "id": "custom-r8t2w6yz",
+            "name": "Night shift",
+            "base": "graphite",
+            "colors": {
+              "window": "#0b0d10",
+              "canvas": "#07080a"
+            }
+          }
+        ],
+        "shortcuts": {
+          "splitRight": {
+            "key": "d",
+            "ctrl": true,
+            "shift": true
+          },
+          "paletteAlt": null
+        },
+        "uiZoom": 110,
+        "dimInactive": 15,
+        "animations": true,
+        "logo": "winking",
+        "compactMode": "sidebar",
+        "compactLast": "sidebar",
+        "onboarded": true,
+        "onboardingVersion": 2,
+        "hintsSeen": [
+          "split-drag",
+          "files-drop"
+        ],
+        "envStripe": false,
+        "tabsPlacement": "sidebar",
+        "lastSeenVersion": "0.10.14",
+        "accent": "#7c83ff",
+        "terminalScheme": "own",
+        "terminalColors": {
+          "background": "#101418",
+          "foreground": "#e0e6ee"
+        },
+        "terminalFont": "system",
+        "terminalFontSize": 14.5,
+        "terminalLineHeight": 1.3,
+        "cursorStyle": "block",
+        "cursorBlink": true,
+        "gpuRendering": false,
+        "copyOnSelect": true,
+        "countTyping": true,
+        "terminalPadding": 12,
+        "reconnectMode": "ask",
+        "idleSleep": 45,
+        "sidebarSide": "left",
+        "sidebarVisible": true,
+        "sidebarWidth": 251.5,
+        "sidebarMode": "wide",
+        "iconPack": "line",
+        "railStatus": "bars",
+        "expanded": [
+          "host:cfg:web-7731"
+        ],
+        "viewMode": "tabs",
+        "hiddenPlaces": [
+          "recent",
+          "/tmp"
+        ],
+        "previewWidth": 420,
+        "paneGap": 6,
+        "paneRadius": 11,
+        "showVitals": true,
+        "updateMode": "notify",
+        "streamerMode": true,
+        "hideSecrets": true,
+        "cleanUploads": true,
+        "highlightErrors": true,
+        "highlightWarnings": true,
+        "highlightAddresses": true,
+        "highlightRules": [
+          {
+            "id": "q8w7e6r5",
+            "pattern": "/timeout after \\d+ ?ms/",
+            "color": "magenta"
+          },
+          {
+            "id": "z1x2c3v4",
+            "pattern": "db-main",
+            "color": "cyan"
+          }
+        ],
+        "notifyAttention": true,
+        "torHideTyping": true,
+        "welcomeMode": "first",
+        "welcomeParts": [
+          "logo",
+          "status"
+        ],
+        "welcomeNote": "Be gentle with db-main",
+        "welcomedHosts": [
+          "cfg:web-7731"
+        ],
+        "nativeTitleBar": false,
+        "placesWidth": 212
+      },
+      "version": 4
+    },
+    "sshee-labels": {
+      "state": {
+        "env": {
+          "cfg:db-main": "prod",
+          "cfg:web-7731": "staging",
+          "saved:k7q2m9xa": "dev"
+        },
+        "hidden": [
+          "cfg:old-box",
+          "saved:q1w2e3r4"
+        ],
+        "configSeen": [
+          "cfg:web-7731",
+          "cfg:db-main",
+          "cfg:old-box"
+        ],
+        "looks": {
+          "cfg:web-7731": {
+            "icon": "globe",
+            "color": "#7577e3"
+          },
+          "saved:k7q2m9xa": {
+            "icon": "backup",
+            "color": "#0997b4",
+            "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+          }
+        },
+        "autoLooks": {
+          "cfg:db-main": {
+            "icon": "database"
+          },
+          "cfg:web-7731": {
+            "icon": "globe"
+          }
+        }
+      },
+      "version": 2
+    },
+    "sshee-workspace": {
+      "state": {
+        "layouts": {
+          "host:cfg:web-7731": {
+            "kind": "split",
+            "id": "s_9k4no7c2",
+            "dir": "row",
+            "children": [
+              {
+                "kind": "pane",
+                "id": "p_dw2vwdy8"
+              },
+              {
+                "kind": "pane",
+                "id": "p_dhecbt0t"
+              },
+              {
+                "kind": "pane",
+                "id": "p_1omplald"
+              },
+              {
+                "kind": "pane",
+                "id": "p_03oxci2w"
+              },
+              {
+                "kind": "pane",
+                "id": "p_hp5avjy0"
+              }
+            ]
+          },
+          "host:cfg:db-main": {
+            "kind": "pane",
+            "id": "p_3et92i0c"
+          },
+          "local": {
+            "kind": "pane",
+            "id": "p_98ofm42e"
+          },
+          "host:saved:k7q2m9xa": {
+            "kind": "split",
+            "id": "s_wbuhb1bn",
+            "dir": "row",
+            "children": [
+              {
+                "kind": "pane",
+                "id": "p_veow8zpw"
+              },
+              {
+                "kind": "pane",
+                "id": "p_0lkgf34w"
+              }
+            ]
+          }
+        },
+        "splitOn": {
+          "host:cfg:web-7731": true
+        },
+        "panes": {
+          "p_dw2vwdy8": {
+            "id": "p_dw2vwdy8",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:web-7731"
+            },
+            "sessionKey": "697qi1144x",
+            "n": 1
+          },
+          "p_1omplald": {
+            "id": "p_1omplald",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:web-7731"
+            },
+            "sessionKey": "21v06pcts5",
+            "n": 2
+          },
+          "p_hp5avjy0": {
+            "id": "p_hp5avjy0",
+            "kind": "files",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:web-7731"
+            },
+            "path": "/var/www/app",
+            "n": 1,
+            "reveal": "index.html",
+            "revealLines": [
+              3,
+              9
+            ]
+          },
+          "p_03oxci2w": {
+            "id": "p_03oxci2w",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:web-7731"
+            },
+            "sessionKey": "a0evkaxi52",
+            "container": {
+              "engine": "docker",
+              "id": "3f9c2a1b7d4e",
+              "name": "api",
+              "run": "logs"
+            },
+            "n": 3
+          },
+          "p_3et92i0c": {
+            "id": "p_3et92i0c",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:db-main"
+            },
+            "sessionKey": "izq2ryolkg",
+            "initialCommand": "cd /srv/db",
+            "n": 1
+          },
+          "p_dhecbt0t": {
+            "id": "p_dhecbt0t",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:db-main"
+            },
+            "sessionKey": "akrviv50un",
+            "n": 2
+          },
+          "p_98ofm42e": {
+            "id": "p_98ofm42e",
+            "kind": "terminal",
+            "target": {
+              "kind": "local"
+            },
+            "sessionKey": "1sgx1pvibj",
+            "n": 1
+          },
+          "p_veow8zpw": {
+            "id": "p_veow8zpw",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "saved:k7q2m9xa"
+            },
+            "sessionKey": "ccf2awl183",
+            "n": 1
+          },
+          "p_0lkgf34w": {
+            "id": "p_0lkgf34w",
+            "kind": "terminal",
+            "target": {
+              "kind": "host",
+              "hostId": "saved:k7q2m9xa"
+            },
+            "sessionKey": "srfprjlqmv",
+            "n": 2
+          }
+        },
+        "focused": "p_1omplald",
+        "hidden": [
+          "p_03oxci2w"
+        ],
+        "tabOrder": [
+          "p_1omplald",
+          "p_dw2vwdy8"
+        ],
+        "home": false,
+        "lastFocusedFor": {
+          "host:cfg:web-7731": "p_1omplald",
+          "host:cfg:db-main": "p_dhecbt0t",
+          "local": "p_98ofm42e",
+          "host:saved:k7q2m9xa": "p_0lkgf34w"
+        },
+        "frontOf": {
+          "host:cfg:web-7731": "p_1omplald",
+          "host:cfg:db-main": "p_rcp1wymy",
+          "local": "p_98ofm42e",
+          "host:saved:k7q2m9xa": "p_0lkgf34w"
+        },
+        "closedTabs": [
+          {
+            "kind": "files",
+            "target": {
+              "kind": "host",
+              "hostId": "saved:k7q2m9xa"
+            },
+            "path": "/srv/backups",
+            "closedAt": 1794528000000
+          },
+          {
+            "kind": "stats",
+            "target": {
+              "kind": "host",
+              "hostId": "cfg:db-main"
+            },
+            "closedAt": 1794528000000
+          }
+        ]
+      },
+      "version": 2
+    },
+    "sshee-snippets": {
+      "state": {
+        "snippets": [
+          {
+            "name": "How full the disks are",
+            "command": "df -h -x tmpfs -x devtmpfs -x overlay",
+            "id": "s-disk"
+          },
+          {
+            "id": "s-logs",
+            "name": "Follow a container's log",
+            "command": "docker logs -f --tail {{lines:100}} {{container}}"
+          },
+          {
+            "id": "s-restart",
+            "name": "Restart a service",
+            "command": "sudo systemctl restart {{service}} && systemctl status --no-pager {{service}}"
+          },
+          {
+            "id": "s-big",
+            "name": "Biggest folders here",
+            "command": "du -xh --max-depth=1 {{folder:.}} 2>/dev/null | sort -rh | head -n 15"
+          },
+          {
+            "name": "Deploy with a token",
+            "command": "curl -fsS -H 'Authorization: Bearer {{token:sk-test-not-real-0000}}' https://203.0.113.10/deploy",
+            "id": "s_bzrpqnxb"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "sshee-bookmarks": {
+      "state": {
+        "pins": {
+          "host:cfg:web-7731": [
+            "/var/www/app",
+            "/etc/nginx"
+          ]
+        },
+        "recent": {
+          "host:cfg:web-7731": [
+            "/var/www/app",
+            "/var/log"
+          ],
+          "local": [
+            "/home/dev/projects"
+          ]
+        }
+      },
+      "version": 1
+    },
+    "sshee-tunnels": {
+      "state": {
+        "byHost": {
+          "cfg:web-7731": [
+            {
+              "id": "tun_g7k2",
+              "name": "Grafana",
+              "forward": {
+                "kind": "local",
+                "localPort": 3000,
+                "remoteHost": "127.0.0.1",
+                "remotePort": 3000
+              },
+              "on": false,
+              "scheme": "http"
+            },
+            {
+              "id": "tun_s0ck",
+              "forward": {
+                "kind": "socks",
+                "localPort": 1080
+              },
+              "on": false
+            }
+          ],
+          "cfg:db-main": [
+            {
+              "id": "tun_pg55",
+              "name": "Postgres",
+              "forward": {
+                "kind": "local",
+                "localPort": 15432,
+                "remoteHost": "",
+                "remotePort": 5432
+              },
+              "on": true
+            }
+          ]
+        }
+      },
+      "version": 1
+    },
+    "sshee-typing-counts": {
+      "state": {
+        "saved": {
+          "tor": {
+            "agent": {
+              "keys": 50,
+              "typed": 49
+            }
+          },
+          "direct": {
+            "line": {
+              "keys": 150,
+              "typed": 150,
+              "atOnce": 40,
+              "echoes": [
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1
+              ]
+            }
+          }
+        }
+      },
+      "version": 0
+    }
+  }
+}

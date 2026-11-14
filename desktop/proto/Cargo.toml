@@ -1,0 +1,23 @@
+[package]
+name = "ssheesh-proto"
+version = "0.0.1"
+description = "SSHeesh 1.0's terminal prototype: one window, one pane"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ssheesh-proto"
+path = "src/main.rs"
+
+[dependencies]
+# Rune only through sshee-ui.
+sshee-ui.workspace = true
+sshee-core.workspace = true
+sshee-term.workspace = true
+# Replay fixtures and their records.
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+# The meter's process CPU, UI-thread CPU and page size.
+libc = "0.2"

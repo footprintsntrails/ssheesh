@@ -1,0 +1,3 @@
+# Next to the root workspace's target folder, never inside it: the two resolve different crates.
+[build]
+target-dir = "../target/desktop"

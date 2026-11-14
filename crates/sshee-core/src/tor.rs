@@ -8,8 +8,13 @@
 //! How a connection gets there: every ssh the app starts gets a
 //! ProxyCommand, this same executable with `--tor-proxy`. That small helper
 //! hands the connection to the app through a door on 127.0.0.1 (its port and
-//! a secret are in ~/.sshee/tor/door, readable by you only; each side proves
-//! it knows the secret without sending it), and the app carries it over Tor.
+//! a secret are in ~/.sshee/tor/door.<the app's process id>, readable by you
+//! only; each side proves it knows the secret without sending it), and the
+//! app carries it over Tor. Each process has a door of its own, so two copies
+//! running at once (one starting as the other quits, during an update) never
+//! lock each other out; see `door_file`. A helper whose door is gone knocks
+//! on the others (see `knock_any`), and shared connections through Tor stay
+//! within the process whose Tor carries them (see `ssh::close_shared`).
 //! When Tor can't carry it, the connection fails: nothing goes around Tor,
 //! not even a name lookup. Servers on your own network (192.168.x.x, a .local
 //! name) are the exception: Tor can't reach them, and they never see the
@@ -42,7 +47,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream as StdTcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -58,6 +63,19 @@ pub const PROXY_FLAG: &str = "--tor-proxy";
 const REFUSE_FLAG: &str = "--tor-refuse";
 /// Said after the port by a connection that carries a transfer (`move_transfers`).
 const FILES: &str = "files";
+/// Said right after `PROXY_FLAG`, with the app's process id: whose door the
+/// helper knocks on (see `door_file`).
+const DOOR_FLAG: &str = "--door";
+/// The one door versions up to 0.10.14 had, shared by all their processes.
+const SHARED_DOOR: &str = "door";
+/// A door left behind by a process that didn't get to remove it (a crash, a
+/// power cut) is cleared away after this long, if nothing answers at it.
+const STALE_DOOR: Duration = Duration::from_secs(30 * 86400);
+/// How long a door gets to let a connection in before nobody counts as
+/// there. A running SSHeesh is let in by the system at once, but on Windows
+/// a port where nothing listens isn't turned away at once either: the
+/// system tries again for a second or two first.
+const DOOR_WAIT: Duration = Duration::from_secs(3);
 
 /// Routes timed before a server's first connection. Each one more is a better
 /// chance for a hostile relay to end up on the route, so no more than it takes.
@@ -250,10 +268,12 @@ static WATCHER: OnceLock<Box<dyn Fn(TorStatus) + Send + Sync>> = OnceLock::new()
 /// Why the engine couldn't be made, when it couldn't.
 static BROKEN: Mutex<Option<String>> = Mutex::new(None);
 
-/// Where Tor keeps what it learned (so it starts fast) and the door. Never a
-/// shared folder such as /tmp: without a home folder, Tor doesn't start.
+/// Where Tor keeps what it learned (so it starts fast) and the doors: in
+/// this copy's own folder (see `app_identity`), ~/.sshee/tor for the
+/// standard one. Never a shared folder such as /tmp: without a home folder,
+/// Tor doesn't start.
 fn dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".sshee").join("tor"))
+    crate::app_identity::current().tor_dir()
 }
 
 /// Called once at startup, before anything connects: if Tor was left on,
@@ -267,10 +287,12 @@ pub fn init(exe: PathBuf, ports: Vec<u16>) {
     }
 }
 
-/// Called as the app quits: nothing answers at the door anymore.
+/// Called as the app quits: nothing answers at its door anymore. Only this
+/// process's door goes. Another copy may still be running (the new version,
+/// started as this one quits during an update), and its door stays.
 pub fn shutdown() {
     if let Some(d) = dir() {
-        let _ = std::fs::remove_file(d.join("door"));
+        let _ = std::fs::remove_file(door_file(&d, std::process::id()));
     }
 }
 
@@ -426,7 +448,7 @@ fn exe() -> String {
 /// reading the config with `ssh -G`: with a ProxyCommand ssh looks no names
 /// up, not even for `CanonicalizePermittedCNAMEs`.
 pub fn proxy_command() -> Option<String> {
-    is_on().then(|| command_line(&exe()))
+    is_on().then(|| command_line(&exe(), std::process::id()))
 }
 
 /// The ProxyCommand for connecting to `t` while Tor is on: through Tor, or
@@ -437,7 +459,7 @@ pub fn proxy_command_for(t: &crate::ssh::SshTarget) -> Option<String> {
     }
     let found = checked(t);
     Some(match found.refusal {
-        None => command_line(&exe()),
+        None => command_line(&exe(), std::process::id()),
         Some(why) => {
             note_failure(found.host.as_deref().unwrap_or(&t.destination), why.message());
             refusing_line(&exe(), why)
@@ -544,20 +566,31 @@ pub fn typed_ssh_options() -> Option<Vec<String>> {
     if !is_on() {
         return None;
     }
-    let exe = exe().replace('%', "%%");
-    let line = if cfg!(windows) { format!("{exe} {PROXY_FLAG} %h %p") } else { format!("{} {PROXY_FLAG} %h %p", crate::ssh::shell_quote(&exe)) };
-    Some(ssh_options(&line))
+    Some(ssh_options(&typed_line(&exe())))
 }
 
-/// ssh fills in %h and %p, so a % in the path is written %%.
-fn command_line(exe: &str) -> String {
+/// The ProxyCommand of `typed_ssh_options`. It names no door, so the helper
+/// takes whichever of this copy's answers (see `Door::Any`): a command kept
+/// in your shell's history still works after SSHeesh restarts or updates.
+fn typed_line(exe: &str) -> String {
+    let exe = exe.replace('%', "%%");
+    if cfg!(windows) {
+        format!("{exe} {PROXY_FLAG} %h %p")
+    } else {
+        format!("{} {PROXY_FLAG} %h %p", crate::ssh::shell_quote(&exe))
+    }
+}
+
+/// The helper's command line, knocking on the door of process `door`. ssh
+/// fills in %h and %p, so a % in the path is written %%.
+fn command_line(exe: &str, door: u32) -> String {
     let exe = exe.replace('%', "%%");
     if cfg!(windows) {
         // Windows' ssh starts it without a shell, and takes a quoted path as the program.
-        format!("\"{exe}\" {PROXY_FLAG} %h %p")
+        format!("\"{exe}\" {PROXY_FLAG} {DOOR_FLAG} {door} %h %p")
     } else {
         // Run with your shell; sh, bash, zsh and fish all read '…' the same.
-        format!("{} {PROXY_FLAG} %h %p", crate::ssh::shell_quote(&exe))
+        format!("{} {PROXY_FLAG} {DOOR_FLAG} {door} %h %p", crate::ssh::shell_quote(&exe))
     }
 }
 
@@ -644,11 +677,36 @@ fn engine() -> Result<&'static Engine, String> {
     Ok(e)
 }
 
-/// The door's port and secret, in a file only you can read.
+/// This process's door: its port and secret, in a file only you can read.
 fn write_door(port: u16, secret: &str) -> std::io::Result<()> {
     make_dir()?;
     let d = dir().ok_or_else(|| std::io::Error::other("no home folder"))?;
-    let (path, tmp) = (d.join("door"), d.join("door.new"));
+    let pid = std::process::id();
+    write_door_in(&d, pid, port, secret)?;
+    // Off the way of this start: telling a door nobody answers at can take
+    // seconds each (see `DOOR_WAIT`).
+    let _ = std::thread::Builder::new().name("tor-doors".into()).spawn(move || sweep_doors(&d, pid, SystemTime::now()));
+    Ok(())
+}
+
+/// The file with process `pid`'s door. Every process that runs Tor has one
+/// of its own and removes only that one as it quits. Up to 0.10.14 there
+/// was a single `door` for all: during an update the old version, quitting,
+/// removed the door the new one had just written, and every connection of
+/// the new one through Tor failed.
+///
+/// The helper is told whose door to use on its command line (see
+/// `command_line`). A version up to 0.10.14 still running starts it without
+/// that, and since ssh runs whatever file is at the app's path, that may be
+/// the new version by then: it then uses the shared `door`, which only the
+/// old version writes and removes. When nobody answers at the door it was
+/// told, it knocks on this copy's others (see `knock_any`).
+fn door_file(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("{SHARED_DOOR}.{pid}"))
+}
+
+fn write_door_in(dir: &Path, pid: u32, port: u16, secret: &str) -> std::io::Result<()> {
+    let (path, tmp) = (door_file(dir, pid), dir.join(format!("{SHARED_DOOR}.{pid}.new")));
     let _ = std::fs::remove_file(&tmp);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -659,6 +717,47 @@ fn write_door(port: u16, secret: &str) -> std::io::Result<()> {
     }
     options.open(&tmp)?.write_all(format!("{port} {secret}\n").as_bytes())?;
     std::fs::rename(&tmp, &path)
+}
+
+/// A door file's port and secret.
+fn read_door(path: &Path) -> Option<(u16, String)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let (port, secret) = text.trim().split_once(' ')?;
+    Some((port.parse().ok()?, secret.to_string()))
+}
+
+/// Whether a file in Tor's folder named `name` is a door: the shared `door`
+/// of a version up to 0.10.14, or a process's (`door_file`). Some(pid) for
+/// a process's, Some(None) for the shared one.
+fn door_name(name: &str) -> Option<Option<u32>> {
+    if name == SHARED_DOOR {
+        return Some(None);
+    }
+    let pid = name.strip_prefix(SHARED_DOOR)?.strip_prefix('.')?.parse::<u32>().ok()?;
+    (name == format!("{SHARED_DOOR}.{pid}")).then_some(Some(pid))
+}
+
+/// Clears away doors that processes left behind, other than `own`'s. Only
+/// one that's been there for `STALE_DOOR` and where nothing lets a
+/// connection in goes: a copy still running answers at its door, and a
+/// helper couldn't get through a door that doesn't anyway. Each can take up
+/// to `DOOR_WAIT`, so this runs off the way of anything waiting.
+fn sweep_doors(dir: &Path, own: u32, now: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let theirs = door_name(&name).is_some_and(|pid| pid != Some(own));
+        let old = || entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > STALE_DOOR);
+        if theirs && old() && read_door(&entry.path()).is_some_and(|(port, _)| !answers(port)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Whether anything on this computer lets a connection in at `port` within
+/// `DOOR_WAIT`. Turned away or not let in by then, nobody is there.
+fn answers(port: u16) -> bool {
+    StdTcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), DOOR_WAIT).is_ok()
 }
 
 /// Changes the status, and tells the UI, under the status lock: starts,
@@ -1072,12 +1171,9 @@ fn clock_off(said: &str) -> Option<u64> {
 /// skewed.", which is why every "Clock is" is looked at.
 fn reported_skew(said: &str) -> Option<(i64, bool)> {
     said.split("Clock is ").skip(1).find_map(|rest| {
-        let (sign, rest) = if let Some(r) = rest.strip_prefix("slow by around ") {
-            (1, r)
-        } else if let Some(r) = rest.strip_prefix("fast by around ") {
-            (-1, r)
-        } else {
-            return None;
+        let (sign, rest) = match rest.strip_prefix("slow by around ") {
+            Some(r) => (1, r),
+            None => (-1, rest.strip_prefix("fast by around ")?),
         };
         let (by, confidence) = rest.split_once(" (")?;
         let secs = humantime::parse_duration(by.trim()).ok()?.as_secs();
@@ -1384,13 +1480,10 @@ fn explain(lost: Option<Lost>, port: u16) -> String {
 /// `main`, before askpass, since askpass's variables reach this too.
 pub fn proxy_main() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        [PROXY_FLAG, host, port] => port.parse::<u16>().map_err(|_| format!("{port} isn't a port")).and_then(|port| proxy(host, port, false)),
-        [PROXY_FLAG, host, port, FILES] => port.parse::<u16>().map_err(|_| format!("{port} isn't a port")).and_then(|port| proxy(host, port, true)),
-        [PROXY_FLAG, ..] => Err(format!("usage: {PROXY_FLAG} <host> <port>")),
-        [REFUSE_FLAG, code] => Err(Refusal::from_code(code).map_or("SSHeesh didn't connect this server through Tor.", Refusal::message).to_string()),
-        [REFUSE_FLAG, ..] => Err("SSHeesh didn't connect this server through Tor.".into()),
-        _ => return None,
+    let result = match helper_request(&args.iter().map(String::as_str).collect::<Vec<_>>())? {
+        Ok(HelperRequest::Carry { door, host, port, files }) => proxy(door, &host, port, files),
+        Ok(HelperRequest::Refuse(message)) => Err(message),
+        Err(message) => Err(message),
     };
     Some(match result {
         Ok(()) => 0,
@@ -1398,6 +1491,50 @@ pub fn proxy_main() -> Option<i32> {
             eprintln!("SSHeesh: {message}");
             1
         }
+    })
+}
+
+/// Whose door the helper knocks on first. When nobody answers there, it
+/// tries this copy's other doors (see `knock_any`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Door {
+    /// The door of the app process with this id: `door_file`.
+    Of(u32),
+    /// None named: started by a version up to 0.10.14's ssh, or by a
+    /// command you typed (`typed_ssh_options`). The shared `door` such a
+    /// version writes while it runs, then whichever door answers.
+    Any,
+}
+
+/// What ssh started the helper for.
+#[derive(Debug, PartialEq)]
+enum HelperRequest {
+    Carry { door: Door, host: String, port: u16, files: bool },
+    /// A server that mustn't connect, and why.
+    Refuse(String),
+}
+
+/// Reads the helper's arguments (after the program's name). None when they
+/// aren't the helper's: a normal launch. What a version up to 0.10.14
+/// started it with still works. Such a version handed the newer form (its
+/// file put back under a newer app still running) says how it's used and
+/// exits, rather than opening the app.
+fn helper_request(args: &[&str]) -> Option<Result<HelperRequest, String>> {
+    let carry = |door: Door, host: &str, port: &str, files: bool| {
+        let port = port.parse::<u16>().map_err(|_| format!("{port} isn't a port"))?;
+        Ok(HelperRequest::Carry { door, host: host.to_string(), port, files })
+    };
+    let door = |pid: &str| pid.parse::<u32>().map(Door::Of).map_err(|_| format!("{pid} isn't a process id"));
+    Some(match args {
+        [PROXY_FLAG, DOOR_FLAG, pid, host, port] => door(pid).and_then(|d| carry(d, host, port, false)),
+        [PROXY_FLAG, DOOR_FLAG, pid, host, port, FILES] => door(pid).and_then(|d| carry(d, host, port, true)),
+        [PROXY_FLAG, DOOR_FLAG, ..] => Err(format!("usage: {PROXY_FLAG} {DOOR_FLAG} <process id> <host> <port>")),
+        [PROXY_FLAG, host, port] => carry(Door::Any, host, port, false),
+        [PROXY_FLAG, host, port, FILES] => carry(Door::Any, host, port, true),
+        [PROXY_FLAG, ..] => Err(format!("usage: {PROXY_FLAG} {DOOR_FLAG} <process id> <host> <port>")),
+        [REFUSE_FLAG, code] => Ok(HelperRequest::Refuse(Refusal::from_code(code).map_or("SSHeesh didn't connect this server through Tor.", Refusal::message).to_string())),
+        [REFUSE_FLAG, ..] => Ok(HelperRequest::Refuse("SSHeesh didn't connect this server through Tor.".into())),
+        _ => return None,
     })
 }
 
@@ -1456,10 +1593,10 @@ fn is_near(ip: IpAddr) -> bool {
     }
 }
 
-fn proxy(host: &str, port: u16, files: bool) -> Result<(), String> {
+fn proxy(door: Door, host: &str, port: u16, files: bool) -> Result<(), String> {
     let sock = match way(host, port) {
         Way::Near(addrs) => StdTcpStream::connect(&addrs[..]).map_err(|e| format!("Couldn't reach the server on your network: {e}"))?,
-        Way::Tor(name) => through_door(&name, port, files)?,
+        Way::Tor(name) => through_door(door, &name, port, files)?,
     };
     let _ = sock.set_nodelay(true);
     carry(sock);
@@ -1467,31 +1604,97 @@ fn proxy(host: &str, port: u16, files: bool) -> Result<(), String> {
 }
 
 /// Asks the app for a connection through Tor.
-fn through_door(host: &str, port: u16, files: bool) -> Result<StdTcpStream, String> {
-    let not_running = || "Tor isn't running in SSHeesh. Open SSHeesh and try again.".to_string();
-    let door = dir().and_then(|d| std::fs::read_to_string(d.join("door")).ok()).ok_or_else(not_running)?;
-    let (door_port, secret) = door.trim().split_once(' ').ok_or_else(not_running)?;
-    let door_port: u16 = door_port.parse().map_err(|_| not_running())?;
-    let mut sock = StdTcpStream::connect((Ipv4Addr::LOCALHOST, door_port)).map_err(|_| not_running())?;
+fn through_door(door: Door, host: &str, port: u16, files: bool) -> Result<StdTcpStream, String> {
+    let d = dir().ok_or_else(|| Knocked::Nobody.to_string())?;
+    let first = match door {
+        Door::Of(pid) => door_file(&d, pid),
+        Door::Any => d.join(SHARED_DOOR),
+    };
+    knock_any(&d, &first, host, port, files)
+}
+
+/// Knocks on the door in the file `first`, and when nobody there lets the
+/// helper through, on the other doors in `dir`, the newest first. The door
+/// named may be gone while this copy's Tor runs: in a command kept from
+/// before SSHeesh restarted, or in one from a version up to 0.10.14 after
+/// the update. Any process of this copy may carry the connection, and each
+/// door is only gone through once it proved it knows that door's secret.
+/// An app that answered and said why it couldn't connect is the answer.
+fn knock_any(dir: &Path, first: &Path, host: &str, port: u16, files: bool) -> Result<StdTcpStream, String> {
+    let why = match knock(first, host, port, files) {
+        Ok(sock) => return Ok(sock),
+        Err(Knocked::Said(why)) => return Err(why),
+        Err(why) => why,
+    };
+    for door in other_doors(dir, first) {
+        match knock(&door, host, port, files) {
+            Ok(sock) => return Ok(sock),
+            Err(Knocked::Said(why)) => return Err(why),
+            Err(_) => {}
+        }
+    }
+    // What the door it was meant for said, as before there were others.
+    Err(why.to_string())
+}
+
+/// The doors in `dir` other than the one in `except`, the newest first: the
+/// likeliest to be a copy's that's running.
+fn other_doors(dir: &Path, except: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut doors: Vec<(SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter(|e| door_name(&e.file_name().to_string_lossy()).is_some() && e.path() != except)
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH), e.path()))
+        .collect();
+    doors.sort_by(|a, b| b.cmp(a));
+    doors.into_iter().map(|(_, path)| path).collect()
+}
+
+/// Why a knock didn't get through.
+#[derive(Debug, PartialEq)]
+enum Knocked {
+    /// No door in the file, or nothing at it that finished the exchange.
+    Nobody,
+    /// Something that doesn't know the door's secret: it never heard the server's name.
+    Stranger,
+    /// The app, saying why it couldn't connect.
+    Said(String),
+}
+
+impl std::fmt::Display for Knocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Knocked::Nobody => "Tor isn't running in SSHeesh. Open SSHeesh and try again.",
+            Knocked::Stranger => "Something other than SSHeesh answers at Tor's door, so SSHeesh didn't connect. Open SSHeesh and try again.",
+            Knocked::Said(why) => why,
+        })
+    }
+}
+
+/// Asks whoever's door is in the file at `door` for a connection through Tor.
+fn knock(door: &Path, host: &str, port: u16, files: bool) -> Result<StdTcpStream, Knocked> {
+    let nobody = |_| Knocked::Nobody;
+    let (door_port, secret) = read_door(door).ok_or(Knocked::Nobody)?;
+    let mut sock = StdTcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, door_port)), DOOR_WAIT).map_err(nobody)?;
     let _ = sock.set_nodelay(true);
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|_| not_running())?;
+    getrandom::fill(&mut bytes).map_err(|_| Knocked::Nobody)?;
     let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    sock.write_all(format!("{HELLO} {nonce}\n").as_bytes()).map_err(|_| not_running())?;
+    sock.write_all(format!("{HELLO} {nonce}\n").as_bytes()).map_err(nobody)?;
     let _ = sock.set_read_timeout(Some(Duration::from_secs(5)));
     // Whatever answers must know the secret before it hears the server's name.
-    let answer = read_line_sync(&mut sock).ok_or_else(not_running)?;
-    if !same(&answer, &proof(secret, "app", &nonce)) {
-        return Err("Something other than SSHeesh answers at Tor's door, so SSHeesh didn't connect. Open SSHeesh and try again.".into());
+    let answer = read_line_sync(&mut sock).ok_or(Knocked::Nobody)?;
+    if !same(&answer, &proof(&secret, "app", &nonce)) {
+        return Err(Knocked::Stranger);
     }
     let lane = if files { format!(" {FILES}") } else { String::new() };
-    sock.write_all(format!("{} {host} {port}{lane}\n", proof(secret, "helper", &nonce)).as_bytes()).map_err(|_| not_running())?;
+    sock.write_all(format!("{} {host} {port}{lane}\n", proof(&secret, "helper", &nonce)).as_bytes()).map_err(nobody)?;
     let _ = sock.set_read_timeout(Some(START_WAIT + CONNECT_WAIT + Duration::from_secs(15)));
-    let line = read_line_sync(&mut sock).ok_or_else(not_running)?;
+    let line = read_line_sync(&mut sock).ok_or(Knocked::Nobody)?;
     let _ = sock.set_read_timeout(None);
     match line.as_str() {
         "OK" => Ok(sock),
-        _ => Err(line.strip_prefix("ERR ").unwrap_or(&line).to_string()),
+        _ => Err(Knocked::Said(line.strip_prefix("ERR ").unwrap_or(&line).to_string())),
     }
 }
 
@@ -1691,13 +1894,321 @@ mod tests {
 
     #[test]
     fn ssh_starts_the_helper_with_its_path_quoted() {
-        let line = command_line("/Applications/SSHeesh.app/Contents/MacOS/SSHeesh");
+        let line = command_line("/Applications/SSHeesh.app/Contents/MacOS/SSHeesh", 4242);
         if cfg!(windows) {
-            assert_eq!(line, "\"/Applications/SSHeesh.app/Contents/MacOS/SSHeesh\" --tor-proxy %h %p");
+            assert_eq!(line, "\"/Applications/SSHeesh.app/Contents/MacOS/SSHeesh\" --tor-proxy --door 4242 %h %p");
         } else {
-            assert_eq!(line, "'/Applications/SSHeesh.app/Contents/MacOS/SSHeesh' --tor-proxy %h %p");
-            assert_eq!(command_line("/home/me/it's 100%/ssheesh"), r"'/home/me/it'\''s 100%%/ssheesh' --tor-proxy %h %p");
+            assert_eq!(line, "'/Applications/SSHeesh.app/Contents/MacOS/SSHeesh' --tor-proxy --door 4242 %h %p");
+            assert_eq!(command_line("/home/me/it's 100%/ssheesh", 7), r"'/home/me/it'\''s 100%%/ssheesh' --tor-proxy --door 7 %h %p");
         }
+    }
+
+    /// The words ssh hands the helper for `line`, once it filled in the
+    /// server: `line` minus the program, as a shell would split it.
+    fn helper_words(line: &str, host: &str, port: u16) -> Vec<String> {
+        let after = line.split_once(PROXY_FLAG).unwrap().1;
+        std::iter::once(PROXY_FLAG.to_string())
+            .chain(after.split_whitespace().map(|w| w.replace("%h", host).replace("%p", &port.to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn the_helper_knocks_on_the_door_it_was_given() {
+        let ask = |words: &[String]| helper_request(&words.iter().map(String::as_str).collect::<Vec<_>>());
+        let line = command_line("/opt/SSHeesh/ssheesh", 4242);
+        assert_eq!(
+            ask(&helper_words(&line, "203.0.113.7", 22)),
+            Some(Ok(HelperRequest::Carry { door: Door::Of(4242), host: "203.0.113.7".into(), port: 22, files: false }))
+        );
+        // A transfer's connection says so after the port.
+        assert_eq!(
+            ask(&helper_words(&format!("{line} {FILES}"), "203.0.113.7", 2222)),
+            Some(Ok(HelperRequest::Carry { door: Door::Of(4242), host: "203.0.113.7".into(), port: 2222, files: true }))
+        );
+        // What a version up to 0.10.14 starts it with, and a command you
+        // type: no door named.
+        let before = |w: &[&str]| helper_request(w);
+        assert_eq!(
+            before(&["--tor-proxy", "198.51.100.4", "22"]),
+            Some(Ok(HelperRequest::Carry { door: Door::Any, host: "198.51.100.4".into(), port: 22, files: false }))
+        );
+        assert_eq!(
+            before(&["--tor-proxy", "198.51.100.4", "22", "files"]),
+            Some(Ok(HelperRequest::Carry { door: Door::Any, host: "198.51.100.4".into(), port: 22, files: true }))
+        );
+        assert!(matches!(before(&["--tor-proxy", "--door", "x1", "198.51.100.4", "22"]), Some(Err(_))));
+        assert!(matches!(before(&["--tor-proxy", "--door", "12"]), Some(Err(_))));
+        assert!(matches!(before(&["--tor-proxy", "198.51.100.4", "port"]), Some(Err(_))));
+        assert!(matches!(before(&["--tor-refuse", "hop"]), Some(Ok(HelperRequest::Refuse(m))) if m.contains("jump host")));
+        // Anything else is the app itself starting.
+        assert_eq!(before(&[]), None);
+        assert_eq!(before(&["--probe"]), None);
+    }
+
+    /// The command line as ssh runs it, through a shell, with the server
+    /// filled in: the helper gets its words whatever the path holds.
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_hands_the_helper_its_words() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sshee-tor-words-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.join("it's 100% mine");
+        std::fs::create_dir_all(&folder).unwrap();
+        // Stands in for the app: prints each word it was started with.
+        let exe = folder.join("ssheesh");
+        std::fs::write(&exe, "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let line = command_line(&exe.to_string_lossy(), 4242);
+        for (line, files) in [(line.clone(), false), (format!("{line} {FILES}"), true)] {
+            // What ssh does with the line: %h, %p and %% filled in, then sh -c.
+            let filled = line.replace("%h", "203.0.113.7").replace("%p", "22").replace("%%", "%");
+            let out = std::process::Command::new("/bin/sh").arg("-c").arg(&filled).output().unwrap();
+            let words = String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                helper_request(&words.iter().map(String::as_str).collect::<Vec<_>>()),
+                Some(Ok(HelperRequest::Carry { door: Door::Of(4242), host: "203.0.113.7".into(), port: 22, files })),
+                "{filled}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_door_belongs_to_the_process_that_made_it() {
+        let dir = std::env::temp_dir().join(format!("sshee-tor-doors-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 0.10 still running with the shared door, and two newer processes.
+        std::fs::write(dir.join(SHARED_DOOR), "40001 aa\n").unwrap();
+        write_door_in(&dir, 111, 40111, "bb").unwrap();
+        write_door_in(&dir, 222, 40222, "cc").unwrap();
+        assert_eq!(read_door(&door_file(&dir, 111)), Some((40111, "bb".into())));
+        assert_eq!(read_door(&door_file(&dir, 222)), Some((40222, "cc".into())));
+        // Written again (Tor restarted in the same process): replaced, not added.
+        write_door_in(&dir, 111, 40112, "dd").unwrap();
+        assert_eq!(read_door(&door_file(&dir, 111)), Some((40112, "dd".into())));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(door_file(&dir, 111).metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // Process 111 quits: its door goes, nobody else's.
+        let _ = std::fs::remove_file(door_file(&dir, 111));
+        assert!(!door_file(&dir, 111).exists());
+        assert_eq!(read_door(&door_file(&dir, 222)), Some((40222, "cc".into())));
+        assert_eq!(read_door(&dir.join(SHARED_DOOR)), Some((40001, "aa".into())));
+        let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["door", "door.222"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn two_copies_keep_their_doors_apart() {
+        let base = std::env::temp_dir().join(format!("sshee-tor-copies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let a = crate::app_identity::AppIdentity::in_dir(base.join("a"), "test.sshee.a");
+        let b = crate::app_identity::AppIdentity::in_dir(base.join("b"), "test.sshee.b");
+        let (da, db) = (a.tor_dir().unwrap(), b.tor_dir().unwrap());
+        for d in [&da, &db] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // The same process id in both: say, a test running two copies.
+        write_door_in(&da, 333, 40333, "a-secret").unwrap();
+        write_door_in(&db, 333, 40334, "b-secret").unwrap();
+        let _ = std::fs::remove_file(door_file(&da, 333));
+        assert_eq!(read_door(&door_file(&db, 333)), Some((40334, "b-secret".into())));
+        sweep_doors(&da, 1, SystemTime::now() + STALE_DOOR * 2);
+        assert!(door_file(&db, 333).exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn only_old_doors_nobody_answers_at_are_cleared_away() {
+        let dir = std::env::temp_dir().join(format!("sshee-tor-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A port where something listens, and one where nothing does anymore.
+        let live = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let live_port = live.local_addr().unwrap().port();
+        let gone_port = {
+            let l = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            l.local_addr().unwrap().port()
+        };
+        write_door_in(&dir, 10, gone_port, "crashed").unwrap();
+        write_door_in(&dir, 11, live_port, "running").unwrap();
+        write_door_in(&dir, 12, gone_port, "mine").unwrap();
+        std::fs::write(dir.join(SHARED_DOOR), format!("{gone_port} old\n")).unwrap();
+        std::fs::write(dir.join("door.10.new"), "half").unwrap();
+        // Fresh: nothing goes, whoever answers.
+        sweep_doors(&dir, 12, SystemTime::now());
+        assert!(door_file(&dir, 10).exists() && dir.join(SHARED_DOOR).exists());
+        // A month on: the ones nobody answers at go, except this process's own.
+        let later = SystemTime::now() + STALE_DOOR + Duration::from_secs(60);
+        sweep_doors(&dir, 12, later);
+        assert!(!door_file(&dir, 10).exists(), "nobody answers there");
+        assert!(!dir.join(SHARED_DOOR).exists(), "nobody answers there");
+        assert!(door_file(&dir, 11).exists(), "something answers there");
+        assert!(door_file(&dir, 12).exists(), "this process's own");
+        assert!(dir.join("door.10.new").exists(), "not a door");
+        drop(live);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What a helper asked a door for: the server, its port, and whether it's a transfer's.
+    type Request = (String, u16, bool);
+
+    /// A stand-in for the app at a door with `secret`, on a port of its own:
+    /// it answers one connection for each of `replies` as the app does (its
+    /// proof, then the reply once the request is proven), and hands back
+    /// what each one asked for.
+    fn stand_in(secret: &str, replies: Vec<&'static str>) -> (u16, std::thread::JoinHandle<Vec<Option<Request>>>) {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let secret = secret.to_string();
+        let app = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            for reply in replies {
+                let (mut conn, _) = listener.accept().unwrap();
+                let nonce = parse_hello(&read_line_sync(&mut conn).unwrap()).unwrap();
+                conn.write_all(format!("{}\n", proof(&secret, "app", &nonce)).as_bytes()).unwrap();
+                let request = read_line_sync(&mut conn).and_then(|l| parse_request(&l, &proof(&secret, "helper", &nonce)));
+                if request.is_some() {
+                    conn.write_all(format!("{reply}\n").as_bytes()).unwrap();
+                }
+                asked.push(request);
+            }
+            asked
+        });
+        (port, app)
+    }
+
+    /// A port on this computer where nothing listens anymore.
+    fn gone_port() -> u16 {
+        let l = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        l.local_addr().unwrap().port()
+    }
+
+    /// Sets when a door was written.
+    fn written_at(path: &Path, secs_ago: u64) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(secs_ago)).unwrap();
+    }
+
+    fn tor_folder(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sshee-tor-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The helper against a stand-in for the app at a door: it proves the
+    /// secret it read from the door file it was pointed at, and gets through.
+    #[test]
+    fn the_helper_gets_through_the_door_in_its_file() {
+        let dir = tor_folder("knock");
+        let secret = "5e".repeat(32);
+        let (port, app) = stand_in(&secret, vec!["OK", "OK"]);
+        write_door_in(&dir, 555, port, &secret).unwrap();
+        // Another process's door with another secret, beside it.
+        write_door_in(&dir, 556, port, &"7f".repeat(32)).unwrap();
+        assert!(knock(&door_file(&dir, 555), "203.0.113.7", 22, true).is_ok());
+        // The wrong door's secret: the stand-in's proof doesn't match it, so the server's name never goes out.
+        let wrong = knock(&door_file(&dir, 556), "203.0.113.7", 22, false);
+        assert_eq!(wrong.unwrap_err(), Knocked::Stranger);
+        let asked = app.join().unwrap();
+        assert_eq!(asked[0], Some(("203.0.113.7".to_string(), 22, true)));
+        assert_eq!(asked[1], None);
+        // No door at all.
+        assert_eq!(knock(&door_file(&dir, 557), "203.0.113.7", 22, false).unwrap_err(), Knocked::Nobody);
+        assert!(Knocked::Nobody.to_string().contains("isn't running"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A command kept from before SSHeesh restarted names a door that's
+    /// gone, and one from 0.10 the shared door nobody writes anymore: they
+    /// get through the door of the copy that's running now.
+    #[test]
+    fn a_helper_whose_door_is_gone_gets_through_another() {
+        let dir = tor_folder("fallback");
+        let secret = "4c".repeat(32);
+        let (port, app) = stand_in(&secret, vec!["OK", "OK", "OK"]);
+        write_door_in(&dir, 902, port, &secret).unwrap();
+        written_at(&door_file(&dir, 902), 600);
+        // A door a crashed process left, newer than the running one's: tried first, and passed by.
+        write_door_in(&dir, 901, gone_port(), &"11".repeat(32)).unwrap();
+        written_at(&door_file(&dir, 901), 60);
+        assert_eq!(other_doors(&dir, &door_file(&dir, 900)), [door_file(&dir, 901), door_file(&dir, 902)]);
+        // The process the command was made by is gone, with its door.
+        assert!(knock_any(&dir, &door_file(&dir, 900), "203.0.113.7", 22, false).is_ok());
+        // 0.10's command, with no shared door.
+        assert!(knock_any(&dir, &dir.join(SHARED_DOOR), "203.0.113.7", 2222, true).is_ok());
+        // A door that's still in its file but nobody answers at.
+        assert!(knock_any(&dir, &door_file(&dir, 901), "198.51.100.4", 22, false).is_ok());
+        let asked = app.join().unwrap();
+        assert_eq!(
+            asked,
+            [Some(("203.0.113.7".to_string(), 22, false)), Some(("203.0.113.7".to_string(), 2222, true)), Some(("198.51.100.4".to_string(), 22, false))]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_app_that_answered_is_the_answer() {
+        let dir = tor_folder("answered");
+        let other = "4c".repeat(32);
+        // Another running copy that would let it through: it's never asked.
+        let (other_port, other_app) = stand_in(&other, vec!["OK"]);
+        write_door_in(&dir, 902, other_port, &other).unwrap();
+        // The door named says why it couldn't connect: that's what the helper says too.
+        let secret = "5a".repeat(32);
+        let (port, app) = stand_in(&secret, vec!["ERR Tor couldn't reach db-main."]);
+        write_door_in(&dir, 903, port, &secret).unwrap();
+        assert_eq!(knock_any(&dir, &door_file(&dir, 903), "203.0.113.7", 22, false).unwrap_err(), "Tor couldn't reach db-main.");
+        assert_eq!(app.join().unwrap(), [Some(("203.0.113.7".to_string(), 22, false))]);
+        // Something other than SSHeesh at the door named: the server's name
+        // never goes there, and the helper goes on to one that proves itself.
+        let (stranger_port, stranger) = stand_in(&"99".repeat(32), vec!["OK"]);
+        write_door_in(&dir, 904, stranger_port, &"5b".repeat(32)).unwrap();
+        assert!(knock_any(&dir, &door_file(&dir, 904), "203.0.113.7", 22, false).is_ok());
+        assert_eq!(stranger.join().unwrap(), [None]);
+        assert_eq!(other_app.join().unwrap(), [Some(("203.0.113.7".to_string(), 22, false))]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn with_no_door_answering_the_helper_says_what_the_one_named_did() {
+        let dir = tor_folder("nobody");
+        assert_eq!(knock_any(&dir, &door_file(&dir, 900), "203.0.113.7", 22, false).unwrap_err(), Knocked::Nobody.to_string());
+        write_door_in(&dir, 901, gone_port(), &"11".repeat(32)).unwrap();
+        std::fs::write(dir.join(format!("{SHARED_DOOR}.901.new")), "half").unwrap();
+        std::fs::write(dir.join("state.json"), "{}").unwrap();
+        assert_eq!(other_doors(&dir, &door_file(&dir, 900)), [door_file(&dir, 901)], "only doors");
+        assert_eq!(knock_any(&dir, &door_file(&dir, 900), "203.0.113.7", 22, false).unwrap_err(), Knocked::Nobody.to_string());
+        let (stranger_port, stranger) = stand_in(&"99".repeat(32), vec!["OK"]);
+        write_door_in(&dir, 904, stranger_port, &"5b".repeat(32)).unwrap();
+        assert_eq!(knock_any(&dir, &door_file(&dir, 904), "203.0.113.7", 22, false).unwrap_err(), Knocked::Stranger.to_string());
+        assert_eq!(stranger.join().unwrap(), [None]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn door_files_are_told_from_the_rest() {
+        assert_eq!(door_name("door"), Some(None));
+        assert_eq!(door_name("door.4242"), Some(Some(4242)));
+        for not in ["door.4242.new", "door.", "door.-1", "door.+7", "door.007", "doors", "door.x", "on", "state"] {
+            assert_eq!(door_name(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn a_command_you_type_names_no_door() {
+        let line = typed_line("/opt/SSHeesh/ssheesh");
+        assert_eq!(
+            helper_request(&helper_words(&line, "203.0.113.7", 22).iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(Ok(HelperRequest::Carry { door: Door::Any, host: "203.0.113.7".into(), port: 22, files: false }))
+        );
     }
 
     #[test]

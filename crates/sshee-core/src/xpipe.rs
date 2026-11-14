@@ -58,7 +58,7 @@ pub fn scan(vaults: &[PathBuf]) -> XpipeScan {
             }
         }
     }
-    out.servers.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.servers.sort_by_key(|s| s.name.to_lowercase());
     out
 }
 
@@ -190,7 +190,7 @@ mod tests {
         put(&v, "b", json!({"uuid": "b", "name": "db"}), json!({"type": "ssh", "host": "198.51.100.7", "port": 22, "gateway": LOCAL_ID}));
         put(&v, "id", json!({"uuid": "id", "name": "me"}), json!({"type": "localIdentity", "username": {"value": "root"}, "sshIdentity": {"type": "agent"}}));
         put(&v, "c", json!({"uuid": "c", "name": "v6"}), json!({"type": "ssh", "host": "2001:db8::1", "port": null, "identity": {"type": "ref", "ref": "id"}}));
-        let scan = scan(&[v.clone()]);
+        let scan = scan(std::slice::from_ref(&v));
         assert!(scan.found);
         assert_eq!(
             scan.servers,
@@ -217,7 +217,7 @@ mod tests {
         put(&v, "tpl", json!({"uuid": "tpl", "name": "t", "template": true}), json!({"type": "ssh", "host": "x"}));
         // A ref that tries to leave the vault reads nothing.
         put(&v, "esc", json!({"uuid": "esc", "name": "esc"}), json!({"type": "ssh", "host": "x", "identity": {"type": "ref", "ref": "../../etc"}}));
-        let scan = scan(&[v.clone()]);
+        let scan = scan(std::slice::from_ref(&v));
         assert_eq!((scan.locked, scan.through_jump), (2, 1));
         assert_eq!(scan.servers.iter().map(|s| s.address.as_str()).collect::<Vec<_>>(), ["x"]);
         let _ = std::fs::remove_dir_all(&v);

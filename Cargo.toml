@@ -1,5 +1,7 @@
 [workspace]
-members = ["src-tauri", "crates/sshee-core", "crates/saturating-time"]
+members = ["src-tauri", "crates/sshee-core", "crates/saturating-time", "crates/sshee-term", "crates/sshee-app"]
+# SSHeesh 1.0 on Rune: a workspace of its own, so Rune's patched crates never reach src-tauri.
+exclude = ["desktop"]
 resolver = "2"
 
 # Arti's copy never finishes on Windows, which hung Tor at 15%: see its PATCHED.md.

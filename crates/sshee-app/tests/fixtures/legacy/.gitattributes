@@ -1,0 +1,4 @@
+# These are the web views' own files, and must stay byte for byte as they were written, whatever
+# a checkout's core.autocrlf says. LevelDB's CURRENT is plain text: checked out with CRLF, it
+# names a manifest that isn't there, and every LevelDB test fails on Windows.
+* -text

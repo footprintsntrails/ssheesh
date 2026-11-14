@@ -1,0 +1,33 @@
+[package]
+name = "sshee-app"
+version = "0.10.14"
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+description = "SSHeesh's app state without screens: settings, tabs, layout, snippets, and bringing them over from 0.10 (for 1.0)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+# Keeps the order of keys in 0.10's stores: the order of machines in `layouts` is the order of the tab strip.
+indexmap = { version = "2", features = ["serde"] }
+# Reading 0.10's web view storage (`legacy`). WebView2 keeps localStorage in LevelDB:
+# a pure-Rust reader, run on a copy (it tidies the folder it opens).
+rusty-leveldb = "4"
+# WebKit (macOS, Linux) and newer WebView2 keep it in SQLite. The same 0.40 Arti
+# resolves: one program can link only one libsqlite3-sys.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Newer WebView2 compresses big values with zstd (already here for Tor) or Snappy
+# (already here for LevelDB).
+zstd = { version = "0.14", default-features = false }
+snap = "1"
+# The private folder the copies are read from, gone when reading is done.
+tempfile = "3"
+# LevelDB's checksum (already here for rusty-leveldb): `legacy` checks a copied store itself
+# before the library opens it, because the library skips damage without a word.
+crc32c = "0.6"
+
+[target.'cfg(unix)'.dependencies]
+# `O_NONBLOCK` and `O_NOFOLLOW`, so a FIFO or a link where a store file should be can't hold
+# up or redirect reading (already here through `dirs` and `tempfile`).
+libc = "0.2"

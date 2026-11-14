@@ -13,3 +13,6 @@ CLAUDE.local.md
 
 # Local research notes, not part of the app
 research/
+
+# Rune with our fixes: made by scripts/vendor-rune.sh from the pinned rev and desktop/vendor/rune.patch
+desktop/vendor/rune/

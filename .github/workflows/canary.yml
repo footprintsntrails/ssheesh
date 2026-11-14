@@ -1,0 +1,86 @@
+name: Canary
+
+# Test builds of 1.0, the app on Rune in desktop/. Runs for the canary branch only. Nothing here
+# makes a release, touches latest.json or reaches anyone on 0.10: the builds are files to
+# download from this run's page.
+on:
+  push:
+    branches: [canary]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+            exe: ssheesh-proto
+          - name: Windows
+            os: windows-latest
+            exe: ssheesh-proto.exe
+          - name: macOS
+            os: macos-latest
+            exe: ssheesh-proto
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux libraries and a software Vulkan driver
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libdbus-1-dev pkg-config libvulkan1 mesa-vulkan-drivers tmux
+
+      # desktop/rust-toolchain.toml names the toolchain.
+      - name: Install Rust
+        working-directory: desktop
+        run: rustup toolchain install || rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> ../target/desktop
+
+      - name: Make Rune with our fixes
+        run: sh scripts/vendor-rune.sh
+
+      - name: Check the 1.0 workspace against the 0.10 one
+        if: runner.os == 'Linux'
+        run: sh scripts/check-desktop-workspace.sh
+
+      - name: Test the terminal, the app state and the core
+        if: runner.os == 'Linux'
+        run: cargo test -p sshee-core -p sshee-term -p sshee-app -p saturating-time
+
+      - name: Test the 1.0 window without a screen
+        working-directory: desktop
+        run: cargo test --workspace
+
+      - name: Build the prototype
+        working-directory: desktop
+        run: cargo build --profile perf -p ssheesh-proto
+
+      - name: Collect the files
+        run: |
+          mkdir -p out
+          cp "target/desktop/perf/${{ matrix.exe }}" out/
+          cp -r desktop/kit out/kit
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssheesh-proto-${{ matrix.name }}
+          path: out
+          retention-days: 14

@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>update</title><body>
+<script>
+// A later session: a second terminal opened (newer value wins) and typing counts cleared (a deletion).
+const w = JSON.parse(localStorage.getItem("sshee-workspace"));
+w.state.layouts["host:cfg:db-main"] = { kind: "pane", id: "pn-d1" };
+w.state.panes["pn-d1"] = { id: "pn-d1", kind: "terminal", target: { kind: "host", hostId: "cfg:db-main" }, sessionKey: "t5n1b9w3ce", n: 1 };
+w.state.tabOrder.push("pn-d1");
+localStorage.setItem("sshee-workspace", JSON.stringify(w));
+localStorage.removeItem("sshee-typing-counts");
+document.body.textContent = "updated " + localStorage.length;
+</script>

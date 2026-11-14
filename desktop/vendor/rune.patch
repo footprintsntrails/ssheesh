@@ -1,0 +1,215 @@
+SSHeesh's fixes to Rune's `rune` crate at c8d77a3f (crates/rune), applied by
+scripts/vendor-rune.sh to make desktop/vendor/rune. Each goes once Rune has it.
+
+1. Rune #225, the Wayland input-method redraw loop (window/platform_sync.rs, win.rs,
+   create.rs, cpu_frame.rs, events.rs): the input method's cursor area is given to the
+   window only when it changes, or after the input method was turned off and on. Every
+   built frame gave it before, moved or not; winit's Wayland backend sends it with a
+   commit, a text-input-v3 compositor answers each with `done`, winit hands that on as an
+   empty `Preedit`, and Rune redraws for every input-method event: a loop at the
+   display's rate while the window has the keyboard.
+2. Frames asked for by keys and the input method (window/pacing.rs, events.rs, draw.rs) are
+   built before taking a drawable and draw only if what they draw changed, as a frame
+   only a timer asked for already was. A terminal's key changes nothing on screen (its
+   echo comes from the server a moment later): it cost a second full frame per key, and
+   on display-paced platforms put the echo a refresh later.
+3. `El::on_physical_input`'s `Tx` says what the key types on the layout and where it is
+   (`Tx::key_base`, `Tx::physical_key`; runtime/input/physical.rs), as `on_key`'s does: a
+   terminal takes Linux's Ctrl+V by the layout's "v" (Dvorak's V is QWERTY's period key,
+   and its K is where QWERTY has V).
+
+diff -ruN a/src/runtime/input/physical.rs b/src/runtime/input/physical.rs
+--- a/src/runtime/input/physical.rs
++++ b/src/runtime/input/physical.rs
+@@ -148,7 +148,7 @@
+         let chord = self.direction_chord(&event, tx);
+         // It changes the field, so the view builds again whatever else is live-only.
+         if chord { live = Some(false); }
+-        let consumed = self.offer_physical(&event, tx, &mut live);
++        let consumed = self.offer_physical(&event, fallback.as_ref().and_then(|f| f.base), tx, &mut live);
+         let modifier = self.modifier_dispatch(&event, consumed, tx, &mut live);
+         let ran = consumed || chord || modifier | match fallback {
+             // A release's logical key, for `on_key_up`.
+@@ -204,11 +204,14 @@
+         merge(tx, one);
+         true
+     }
+-    /// The focused element's `on_physical_input` handler; true if it consumed `event`.
+-    fn offer_physical(&mut self, event: &PhysicalInput, tx: &mut Tx, live: &mut Option<bool>) -> bool {
++    /// The focused element's `on_physical_input` handler; true if it consumed `event`. Its `Tx`
++    /// says what the key types on the layout (`Tx::key_base`, SSHeesh: a terminal takes Linux's
++    /// Ctrl+V by the layout's "v", not by V's place, which is Dvorak's K) and where it is.
++    fn offer_physical(&mut self, event: &PhysicalInput, base: Option<char>, tx: &mut Tx, live: &mut Option<bool>) -> bool {
+         let Some(handler) = self.focus.path().and_then(|p| self.node(p))
+             .and_then(|n| n.focus.physical.clone()) else { return false };
+-        let mut one = Tx { key_repeat: matches!(event, PhysicalInput::Key { repeat: true, .. }), ..self.transaction() };
++        let physical_key = match event { PhysicalInput::Key { key, .. } => Some(*key), _ => None };
++        let mut one = Tx { key_repeat: matches!(event, PhysicalInput::Key { repeat: true, .. }), key_base: base, physical_key, ..self.transaction() };
+         let consumed = Tx::took(handler(states!(self), event, &mut one), &mut one);
+         fold_live(live, consumed, &one);
+         merge(tx, one);
+@@ -218,7 +221,7 @@
+     /// modifier keys stay held.
+     pub(super) fn physical_focus_lost(&mut self) -> bool {
+         let mut tx = Tx::default();
+-        let changed = self.offer_physical(&PhysicalInput::FocusLost, &mut tx, &mut None);
++        let changed = self.offer_physical(&PhysicalInput::FocusLost, None, &mut tx, &mut None);
+         self.latch_requests(&mut tx);
+         merge(&mut self.pending, tx);
+         changed
+diff -ruN a/src/window/cpu_frame.rs b/src/window/cpu_frame.rs
+--- a/src/window/cpu_frame.rs
++++ b/src/window/cpu_frame.rs
+@@ -297,6 +297,7 @@
+             cursor: crate::cursor::os::OsCursor::new(),
+             alpha: None,
+             timer_frame: TimerFrame::default(),
++            ime_area: None,
+             presented: None,
+             covered_draw: CoveredDraw::Current,
+             redraw: std::cell::Cell::new(Redraw::Idle),
+diff -ruN a/src/window/create.rs b/src/window/create.rs
+--- a/src/window/create.rs
++++ b/src/window/create.rs
+@@ -254,6 +254,7 @@
+             cursor: crate::cursor::os::OsCursor::new(),
+             alpha,
+             timer_frame: TimerFrame::default(),
++            ime_area: None,
+             presented: None,
+             #[cfg(target_os = "windows")]
+             covered_draw: CoveredDraw::Current,
+diff -ruN a/src/window/draw.rs b/src/window/draw.rs
+--- a/src/window/draw.rs
++++ b/src/window/draw.rs
+@@ -203,7 +203,7 @@
+         // when it draws what's on screen.
+         #[cfg(feature = "frame-profile")]
+         let fp_entry = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now);
+-        let quiet = l.timer_frame.take_quiet() && !hidden && !live_resize && l.presented.is_some() && !composed(self.comp.as_deref())
++        let quiet = (l.timer_frame.take_quiet() | l.timer_frame.take_input_quiet()) && !hidden && !live_resize && l.presented.is_some() && !composed(self.comp.as_deref())
+             && self.trace.is_none() && self.args.trace.is_none() && self.rt.live_visible()
+             && self.rt.window_frame.is_none() && !FrameMove::moving(&self.frame_move);
+         #[cfg(target_os = "macos")]
+diff -ruN a/src/window/events.rs b/src/window/events.rs
+--- a/src/window/events.rs
++++ b/src/window/events.rs
+@@ -212,7 +212,15 @@
+             WindowEvent::Focused(true) | WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => self.look_stale(),
+             _ => {}
+         }
+-        if !matches!(event, WindowEvent::RedrawRequested) && let Some(w) = &mut self.win { w.timer_frame.no_longer_quiet(); }
++        // Keys and the input method ask quietly (`TimerFrame::asked_by_input`): their frame draws
++        // only what their handlers changed.
++        if let Some(w) = &mut self.win {
++            match &event {
++                WindowEvent::RedrawRequested => {}
++                WindowEvent::KeyboardInput { .. } | WindowEvent::ModifiersChanged(_) | WindowEvent::Ime(_) => w.timer_frame.asked_by_input(),
++                _ => w.timer_frame.no_longer_quiet(),
++            }
++        }
+         #[cfg(target_os = "macos")]
+         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
+             && let Some(w) = &mut self.win && let Some(pacing) = &mut w.native.pacing {
+@@ -385,6 +393,7 @@
+                     crate::platform::ime::cancel(&l.window);
+                     l.window.set_ime_allowed(false);
+                     self.ime_allowed = false;
++                    l.ime_area = None;
+                     // A minimized or occluded window skips redraw.
+                     l.apply_cursor(rt, false);
+                 } else if rt.stale() {
+@@ -401,6 +410,7 @@
+                             LogicalPosition::new(a[0] as f64, a[1] as f64),
+                             LogicalSize::new(a[2] as f64, a[3] as f64),
+                         );
++                        l.ime_area = Some(a);
+                     }
+                     l.apply_cursor(rt, true);
+                 }
+diff -ruN a/src/window/pacing.rs b/src/window/pacing.rs
+--- a/src/window/pacing.rs
++++ b/src/window/pacing.rs
+@@ -127,6 +127,12 @@
+     /// taking a drawable. A window event, or any wake but the display tick, says otherwise. It
+     /// outlives `drawn`: a draw that returns before its decision leaves the frame for a later one.
+     quiet: bool,
++    /// Keyboard or input-method input asked for it (SSHeesh: input whose handlers changed
++    /// nothing on screen, a terminal's key whose echo comes later, draws nothing). Like `quiet`,
++    /// the frame is built before taking a drawable and draws only if its instances differ.
++    input: bool,
++    /// Something else asked for it since the last frame (`no_longer_quiet`): it draws in full.
++    loud: bool,
+ }
+ 
+ impl TimerFrame {
+@@ -144,7 +150,10 @@
+     pub(crate) fn drawn(&mut self) { self.owed = None; }
+ 
+     /// Something other than a timer asked for a frame: the one that follows draws in full.
+-    pub(crate) fn no_longer_quiet(&mut self) { self.quiet = false; }
++    pub(crate) fn no_longer_quiet(&mut self) { self.quiet = false; self.loud = true; }
++
++    /// A key, its release, the modifiers or the input method asked for a frame.
++    pub(crate) fn asked_by_input(&mut self) { self.input = true; }
+ 
+     /// Only a timer asked for the frame that is next to draw.
+     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+@@ -153,6 +162,14 @@
+     /// The frame reaches its draw decision: whether only a timer asked for it.
+     pub(crate) fn take_quiet(&mut self) -> bool { std::mem::take(&mut self.quiet) }
+ 
++    /// The frame reaches its draw decision: whether only input (and timers) asked for it. Taken
++    /// with `take_quiet`, once per decision.
++    pub(crate) fn take_input_quiet(&mut self) -> bool {
++        let input = std::mem::take(&mut self.input) && !self.loud;
++        self.loud = false;
++        input
++    }
++
+     /// Whether the frame asked for is still outstanding after the stall bound.
+     pub(crate) fn stalled(&self, now: Instant) -> bool {
+         self.owed.is_some_and(|asked| now >= asked + TIMER_FRAME_STALL)
+diff -ruN a/src/window/platform_sync.rs b/src/window/platform_sync.rs
+--- a/src/window/platform_sync.rs
++++ b/src/window/platform_sync.rs
+@@ -18,6 +18,8 @@
+         l.window.set_ime_allowed(false);
+         l.window.set_ime_allowed(ime_allowed);
+         *ime = ime_allowed;
++        // The input method starts over: it needs the area again.
++        l.ime_area = None;
+     }
+     // A terminal's caret asks for Option as Alt (`El::ime_option_as_alt`): AppKit then hands the key
+     // under Option over as itself, not the character the layout composes with it.
+@@ -44,12 +46,14 @@
+     clipboard.flush(rt);
+     // The focused field's text, for the input method to convert again or read around the caret.
+     crate::platform::ime::sync(&l.window, if ime_allowed { rt.ime_text() } else { None });
+-    if let Some(a) = rt.ime_area.map(|a| rt.to_window(a)) {
++    let area = rt.ime_area.map(|a| rt.to_window(a));
++    if let Some(a) = area.filter(|a| l.ime_area != Some(*a)) {
+         l.window.set_ime_cursor_area(
+             LogicalPosition::new(a[0] as f64, a[1] as f64),
+             LogicalSize::new(a[2] as f64, a[3] as f64),
+         );
+     }
++    l.ime_area = area;
+ }
+ 
+ impl Win {
+diff -ruN a/src/window/win.rs b/src/window/win.rs
+--- a/src/window/win.rs
++++ b/src/window/win.rs
+@@ -83,6 +83,11 @@
+     /// The frame a due timer asked for, until the window draws it, and whether only it asked
+     /// (`TimerFrame`).
+     pub(super) timer_frame: TimerFrame,
++    /// The input method's cursor area last given to the window, in window points (SSHeesh:
++    /// Rune #225). Given again only when it changes, or after the input method was turned off
++    /// and on: a Wayland input method answers each one with `done`, which winit hands on as an
++    /// empty `Preedit`, whose frame gave the area again, a loop at the display's rate.
++    pub(super) ime_area: Option<[f32; 4]>,
+     /// The last frame presented, while the window rests.
+     pub(super) presented: Option<Presented>,
+     /// A frame asked for while other windows covered it, still to draw (`CoveredDraw`).

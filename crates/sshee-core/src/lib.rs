@@ -5,6 +5,7 @@
 //! `~/.ssh/config`, keys and agent just work.
 
 pub mod agents;
+pub mod app_identity;
 pub mod checkup;
 pub mod containers;
 pub mod disk;
@@ -29,7 +30,8 @@ pub mod tunnels;
 pub mod welcome;
 pub mod xpipe;
 
+pub use app_identity::AppIdentity;
 pub use error::{ErrorCode, OpError};
 pub use hosts::{Host, HostSource, HostStore, NewHost};
-pub use session::{SessionEvent, SessionManager, SessionSpec, SessionState};
+pub use session::{Delivery, SessionEvent, SessionManager, SessionSpec, SessionState};
 pub use ssh::{SshEnv, SshTarget, Target};

@@ -1,0 +1,4 @@
+{ "cols": 133, "rows": 30,
+  "events": [
+    { "t": 0.0, "out": "hello world from web-7731\r\nweb-7731:~$ " }
+  ] }

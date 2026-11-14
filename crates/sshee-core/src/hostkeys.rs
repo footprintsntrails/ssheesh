@@ -160,11 +160,12 @@ fn is_key_for_one_host(line: &str) -> bool {
     !line.is_empty() && !line.starts_with(['#', '@']) && !hosts.contains(['*', '?', '!'])
 }
 
-/// Where a server's keys are fetched to: ~/.sshee/hostkeys, a folder only
-/// you can open. The system temp folder is /tmp on Linux, shared with every
-/// user, any of whom could create a file under this name first.
+/// Where a server's keys are fetched to: ~/.sshee/hostkeys (this copy's
+/// own, see `app_identity`), a folder only you can open. The system temp
+/// folder is /tmp on Linux, shared with every user, any of whom could create
+/// a file under this name first.
 fn scratch_file(host_id: &str) -> Result<PathBuf, OpError> {
-    let dir = dirs::home_dir().ok_or_else(|| OpError::failed("Couldn't find your home folder."))?.join(".sshee").join("hostkeys");
+    let dir = crate::app_identity::current().hostkeys_dir().ok_or_else(|| OpError::failed("Couldn't find your home folder."))?;
     std::fs::create_dir_all(&dir)?;
     #[cfg(unix)]
     {

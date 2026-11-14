@@ -1,0 +1,23 @@
+[package]
+name = "sshee-term"
+version = "0.10.14"
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+description = "SSHeesh's terminal without a screen: parsing, masking, input encoding, find (for 1.0)"
+
+[dependencies]
+alacritty_terminal = { version = "=0.26.0", default-features = false }
+vte = { version = "=0.15.0", features = ["ansi"] }
+# Cell styles as flags (alacritty_terminal already builds it).
+bitflags = "2"
+# The guard of alacritty's FairMutex, to hand the terminal to a waiting screen between slices of
+# a read (alacritty_terminal already builds it).
+parking_lot = "0.12"
+regex = "1"
+# Streamer mode's server names, any number of them (regex already builds it).
+aho-corasick = "1"
+# Your own highlight rules were written as JavaScript regexes in 0.10: this engine reads that syntax.
+regress = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-width = "0.2"

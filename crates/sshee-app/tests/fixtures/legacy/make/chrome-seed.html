@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>seed</title><body>
+<script>
+// Made-up 0.10-shaped records, as zustand's persist writes them: JSON.stringify({state, version}).
+const put = (k, state, version) => localStorage.setItem(k, JSON.stringify({ state, version }));
+put("sshee-settings", { theme: "midnight", accent: "#58a6ff", updateMode: "manual", streamerMode: true, hideSecrets: true,
+  terminalFontSize: 14, welcomeNote: "Café on db-main ☕", onboarded: true, onboardingVersion: 2, lastSeenVersion: "0.10.14",
+  shortcuts: { newTerminal: "Ctrl+Alt+T" }, customThemes: [] }, 4);
+put("sshee-labels", { env: { "cfg:db-main": "prod", "cfg:web-7731": "staging" }, looks: { "cfg:db-main": { icon: "database", color: "#e5534b" } },
+  autoLooks: {}, hidden: [], configSeen: ["cfg:web-7731", "cfg:db-main"] }, 2);
+put("sshee-snippets", { snippets: [ { id: "sn-r1", name: "Restart web", command: "sudo systemctl restart nginx" },
+  { id: "sn-t2", name: "Токен деплоя", command: "export DEPLOY_TOKEN=tok_made_up_4f7a1c9e2b" } ] }, 1);
+put("sshee-bookmarks", { pins: { "host:cfg:web-7731": ["/var/www/app"] }, recent: {} }, 1);
+put("sshee-tunnels", { byHost: {} }, 1);
+put("sshee-tunnels", { byHost: { "cfg:db-main": [ { id: "tn-pg", name: "Postgres", forward: { kind: "local", localPort: 15432, remoteHost: "127.0.0.1", remotePort: 5432 }, on: false } ] } }, 1);
+put("sshee-typing-counts", { saved: { direct: { line: { n: 3 } } } }, 0);
+put("sshee-workspace", { layouts: { "host:cfg:web-7731": { kind: "pane", id: "pn-w1" } }, splitOn: {},
+  panes: { "pn-w1": { id: "pn-w1", kind: "terminal", target: { kind: "host", hostId: "cfg:web-7731" }, sessionKey: "q8x2m4k7za", n: 1 } },
+  focused: "pn-w1", hidden: [], tabOrder: ["pn-w1"], home: false, lastFocusedFor: {}, frontOf: {}, closedTabs: [] }, 2);
+localStorage.setItem("not-ours", "a record of some other code on the page: never read");
+document.body.textContent = "seeded " + localStorage.length;
+</script>

@@ -1,0 +1,13 @@
+[package]
+name = "sshee-ui"
+version = "0.0.1"
+description = "SSHeesh's screen layer on Rune: the only library that names Rune"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rune.workspace = true
+sshee-term.workspace = true
+# The font's character map and metrics for the terminal's cells (the version Rune locks).
+swash.workspace = true

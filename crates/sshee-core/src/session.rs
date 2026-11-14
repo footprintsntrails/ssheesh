@@ -57,6 +57,60 @@ pub struct SessionSpec {
 
 pub type EventSink = Arc<dyn Fn(SessionEvent) + Send + Sync>;
 
+/// What a session's program gets of this process's environment besides what it inherits:
+/// variables set back that the app took out of its own environment when it started, and the
+/// app's own that a child mustn't have. The 1.0 app removes Rune's trace and log switches from
+/// itself before Rune can read them; a shell in its terminal should still have a developer's
+/// own `OTEL_*`, and must not have `RUNE_READY_DIR` (a Rune program run there would write its
+/// ready note where a launcher waits for the app's). Empty unless set.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChildEnv {
+    pub set: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    pub remove: Vec<std::ffi::OsString>,
+}
+
+static CHILD_ENV: std::sync::OnceLock<ChildEnv> = std::sync::OnceLock::new();
+
+/// Sets [`ChildEnv`] for every session started from now on. Once, at start, before the first
+/// session; a second call is refused and gets its value back.
+pub fn set_child_env(env: ChildEnv) -> Result<(), ChildEnv> {
+    CHILD_ENV.set(env)
+}
+
+fn apply_child_env(cmd: &mut CommandBuilder, env: &ChildEnv) {
+    for (name, value) in &env.set {
+        cmd.env(name, value);
+    }
+    for name in &env.remove {
+        cmd.env_remove(name);
+    }
+}
+
+/// How a session hands its output to its sink.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Delivery {
+    /// Held until it stops coming for 2 ms (at most 16 ms or 64 KiB), and
+    /// handed on from a thread of its own, one event at a time: for a web
+    /// view, where every hand-over is a message.
+    #[default]
+    Batched,
+    /// Each read as it comes, on the reader thread (named `session-read`),
+    /// in order: for a sink that parses output into a terminal model of its
+    /// own and wakes the window. The sink must not block, or the program's
+    /// output stalls behind it.
+    ///
+    /// Statuses: a server's `Connected` comes from the reader thread, just
+    /// before the output that follows ssh's marker; this computer's comes
+    /// from the session's thread before its reader starts. The others come
+    /// from the session's thread, and one that ends a connection comes after
+    /// that connection's last output, as the session waits up to 2 s for its
+    /// reader to finish. Past that wait (a program left in the background
+    /// still holds the terminal open) the old reader's output can still be
+    /// coming while the session goes on, so the sink can be called from two
+    /// threads at once and must lock what it shares.
+    Direct,
+}
+
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, Arc<Shared>>>,
     /// Reconnect by itself after a drop, or wait for the user.
@@ -132,6 +186,7 @@ impl SessionManager {
     /// to run on the session's own thread, as it may wait on the keychain;
     /// the session is there at once, so keys, resizes and Close sent
     /// meanwhile find it. An `Err` from it ends the session as Failed.
+    /// Output reaches `sink` in batches ([`Delivery::Batched`]).
     pub fn open(
         &self,
         id: &str,
@@ -140,8 +195,24 @@ impl SessionManager {
         prepare: impl FnOnce() -> Result<SessionSpec, String> + Send + 'static,
         sink: EventSink,
     ) {
+        self.open_with(id, cols, rows, prepare, sink, Delivery::Batched);
+    }
+
+    /// [`open`](Self::open), with output handed to `sink` as `delivery` says.
+    pub fn open_with(
+        &self,
+        id: &str,
+        cols: u16,
+        rows: u16,
+        prepare: impl FnOnce() -> Result<SessionSpec, String> + Send + 'static,
+        sink: EventSink,
+        delivery: Delivery,
+    ) {
         self.close(id);
-        let sink = batched(sink);
+        let sink = match delivery {
+            Delivery::Batched => batched(sink),
+            Delivery::Direct => sink,
+        };
         let shared = Arc::new(Shared {
             writer: Mutex::new(None),
             master: Mutex::new(None),
@@ -467,14 +538,17 @@ fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Resul
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let (input, keys) = mpsc::channel::<Vec<u8>>();
-    std::thread::spawn(move || {
-        // Ends when the session drops its sender, or the terminal stops taking input.
-        for data in keys {
-            if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
-                break;
+    std::thread::Builder::new()
+        .name("session-write".into())
+        .spawn(move || {
+            // Ends when the session drops its sender, or the terminal stops taking input.
+            for data in keys {
+                if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        })
+        .expect("spawn session writer");
     *shared.writer.lock().unwrap() = Some(input);
     *shared.master.lock().unwrap() = Some(pair.master);
     *shared.killer.lock().unwrap() = Some(child.clone_killer());
@@ -489,9 +563,14 @@ fn run_once(shared: &Arc<Shared>, spec: &SessionSpec, sink: &EventSink) -> Resul
 
     let (tx, rx) = mpsc::channel();
     let reader_sink = sink.clone();
-    std::thread::spawn(move || {
-        let _ = tx.send(read_loop(reader, reader_sink, tor));
-    });
+    // Named, so the reader's time shows as its own in profilers and meters
+    // (and `Delivery::Direct` sinks run on it).
+    std::thread::Builder::new()
+        .name("session-read".into())
+        .spawn(move || {
+            let _ = tx.send(read_loop(reader, reader_sink, tor));
+        })
+        .expect("spawn session reader");
 
     let status = child.wait().map_err(|e| e.to_string())?;
     // Dropping the pty master lets the reader see EOF (needed on Windows).
@@ -577,6 +656,9 @@ fn build_command(spec: &SessionSpec) -> CommandBuilder {
             c
         }
     };
+    if let Some(env) = CHILD_ENV.get() {
+        apply_child_env(&mut cmd, env);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     // Apps started from the Dock/Start menu often have no locale, which
@@ -721,9 +803,185 @@ pub fn rows(target: &Target, env: &SshEnv, key: &str) -> Result<String, crate::O
 /// The most history searched in a terminal.
 const FIND_ROWS: u32 = 100_000;
 
+// ---------------------------------------------------------------- terminals left running on a server
+
+/// One of SSHeesh's terminals still running in tmux on a server. A pane
+/// opened with its `session_key` as `SessionSpec::key` attaches to it again,
+/// with whatever runs in it. That works for a container's shell too: tmux
+/// attaches to the session as it is, and `SessionSpec::run` only counts if
+/// the session ended in the meantime.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSession {
+    pub session_key: String,
+    /// When it started, in Unix seconds.
+    pub created: i64,
+    /// When something last happened in it (output, typing), in Unix seconds.
+    /// 0 from a tmux too old to say.
+    pub last_active: i64,
+    /// Terminals attached to it right now, here or elsewhere: 0 when none.
+    pub attached: u32,
+    /// The program in front: "zsh", "claude", "vim", "docker" for a
+    /// container's shell.
+    pub command: String,
+    /// The folder it's in.
+    pub cwd: String,
+}
+
+/// What `list_remote` found on a server.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSessions {
+    /// The server has tmux. Without it a terminal ends with its connection,
+    /// so there's never anything to find.
+    pub tmux: bool,
+    /// The last used first.
+    pub sessions: Vec<RemoteSession>,
+}
+
+/// SSHeesh's terminals still running on a server, to open them again when
+/// the app lost track of them: 1.0 couldn't read the layout an earlier
+/// version left, or tabs were closed while their server was out of reach.
+/// Only sessions SSHeesh named are listed, the rest of your tmux sessions
+/// aren't. "This computer" has none: its terminals don't run in tmux.
+pub fn list_remote(target: &Target, env: &SshEnv) -> Result<RemoteSessions, crate::OpError> {
+    let Target::Ssh(t) = target else { return Ok(RemoteSessions::default()) };
+    let out = crate::ssh::run_remote_read(t, env, LIST_SCRIPT)?;
+    Ok(parse_remote(&String::from_utf8_lossy(&out)))
+}
+
+/// What `LIST_SCRIPT` says on a server without tmux.
+const NO_TMUX: &str = "sshee-no-tmux";
+
+/// Lists every tmux session, one per line: its name, when it started and
+/// was last active, terminals attached, then the program and folder of its
+/// pane in front. The folder comes last, so a tab in it can't shift the
+/// rest. No tmux running yet is no sessions.
+const LIST_SCRIPT: &str = "command -v tmux >/dev/null 2>&1 || { echo sshee-no-tmux; exit 0; }; tmux list-sessions -F '#{session_name}\t#{session_created}\t#{session_activity}\t#{session_attached}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null; exit 0";
+
+fn parse_remote(out: &str) -> RemoteSessions {
+    if out.lines().any(|l| l.trim() == NO_TMUX) {
+        return RemoteSessions { tmux: false, sessions: Vec::new() };
+    }
+    let mut sessions: Vec<RemoteSession> = out
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.trim_end_matches('\r').splitn(6, '\t').collect();
+            let [name, created, active, attached, command, cwd] = f.as_slice() else { return None };
+            // Only a name SSHeesh could have given, so that a pane opened
+            // with the key lands in this very session.
+            let key = name.strip_prefix("sshee-").filter(|k| !k.is_empty() && session_name(k) == *name)?;
+            Some(RemoteSession {
+                session_key: key.to_string(),
+                created: created.parse().unwrap_or(0),
+                last_active: active.parse().unwrap_or(0),
+                attached: attached.parse().unwrap_or(0),
+                command: command.to_string(),
+                cwd: cwd.to_string(),
+            })
+        })
+        .collect();
+    sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active).then_with(|| a.session_key.cmp(&b.session_key)));
+    RemoteSessions { tmux: true, sessions }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_childs_environment_gets_back_what_the_app_took_and_not_its_own() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.env("SSHEE_TEST_KEPT", "/tmp/p/ready");
+        let env = ChildEnv { set: vec![("SSHEE_TEST_OTEL".into(), "http://203.0.113.9:4318".into())], remove: vec!["SSHEE_TEST_KEPT".into()] };
+        apply_child_env(&mut cmd, &env);
+        assert_eq!(cmd.get_env("SSHEE_TEST_OTEL"), Some(std::ffi::OsStr::new("http://203.0.113.9:4318")));
+        assert_eq!(cmd.get_env("SSHEE_TEST_KEPT"), None);
+        // Nothing set: the environment as inherited.
+        let mut plain = CommandBuilder::new("sh");
+        plain.env("SSHEE_TEST_KEPT", "x");
+        apply_child_env(&mut plain, &ChildEnv::default());
+        assert_eq!(plain.get_env("SSHEE_TEST_KEPT"), Some(std::ffi::OsStr::new("x")));
+    }
+
+    #[test]
+    fn finds_only_the_terminals_sshee_left() {
+        let out = "sshee-k1\t1700000000\t1700000500\t0\tclaude\t/srv/app\n\
+                   work\t1700000000\t1700009999\t1\tvim\t/home/me\n\
+                   sshee-a_b-2\t1700000100\t1700000900\t1\tzsh\t/home/me/with\ttab\r\n\
+                   sshee-\t1\t2\t0\tsh\t/\n\
+                   sshee-bad.name\t1\t2\t0\tsh\t/\n\
+                   sshee-old\t1700000000\t\t0\tbash\t/root\n\
+                   sshee-cut\t1700000000\n";
+        let found = parse_remote(out);
+        assert!(found.tmux);
+        let keys: Vec<&str> = found.sessions.iter().map(|s| s.session_key.as_str()).collect();
+        // The last used first; one from a tmux that can't say when, last.
+        assert_eq!(keys, ["a_b-2", "k1", "old"]);
+        assert_eq!(
+            found.sessions[1],
+            RemoteSession { session_key: "k1".into(), created: 1_700_000_000, last_active: 1_700_000_500, attached: 0, command: "claude".into(), cwd: "/srv/app".into() }
+        );
+        assert_eq!(found.sessions[0].cwd, "/home/me/with\ttab");
+        assert_eq!(found.sessions[0].attached, 1);
+        assert_eq!(parse_remote(""), RemoteSessions { tmux: true, sessions: Vec::new() });
+        assert_eq!(parse_remote("sshee-no-tmux\n"), RemoteSessions { tmux: false, sessions: Vec::new() });
+        assert_eq!(list_remote(&Target::Local, &SshEnv::default()).unwrap(), RemoteSessions::default());
+    }
+
+    /// The listing against a real tmux, with sessions as SSHeesh names them.
+    #[cfg(unix)]
+    #[test]
+    fn lists_the_sessions_a_real_tmux_has() {
+        use std::process::Command;
+        if !Command::new("tmux").arg("-V").output().is_ok_and(|o| o.status.success()) {
+            return;
+        }
+        // Short: a tmux socket's path has a limit.
+        let dir = std::path::PathBuf::from(format!("/tmp/sshee-ls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tmux = |args: &[&str]| Command::new("tmux").env("TMUX_TMPDIR", &dir).env_remove("TMUX").args(args).output().unwrap();
+        let list = || {
+            let out = Command::new("sh").arg("-c").arg(LIST_SCRIPT).env("TMUX_TMPDIR", &dir).env_remove("TMUX").output().unwrap();
+            parse_remote(&String::from_utf8_lossy(&out.stdout))
+        };
+        // No tmux running yet: nothing, but tmux is there.
+        assert_eq!(list(), RemoteSessions { tmux: true, sessions: Vec::new() });
+        let key = "q7x2m9k1ab";
+        assert!(tmux(&["new-session", "-d", "-s", &session_name(key), "-c", "/", "sleep 30"]).status.success());
+        assert!(tmux(&["new-session", "-d", "-s", "mine", "sleep 30"]).status.success());
+        // Right after it starts, the pane's program can still be the forked tmux
+        // or the shell about to exec `sleep`: give it a moment to settle.
+        let settled = Instant::now() + Duration::from_secs(3);
+        let found = loop {
+            let found = list();
+            let running = found.sessions.first().is_some_and(|s| s.command == "sleep");
+            if running || Instant::now() > settled {
+                break found;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        tmux(&["kill-server"]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(found.tmux);
+        assert_eq!(found.sessions.len(), 1, "{found:?}");
+        let s = &found.sessions[0];
+        assert_eq!(s.session_key, key);
+        assert_eq!((s.command.as_str(), s.cwd.as_str(), s.attached), ("sleep", "/", 0));
+        assert!(s.created > 1_600_000_000 && s.last_active >= s.created, "{s:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_server_without_tmux_says_so() {
+        let empty = std::env::temp_dir().join(format!("sshee-no-tmux-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        let out = std::process::Command::new("/bin/sh").arg("-c").arg(LIST_SCRIPT).env("PATH", &empty).output().unwrap();
+        assert!(out.status.success());
+        assert!(!parse_remote(&String::from_utf8_lossy(&out.stdout)).tmux);
+        let _ = std::fs::remove_dir(&empty);
+    }
 
     #[test]
     fn reads_the_scroll_report() {
@@ -822,6 +1080,119 @@ mod tests {
         assert_eq!(next(), SessionState::Connecting { attempt: 2 });
         assert_eq!(next(), SessionState::Connected { durable: false, tor: false });
         m.close("p");
+    }
+
+    /// Every event a sink got: what, on which thread, when.
+    #[cfg(unix)]
+    type Seen = Arc<Mutex<Vec<(SessionEvent, Option<String>, Instant)>>>;
+
+    /// A sink that keeps everything it's given, and a way to wait for the end.
+    #[cfg(unix)]
+    fn recorder() -> (EventSink, Seen, mpsc::Receiver<()>) {
+        let seen: Seen = Arc::default();
+        let (done_tx, done) = mpsc::channel();
+        let done_tx = Mutex::new(done_tx);
+        let keep = seen.clone();
+        let sink: EventSink = Arc::new(move |e: SessionEvent| {
+            let end = matches!(&e, SessionEvent::Status { state: SessionState::Ended { .. } | SessionState::Failed { .. } });
+            keep.lock().unwrap().push((e, std::thread::current().name().map(str::to_owned), Instant::now()));
+            if end {
+                let _ = done_tx.lock().unwrap().send(());
+            }
+        });
+        (sink, seen, done)
+    }
+
+    #[cfg(unix)]
+    fn local(argv: &[&str]) -> impl FnOnce() -> Result<SessionSpec, String> + Send + 'static {
+        let run = argv.iter().map(|a| a.to_string()).collect();
+        move || Ok(SessionSpec { target: Target::Local, key: "d".into(), env: SshEnv::default(), run: Some(run), welcome: Default::default() })
+    }
+
+    /// The output a program printed, without the line end portable-pty's writer can add after
+    /// it: dropping the writer (the session does once the program exits) sends "\n" and EOF
+    /// to the terminal, and while the other end is still open the terminal echoes "\r\n".
+    #[cfg(unix)]
+    fn printed(text: String) -> String {
+        text.strip_suffix("\r\n").map(str::to_owned).unwrap_or(text)
+    }
+
+    #[cfg(unix)]
+    fn outputs(seen: &Seen) -> Vec<(String, Option<String>, Instant)> {
+        let seen = seen.lock().unwrap();
+        seen.iter()
+            .filter_map(|(e, thread, at)| match e {
+                SessionEvent::Output { data } => Some((data.clone(), thread.clone(), *at)),
+                SessionEvent::Status { .. } => None,
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_output_arrives_per_read_on_the_reader_thread() {
+        let (sink, seen, done) = recorder();
+        let m = SessionManager::new();
+        m.open_with("d", 80, 24, local(&["sh", "-c", "printf one; sleep 0.3; printf two"]), sink, Delivery::Direct);
+        done.recv_timeout(Duration::from_secs(10)).expect("the session ends");
+        let out = outputs(&seen);
+        let text: String = out.iter().map(|(d, _, _)| d.as_str()).collect();
+        assert_eq!(printed(text), "onetwo");
+        assert!(out.iter().all(|(_, thread, _)| thread.as_deref() == Some("session-read")), "{out:?}");
+        // Two reads, handed on as they came: nothing held "one" back for "two".
+        let at = |what: &str| out.iter().find(|(d, _, _)| d.contains(what)).map(|(_, _, at)| *at).unwrap();
+        assert!(at("two").duration_since(at("one")) >= Duration::from_millis(200), "{out:?}");
+        let states: Vec<SessionState> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(e, _, _)| match e {
+                SessionEvent::Status { state } => Some(state.clone()),
+                SessionEvent::Output { .. } => None,
+            })
+            .collect();
+        assert_eq!(
+            states,
+            [SessionState::Connecting { attempt: 1 }, SessionState::Connected { durable: false, tor: false }, SessionState::Ended { code: Some(0) }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_end_comes_after_all_output() {
+        const SIZE: usize = 1024 * 1024;
+        let (sink, seen, done) = recorder();
+        let m = SessionManager::new();
+        let script = format!("head -c {SIZE} /dev/zero | tr '\\0' x");
+        m.open_with("d", 80, 24, local(&["sh", "-c", &script]), sink, Delivery::Direct);
+        done.recv_timeout(Duration::from_secs(20)).expect("the session ends");
+        let seen = seen.lock().unwrap();
+        let text: String = seen
+            .iter()
+            .filter_map(|(e, _, _)| match e {
+                SessionEvent::Output { data } => Some(data.as_str()),
+                SessionEvent::Status { .. } => None,
+            })
+            .collect();
+        let text = printed(text);
+        assert_eq!(text.len(), SIZE);
+        assert!(text.bytes().all(|b| b == b'x'));
+        let (last, _, _) = seen.last().unwrap();
+        assert!(matches!(last, SessionEvent::Status { state: SessionState::Ended { code: Some(0) } }), "{last:?}");
+    }
+
+    /// `open` keeps 0.10's batching: output comes from the batching thread.
+    #[cfg(unix)]
+    #[test]
+    fn open_still_batches() {
+        let (sink, seen, done) = recorder();
+        let m = SessionManager::new();
+        m.open("d", 80, 24, local(&["sh", "-c", "printf one; printf two"]), sink);
+        done.recv_timeout(Duration::from_secs(10)).expect("the session ends");
+        let out = outputs(&seen);
+        let text: String = out.iter().map(|(d, _, _)| d.as_str()).collect();
+        assert_eq!(printed(text), "onetwo");
+        assert!(out.iter().all(|(_, thread, _)| thread.as_deref() == Some("session-output")), "{out:?}");
     }
 
     #[test]

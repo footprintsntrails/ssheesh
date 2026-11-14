@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><title>live</title><body>
+<script>
+// The app still open: one more terminal, saved while the window stays up.
+const w = JSON.parse(localStorage.getItem("sshee-workspace"));
+w.state.panes["pn-l1"] = { id: "pn-l1", kind: "terminal", target: { kind: "local" }, sessionKey: "m3c8v0p6rd", n: 1 };
+w.state.layouts["local"] = { kind: "pane", id: "pn-l1" };
+w.state.tabOrder.push("pn-l1");
+localStorage.setItem("sshee-workspace", JSON.stringify(w));
+document.body.textContent = "live " + localStorage.length;
+</script>

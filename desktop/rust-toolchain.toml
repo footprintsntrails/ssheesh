@@ -1,0 +1,4 @@
+# Rune's pin at the rev in Cargo.toml (its rust-toolchain.toml): bump the two together.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]

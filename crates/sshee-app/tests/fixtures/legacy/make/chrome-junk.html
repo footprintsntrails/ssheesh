@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><title>junk</title><body>
+<script>
+// Another origin filling LevelDB past its 4 MB write buffer, so earlier records move into a table file.
+const block = "x".repeat(1 << 20);
+for (let i = 0; i < 5; i++) localStorage.setItem("junk-" + i, block + i);
+document.body.textContent = "junk " + localStorage.length;
+</script>

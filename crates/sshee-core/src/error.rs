@@ -17,6 +17,9 @@ pub enum ErrorCode {
     Unsupported,
     /// You stopped it.
     Cancelled,
+    /// The file changed on the server since you opened it, so nothing was
+    /// written over it (see `files::save_guarded`).
+    Conflict,
     Failed,
 }
 

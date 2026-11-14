@@ -10,7 +10,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Mutex;
 
-const SERVICE: &str = "io.github.footprintsntrails.ssheesh";
+/// The keychain name this copy files passwords under (see `app_identity`):
+/// the app's id for the standard copy, as in every version so far.
+fn service() -> &'static str {
+    crate::app_identity::current().keychain_service()
+}
 
 /// Set on the ssh process so our executable knows it was started as askpass.
 pub const ASKPASS_FLAG: &str = "SSHEESH_ASKPASS";
@@ -64,7 +68,7 @@ impl PasswordStore {
             return None;
         }
         let id = host_id.to_string();
-        let pw = off_runtime(move || keyring::Entry::new(SERVICE, &id).ok()?.get_password().ok()).flatten()?;
+        let pw = off_runtime(move || keyring::Entry::new(service(), &id).ok()?.get_password().ok()).flatten()?;
         let s = Secret::new(pw);
         self.memory.lock().unwrap().insert(host_id.to_string(), s.clone());
         Some(s)
@@ -88,7 +92,7 @@ impl PasswordStore {
             return Ok(());
         }
         let (id, pw) = (host_id.to_string(), password.expose().to_string());
-        off_runtime(move || keyring::Entry::new(SERVICE, &id).and_then(|e| e.set_password(&pw)).map_err(|e| e.to_string()))
+        off_runtime(move || keyring::Entry::new(service(), &id).and_then(|e| e.set_password(&pw)).map_err(|e| e.to_string()))
             .unwrap_or_else(|| Err("the keychain stopped".into()))
             .map_err(|e| format!("Couldn't save the password in your keychain ({e}). It works until you quit SSHeesh."))
     }
@@ -97,7 +101,7 @@ impl PasswordStore {
         self.memory.lock().unwrap().remove(host_id);
         let id = host_id.to_string();
         off_runtime(move || {
-            if let Ok(e) = keyring::Entry::new(SERVICE, &id) {
+            if let Ok(e) = keyring::Entry::new(service(), &id) {
                 let _ = e.delete_credential();
             }
         });
