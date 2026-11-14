@@ -251,7 +251,9 @@ fn arc(from: [f32; 2], radii: [f32; 2], turn_degrees: f32, large: bool, sweep: b
     } else if !sweep && sweep_angle > 0.0 {
         sweep_angle -= std::f32::consts::TAU;
     }
-    let pieces = (sweep_angle.abs() / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+    // A quarter turn a piece. The hair taken off keeps a half circle at two pieces where the
+    // platform's arithmetic lands a rounding step over pi (it made three on macOS).
+    let pieces = (sweep_angle.abs() / std::f32::consts::FRAC_PI_2 - 1e-4).ceil().max(1.0) as usize;
     let step = sweep_angle / pieces as f32;
     // The control points' distance for a piece of `step` radians.
     let handle = 4.0 / 3.0 * (step / 4.0).tan();

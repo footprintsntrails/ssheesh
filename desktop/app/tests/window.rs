@@ -155,7 +155,9 @@ fn the_demo_is_the_designs_scene_in_both_appearances() {
         for (i, name) in ["This computer", "web-7731", "web-staging", "backups", "db-main"].iter().enumerate() {
             assert_eq!(run.label(&format!("server-{i}")), *name);
         }
-        assert_eq!(run.element("waits").map(|e| e["path"].as_str().unwrap().to_owned()).as_deref(), Some("window/body/rail/server-4/waits"));
+        // (On Windows the window sits inside the frame Rune draws, so the path has more in front.)
+        let waits = run.element("waits").map(|e| e["path"].as_str().unwrap().to_owned()).unwrap_or_default();
+        assert!(waits.ends_with("window/body/rail/server-4/waits"), "{theme}: the dot is at {waits:?}");
         for name in ["Main menu", "Search", "Add a server", "Security check", "Tor", "Settings", "New terminal", "Hide sidebar"] {
             assert!(run.tree_text.contains(&format!("\"{name}\"")), "{theme}: nothing is named {name}");
         }
