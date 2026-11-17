@@ -205,6 +205,20 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ../target/desktop/debug/ss
 Preview keeps its own files in `~/.sshee-preview` (shared connections, Tor, `tabs.json`) and
 never writes 0.10's. `--demo` reads and writes nothing.
 
+## Test builds updating themselves
+
+A build the canary workflow made knows its commit and run (`app/build.rs`; Settings → About
+shows `Options::build`). It reads the `canary` pre-release's `canary.json` at start and every
+four hours (through Tor while Tor is on), downloads a newer archive, checks its size, SHA-256
+and minisign signature by the canary key (`update::CANARY_PUBLIC_KEY`, never 0.10's), and
+stages the program next to itself; `screens::canary` says so across the top of the page.
+"Restart to update" (`Backend::restart_to_update`) swaps the files and leaves a helper (the
+old program, `--canary-watch`) that starts the new one once the window has closed and puts
+the old one back if it doesn't say it started within a minute. All of it is
+`app/src/update.rs` and `update/`; the words are `sshee_app::canary`. Settings → Updates →
+"Check for test builds" turns the looking off. 0.10's `latest.json` and `v*` releases are
+never touched.
+
 ## Known gaps in the shell (not screens)
 
 - Linux keeps the system's title bar above the window: Rune draws no frame there, and a

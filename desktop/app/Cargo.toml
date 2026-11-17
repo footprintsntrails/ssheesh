@@ -25,7 +25,28 @@ dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Each server's colour by its key, in the order sshee-app lists them (the version it uses).
 indexmap = "2"
+# Test builds updating themselves (`update`): canary.json and the archives over HTTPS (rustls
+# with ring and the web's roots, as sshee-core's Tor already builds it), the archive's SHA-256
+# and minisign signature (the checker Tauri's updater uses), and the program out of a tar.gz
+# or a zip (the versions sshee-core already locks).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-root-certs = "1"
+sha2 = "0.10"
+minisign-verify = "0.3"
+base64 = "0.22"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+tar = { version = "0.4", default-features = false }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# Taking macOS's quarantine mark off a staged build (`update::swap`).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
+# Signing made-up archives as minisign does, with keys made in the tests (`update::verify`);
+# folders of made-up programs (`update::swap`).
+ed25519-dalek = "2"
+blake2 = "0.10"
+tempfile = "3"
 # The headless snapshots, decoded to compare colours; the scripts and trees are JSON.
 png = "0.18"

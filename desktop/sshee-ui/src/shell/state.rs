@@ -215,6 +215,13 @@ pub trait Backend {
         let _ = ask;
     }
 
+    /// "Restart to update" on a newer test build (`screens::canary`): puts it in place and
+    /// has it started once the window has closed. `Ok` closes the window; an error is said on
+    /// the line instead and nothing has changed.
+    fn restart_to_update(&mut self) -> Result<(), String> {
+        Err("this copy doesn't update itself".into())
+    }
+
     /// The security check, its fixes and what recipes need to know (`screens::checkup`,
     /// `screens::recipes`): each waits on a server or a file, so the backend does it on a
     /// thread of its own and answers through [`Remote::recipes`].
@@ -263,6 +270,8 @@ pub struct Options {
     pub shortcuts: IndexMap<String, Option<Keys>>,
     /// Show the component sheet instead of the window (`--sheet`).
     pub sheet: bool,
+    /// Which build this is, for Settings → About.
+    pub build: sshee_app::canary::Build,
     /// Windows: Settings' "Use the Windows title bar", as saved when the program started.
     pub native_title_bar: bool,
 }
@@ -275,6 +284,7 @@ impl Default for Options {
             mac_keys: cfg!(target_os = "macos"),
             shortcuts: IndexMap::new(),
             sheet: false,
+            build: Default::default(),
             native_title_bar: false,
         }
     }

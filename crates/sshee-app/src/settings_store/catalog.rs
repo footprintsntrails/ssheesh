@@ -987,6 +987,15 @@ fn build() -> Vec<Row> {
         // ------------------------------------------------------------------ Updates
         Row::new("updates-card", Updates, "", Control::Special(Special::UpdateCard)),
         Row::new(
+            "updates-canary",
+            Updates,
+            "Check for test builds",
+            Switch { get: |st| st.canary_updates(), set: |st, v| st.set_more(|m| m.canary_updates = v) },
+        )
+        .hint("A test build looks for a newer one when it starts and every few hours, downloads it in the background and asks before restarting. Builds made on your own computer never look.")
+        .adds(&["canaryUpdates"])
+        .words("canary test build preview update nightly"),
+        Row::new(
             "updates-mode",
             Updates,
             "Install updates",
@@ -997,8 +1006,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.update_mode = UpdateMode::from(v)),
             },
         )
-        .hint("Updates are checked when the app starts and every few hours. Restarting reconnects your terminals.")
-        .later("The preview doesn't update itself yet. Your choice from 0.10 is kept.")
+        .hint("Updates are checked when the app starts and every few hours. Restarting reconnects your terminals. A test build downloads a newer one and asks before restarting; Never check stops it looking.")
         .saves(&["updateMode"])
         .words("auto update version check"),
         // ------------------------------------------------------------------ About

@@ -10,6 +10,7 @@
 
 pub mod agent;
 pub mod add_server;
+pub mod canary;
 pub mod checkup;
 pub mod containers;
 pub mod files;
@@ -68,6 +69,8 @@ pub struct States {
     /// What the looks at each machine tell beyond its vital signs (the Stats page).
     pub machines: stats::Machines,
     pub settings: settings::State,
+    /// A newer test build: the line across the top of the page.
+    pub canary: canary::State,
     /// The security check, recipes and snippets; the welcome, the tour (and hints), and
     /// "What's new".
     pub checkup: checkup::State,

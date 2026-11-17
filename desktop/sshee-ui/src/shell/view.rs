@@ -175,6 +175,8 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         Some(notice) => col().key("page-with-notice").w_full().h_full().child(notice).child(el().w_full().grow(1.0).min_h(0.0).child(content)),
         None => content,
     };
+    // A newer test build is ready: said across the top of the page too.
+    let content = screens::canary::with_bar(s, t, content);
     el().key("page")
         .w_full()
         .grow(1.0)

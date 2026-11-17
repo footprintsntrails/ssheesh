@@ -22,6 +22,7 @@ mod servers;
 mod settings;
 mod signin;
 mod tabs;
+mod update;
 mod tor_check;
 mod tunnels;
 mod vitals;
@@ -41,6 +42,8 @@ fn fail(message: &str) -> ! {
 /// The live backend, which also keeps the tabs between runs.
 struct Live {
     inner: live::LiveBackend,
+    /// Test builds looking for newer ones (`update`).
+    update: update::Updater,
 }
 
 impl Backend for Live {
@@ -67,7 +70,12 @@ impl Backend for Live {
             // Nothing will answer: the settings stay private, and say why.
             remote.update(|s| s.seed_settings(sshee_app::settings_store::Seed::Doubt("the settings of SSHeesh 0.10 couldn't be looked for".into())));
         }
+        self.update.start(remote.clone());
         self.inner.start(remote);
+    }
+
+    fn restart_to_update(&mut self) -> Result<(), String> {
+        self.update.restart()
     }
 
     fn servers(&mut self, ask: sshee_app::servers::Ask) {
@@ -75,7 +83,9 @@ impl Backend for Live {
     }
 
     fn settings(&mut self) -> sshee_app::settings_store::SettingsStore {
-        self.inner.settings()
+        let mut store = self.inner.settings();
+        self.update.listen(&mut store);
+        store
     }
 
     fn settings_changed(&mut self, settings: &sshee_app::model::Settings) {
@@ -163,6 +173,14 @@ fn main() {
     if let Some(code) = sshee_core::secrets::askpass_main() {
         std::process::exit(code);
     }
+    // A test build's update started this, the build from before, to start the new one and
+    // put this one back if it doesn't start.
+    if let Some(code) = update::watch_main() {
+        std::process::exit(code);
+    }
+    // What the update before this start said (taken out of the environment while this is
+    // still the only thread).
+    let arrival = update::arrival();
     // `--tor-check`: this copy's Tor started without a window, each step said (`tor_check.rs`).
     if std::env::args().nth(1).as_deref() == Some("--tor-check") {
         std::process::exit(tor_check::run());
@@ -177,9 +195,9 @@ fn main() {
         Ok(args) => args,
         Err(e) => fail(&format!("{e}\n\n{}", args::USAGE)),
     };
-    let options = Options { sheet: args.sheet, ..Options::default() };
+    let options = Options { sheet: args.sheet, build: update::build(), ..Options::default() };
     let launch = if args.demo {
-        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers).with_card(args.demo_card.clone()).with_first_run(args.demo_welcome, args.demo_whats_new)), options }
+        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers).with_card(args.demo_card.clone()).with_first_run(args.demo_welcome, args.demo_whats_new).with_update(args.demo_update)), options }
     } else {
         // This copy's own list (`~/.sshee-preview/hosts.json`, `looks.json`) and the ssh
         // config: a couple of small files, read before the window opens, so the sidebar is
@@ -197,7 +215,7 @@ fn main() {
         // Settings' "Use the Windows title bar" is read before the window opens: it decides
         // the window's frame.
         let native_title_bar = sshee_core::app_identity::current().dir().is_some_and(sshee_app::settings_store::native_title_bar);
-        Launch { bench, backend: Box::new(Live { inner }), options: Options { native_title_bar, ..options } }
+        Launch { bench, backend: Box::new(Live { inner, update: update::Updater::new(arrival) }), options: Options { native_title_bar, ..options } }
     };
     shell::run(launch);
 }

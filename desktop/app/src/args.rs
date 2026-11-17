@@ -9,6 +9,7 @@ usage: ssheesh-preview [options]
                       nothing is read from this computer and nothing connects
   --sheet             show the component sheet (every control in its states) instead of the window
   --demo-leftovers    with --demo: offer two made-up copies an earlier run left unsent
+  --demo-update       with --demo: say a made-up newer test build is ready
   --demo-welcome      with --demo: start with the welcome, as at a first start
   --demo-whats-new    with --demo: start with What's new, as after an update from 0.10.14
   --demo-card STATE   with --demo: the first terminal on backups shows a session card
@@ -25,6 +26,7 @@ pub struct Args {
     pub demo: bool,
     pub sheet: bool,
     pub demo_leftovers: bool,
+    pub demo_update: bool,
     pub demo_welcome: bool,
     pub demo_whats_new: bool,
     pub ssh_config: Option<PathBuf>,
@@ -40,6 +42,7 @@ impl Args {
                 "--demo" => &mut args.demo,
                 "--sheet" => &mut args.sheet,
                 "--demo-leftovers" => &mut args.demo_leftovers,
+                "--demo-update" => &mut args.demo_update,
                 "--demo-welcome" => &mut args.demo_welcome,
                 "--demo-whats-new" => &mut args.demo_whats_new,
                 "--demo-card" => {
@@ -75,6 +78,9 @@ impl Args {
         if args.demo_leftovers && !args.demo {
             return Err("--demo-leftovers goes with --demo".into());
         }
+        if args.demo_update && !args.demo {
+            return Err("--demo-update goes with --demo".into());
+        }
         if args.demo && args.ssh_config.is_some() {
             return Err("--demo connects to nothing: it takes no --ssh-config".into());
         }
@@ -97,6 +103,8 @@ mod tests {
         assert!(parse(&["--demo", "--sheet"]).unwrap().sheet);
         assert!(parse(&["--demo", "--demo-leftovers"]).unwrap().demo_leftovers);
         assert!(parse(&["--demo-leftovers"]).is_err());
+        assert!(parse(&["--demo", "--demo-update"]).unwrap().demo_update);
+        assert!(parse(&["--demo-update"]).is_err());
         assert_eq!(parse(&["--ssh-config", "/tmp/p/ssh_config"]).unwrap().ssh_config, Some("/tmp/p/ssh_config".into()));
     }
 

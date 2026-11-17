@@ -1626,6 +1626,13 @@ fn proxy(door: Door, host: &str, port: u16, files: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// A connection to `host:port` through this process's own Tor, for the app's own requests (a
+/// test build asking for a newer one): the door ssh's helper uses, so it's carried, refused
+/// or failed the same way, and never goes around Tor.
+pub fn app_stream(host: &str, port: u16) -> Result<StdTcpStream, String> {
+    through_door(Door::Of(std::process::id()), host, port, false)
+}
+
 /// Asks the app for a connection through Tor.
 fn through_door(door: Door, host: &str, port: u16, files: bool) -> Result<StdTcpStream, String> {
     let d = dir().ok_or_else(|| Knocked::Nobody.to_string())?;
