@@ -291,6 +291,12 @@ pub trait Backend {
         None
     }
 
+    /// The window closes: where it is, to open there at the next start (`place.rs`). Not
+    /// told where the system doesn't say (Wayland).
+    fn window_placed(&mut self, place: &sshee_app::windows::Placement) {
+        let _ = place;
+    }
+
     /// Sessions are replays on the window's own clock (a demo, a test): panes then run on
     /// Rune's clock, virtual in a headless run, so every run draws the same.
     fn replays(&self) -> bool {
@@ -314,6 +320,8 @@ pub struct Options {
     pub build: sshee_app::canary::Build,
     /// Windows: Settings' "Use the Windows title bar", as saved when the program started.
     pub native_title_bar: bool,
+    /// Where the window was when it last closed (`place.rs`): it opens there.
+    pub place: Option<sshee_app::windows::Placement>,
 }
 
 impl Default for Options {
@@ -326,6 +334,7 @@ impl Default for Options {
             sheet: false,
             build: Default::default(),
             native_title_bar: false,
+            place: None,
         }
     }
 }
@@ -373,6 +382,10 @@ pub struct Shell {
     pub(crate) row: super::tabs::Row,
     /// Streamer mode (`streamer.rs`).
     pub(crate) streamer: super::streamer::Streamer,
+    /// The terminal files from another app are dragged over (`file_drop.rs`).
+    pub(crate) drop_over: Option<TabId>,
+    /// The native window, once it's made: where it is, for `place.rs`.
+    pub(crate) window: Option<rune::WindowHandle>,
     /// Terminal tabs restored from the last run whose pane hasn't been made yet.
     opened_before: Vec<Tab>,
 }
@@ -422,6 +435,8 @@ impl Shell {
             compact: Default::default(),
             row: Default::default(),
             streamer: Default::default(),
+            drop_over: None,
+            window: None,
             opened_before: Vec::new(),
         };
         shell.opened_before = shell.bench.tabs().iter().filter(|t| t.kind == TabKind::Terminal && t.session_key.is_some()).cloned().collect();
@@ -833,6 +848,10 @@ impl Shell {
 
     /// The window closes: connections go, shells in tmux stay.
     pub fn close(&mut self) {
+        // Where the window is, to open there next time.
+        if let Some(place) = super::place::now(self) {
+            self.backend.window_placed(&place);
+        }
         // Every change so far is in the settings file before the program ends.
         self.settings.flush();
         // Files open in an editor elsewhere end; copies with unsent changes stay.

@@ -120,7 +120,16 @@ impl State {
 }
 
 pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
-    view::page(s, tab, t, cx)
+    let id = tab.id;
+    // The mouse's side buttons go back and forward, as in a browser (0.10.5).
+    view::page(s, tab, t, cx).pointer_buttons([rune::PointerButton::Back, rune::PointerButton::Forward]).on_background_press_tx(move |s: &mut Shell, tx| {
+        match tx.button() {
+            rune::PointerButton::Back => back(s, id),
+            rune::PointerButton::Forward => forward(s, id),
+            _ => return,
+        }
+        tx.instant();
+    })
 }
 
 /// Milliseconds on a clock that only goes forward, for how fresh a cached folder is. It stands
@@ -667,6 +676,17 @@ pub fn main_terminal_here(s: &mut Shell, tab: TabId, folder: &str, tx: &mut rune
 /// Downloads rows of the folder on screen into this computer's Downloads folder, under one
 /// card. Nothing on this computer itself.
 pub fn download(s: &mut Shell, tab: TabId, names: &[String]) {
+    download_into(s, tab, names, false);
+}
+
+/// Rows dragged out of the window and let go there (0.10.13): downloaded into the folder under
+/// the pointer where the system says which (Windows: the desktop, an Explorer window), else
+/// into Downloads. On this computer nothing happens: the files are already here.
+pub fn download_here(s: &mut Shell, tab: TabId, names: &[String]) {
+    download_into(s, tab, names, true);
+}
+
+fn download_into(s: &mut Shell, tab: TabId, names: &[String], here: bool) {
     let Some(state) = s.screens.files.get(&tab).filter(|st| st.browser.server() != "local") else { return };
     let items: Vec<Item> = names.iter().filter_map(|n| state.browser.entry(n)).map(|e| Item { path: state.browser.path_of(&e.name), is_dir: e.is_dir() }).collect();
     if items.is_empty() {
@@ -674,7 +694,7 @@ pub fn download(s: &mut Shell, tab: TabId, names: &[String]) {
     }
     let paths: Vec<&str> = items.iter().map(|i| i.path.as_str()).collect();
     let id = s.screens.transfers.begin(Kind::Download, files_label(&paths), tab, state.browser.server());
-    ask(s, tab, Want::Download { id, items });
+    ask(s, tab, if here { Want::DownloadHere { id, items } } else { Want::Download { id, items } });
 }
 
 fn send(s: &mut Shell, tab: TabId, paths: Vec<PathBuf>, dir: String, overwrite: bool) {

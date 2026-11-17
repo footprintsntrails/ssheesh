@@ -67,6 +67,10 @@ pub enum Want {
     Move { from: String, names: Vec<String>, to: String },
     /// Downloads into this computer's Downloads folder, one after another, under one card.
     Download { id: TransferId, items: Vec<Item> },
+    /// [`Want::Download`] for rows dragged out of the window: into the folder under the
+    /// pointer on this computer's screen where the system says which (Windows: the desktop or
+    /// an Explorer window), else into Downloads.
+    DownloadHere { id: TransferId, items: Vec<Item> },
     /// Sends files and folders of this computer into `dir`. Without `overwrite`, nothing is
     /// sent if any name is taken there ([`super::FailureKind::Exists`]): the screen asks, and
     /// sends the same again with `overwrite`.

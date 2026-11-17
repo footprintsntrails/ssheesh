@@ -224,6 +224,16 @@ never touched.
 
 ## Known gaps in the shell (not screens)
 
+- From the platform (Rune, `vendor/rune.patch`): files dropped from another app reach Files
+  (onto the list, or onto a folder row) and terminals (`shell/file_drop.rs`: this computer's
+  types the quoted paths) on macOS, Windows and X11, not on Wayland (winit 0.30 reports no
+  drags there); rows dragged past the window's edge download (`Want::DownloadHere`: on
+  Windows into the desktop or Explorer folder under the pointer, else Downloads); the mouse's
+  back and forward buttons in Files; "Upload files…" picks several (`Tx::open_files`); SVG
+  previews draw (Rune's `svg`, with local `<image href>` refused); the main window opens
+  where it closed (`shell/place.rs`, `window.json`, kept on a screen that's there; not on
+  Wayland, which hides positions). A lone Alt on Windows never opens the system menu: winit
+  keeps `WM_SYSKEYUP` from `DefWindowProc` for a window without a menu bar, as Rune's are.
 - Linux keeps the system's title bar above the window: Rune draws no frame there, and a
   borderless window can't be resized by its edges (Rune doesn't expose winit's
   `drag_resize_window`). macOS and Windows get the design's bar (`App::titlebar`); neither has
@@ -313,7 +323,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 
 | Screen (0.10's source) | Owns in `sshee-ui/src/` | Owns in `crates/sshee-app/src/` |
 |---|---|---|
-| Files, what is left (everything of 0.10's Files is built but these): a video player (Rune has no video element), SVG drawn (Rune's `svg` feature is off; SVG opens as its source), more than one file per pick in "Upload files…" (Rune's Open dialog picks one), the editor over 128 KB (Rune's text field shapes the whole text on every key), a card flying with the pointer while rows are dragged, drag onto a Files tab in the row of tabs | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
+| Files, what is left (everything of 0.10's Files is built but these): a video player (Rune has no video element), the editor over 128 KB (Rune's text field shapes the whole text on every key), a card flying with the pointer while rows are dragged, drag onto a Files tab in the row of tabs | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | The load drawn on each server's sidebar icon (`RailLoad` in `ServerLoad.tsx`: Settings' `railStatus`) | `kit/rail.rs` | `stats.rs` (`Load`) |
 | Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, pixel icons, server load, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
@@ -321,7 +331,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | A tab dragged out to its own window (`windows.ts`) | `shell/tabs.rs` | `workbench/layout.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key question, reconnect and sleep notices, the agents' buttons: built (`terminal/session.rs` holds their state). Not built: a password question of its own | `screens/prompts.rs` | `prompts.rs` |
-| In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
+| In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, 0.10's question about which folder files dropped on a server's terminal go to (`UploadDialog`: today they go to the folder the shell said it's in, else Files opens there; `shell/file_drop.rs`) (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Security check and recipes, what is left: the disk window (`ServerTools.tsx`'s `DiskDialog`), and `{{container}}` in a snippet as a list of the server's containers (it's a text field until Docker's screen can list them) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
 | Docker, what 0.11 adds (README's roadmap): per-container stats, updates you can roll back, systemd services; sshee-core has none of it yet | `screens/containers.rs` | `containers.rs` |
 | Welcome, what is left: 0.10's "Make it yours" page (look, layout, privacy with a live preview), the "what changed" screen for 0.10 users, the tour's animated scenes (`TourScenes.tsx`) | `screens/welcome.rs`, `screens/tour.rs` | `tour.rs` |
