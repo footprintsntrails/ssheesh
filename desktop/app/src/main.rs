@@ -14,6 +14,7 @@ mod agents;
 mod args;
 mod containers;
 mod demo;
+mod desktop;
 mod edit;
 mod files;
 mod live;
@@ -114,6 +115,22 @@ impl Backend for Live {
         self.inner.edit(ask);
     }
 
+    fn notify(&mut self, tab: &sshee_app::workbench::Tab, note: &sshee_term::attention::Notification) {
+        self.inner.notify(tab, note);
+    }
+
+    fn waiting_changed(&mut self, waiting: &[shell::desktop::Waiting]) {
+        self.inner.waiting_changed(waiting);
+    }
+
+    fn window_shown(&mut self, shown: bool) {
+        self.inner.window_shown(shown);
+    }
+
+    fn tab_of_link(&self, link: &str) -> Option<sshee_app::workbench::TabId> {
+        self.inner.tab_of_link(link)
+    }
+
     fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
         self.inner.recipes(ask);
     }
@@ -177,6 +194,12 @@ fn main() {
         Ok(args) => args,
         Err(e) => fail(&format!("{e}\n\n{}", args::USAGE)),
     };
+    // Windows starts the program again for a notification's click, with its link: the running
+    // copy takes it (and the foreground) and this one ends. Only the real window claims it:
+    // a demo or a headless run beside it stays a program of its own.
+    if cfg!(windows) && !args.demo && !args.sheet && !shell::desktop::headless() && !shell::desktop::single_instance(&desktop::instance_id()) {
+        return;
+    }
     let options = Options { sheet: args.sheet, ..Options::default() };
     let launch = if args.demo {
         Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers).with_card(args.demo_card.clone()).with_first_run(args.demo_welcome, args.demo_whats_new)), options }

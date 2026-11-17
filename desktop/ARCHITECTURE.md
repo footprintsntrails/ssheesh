@@ -10,6 +10,7 @@ patched crates stay out of the 0.10 app in the root workspace); build and test f
 | `crates/sshee-core` (root workspace) | no | ssh, tmux, files, Tor, metrics: everything that talks to a machine |
 | `crates/sshee-term` (root) | no | the terminal without a screen: engine, keys, secrets, selection |
 | `crates/sshee-app` (root) | no | the app's state without screens. `workbench` is what the window shows and does: servers, the row of tabs, the tab on screen, shortcuts, vital signs, saved tabs. `model`, `import`, `legacy` are 0.10's stores and bringing them over. `settings_store` is a running 1.0's settings: the file, the catalogue of rows, the shortcut and scheme tables |
+| `crates/sshee-desktop` (root) | no | outside the window: system notifications whose click comes back (D-Bus, WinRT toasts, `UNUserNotificationCenter`), the tray's menu, the macOS menu bar item |
 | `desktop/sshee-ui` | **yes** | everything drawn: `theme` (tokens), `icons`, `kit` (components), `terminal` (the pane), `shell` (the window), `screens` (one module per screen). It doesn't depend on sshee-core |
 | `desktop/app` (`ssheesh-preview`) | through sshee-ui | `main`: which copy this is (`AppIdentity::preview`), ssh's helper roles (Tor proxy, askpass), and the window's backend: `live.rs` on sshee-core, `demo.rs` on made-up data |
 | `desktop/proto` (`ssheesh-proto`) | through sshee-ui | the terminal prototype: one window, one pane, the meter |
@@ -104,7 +105,8 @@ wraps it (`term-box`) with what sits over the text, each in its own file with it
   `Icon::drawing` with SVG path data (`svg.rs` reads it), on the 16-unit grid, 1.4 pt line.
 - `sshee-ui/src/kit/`: one module per component (`button`, `tab`, `rail`, `chip`, `menu`,
   `popover`, `status`; for forms and lists `field`, `list`, `tile`, `push`; and Settings'
-  `switch`, `segmented`, `slider`, `popup`, `keycap`, `form`). A component is a function from what it shows to an `El`; the caller
+  `switch`, `segmented`, `slider`, `popup`, `keycap`, `form`; over the window `toast` and
+  `dialog`). A component is a function from what it shows to an `El`; the caller
   chains `.key(..)` and handlers. Add states to the component, not at the call site.
 - From Rune itself, used as is: tooltips (`El::help`), focus rings and Tab order, text fields
   (`rune::text_input`), native pop-up menus, virtual lists (`El::virtual_rows`). **rune-kit**
@@ -223,9 +225,6 @@ never writes 0.10's. `--demo` reads and writes nothing.
   `TermPane::set_foreground` with the program in front. The program in front is wired
   (`app/src/agents.rs` asks tmux, `screens::agent::foreground` names the tab "Terminal N
   (Claude Code)" and tells the pane); the folder isn't yet.
-- A system notification's text is made and handed to `Backend::notify`, which shows nothing
-  yet: the notification itself, and its click bringing the tab forward, are the desktop
-  crate's step.
 - A click on a file's path finds it on its machine (`terminal/session.rs`: tmux's folder for a
   relative one, then the server's `find_path`) and shows it in Files beside the terminal;
   `path:line` says its lines in a note, the editor doesn't mark them yet. A web link whose
@@ -310,10 +309,8 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Security check and recipes, what is left: the disk window (`ServerTools.tsx`'s `DiskDialog`), and `{{container}}` in a snippet as a list of the server's containers (it's a text field until Docker's screen can list them) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
 | Docker, what 0.11 adds (README's roadmap): per-container stats, updates you can roll back, systemd services; sshee-core has none of it yet | `screens/containers.rs` | `containers.rs` |
-| Toasts and confirmations (`Overlays.tsx`) | `kit/toast.rs`, `kit/dialog.rs` | none |
 | Welcome, what is left: 0.10's "Make it yours" page (look, layout, privacy with a live preview), the "what changed" screen for 0.10 users, the tour's animated scenes (`TourScenes.tsx`) | `screens/welcome.rs`, `screens/tour.rs` | `tour.rs` |
 | Second window, the mini window (`windows.ts`, `MiniApp.tsx`) | `shell/windows.rs` | `windows.rs` |
-| Notifications with a click, tray (outside the window) | none | a new Rune-free crate, `crates/sshee-desktop` |
 
 Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) isn't wired.
 Servers, with their labels and looks, come over when you pick them in "Add a server"
@@ -358,6 +355,44 @@ brought over from 0.10 at the first start with the settings (`Shell::seed_snippe
   kernel, load, every disk: `States::machines`). The busiest programs (`sshee_core::metrics::processes`,
   one `ps`) are asked through `Backend::stats` every 5 s while a Stats tab is on screen. A
   server's card shows its load only while it is being looked at, never old numbers.
+
+## Toasts and confirmations
+
+`shell/notes.rs` holds them; the cards are `kit/toast.rs` and `kit/dialog.rs`.
+
+- **A toast**: `s.toast(Toast::success("Downloaded site.zip").body(..).action("Show in folder",
+  |s| ..))`. It stacks in the bottom right corner under the transfer cards
+  (`screens::transfers` draws both), leaves by itself (3.8 s, 9 s with a button, 7 s for an
+  error; longer while the pointer rests on it), at most four at a time. Files' notes
+  (`sshee_app::files::Notice`) are toasts now (`screens::files::note`).
+- **A confirmation**: `s.confirm(Confirm::new(title, body, "Remove").destructive(undoable),
+  |s, tx| ..)`; the closure runs on yes only. One at a time, over a dimmed window; it takes
+  the keyboard (`States::any_open`); Return presses the default button, Esc cancels. What
+  can't be undone makes Cancel the default. A screen with its own question state draws the
+  same card with `kit::dialog::dialog` (Files' `question`).
+- Both go through `Shell::text_shown`: streamer mode dots names in them.
+
+## The desktop outside the window
+
+Notifications and the tray are `crates/sshee-desktop` (no Rune; its doc comment says what each
+system does); the window's side is `sshee-ui/src/shell/desktop.rs`; the program joins them in
+`desktop/app/src/desktop.rs` (the live backend only; nothing starts in a headless run).
+
+- **A notification**: `screens::agent` hands a safe note to `Shell::notify_system`, which
+  honours Settings' "Tell me when a terminal needs me" and calls `Backend::notify`. Its click
+  comes back as `Remote::open_tab(tab, token)`: Rune's `AppHandle` shows and raises the window
+  (with the Wayland token when there is one), and `Shell::open_from_outside` closes what is
+  open over the page and puts the tab on screen with the keyboard. On Windows the click is a
+  link (`ssheesh-preview://notification/<tab>`): Windows starts the program, Rune's
+  `single_instance` passes it to the running one (`App::on_open_url`, `Shell::open_link`).
+- **The tray**: `Backend::waiting_changed` gets the tabs that need you (names as shown, so
+  dotted while streaming) after every change; the tray lists them, and a tab you look at takes
+  its notification away. Its menu: Show or Hide, the tabs that need you, Quit. Rune's tray on
+  Windows and Linux (`shell::desktop::SystemTray`), sshee-desktop's menu bar item on macOS.
+- **What isn't verified**: only Linux has run it (D-Bus notifications, the tray needs a host:
+  KDE, a bar, GNOME's extension). Windows and macOS build (`cargo check --target`) but haven't
+  run. macOS shows notifications only from an `.app` bundle; the preview isn't one yet, so
+  there the Dock icon bounces instead.
 
 ## Open in your own editor (for the Files screen)
 

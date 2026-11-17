@@ -1060,6 +1060,55 @@ fn copies_an_earlier_run_left_unsent_are_offered_once_at_start() {
     assert!(run.element("edit-leftovers").is_none());
 }
 
+// ---- Toasts and confirmations (`shell::notes`, `kit::toast`, `kit::dialog`)
+
+#[test]
+fn toasts_stack_in_the_corner_in_both_appearances() {
+    // deploy.sh dragged onto logs ("Moved … Undo"), then an upload ("Uploaded notes.txt").
+    let script = || {
+        json!([
+            tap(0.3, "tab-2"),
+            { "t": 0.8, "type": "down", "x": 300.0, "y": 231.0 },
+            { "t": 0.9, "type": "move", "x": 310.0, "y": 210.0 },
+            { "t": 1.0, "type": "move", "x": 320.0, "y": 180.0 },
+            { "t": 1.2, "type": "up", "x": 320.0, "y": 180.0 },
+            { "t": 1.6, "type": "tap", "x": 1258.0, "y": 64.0 },
+            { "t": 1.9, "type": "file-dialog", "path": "/home/dev/notes.txt" },
+            { "t": 2.3, "type": "move", "x": 640.0, "y": 400.0 },
+            end(2.6)
+        ])
+    };
+    in_both("toasts", script, |run, dark| {
+        for said in ["Moved deploy.sh to logs", "Undo", "Uploaded notes.txt", "Dismiss"] {
+            assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+        }
+        // Newest at the bottom, over the status bar, at the window's right edge.
+        let (first, second) = (run.rect("toast-1"), run.rect("toast-2"));
+        assert_eq!((first[2], second[2]), (300.0, 300.0));
+        assert_eq!(second[0] + second[2], 1280.0 - 14.0);
+        assert!(first[1] < second[1] && second[1] + second[3] <= 800.0 - 24.0 - 12.0 + 0.5, "{first:?} {second:?}");
+        // The popover's surface.
+        assert_eq!(run.fill("toast-2"), if dark { "#2c2c2eff" } else { "#f6f6f8ff" });
+    });
+}
+
+#[test]
+fn a_confirmation_dims_the_window_in_both_appearances() {
+    let script = || json!([tap(0.3, "tab-2"), { "t": 0.8, "type": "tap", "x": 300.0, "y": 231.0 }, press(1.0, "Delete", false, false, false), end(1.6)]);
+    in_both("dialog", script, |run, dark| {
+        assert_eq!(run.fill("files-question"), if dark { "#2c2c2eff" } else { "#f6f6f8ff" });
+        assert_eq!(run.fill("files-question-layer"), "#00000040");
+        // The card in the middle of the window.
+        let [x, y, w, h] = run.rect("files-question");
+        assert_eq!(w, 400.0);
+        assert!(((x + w / 2.0) - 640.0).abs() < 1.0 && ((y + h / 2.0) - 400.0).abs() < 1.0, "{x} {y} {w} {h}");
+        // Delete takes something away: red words on a quiet button, never blue.
+        let px = run.pixels();
+        let [bx, by, bw, bh] = run.rect("question-yes");
+        assert_eq!(near(&px, [bx as u32, by as u32, (bx + bw) as u32, (by + bh) as u32], [0x00, 0x71, 0xe3]), 0, "Delete is blue");
+    });
+}
+
 // ---- the security check, recipes and snippets; the welcome, the tour and "What's new"
 
 #[test]

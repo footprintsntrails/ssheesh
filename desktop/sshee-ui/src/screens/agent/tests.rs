@@ -50,6 +50,10 @@ struct World {
     sessions: Vec<(TabId, Arc<Mutex<Seen>>)>,
     notified: Vec<(TabId, String, String)>,
     agents_on: Vec<Vec<String>>,
+    /// The tabs that need you, each time the window said (`shell::desktop`).
+    waiting: Vec<Vec<(TabId, String)>>,
+    /// The window shown or hidden, as the backend heard it.
+    shown: Vec<bool>,
 }
 
 struct FakeBackend(Arc<Mutex<World>>);
@@ -65,6 +69,15 @@ impl Backend for FakeBackend {
     }
     fn notify(&mut self, tab: &Tab, note: &sshee_term::attention::Notification) {
         self.0.lock().unwrap().notified.push((tab.id, note.title.clone(), note.body.clone()));
+    }
+    fn waiting_changed(&mut self, waiting: &[crate::shell::desktop::Waiting]) {
+        self.0.lock().unwrap().waiting.push(waiting.iter().map(|w| (w.tab, w.server.clone())).collect());
+    }
+    fn window_shown(&mut self, shown: bool) {
+        self.0.lock().unwrap().shown.push(shown);
+    }
+    fn tab_of_link(&self, link: &str) -> Option<TabId> {
+        link.strip_prefix("test://notification/").and_then(|n| n.parse().ok()).map(TabId)
     }
     fn replays(&self) -> bool {
         true
@@ -563,4 +576,101 @@ fn going_to_the_tab_puts_the_card_away_and_marks_it_seen() {
     assert!(!w.rt.state.bench.tab(agent).unwrap().needs_you);
     assert_eq!(w.agent().agents.waiting_since(agent), None);
     assert_eq!(w.written(agent), "");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The desktop outside the window: the notification's click, the tray's list (`shell::desktop`)
+
+/// A window control that keeps what it was asked.
+fn asks() -> (crate::shell::WindowControl, Arc<Mutex<Vec<crate::shell::WindowAsk>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let keep = asked.clone();
+    (Arc::new(move |ask| keep.lock().unwrap().push(ask)), asked)
+}
+
+#[test]
+fn a_notifications_click_brings_the_window_forward_on_its_tab() {
+    let (mut w, agent, here) = Window::with_agent_on(DB, 3);
+    w.rt.update(|s, tx| s.window_focus(false, tx));
+    w.feed(agent, "\x1b]9;Claude Code: may I run the migration?\x07");
+    assert_eq!(w.world.lock().unwrap().notified.last().map(|n| n.0), Some(agent));
+    // The tray heard that db-main's terminal needs you.
+    assert_eq!(w.world.lock().unwrap().waiting.last().unwrap(), &[(agent, "db-main".to_owned())]);
+    // Something is open over the page when the click comes: it goes.
+    w.rt.update(|s, tx| s.open_palette("", tx));
+    assert!(w.rt.state.screens.palette.open);
+    let (window, asked) = asks();
+    w.remote.clone().with_window(window).open_tab(agent, Some("wayland-token".into()));
+    w.rt.update(|s, tx| s.window_focus(true, tx));
+    w.frames(4);
+    assert_eq!(asked.lock().unwrap().as_slice(), [crate::shell::WindowAsk::Raise { token: Some("wayland-token".into()) }]);
+    assert_eq!(w.rt.state.bench.active_id(), Some(agent));
+    assert_ne!(Some(here), w.rt.state.bench.active_id());
+    assert!(!w.rt.state.screens.palette.open);
+    // Keys go to that terminal.
+    w.typed("1");
+    assert!(w.written(agent).ends_with('1'), "{:?}", w.written(agent));
+    // Seen: it no longer waits, and the tray hears so.
+    assert!(!w.rt.state.bench.tab(agent).unwrap().needs_you);
+    assert_eq!(w.world.lock().unwrap().waiting.last().unwrap(), &[]);
+}
+
+#[test]
+fn a_click_for_a_tab_that_closed_only_brings_the_window_forward() {
+    let (mut w, agent, here) = Window::with_agent_on(DB, 3);
+    w.rt.update(|s, tx| s.close_tab(agent, tx));
+    let (window, asked) = asks();
+    w.remote.clone().with_window(window).open_tab(agent, None);
+    w.frames(4);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+    assert_eq!(w.rt.state.bench.active_id(), Some(here));
+}
+
+#[test]
+fn a_windows_toast_link_opens_its_tab_and_nothing_else_does() {
+    let (mut w, agent, here) = Window::with_agent_on(DB, 3);
+    w.rt.update(|s, tx| s.open_link("test://notification/999", tx));
+    assert_eq!(w.rt.state.bench.active_id(), Some(here));
+    w.rt.update(|s, tx| s.open_link("https://example.com", tx));
+    assert_eq!(w.rt.state.bench.active_id(), Some(here));
+    w.rt.update(move |s, tx| s.open_link(&format!("test://notification/{}", agent.0), tx));
+    assert_eq!(w.rt.state.bench.active_id(), Some(agent));
+}
+
+#[test]
+fn the_settings_switch_stops_system_notifications_and_the_tray_hides_names_while_streaming() {
+    let (mut w, agent, _) = Window::with_agent_on(DB, 3);
+    w.rt.update(|s, tx| {
+        s.change_settings(tx, |st| st.set(|v| v.notify_attention = false));
+        s.window_focus(false, tx);
+    });
+    // A long run that went quiet in the background: no system notification either.
+    w.rt.update(move |s, _| {
+        let tab = s.bench.tab(agent).cloned().unwrap();
+        s.notify_system(&tab, &sshee_term::attention::Notification { title: "db-main is done".into(), body: String::new() });
+    });
+    assert!(w.world.lock().unwrap().notified.is_empty());
+    // Streaming: the tray says "Server 3", never the name.
+    w.rt.update(|s, tx| {
+        s.change_settings(tx, |st| st.set(|v| v.notify_attention = true));
+        s.toggle_streamer(tx);
+    });
+    w.feed(agent, "\x07");
+    let waiting = w.world.lock().unwrap().waiting.last().cloned().unwrap();
+    assert_eq!(waiting, [(agent, "Server 3".to_owned())]);
+}
+
+#[test]
+fn the_backend_hears_the_window_hidden_and_shown_again() {
+    let (mut w, _, _) = Window::with_agent_on(DB, 3);
+    let (window, asked) = asks();
+    let remote = w.remote.clone().with_window(window);
+    remote.hide_window();
+    w.frames(2);
+    remote.show_window(None);
+    w.frames(2);
+    remote.quit();
+    assert_eq!(w.world.lock().unwrap().shown, [false, true]);
+    use crate::shell::WindowAsk::*;
+    assert_eq!(asked.lock().unwrap().as_slice(), [Hide, Raise { token: None }, Quit]);
 }

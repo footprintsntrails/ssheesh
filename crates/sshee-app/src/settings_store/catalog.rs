@@ -968,7 +968,7 @@ fn build() -> Vec<Row> {
             "Tell me when a terminal needs me",
             Switch { get: |st| st.get().notify_attention, set: |st, v| st.set(|s| s.notify_attention = v) },
         )
-        .hint("When a program rings the bell or asks for you (AI coding agents do). Its tab says Needs you and its server gets a dot. A system notification while SSHeesh is in the background comes later.")
+        .hint("When a program rings the bell or asks for you (AI coding agents do). Its tab says Needs you and its server gets a dot. While SSHeesh is in the background a system notification says so too; clicking it brings you to that terminal.")
         .saves(&["notifyAttention"])
         .words("notification bell alert agent claude codex done attention"),
         // ------------------------------------------------------------------ Tor

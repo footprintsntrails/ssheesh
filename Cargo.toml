@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/sshee-core", "crates/saturating-time", "crates/sshee-term", "crates/sshee-app"]
+members = ["src-tauri", "crates/sshee-core", "crates/saturating-time", "crates/sshee-term", "crates/sshee-app", "crates/sshee-desktop"]
 # SSHeesh 1.0 on Rune: a workspace of its own, so Rune's patched crates never reach src-tauri.
 exclude = ["desktop"]
 resolver = "2"

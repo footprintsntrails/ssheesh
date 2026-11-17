@@ -69,6 +69,11 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test -p sshee-core -p sshee-term -p sshee-app -p saturating-time
 
+      # Notifications and the tray, on each system's own API (D-Bus, WinRT, AppKit): no Rune,
+      # so it builds in the root workspace, and on every system.
+      - name: Test the notifications and the tray
+        run: cargo test -p sshee-desktop
+
       - name: Test the 1.0 window without a screen
         working-directory: desktop
         run: cargo test --workspace

@@ -89,6 +89,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .children(super::tabs::overlays(s, t))
         // Over everything: the palette, a server's card and menu, "Add a server".
         .children(screens::overlays(s, t, cx))
+        // A confirmation, over all of it (`notes.rs`).
+        .children(super::notes::dialog_view(s, t))
         // A tab being dragged over the page: where it would land.
         .children(super::split::drop_mark(s, t))
 }

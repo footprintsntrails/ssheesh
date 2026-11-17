@@ -27,11 +27,22 @@ pub type Post = Arc<dyn Fn(Box<dyn FnOnce(&mut Shell, &mut Tx) -> bool + Send>) 
 #[derive(Clone)]
 pub struct Remote {
     post: Post,
+    /// Brings the window forward, hides it, quits (`shell::desktop`); none in tests.
+    pub(crate) window: Option<super::desktop::WindowControl>,
 }
 
 impl Remote {
     pub fn new(post: Post) -> Remote {
-        Remote { post }
+        Remote { post, window: None }
+    }
+
+    /// Runs `f` on the UI thread with the change's `Tx` (to move the keyboard, say); the
+    /// window draws again after it.
+    pub fn update_tx(&self, f: impl FnOnce(&mut Shell, &mut Tx) + Send + 'static) {
+        (self.post)(Box::new(move |s, tx| {
+            f(s, tx);
+            true
+        }));
     }
 
     /// Runs `f` on the UI thread; the window draws again after it.
@@ -146,11 +157,30 @@ pub trait Backend {
     }
 
     /// A terminal needs you, or went quiet, while the window was in the background: the
-    /// system notification for it. The text is already safe to leave the app (secrets
-    /// dotted, names too while streaming: `sshee_term::attention`). The seam for the step
-    /// that shows it and brings `tab` forward on a click; until then nothing is shown.
+    /// system notification for it (only when Settings says to tell you:
+    /// `Shell::notify_system`). The text is already safe to leave the app (secrets dotted,
+    /// names too while streaming: `sshee_term::attention`). Its click comes back as
+    /// `Remote::open_tab` (or, on Windows, a link: [`Backend::tab_of_link`]).
     fn notify(&mut self, tab: &Tab, note: &sshee_term::attention::Notification) {
         let _ = (tab, note);
+    }
+
+    /// The tabs that need you changed (the tray lists them; a tab you've seen takes its
+    /// notification away). Names are as the window shows them (`shell::desktop::Waiting`).
+    fn waiting_changed(&mut self, waiting: &[super::desktop::Waiting]) {
+        let _ = waiting;
+    }
+
+    /// The window was hidden or shown again from the tray, or came to the front.
+    fn window_shown(&mut self, shown: bool) {
+        let _ = shown;
+    }
+
+    /// The tab a link the system opened with the app names (a Windows toast's click), if it
+    /// is one of the backend's notifications'.
+    fn tab_of_link(&self, link: &str) -> Option<TabId> {
+        let _ = link;
+        None
     }
 
     /// A Files tab asks for something: a folder's listing, a file, a change, a transfer.
@@ -288,7 +318,7 @@ pub struct Shell {
     pub(crate) panes: HashMap<TabId, TermPane>,
     backend: Box<dyn Backend>,
     pub options: Options,
-    remote: Option<Remote>,
+    pub(crate) remote: Option<Remote>,
     /// Rune's waker, for panes made later.
     waker: Option<rune::Waker>,
     /// The window is in front.
@@ -550,6 +580,8 @@ impl Shell {
         self.sync_keyboard(tx);
         self.save_tabs();
         crate::screens::agent::settled(self, tx);
+        // The tray's list of tabs that need you (`desktop.rs`).
+        self.sync_waiting();
         if self.screens.any_open() || self.screens.settings.open {
             // What is open over the window, and Settings over the page, keep the keyboard.
         } else if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
@@ -767,6 +799,10 @@ impl Shell {
     /// The window came to the front or left it (`App::on_focus`).
     pub fn window_focus(&mut self, focused: bool, tx: &mut Tx) {
         self.window_focused = focused;
+        if focused {
+            // In front, so on screen: the tray offers Hide (`desktop.rs`).
+            self.window_shown(true);
+        }
         self.sync_keyboard(tx);
     }
 
@@ -838,7 +874,10 @@ impl Shell {
         }
         // Agents: who works, who went quiet, and the card of the one being answered.
         let agents = crate::screens::agent::poll(self, clock, tx);
-        changed || ticked || agents || winked
+        // Toasts whose time is up (`notes.rs`), and the tray's list of who needs you.
+        let notes = super::notes::tick(self, clock, tx);
+        self.sync_waiting();
+        changed || ticked || agents || winked || notes
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

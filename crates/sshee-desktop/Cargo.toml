@@ -1,0 +1,32 @@
+[package]
+name = "sshee-desktop"
+version = "0.10.14"
+edition = "2021"
+license = "CC-BY-NC-SA-4.0"
+description = "SSHeesh's place on the desktop outside its window: system notifications whose click comes back, and the tray (for 1.0; no Rune)"
+
+[dependencies]
+# The tray's icon: the app's PNG read into pixels (the version both workspaces lock).
+png = "0.18"
+
+# Notifications over D-Bus (org.freedesktop.Notifications) on a thread of their own: the zbus,
+# tokio and futures-util Rune's Linux services already build, with the same features.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+futures-util = "0.3"
+
+# Toasts (WinRT) and the registry entries that let a click reach the app: the `windows` crate
+# Rune and sshee-app already build, and its small registry companion.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Foundation", "Data_Xml_Dom", "UI_Notifications", "Win32_System_Com"] }
+windows-registry = "0.6"
+
+# UNUserNotificationCenter (inside an .app bundle) and the menu bar item: the objc2 family
+# winit and Rune already build.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSButton", "NSControl", "NSImage", "NSMenu", "NSMenuItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationTrigger", "UNUserNotificationCenter"] }

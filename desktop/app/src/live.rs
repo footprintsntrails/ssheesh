@@ -68,6 +68,8 @@ pub struct LiveBackend {
     /// theirs.
     welcome_first: bool,
     welcomed: Vec<String>,
+    /// System notifications and the tray (`crate::desktop`); none in a headless run.
+    desktop: Option<crate::desktop::Glue>,
     /// Writes `snippets.json`, in order.
     snippets: crate::recipes::SnippetWriter,
     /// The passwords that got a terminal in this run, by server (`crate::signin`).
@@ -124,6 +126,7 @@ impl LiveBackend {
             welcome: full_welcome(),
             welcome_first: false,
             welcomed: vec![],
+            desktop: None,
             snippets: crate::recipes::SnippetWriter::new(sshee_core::app_identity::current().dir().map(std::path::Path::to_path_buf)),
             known: Known::default(),
             keys: Arc::new(PendingKeys::default()),
@@ -272,6 +275,7 @@ impl Backend for LiveBackend {
         self.edit.start(remote.clone());
         self.containers.start(remote.clone());
         self.remote = Some(remote.clone());
+        self.desktop = crate::desktop::Glue::start(remote.clone());
         // This computer's hostname, for streamer mode to hide (`hostname` may take a moment).
         let learn = remote.clone();
         let _ = std::thread::Builder::new().name("local-host".into()).spawn(move || {
@@ -422,6 +426,30 @@ impl Backend for LiveBackend {
         if let Err(e) = spawned {
             eprintln!("ssheesh-preview: Tor: {e}");
         }
+    }
+
+    /// A terminal needs you while the window is in the background: the system's notification,
+    /// whose click brings the tab forward (`crate::desktop`).
+    fn notify(&mut self, tab: &Tab, note: &sshee_term::attention::Notification) {
+        if let Some(desktop) = &mut self.desktop {
+            desktop.notify(tab, note);
+        }
+    }
+
+    fn waiting_changed(&mut self, waiting: &[sshee_ui::shell::desktop::Waiting]) {
+        if let Some(desktop) = &mut self.desktop {
+            desktop.waiting_changed(waiting);
+        }
+    }
+
+    fn window_shown(&mut self, shown: bool) {
+        if let Some(desktop) = &mut self.desktop {
+            desktop.window_shown(shown);
+        }
+    }
+
+    fn tab_of_link(&self, link: &str) -> Option<sshee_app::workbench::TabId> {
+        crate::desktop::tab_of_link(link)
     }
 
     fn watch(&mut self, server: Option<&Server>) {
