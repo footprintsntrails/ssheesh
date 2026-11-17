@@ -36,12 +36,25 @@ pub enum Forward {
     /// A SOCKS proxy on `localhost:local_port`: apps set to use it reach the
     /// internet (and the server's network) through the server.
     Socks { local_port: u16 },
+    /// The other way round: `127.0.0.1:remote_port` on the server reaches
+    /// `localhost:local_port` on this computer (ssh's `-R`). Nothing listens
+    /// here; the server's end listens on its own loopback address only.
+    Remote { remote_port: u16, local_port: u16 },
 }
 
 impl Forward {
     pub fn local_port(&self) -> u16 {
         match self {
-            Forward::Local { local_port, .. } | Forward::Socks { local_port } => *local_port,
+            Forward::Local { local_port, .. } | Forward::Socks { local_port } | Forward::Remote { local_port, .. } => *local_port,
+        }
+    }
+
+    /// The port this computer listens on for it: none for a remote forward,
+    /// whose listening end is on the server.
+    pub fn listens_here(&self) -> Option<u16> {
+        match self {
+            Forward::Remote { .. } => None,
+            other => Some(other.local_port()),
         }
     }
 
@@ -53,12 +66,16 @@ impl Forward {
                 vec!["-L".into(), format!("127.0.0.1:{local_port}:{host}:{remote_port}")]
             }
             Forward::Socks { local_port } => vec!["-D".into(), format!("127.0.0.1:{local_port}")],
+            Forward::Remote { remote_port, local_port } => vec!["-R".into(), format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}")],
         }
     }
 
     fn check(&self) -> Result<(), OpError> {
         if self.local_port() == 0 {
             return Err(invalid("Pick a port on this computer, from 1 to 65535."));
+        }
+        if let Forward::Remote { remote_port: 0, .. } = self {
+            return Err(invalid("Pick the server's port, from 1 to 65535."));
         }
         if let Forward::Local { remote_host, remote_port, .. } = self {
             if *remote_port == 0 {
@@ -216,7 +233,8 @@ pub struct TunnelManager {
 struct Tunnel {
     /// The ssh command line; starting the same id the same way keeps it running.
     args: Vec<String>,
-    port: u16,
+    /// The port it listens on here (none for a remote forward).
+    port: Option<u16>,
     stopped: AtomicBool,
     /// The loop gave up (Failed).
     done: AtomicBool,
@@ -270,7 +288,7 @@ impl TunnelManager {
     pub fn start(&self, id: &str, target: &SshTarget, env: &SshEnv, forward: Forward, sink: StateSink) -> Result<(), OpError> {
         forward.check()?;
         let args = tunnel_args(target, env, &forward);
-        let port = forward.local_port();
+        let port = forward.listens_here();
         let mut tunnels = self.tunnels.lock().unwrap();
         if let Some(t) = tunnels.get(id) {
             if t.args == args && !t.stopped() && !t.done.load(Ordering::SeqCst) {
@@ -283,11 +301,13 @@ impl TunnelManager {
         if let Some(old) = tunnels.remove(id) {
             old.stop();
         }
-        if tunnels.values().any(|t| t.port == port && !t.done.load(Ordering::SeqCst)) {
-            return Err(OpError::new(ErrorCode::Exists, format!("Another tunnel already uses port {port} on this computer.")));
-        }
-        if let Some(problem) = port_problem(port) {
-            return Err(problem);
+        if let Some(port) = port {
+            if tunnels.values().any(|t| t.port == Some(port) && !t.done.load(Ordering::SeqCst)) {
+                return Err(OpError::new(ErrorCode::Exists, format!("Another tunnel already uses port {port} on this computer.")));
+            }
+            if let Some(problem) = port_problem(port) {
+                return Err(problem);
+            }
         }
         let tunnel = Arc::new(Tunnel {
             args,
@@ -356,7 +376,7 @@ fn run(t: Arc<Tunnel>, target: SshTarget, env: SshEnv, forward: Forward) {
     let mut ever_up = false;
     while !t.stopped() {
         if failures > 0 {
-            if let Some(problem) = port_problem(t.port) {
+            if let Some(problem) = t.port.and_then(port_problem) {
                 t.set(TunnelState::Failed { message: problem.message });
                 break;
             }
@@ -520,6 +540,10 @@ enum ChannelEvent {
 /// "channel 3: open failed: connect failed: Connection refused" and
 /// "debug1: channel 3: free: direct-tcpip: ..." (the forwarded connection ended).
 fn channel_event(line: &str) -> Option<(String, ChannelEvent)> {
+    // A remote forward's connection that found nothing here: "connect_to 127.0.0.1 port 3000: failed."
+    if line.starts_with("connect_to ") && line.ends_with("failed.") {
+        return Some(("here".to_string(), ChannelEvent::Failed("connect failed".to_string())));
+    }
     let rest = &line[line.find("channel ")? + "channel ".len()..];
     let (channel, rest) = rest.split_once(": ")?;
     if !channel.bytes().all(|b| b.is_ascii_digit()) {
@@ -528,7 +552,7 @@ fn channel_event(line: &str) -> Option<(String, ChannelEvent)> {
     if let Some(why) = rest.strip_prefix("open failed: ") {
         return Some((channel.to_string(), ChannelEvent::Failed(why.to_string())));
     }
-    let closed = rest.starts_with("free: direct-tcpip") || rest.starts_with("free: dynamic-tcpip");
+    let closed = rest.starts_with("free: direct-tcpip") || rest.starts_with("free: dynamic-tcpip") || rest.starts_with("free: forwarded-tcpip");
     closed.then(|| (channel.to_string(), ChannelEvent::Closed))
 }
 
@@ -540,6 +564,9 @@ fn open_failed_warning(why: &str, forward: &Forward) -> Option<String> {
         Forward::Local { remote_host, remote_port, .. } if why.contains("connect failed") => {
             Some(format!("Nothing answers at {}:{remote_port} on the server right now.", or_server(remote_host)))
         }
+        Forward::Remote { local_port, .. } if why.contains("connect failed") || why.contains("Connection refused") => {
+            Some(format!("Nothing answers at localhost:{local_port} on this computer right now."))
+        }
         // Through a SOCKS proxy some sites failing is normal.
         _ => None,
     }
@@ -549,6 +576,11 @@ fn open_failed_warning(why: &str, forward: &Forward) -> Option<String> {
 /// can't work)` to stop.
 fn classify(lines: &[String], forward: &Forward, ever_up: bool) -> Result<String, String> {
     let has = |s: &str| lines.iter().any(|l| l.contains(s));
+    if let Forward::Remote { remote_port, .. } = forward {
+        if has("remote port forwarding failed") {
+            return Err(format!("Port {remote_port} on the server is in use, or needs administrator rights there. Pick another one."));
+        }
+    }
     let port = forward.local_port();
     if has("Permission denied") && has("bind ") {
         return Err(format!("Port {port} on this computer needs administrator rights. Pick one above 1023."));
@@ -1024,6 +1056,27 @@ mod tests {
     }
 
     #[test]
+    fn a_remote_forward_listens_on_the_servers_loopback_only() {
+        let r = Forward::Remote { remote_port: 9000, local_port: 3000 };
+        assert_eq!(r.args(), ["-R", "127.0.0.1:9000:127.0.0.1:3000"]);
+        // Nothing listens here, so nothing here is checked or claimed for it.
+        assert_eq!(r.listens_here(), None);
+        assert_eq!(Forward::Socks { local_port: 1080 }.listens_here(), Some(1080));
+        assert!(r.check().is_ok());
+        assert!(Forward::Remote { remote_port: 0, local_port: 3000 }.check().is_err());
+        assert!(Forward::Remote { remote_port: 9000, local_port: 0 }.check().is_err());
+        let f: Forward = serde_json::from_str(r#"{"kind":"remote","remotePort":9000,"localPort":3000}"#).unwrap();
+        assert_eq!(f, r);
+        // The server's port taken: no retry helps.
+        let lines = vec!["Error: remote port forwarding failed for listen port 9000".to_string()];
+        assert!(classify(&lines, &r, false).unwrap_err().contains("Port 9000 on the server"));
+        // A connection from the server that found nothing here warns, and one that got through clears it.
+        assert!(matches!(channel_event("connect_to 127.0.0.1 port 3000: failed."), Some((_, ChannelEvent::Failed(_)))));
+        assert!(open_failed_warning("connect failed", &r).unwrap().contains("localhost:3000 on this computer"));
+        assert!(matches!(channel_event("debug1: channel 4: free: forwarded-tcpip, nchannels 5"), Some((c, ChannelEvent::Closed)) if c == "4"));
+    }
+
+    #[test]
     fn forwards_are_checked() {
         assert!(local(0, "", 80).check().is_err());
         assert!(local(8080, "", 0).check().is_err());
@@ -1133,7 +1186,7 @@ mod tests {
     fn run_stand_in(script: &str, stop_after: Option<Duration>) -> (Exit, Duration) {
         let t = Arc::new(Tunnel {
             args: Vec::new(),
-            port: 0,
+            port: Some(0),
             stopped: AtomicBool::new(false),
             done: AtomicBool::new(false),
             child: Mutex::new(None),

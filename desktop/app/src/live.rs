@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use sshee_app::model::{ReconnectMode, Settings, WelcomeMode};
 use sshee_app::settings_store::SettingsStore;
-use sshee_app::workbench::{Server, Tab, Tor};
+use sshee_app::workbench::{Server, Tab};
 use sshee_core::session::{Delivery, EventSink, SessionEvent, SessionManager, SessionSpec, SessionState};
 use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::ssh::{SshEnv, Target};
@@ -58,6 +58,8 @@ pub struct LiveBackend {
     files: crate::files::Files,
     /// "Open in your own editor": the app's one edit bridge.
     edit: crate::edit::Edit,
+    /// The tunnels' ssh processes, and the list kept for next time.
+    tunnels: crate::tunnels::Tunnels,
     /// What a new terminal on a server shows first, as Settings has it now.
     welcome: Welcome,
     /// Settings' "SSHeesh's the first time, then the server's", and the servers that have had
@@ -100,6 +102,7 @@ impl LiveBackend {
     fn with_env(hosts: &[Host], ssh_config: Option<PathBuf>, env: SshEnv) -> Self {
         let files = crate::files::Files::new(env.clone());
         let edit = crate::edit::Edit::new(env.clone());
+        let tunnels = crate::tunnels::Tunnels::new(env.clone(), sshee_core::app_identity::current().dir().map(std::path::Path::to_path_buf));
         LiveBackend {
             manager: Arc::new(SessionManager::new()),
             env,
@@ -111,6 +114,7 @@ impl LiveBackend {
             remote: None,
             files,
             edit,
+            tunnels,
             welcome: full_welcome(),
             welcome_first: false,
             welcomed: vec![],
@@ -179,14 +183,76 @@ fn show(remote: &Remote, shown: Shown, answer: Option<sshee_app::servers::Answer
     });
 }
 
-/// Tor's state as the sidebar shows it. How long a round trip through it takes isn't measured
-/// yet.
-pub fn tor_shown(status: &TorStatus) -> Tor {
+/// Tor's state as the window takes it (`sshee_app::tor::Status`, sshee-core's mirrored).
+pub fn tor_status(status: &TorStatus) -> sshee_app::tor::Status {
+    use sshee_app::tor::Status;
     match status {
-        TorStatus::Off => Tor::Off,
-        TorStatus::Starting { .. } => Tor::Starting,
-        TorStatus::On => Tor::On { latency_ms: None },
-        TorStatus::Failed { .. } => Tor::Failed,
+        TorStatus::Off => Status::Off,
+        TorStatus::Starting { percent, note } => Status::Starting { percent: *percent, note: note.clone() },
+        TorStatus::On => Status::On,
+        TorStatus::Failed { message } => Status::Failed { message: message.clone() },
+    }
+}
+
+/// How often the round trip through Tor is looked at. Nothing is sent to measure it:
+/// sshee-core times each route as a server picks it.
+const LATENCY_LOOK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Tells the window the round trip through Tor when it changes, for as long as the program runs.
+fn watch_latency(remote: Remote) {
+    let _ = std::thread::Builder::new().name("tor-latency".into()).spawn(move || {
+        let mut said = None;
+        loop {
+            std::thread::sleep(LATENCY_LOOK);
+            let now = sshee_core::tor::latency_ms();
+            if now != said {
+                said = now;
+                remote.tor_latency(now);
+            }
+        }
+    });
+}
+
+/// The last lines of Tor's log, read on a thread: the file's end only.
+fn read_tor_log(remote: Remote) {
+    let _ = std::thread::Builder::new().name("tor-log".into()).spawn(move || {
+        let text = sshee_core::tor::log_path().map(|p| tail_of(&p, 64 * 1024)).unwrap_or_default();
+        remote.tor_log(sshee_app::tor::log_tail(&text, sshee_app::tor::LOG_LINES));
+    });
+}
+
+/// The last `limit` bytes of a file, as text; empty when it can't be read.
+fn tail_of(path: &std::path::Path, limit: u64) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return String::new() };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file.seek(SeekFrom::Start(len.saturating_sub(limit))).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    let _ = file.take(limit).read_to_end(&mut bytes);
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    // A line cut in two at the start isn't shown.
+    if len > limit {
+        text.split_once('\n').map_or_else(String::new, |(_, rest)| rest.to_owned())
+    } else {
+        text
+    }
+}
+
+/// The folder with Tor's log, in the system's file manager: its full program name, the folder
+/// as one argument, never through a shell.
+fn show_tor_folder() {
+    let Some(dir) = sshee_core::tor::log_path().and_then(|p| p.parent().map(std::path::Path::to_path_buf)).filter(|d| d.is_dir()) else { return };
+    let program = if cfg!(target_os = "macos") {
+        "/usr/bin/open"
+    } else if cfg!(windows) {
+        "explorer.exe"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(program).arg(&dir).spawn() {
+        eprintln!("ssheesh-preview: Tor's folder wasn't shown: {e}");
     }
 }
 
@@ -216,8 +282,16 @@ impl Backend for LiveBackend {
         // Tor, if it was left on in this copy (`~/.sshee-preview/tor/on`): every connection
         // from here on goes through it. The ports are the servers' own.
         let ports = self.hosts.lock().map(|h| h.values().filter_map(|h| h.port).collect()).unwrap_or_default();
-        sshee_core::tor::watch(move |status| remote.set_tor(tor_shown(&status)));
+        let watcher = remote.clone();
+        sshee_core::tor::watch(move |status| watcher.tor_status(tor_status(&status)));
         sshee_core::tor::init(std::env::current_exe().unwrap_or_default(), ports);
+        // Said once now too: Tor left off says nothing to the watcher.
+        remote.tor_status(tor_status(&sshee_core::tor::status()));
+        watch_latency(remote.clone());
+        // The tunnels left on last time, after Tor: they go through it when it's on.
+        for ask in self.tunnels.start(remote) {
+            self.tunnels(ask);
+        }
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
@@ -299,7 +373,10 @@ impl Backend for LiveBackend {
     /// on a thread of their own; the sidebar hears through `tor::watch`.
     fn tor(&mut self, command: TorCommand) {
         let ports: Vec<u16> = self.hosts.lock().map(|h| h.values().filter_map(|h| h.port).collect()).unwrap_or_default();
+        let (manager, env, remote) = (self.manager.clone(), self.env.clone(), self.remote.clone());
+        let reroute_tunnels = self.tunnels.rerouter();
         let spawned = std::thread::Builder::new().name("tor-command".into()).spawn(move || {
+            let switched = matches!(command, TorCommand::On | TorCommand::Off | TorCommand::NewRoutes);
             let done = match command {
                 TorCommand::On => sshee_core::tor::set_on(true, ports),
                 TorCommand::Off => sshee_core::tor::set_on(false, ports),
@@ -309,8 +386,22 @@ impl Backend for LiveBackend {
                 }
                 TorCommand::StartAfresh => sshee_core::tor::start_afresh(),
             };
-            if let Err(e) = done {
+            if let Err(e) = &done {
                 eprintln!("ssheesh-preview: Tor: {e}");
+            }
+            if let Some(remote) = &remote {
+                remote.tor_warning(done.err());
+            }
+            // As 0.10 does: what's connected moves to the new way at once. Terminals in tmux
+            // reconnect through (or around) Tor and find their shell again; one without tmux
+            // stays on the old way until it reconnects. Tunnels and Files' shells start again.
+            if switched {
+                sshee_core::shell_pool::forget_all();
+                let stayed = manager.reroute();
+                reroute_tunnels();
+                if stayed == 0 {
+                    sshee_core::ssh::close_shared(&env, !sshee_core::tor::is_on());
+                }
             }
         });
         if let Err(e) = spawned {
@@ -337,6 +428,25 @@ impl Backend for LiveBackend {
 
     fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
         self.edit.ask(ask, |host| self.reach(host));
+    }
+
+    fn tor_ask(&mut self, ask: sshee_app::tor::Ask) {
+        match ask {
+            sshee_app::tor::Ask::ReadLog => {
+                if let Some(remote) = self.remote.clone() {
+                    read_tor_log(remote);
+                }
+            }
+            sshee_app::tor::Ask::ShowLog => show_tor_folder(),
+        }
+    }
+
+    fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
+        let reach: crate::edit::Reach = match &ask {
+            sshee_app::tunnels::Ask::Start { host, .. } => self.reach(&format!("host:{host}")),
+            _ => (None, Box::new(|_: &mut Target| {})),
+        };
+        self.tunnels.ask(ask, reach);
     }
 }
 
@@ -741,11 +851,13 @@ mod tests {
     }
 
     #[test]
-    fn tor_as_the_sidebar_shows_it() {
-        assert_eq!(tor_shown(&TorStatus::Off), Tor::Off);
-        assert_eq!(tor_shown(&TorStatus::Starting { percent: 15, note: None }), Tor::Starting);
-        assert_eq!(tor_shown(&TorStatus::On), Tor::On { latency_ms: None });
-        assert_eq!(tor_shown(&TorStatus::Failed { message: "no internet".into() }), Tor::Failed);
+    fn tor_as_the_window_takes_it() {
+        use sshee_app::tor::Status;
+        assert_eq!(tor_status(&TorStatus::Off), Status::Off);
+        let held = Some("A VPN can do this.".to_owned());
+        assert_eq!(tor_status(&TorStatus::Starting { percent: 15, note: held.clone() }), Status::Starting { percent: 15, note: held });
+        assert_eq!(tor_status(&TorStatus::On), Status::On);
+        assert_eq!(tor_status(&TorStatus::Failed { message: "no internet".into() }), Status::Failed { message: "no internet".into() });
     }
 
     #[test]

@@ -10,6 +10,7 @@
 
 mod edit;
 mod files;
+mod tor;
 
 use std::path::Path;
 
@@ -73,7 +74,7 @@ pub fn bench() -> Workbench {
     let agent = bench.open_with(TabKind::Terminal, DB, Open { title: Some("Migration 0042".into()), agent: Some("Claude Code".into()), ..Open::default() });
     bench.focus(shop);
     bench.set_needs_you(agent, true);
-    bench.set_tor(Tor::On { latency_ms: Some(84) });
+    bench.set_tor(Tor::On { latency_ms: Some(tor::LATENCY_MS) });
     bench.set_vitals(
         WEB,
         Some(Vitals { cpu: Some(0.38), memory: 0.6, disk: Some((0.44, None)), uptime_secs: 37 * 86_400 + 5 * 3_600, down: Some(1.6 * 1_048_576.0), up: Some(315.0 * 1024.0) }),
@@ -205,6 +206,8 @@ impl Backend for DemoBackend {
             // The agents' own clock of it: the card under the tab says "waiting 2 min" too.
             sshee_ui::screens::agent::seed_wait(s, 130);
         });
+        tor::start(&remote);
+        tor::tunnels_start(&remote);
         self.remote = Some(remote);
         self.show(None);
     }
@@ -240,10 +243,23 @@ impl Backend for DemoBackend {
         SettingsStore::in_memory(settings())
     }
 
-    /// Tor's switch in Settings: the made-up Tor goes on and off at once.
+    /// Tor's switch: the made-up Tor goes off at once, and on after a made-up start.
     fn tor(&mut self, command: TorCommand) {
         if let Some(remote) = &self.remote {
-            remote.set_tor(if command == TorCommand::Off { Tor::Off } else { Tor::On { latency_ms: Some(84) } });
+            tor::command(remote, command);
+        }
+    }
+
+    /// Tor's made-up log; there's no folder to show.
+    fn tor_ask(&mut self, ask: sshee_app::tor::Ask) {
+        if let (Some(remote), sshee_app::tor::Ask::ReadLog) = (&self.remote, ask) {
+            remote.tor_log(tor::log());
+        }
+    }
+
+    fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
+        if let Some(remote) = &self.remote {
+            tor::tunnels(remote, ask);
         }
     }
 

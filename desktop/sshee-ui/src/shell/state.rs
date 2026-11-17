@@ -155,6 +155,18 @@ pub trait Backend {
         let _ = command;
     }
 
+    /// The Tor popover's other asks: its log's last lines (answered through
+    /// [`Remote::tor_log`]), and the log's folder shown.
+    fn tor_ask(&mut self, ask: sshee_app::tor::Ask) {
+        let _ = ask;
+    }
+
+    /// Tunnels: start one, stop one, keep the list. Each tunnel's state comes back through
+    /// [`Remote::tunnels`], as does the list kept from last time, at the start.
+    fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
+        let _ = ask;
+    }
+
     /// Adding and managing servers (`screens::add_server`, `screens::server_menu`): saving,
     /// the keychain and reading other programs' files wait, so the backend does what is
     /// asked on a thread of its own and answers through `Remote` (`Shell::servers_answer`,

@@ -1,6 +1,6 @@
 //! A server's menu: a right click on its icon in the sidebar or on its tile on the main menu
 //! (0.10's server menu in `Sidebar.tsx`, with its look picker and its "Remove?" question).
-//! New terminal and Files; a name of your own; its icon and colour; its Production, Staging
+//! New terminal, Files and its tunnels; a name of your own; its icon and colour; its Production, Staging
 //! or Development label; and taking it out of the list, asked by name first.
 //!
 //! One popover with four pages, at the point that was clicked:
@@ -64,6 +64,7 @@ pub struct State {
 enum Item {
     NewTerminal,
     Files,
+    Tunnels,
     Rename,
     Look,
     Env(EnvLabel),
@@ -79,6 +80,7 @@ fn from_config(server: &Server) -> bool {
 fn groups(server: &Server) -> Vec<Vec<Item>> {
     let mut groups = vec![vec![Item::NewTerminal, Item::Files]];
     if !server.is_local() {
+        groups[0].push(Item::Tunnels);
         groups.push(vec![Item::Rename, Item::Look]);
         groups.push(env_order().into_iter().map(Item::Env).collect());
         groups.push(vec![Item::Remove]);
@@ -141,6 +143,10 @@ impl Shell {
             Item::Files => {
                 self.screens.server_menu.open = None;
                 self.show_tab(TabKind::Files, &key, None, tx);
+            }
+            Item::Tunnels => {
+                self.screens.server_menu.open = None;
+                self.open_tunnels(&key, tx);
             }
             Item::Rename => {
                 // Streamer mode: the field starts empty rather than show the name.
@@ -212,6 +218,7 @@ fn menu_page(t: &Theme, server: &Server, hot: Option<usize>) -> (El, f32) {
             let spec = match &item {
                 Item::NewTerminal => ListRow { icon: Some(Icon::Terminal), label: "New terminal", state, ..ListRow::default() },
                 Item::Files => ListRow { icon: Some(Icon::Folder), label: "Files", state, ..ListRow::default() },
+                Item::Tunnels => ListRow { icon: Some(Icon::Link), label: "Tunnels…", state, ..ListRow::default() },
                 Item::Rename => ListRow { icon: Some(Icon::Pencil), label: "Rename…", state, ..ListRow::default() },
                 Item::Look => ListRow { icon: Some(Icon::Swatch), label: "Icon and colour…", state, ..ListRow::default() },
                 Item::Env(env) => ListRow { label: env_name(env), checked: Some(server.env.as_ref() == Some(env)), state, ..ListRow::default() },

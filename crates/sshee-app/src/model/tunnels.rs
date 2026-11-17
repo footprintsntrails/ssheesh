@@ -46,7 +46,8 @@ pub struct SavedTunnel {
 }
 
 /// A port here that leads through the server: to a port there (`Local`), or out to
-/// anywhere as a SOCKS proxy (`Socks`).
+/// anywhere as a SOCKS proxy (`Socks`); or, 1.0's own, a port on the server that leads back
+/// here (`Remote`: `remote_port` there, `local_port` here).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Forward {
@@ -56,7 +57,7 @@ pub struct Forward {
     /// For `Local`: the address as the server sees it; empty means the server itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_host: Option<String>,
-    /// For `Local`.
+    /// For `Local` and `Remote`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_port: Option<u16>,
     #[serde(flatten)]
@@ -64,7 +65,7 @@ pub struct Forward {
 }
 
 string_enum! {
-    pub enum ForwardKind { Local = "local", Socks = "socks", }
+    pub enum ForwardKind { Local = "local", Socks = "socks", Remote = "remote", }
     default Local
 }
 

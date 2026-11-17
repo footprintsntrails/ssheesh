@@ -228,7 +228,9 @@ never writes 0.10's. `--demo` reads and writes nothing.
   one asks in the terminal. A server's key is checked before signing in
   (`LiveLink::begin`, `hostkeys::check`) and asked about on the pane's card
   (`screens/prompts.rs`), so ssh never asks it, in the terminal or of askpass.
-- Tor's round-trip time isn't measured; the status bar shows "Tor" without it.
+- Tor's round trip is the one sshee-core timed when it picked the route used last
+  (`sshee_core::tor::latency_ms`); nothing is sent to measure it. Until a server has been
+  reached through Tor, the status bar says "Tor" alone.
 - A pane out of sight answers its program at once but takes a frame only every half second
   (`TermPane::set_shown`, `HIDDEN_FRAME`): enough for an agent's question and "went quiet".
 
@@ -260,6 +262,15 @@ never writes 0.10's. `--demo` reads and writes nothing.
 | Command palette (`srv:` `cmd:` `file:` `set:`; a command for a server is never preselected) | `screens/palette.rs` | `palette.rs` |
 | Add a server: by hand, from the ssh config, XPipe and 0.10 | `screens/add_server.rs` | `servers.rs` (`Form`, `Ask`, `Answer`, and `Book`, the list in memory a demo and the tests answer from) |
 | A server's menu (rename, icon and colour, label, remove) and its card under the pointer | `screens/server_menu.rs`, `screens/server_card.rs` | `labels.rs`, `home.rs` (`Card`) |
+| Tor: the popover over the sidebar's onion and the status bar's "Tor 84 ms" (the switch, a start's progress and what holds it up, the round trip, the log's last lines, new routes, start fresh) | `screens/tor.rs` | `tor.rs` |
+| Tunnels, from a server's menu: saved per server with their switches and states; a server's port here, a SOCKS proxy, and a port here on the server (1.0's own). Not built: 0.10's list of the server's web apps to open with one click | `screens/tunnels.rs` | `tunnels.rs` |
+
+Tor: `desktop/app/src/live.rs` hears sshee-core's watcher (`Remote::tor_status`), looks at
+the round trip every 2 s (`Remote::tor_latency`), and after a switch moves what's connected
+to the new way as 0.10 does (`SessionManager::reroute`, Files' shells, tunnels, shared
+connections). `ssheesh-preview --tor-check` starts this copy's Tor without a window and says
+each step: the first thing to run where Tor won't start. Tunnels: `desktop/app/src/tunnels.rs`
+(sshee-core's `TunnelManager`, the list in `~/.sshee-preview/tunnels.json`, 0.10's shape).
 
 The list of servers is this copy's own: `desktop/app/src/servers.rs` keeps `hosts.json` and
 `looks.json` in `~/.sshee-preview` and passwords under the copy's keychain name. The window
@@ -285,10 +296,8 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key question, reconnect and sleep notices, the agents' buttons: built (`terminal/session.rs` holds their state). Not built: a password question of its own | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
-| Tor: the switch, progress, log (`TorButton.tsx`) | `screens/tor.rs` | `tor.rs` |
 | Security check and fixes (`ServerTools.tsx`, `Recipes.tsx`) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
 | Docker and containers (`ServerTools.tsx`) | `screens/containers.rs` | `containers.rs` |
-| Tunnels (`Tunnels.tsx`) | `screens/tunnels.rs` | `tunnels.rs` |
 | Snippets (`Snippets.tsx`) | `screens/snippets.rs` | `snippets.rs` |
 | Toasts and confirmations (`Overlays.tsx`) | `kit/toast.rs`, `kit/dialog.rs` | none |
 | Welcome, tour, what's new, hints (`Welcome.tsx`, `Tour.tsx`, `WhatsNew.tsx`, `Hints.tsx`) | `screens/welcome.rs`, `screens/tour.rs`, `screens/whats_new.rs` | `tour.rs`, `changelog.rs` |

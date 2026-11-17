@@ -18,7 +18,9 @@ pub mod server_card;
 pub mod server_menu;
 pub mod settings;
 pub mod stats;
+pub mod tor;
 pub mod transfers;
+pub mod tunnels;
 
 #[cfg(test)]
 mod tests;
@@ -53,6 +55,10 @@ pub struct States {
     pub edits: sshee_app::files::edit::Edits,
     pub stats: HashMap<TabId, stats::State>,
     pub settings: settings::State,
+    /// Tor's popover, and what it knows of Tor.
+    pub tor: tor::State,
+    /// A server's tunnels, and every saved tunnel with its state.
+    pub tunnels: tunnels::State,
 }
 
 impl States {
@@ -67,7 +73,7 @@ impl States {
     /// Something is open over the window (the palette, a dialog, a menu): no shortcut fires
     /// behind it and no key reaches a terminal, as behind any dialog in 0.10.
     pub fn any_open(&self) -> bool {
-        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard()
+        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some()
     }
 
     /// Closes what is open over the window, before something else opens there: one at a time.
@@ -77,6 +83,8 @@ impl States {
         self.server_menu.open = None;
         self.server_card.hide();
         self.agent.close();
+        self.tor.open = false;
+        self.tunnels.open = None;
     }
 }
 
@@ -87,7 +95,7 @@ pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::s
     let mut out: Vec<El> = [settings::overlay(s, t), server_card::view(s, t)].into_iter().flatten().collect();
     // An agent's question under its tab, the list of agents.
     out.extend(agent::overlays(s, t, cx));
-    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t)].into_iter().flatten());
+    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
     out
 }
 

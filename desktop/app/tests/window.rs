@@ -200,7 +200,7 @@ fn the_demo_is_the_designs_scene_in_both_appearances() {
         // (On Windows the window sits inside the frame Rune draws, so the path has more in front.)
         let waits = run.element("waits").map(|e| e["path"].as_str().unwrap().to_owned()).unwrap_or_default();
         assert!(waits.ends_with("window/body/rail/server-4/waits"), "{theme}: the dot is at {waits:?}");
-        for name in ["Main menu", "Search", "Add a server", "Security check", "Tor", "Settings", "New terminal", "Hide sidebar"] {
+        for name in ["Main menu", "Search", "Add a server", "Security check", "Tor", "Settings", "New tab", "Hide sidebar"] {
             assert!(run.tree_text.contains(&format!("\"{name}\"")), "{theme}: nothing is named {name}");
         }
         // The status bar's numbers and the title's label are there to read. (Rune's tree file
