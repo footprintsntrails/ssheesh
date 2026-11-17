@@ -306,6 +306,28 @@ fn a_fix_runs_after_one_yes_and_production_asks_twice() {
     assert!(matches!(&w.asks()[w.asks().len() - 2], Ask::Fix { server, command, .. } if server == WEB && command == "sudo ufw --force enable"));
 }
 
+/// A check that comes back between Run and the yes, offering another command: the yes runs
+/// nothing, and the new command is there to be run and asked about afresh.
+#[test]
+fn the_yes_runs_only_the_command_it_asked_about() {
+    let mut w = Window::open();
+    w.click("server-2");
+    w.click("check");
+    w.click("fix-run-0");
+    let changed = Report { findings: vec![finding("firewall", Verdict::Bad, Some("sudo ufw --force reset"))], as_root: false };
+    w.rt.update(move |s, _| crate::screens::checkup::deliver(s, Reply::Checked { server: STAGING.into(), result: Ok(changed) }));
+    w.settle();
+    w.click("fix-yes-0");
+    assert_eq!(w.fixes(), 0, "the command changed after Run: nothing runs");
+    assert!(!w.has("fix-yes-0"), "the question is gone");
+    assert!(w.tree().contains("sudo ufw --force reset"), "the new command is shown: {}", w.tree());
+    // Asked about the new one, the yes runs exactly that.
+    w.click("fix-run-0");
+    w.click("fix-yes-0");
+    assert_eq!(w.fixes(), 1);
+    assert!(w.asks().iter().any(|a| matches!(a, Ask::Fix { command, .. } if command == "sudo ufw --force reset")));
+}
+
 #[test]
 fn from_the_main_menu_the_check_asks_which_server() {
     let mut w = Window::open();

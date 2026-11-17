@@ -13,12 +13,14 @@
 //! own password prompt while the terminal was connecting ([`Watch`]). Only that: the keys
 //! typed while ssh shows "user@host's password:" (never a key's passphrase, a code, a host
 //! key's yes, or anything once the shell is up), and only once the server let the terminal
-//! in. A session that fails to sign in forgets it.
+//! in. A session that fails to sign in forgets it. And only at a prompt askpass would itself
+//! answer for this server's own account (`secrets::answers`): a jump host's "jump@bastion's
+//! password:", or a fake prompt a server prints before it signs you in, is never kept.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use sshee_core::secrets::{is_password_prompt, Secret};
+use sshee_core::secrets::{answers, PasswordFor, Secret};
 
 /// The longest prompt line kept while connecting; ssh's are far shorter.
 const LINE_MAX: usize = 512;
@@ -34,12 +36,16 @@ pub struct Watch {
     typing: String,
     /// The last answer sent to a password prompt.
     answered: Option<Secret>,
+    /// Whose password a prompt must ask for to be watched: the server's own account. None
+    /// watches nothing.
+    to: Option<PasswordFor>,
 }
 
 impl Watch {
-    /// A (re)connect starts: anything from the attempt before is forgotten.
-    pub fn connecting(&mut self) {
-        *self = Watch { connecting: true, ..Watch::default() };
+    /// A (re)connect to the account `to` starts: anything from the attempt before is
+    /// forgotten. Without `to` nothing typed is kept.
+    pub fn connecting(&mut self, to: Option<PasswordFor>) {
+        *self = Watch { connecting: true, to, ..Watch::default() };
     }
 
     /// What the session printed.
@@ -61,9 +67,11 @@ impl Watch {
         }
     }
 
-    /// Whether ssh is asking for a password on the line it is on.
+    /// Whether ssh is asking for this server's own password on the line it is on: a prompt
+    /// askpass would answer for it, never a hop's or one that names another account.
     fn at_password_prompt(&self) -> bool {
-        self.connecting && is_password_prompt(&sshee_core::strip_ansi(&self.line))
+        let Some(to) = self.to.as_ref().filter(|_| self.connecting) else { return false };
+        answers(&sshee_core::strip_ansi(&self.line), to)
     }
 
     /// Keys the terminal sends to the session.
@@ -126,9 +134,17 @@ impl Known {
 mod tests {
     use super::*;
 
+    fn target() -> Option<PasswordFor> {
+        Some(PasswordFor { who: "deploy@203.0.113.17".into(), hops: false, labels_questions: true })
+    }
+
     fn signed_in(steps: &[(&str, &[u8])]) -> Option<String> {
+        signed_in_to(target(), steps)
+    }
+
+    fn signed_in_to(to: Option<PasswordFor>, steps: &[(&str, &[u8])]) -> Option<String> {
         let mut w = Watch::default();
-        w.connecting();
+        w.connecting(to);
         for (out, keys) in steps {
             w.output(out);
             w.typed(keys);
@@ -140,7 +156,7 @@ mod tests {
     fn the_password_typed_at_ssh_prompt_is_what_got_in() {
         assert_eq!(signed_in(&[("deploy@203.0.113.17's password: ", b"made-up\r")]).as_deref(), Some("made-up"));
         // Typed a key at a time, with a slip mended by Backspace.
-        let keys: Vec<(&str, &[u8])> = vec![("(deploy@web-7731) Password: ", b"m"), ("", b"x"), ("", b"\x7f"), ("", b"e"), ("", b"\r")];
+        let keys: Vec<(&str, &[u8])> = vec![("(deploy@203.0.113.17) Password: ", b"m"), ("", b"x"), ("", b"\x7f"), ("", b"e"), ("", b"\r")];
         assert_eq!(signed_in(&keys).as_deref(), Some("me"));
         // Windows' console draws the prompt with escapes around it.
         assert_eq!(signed_in(&[("\x1b[?25l\x1b[2J\x1b[m\x1b[Hdeploy@203.0.113.17's password: \x1b[?25h", b"made-up\r")]).as_deref(), Some("made-up"));
@@ -172,7 +188,7 @@ mod tests {
     #[test]
     fn once_the_shell_is_up_nothing_typed_is_kept() {
         let mut w = Watch::default();
-        w.connecting();
+        w.connecting(target());
         w.output("deploy@203.0.113.17's password: ");
         w.typed(b"made-up\r");
         assert!(w.connected().is_some());
@@ -182,9 +198,29 @@ mod tests {
         assert!(w.connected().is_none());
         // A reconnect starts afresh: what was typed before it is gone.
         w.output("deploy@203.0.113.17's password: ");
-        w.connecting();
+        w.connecting(target());
         w.typed(b"stale\r");
         assert!(w.connected().is_none());
+    }
+
+    #[test]
+    fn a_jump_hosts_password_is_never_kept_as_the_servers() {
+        // Through ProxyJump with a current ssh: the bastion asks first, labelled with its own
+        // account. Only the target's own prompt is kept.
+        let behind = Some(PasswordFor { who: "deploy@203.0.113.17".into(), hops: true, labels_questions: true });
+        assert_eq!(signed_in_to(behind.clone(), &[("(jump@198.51.100.4) Password: ", b"bastion-pw\r")]), None);
+        assert_eq!(signed_in_to(behind.clone(), &[("jump@198.51.100.4's password: ", b"bastion-pw\r")]), None);
+        let both: Vec<(&str, &[u8])> = vec![("(jump@198.51.100.4) Password: ", b"bastion-pw\r"), ("\r\n(deploy@203.0.113.17) Password: ", b"target-pw\r")];
+        assert_eq!(signed_in_to(behind.clone(), &both).as_deref(), Some("target-pw"));
+        assert_eq!(signed_in_to(behind, &[("deploy@203.0.113.17's password: ", b"target-pw\r")]).as_deref(), Some("target-pw"));
+        // Direct, the same: a prompt naming another account isn't this server's password.
+        assert_eq!(signed_in(&[("jump@198.51.100.4's password: ", b"other\r")]), None);
+        assert_eq!(signed_in(&[("(jump@198.51.100.4) Password: ", b"other\r")]), None);
+        // An older ssh through a hop can't tell who asks: nothing is kept.
+        let old = Some(PasswordFor { who: "deploy@203.0.113.17".into(), hops: true, labels_questions: false });
+        assert_eq!(signed_in_to(old, &[("deploy@203.0.113.17's password: ", b"either\r")]), None);
+        // No account to check against: nothing is kept.
+        assert_eq!(signed_in_to(None, &[("deploy@203.0.113.17's password: ", b"made-up\r")]), None);
     }
 
     #[test]

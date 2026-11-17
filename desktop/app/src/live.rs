@@ -623,11 +623,19 @@ struct Inner {
 
 /// What a terminal's sign-in leaves for the rest of the run: once it's in, the password that
 /// got it there (typed at ssh's prompt, else the one it started with) is kept for `server`;
-/// one that failed to sign in is forgotten.
-fn signed_in(state: &SessionState, server: &str, watch: &Mutex<Watch>, known: &Known, used: &Mutex<Option<sshee_core::secrets::Secret>>) {
+/// one that failed to sign in is forgotten. `account` is whose password the server's own
+/// prompt asks for: only what is typed there is kept (never a jump host's).
+fn signed_in(
+    state: &SessionState,
+    server: &str,
+    watch: &Mutex<Watch>,
+    known: &Known,
+    used: &Mutex<Option<sshee_core::secrets::Secret>>,
+    account: &dyn Fn() -> Option<sshee_core::secrets::PasswordFor>,
+) {
     let mut watch = watch.lock().unwrap_or_else(|e| e.into_inner());
     match state {
-        SessionState::Connecting { .. } => watch.connecting(),
+        SessionState::Connecting { .. } => watch.connecting(account()),
         SessionState::Connected { .. } => {
             let typed = watch.connected();
             if let Some(password) = typed.or_else(|| used.lock().unwrap_or_else(|e| e.into_inner()).clone()) {
@@ -742,6 +750,12 @@ impl Inner {
         let bytes = self.bytes.clone();
         let durable = self.durable.clone();
         let (watch, known, server) = (self.watch.clone(), self.known.clone(), self.signin.clone());
+        // Whose password the server's own prompt asks for, as askpass checks it.
+        let ssh_target = match &spec.target {
+            Target::Ssh(t) => Some(t.clone()),
+            _ => None,
+        };
+        let account = move || ssh_target.as_ref().map(|t| (*sshee_core::ssh::password_for(t)).clone());
         // The password the session starts with (a saved one, or one that got in before).
         let used: Arc<Mutex<Option<sshee_core::secrets::Secret>>> = Arc::default();
         let started_with = used.clone();
@@ -756,7 +770,7 @@ impl Inner {
                 // Kept before the window hears it's connected: what the window then asks
                 // (the status bar, a Files tab trying again) signs in with it.
                 if let Some(server) = &server {
-                    signed_in(&state, server, &watch, &known, &used);
+                    signed_in(&state, server, &watch, &known, &used, &account);
                 }
                 durable.store(matches!(state, SessionState::Connected { durable: true, .. }), Ordering::Relaxed);
                 match &state {
@@ -969,7 +983,8 @@ mod tests {
         };
         assert_eq!(password(&backend), None);
         let (watch, used) = (Mutex::new(Watch::default()), Mutex::new(None));
-        let at = |state| signed_in(&state, "host:saved:1", &watch, &backend.known, &used);
+        let account = || Some(sshee_core::secrets::PasswordFor { who: "deploy@203.0.113.17".into(), hops: false, labels_questions: true });
+        let at = |state| signed_in(&state, "host:saved:1", &watch, &backend.known, &used, &account);
         // Typed at ssh's prompt while connecting, then in.
         at(SessionState::Connecting { attempt: 1 });
         watch.lock().unwrap().output("deploy@203.0.113.17's password: ");

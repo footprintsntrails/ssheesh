@@ -239,7 +239,8 @@ fn main() {
     // own two switches.
     let _ = sshee_core::session::set_child_env(sshee_core::session::ChildEnv { set: scrubbed.removed, remove: scrubbed.kept });
 
-    let args = match Args::parse(shell::extra_args()) {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let args = match Args::of_launch(&raw, shell::extra_args()) {
         Ok(args) => args,
         Err(e) => fail(&format!("{e}\n\n{}", args::USAGE)),
     };

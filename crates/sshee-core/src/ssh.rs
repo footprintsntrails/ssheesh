@@ -1,6 +1,6 @@
 //! Building `ssh` invocations and running one-off remote commands.
 
-use crate::secrets::{askpass_env, PasswordFor, Secret};
+use crate::secrets::{askpass_env, AskpassEnv, PasswordFor, Secret};
 use crate::error::OpError;
 use std::collections::HashMap;
 use std::io::Write;
@@ -339,7 +339,7 @@ fn durable_command_for(key: &str, run: Option<&[String]>, welcome: &crate::welco
 }
 
 /// Environment that lets ssh log in with the target's password, if it has one.
-pub fn password_env(t: &SshTarget, env: &SshEnv) -> Option<Vec<(&'static str, String)>> {
+pub fn password_env(t: &SshTarget, env: &SshEnv) -> Option<AskpassEnv> {
     let program = env.askpass.as_deref()?;
     let password = t.password.as_ref()?;
     Some(askpass_env(program, password, &password_for(t)))
@@ -401,7 +401,7 @@ pub fn config_value(config: &str, key: &str) -> Option<String> {
 
 /// Who a target's password is for, as ssh names them in its prompts. Asked
 /// of `ssh -G` once per target in a run.
-fn password_for(t: &SshTarget) -> Arc<PasswordFor> {
+pub fn password_for(t: &SshTarget) -> Arc<PasswordFor> {
     static SEEN: OnceLock<Mutex<HashMap<Vec<String>, Arc<PasswordFor>>>> = OnceLock::new();
     let mut key = config_args(t);
     key.push(t.destination.clone());
@@ -437,7 +437,7 @@ fn command_with(t: &SshTarget, env: &SshEnv, script: &str, tor: Option<String>) 
     // and askpass answers the password prompt and refuses everything else.
     match password_env(t, env) {
         Some(vars) => {
-            cmd.envs(vars);
+            cmd.envs(vars.iter());
         }
         None => {
             cmd.args(["-o", "BatchMode=yes"]);
