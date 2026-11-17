@@ -79,6 +79,12 @@ impl Remote {
         self.update(move |s| crate::screens::files::deliver(s, reply));
     }
 
+    /// The answer to the security check, a fix, or what a recipe asked
+    /// (`screens::checkup::deliver`).
+    pub fn recipes(&self, reply: sshee_app::recipes::Reply) {
+        self.update(move |s| crate::screens::checkup::deliver(s, reply));
+    }
+
     /// News from the edit bridge: a file open in an editor elsewhere, an answer to what was
     /// asked of it (`screens::files::edit::deliver`).
     pub fn edit(&self, reply: sshee_app::files::edit::EditReply) {
@@ -173,6 +179,35 @@ pub trait Backend {
     /// `Remote::set_servers`, `Shell::set_server_looks`).
     fn servers(&mut self, ask: sshee_app::servers::Ask) {
         let _ = ask;
+    }
+
+    /// The security check, its fixes and what recipes need to know (`screens::checkup`,
+    /// `screens::recipes`): each waits on a server or a file, so the backend does it on a
+    /// thread of its own and answers through [`Remote::recipes`].
+    fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
+        let _ = ask;
+    }
+
+    /// Once, when the window starts: the snippets kept between runs (`None`: 0.10's
+    /// starters).
+    fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
+        None
+    }
+
+    /// The snippets changed: keep them.
+    fn snippets_changed(&mut self, list: &sshee_app::model::Snippets) {
+        let _ = list;
+    }
+
+    /// Whether this start may show the welcome (when it's due): the program's yes; a demo and
+    /// a test start without it.
+    fn welcome(&mut self) -> bool {
+        false
+    }
+
+    /// The program's version, for "What's new" (`None`: it never opens by itself).
+    fn version(&mut self) -> Option<String> {
+        None
     }
 
     /// Sessions are replays on the window's own clock (a demo, a test): panes then run on
@@ -311,6 +346,9 @@ impl Shell {
         shell.sync_watch();
         // The editors on this computer, and copies an earlier run left unsent.
         crate::screens::files::edit::start(&mut shell);
+        // Your snippets; the welcome or "What's new", when one is due.
+        crate::screens::snippets::start(&mut shell);
+        crate::screens::welcome::start(&mut shell);
         shell
     }
 
@@ -730,6 +768,8 @@ impl Shell {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // The screens' own clockwork: who started to wait, a server's card coming up.
         let ticked = crate::screens::home::tick(self, clock, tx);
+        // A hint whose moment came; "Add a server" opened from the welcome, at its list.
+        let ticked = crate::screens::tour::tick(self, clock) | crate::screens::welcome::tick(self) | ticked;
         let winked = crate::looks::tick_logo(self, clock, tx);
         // A setting brought more tabs onto the page ("Tabs on screen"): their terminals start.
         let unmade = self.tabs_on_screen().into_iter().any(|id| !self.panes.contains_key(&id) && self.bench.tab(id).is_some_and(|t| t.kind == TabKind::Terminal));

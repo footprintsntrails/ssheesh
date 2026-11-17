@@ -10,6 +10,7 @@
 
 mod edit;
 mod files;
+mod recipes;
 mod tor;
 
 use std::path::Path;
@@ -89,7 +90,8 @@ pub fn bench() -> Workbench {
 /// The demo's settings: 0.10's defaults, kept in memory, following the system's light or
 /// dark so that `--theme` picks the picture.
 pub fn settings() -> Settings {
-    Settings { theme_follows_system: true, ..Settings::default() }
+    // Welcomed already, so the scene is the design's (`--demo-welcome` shows the welcome).
+    Settings { theme_follows_system: true, onboarded: true, onboarding_version: sshee_app::tour::ONBOARDING_VERSION, ..Settings::default() }
 }
 
 /// Sessions that play fixtures, and a list of servers kept in memory: adding, importing and
@@ -100,6 +102,10 @@ pub struct DemoBackend {
     files: files::DemoFiles,
     /// "Open in your own editor", without an editor: the status flow only.
     edit: edit::DemoEdit,
+    /// `--demo-welcome`: the welcome, as at a first start.
+    welcome: bool,
+    /// `--demo-whats-new`: "What's new" opens, as after an update from 0.10.14.
+    whats_new: bool,
     /// What the first terminal on backups shows (`--demo-card`): by default, its key's
     /// question, as a server seen for the first time.
     card: String,
@@ -119,7 +125,14 @@ impl DemoBackend {
     }
 
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), card: "hostkey-new".into() }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), welcome: false, whats_new: false, card: "hostkey-new".into() }
+    }
+
+    /// The welcome at the start (`--demo-welcome`), "What's new" (`--demo-whats-new`).
+    pub fn with_first_run(mut self, welcome: bool, whats_new: bool) -> DemoBackend {
+        self.welcome = welcome;
+        self.whats_new = whats_new;
+        self
     }
 
     /// The first terminal on backups shows `card` (`--demo-card`), not its key's question.
@@ -240,7 +253,34 @@ impl Backend for DemoBackend {
     }
 
     fn settings(&mut self) -> SettingsStore {
-        SettingsStore::in_memory(settings())
+        let mut settings = settings();
+        if self.welcome {
+            settings.onboarding_version = 2;
+        }
+        if self.whats_new {
+            settings.last_seen_version = "0.10.14".into();
+        }
+        SettingsStore::in_memory(settings)
+    }
+
+    /// Made-up findings, fixes that run at once, a made-up key (`recipes`): through the
+    /// window's queue, after the handler that asked.
+    fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
+        if let Some(remote) = &self.remote {
+            remote.recipes(recipes::answer(ask));
+        }
+    }
+
+    fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
+        Some(recipes::snippets())
+    }
+
+    fn welcome(&mut self) -> bool {
+        self.welcome
+    }
+
+    fn version(&mut self) -> Option<String> {
+        self.whats_new.then(|| env!("CARGO_PKG_VERSION").to_owned())
     }
 
     /// Tor's switch: the made-up Tor goes off at once, and on after a made-up start.

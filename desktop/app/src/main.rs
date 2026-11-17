@@ -16,6 +16,7 @@ mod demo;
 mod edit;
 mod files;
 mod live;
+mod recipes;
 mod servers;
 mod settings;
 mod signin;
@@ -51,7 +52,14 @@ impl Backend for Live {
         let spawned = settings::first_start().then(|| std::thread::Builder::new().name("import".into()).spawn(move || {
             let (found, imported) = servers::import_of_0_10();
             let seed = settings::seed(&found, imported.as_ref(), servers::ran_0_10_here());
-            seeder.update(move |s| s.seed_settings(seed));
+            // 0.10's snippets, unless this copy keeps its own already.
+            let snippets = imported.map(|i| i.state.snippets).filter(|_| !sshee_core::app_identity::current().dir().is_some_and(recipes::has_snippets));
+            seeder.update(move |s| {
+                s.seed_settings(seed);
+                if let Some(list) = snippets {
+                    s.seed_snippets(list);
+                }
+            });
         }));
         if let Some(Err(e)) = spawned {
             eprintln!("ssheesh-preview: 0.10's settings weren't read: {e}");
@@ -105,6 +113,26 @@ impl Backend for Live {
         self.inner.edit(ask);
     }
 
+    fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
+        self.inner.recipes(ask);
+    }
+
+    fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
+        self.inner.snippets()
+    }
+
+    fn snippets_changed(&mut self, list: &sshee_app::model::Snippets) {
+        self.inner.snippets_changed(list);
+    }
+
+    fn welcome(&mut self) -> bool {
+        self.inner.welcome()
+    }
+
+    fn version(&mut self) -> Option<String> {
+        self.inner.version()
+    }
+
     fn tabs_changed(&mut self, saved: &SavedTabs) {
         if let Some(dir) = sshee_core::app_identity::current().dir() {
             if let Err(e) = tabs::save(dir, saved) {
@@ -150,7 +178,7 @@ fn main() {
     };
     let options = Options { sheet: args.sheet, ..Options::default() };
     let launch = if args.demo {
-        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers).with_card(args.demo_card.clone())), options }
+        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers).with_card(args.demo_card.clone()).with_first_run(args.demo_welcome, args.demo_whats_new)), options }
     } else {
         // This copy's own list (`~/.sshee-preview/hosts.json`, `looks.json`) and the ssh
         // config: a couple of small files, read before the window opens, so the sidebar is

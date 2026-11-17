@@ -268,6 +268,10 @@ never writes 0.10's. `--demo` reads and writes nothing.
 | Command palette (`srv:` `cmd:` `file:` `set:`; a command for a server is never preselected) | `screens/palette.rs` | `palette.rs` |
 | Add a server: by hand, from the ssh config, XPipe and 0.10 | `screens/add_server.rs` | `servers.rs` (`Form`, `Ask`, `Answer`, and `Book`, the list in memory a demo and the tests answer from) |
 | A server's menu (rename, icon and colour, label, remove) and its card under the pointer | `screens/server_menu.rs`, `screens/server_card.rs` | `labels.rs`, `home.rs` (`Card`) |
+| Security check: findings worst first in plain words, each fix shown in full, run only after a yes and on Production after a second one; a fix that needs you opens in a terminal. From the sidebar's shield (a list of servers from the main menu) and the palette | `screens/checkup.rs` | `recipes.rs`, `recipes/checkup.rs` |
+| Recipes: eight step-by-step guides (0.10's, word for word), the server's system guessed from its kernel, fields, the key from `~/.ssh`, Paste into terminal without Return, the bar it steps aside into | `screens/recipes.rs` | `recipes.rs`, `recipes/book.rs` |
+| Snippets: the list, the editor (one server or every server), the blanks asked before it goes into the terminal; Production asks before Return | `screens/snippets.rs` | `snippets.rs` |
+| Welcome (first start: bring 0.10's servers over, pick from `~/.ssh/config`, add one), the tour (the simple one, Р7), hints, What's new (CHANGELOG.md built in) | `screens/welcome.rs`, `screens/tour.rs`, `screens/whats_new.rs` | `tour.rs`, `changelog.rs` |
 | Tor: the popover over the sidebar's onion and the status bar's "Tor 84 ms" (the switch, a start's progress and what holds it up, the round trip, the log's last lines, new routes, start fresh) | `screens/tor.rs` | `tor.rs` |
 | Tunnels, from a server's menu: saved per server with their switches and states; a server's port here, a SOCKS proxy, and a port here on the server (1.0's own). Not built: 0.10's list of the server's web apps to open with one click | `screens/tunnels.rs` | `tunnels.rs` |
 
@@ -302,17 +306,40 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key question, reconnect and sleep notices, the agents' buttons: built (`terminal/session.rs` holds their state). Not built: a password question of its own | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
-| Security check and fixes (`ServerTools.tsx`, `Recipes.tsx`) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
+| Security check and recipes, what is left: the disk window (`ServerTools.tsx`'s `DiskDialog`), and `{{container}}` in a snippet as a list of the server's containers (it's a text field until Docker's screen can list them) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
 | Docker and containers (`ServerTools.tsx`) | `screens/containers.rs` | `containers.rs` |
-| Snippets (`Snippets.tsx`) | `screens/snippets.rs` | `snippets.rs` |
 | Toasts and confirmations (`Overlays.tsx`) | `kit/toast.rs`, `kit/dialog.rs` | none |
-| Welcome, tour, what's new, hints (`Welcome.tsx`, `Tour.tsx`, `WhatsNew.tsx`, `Hints.tsx`) | `screens/welcome.rs`, `screens/tour.rs`, `screens/whats_new.rs` | `tour.rs`, `changelog.rs` |
+| Welcome, what is left: 0.10's "Make it yours" page (look, layout, privacy with a live preview), the "what changed" screen for 0.10 users, the tour's animated scenes (`TourScenes.tsx`) | `screens/welcome.rs`, `screens/tour.rs` | `tour.rs` |
 | Second window, the mini window (`windows.ts`, `MiniApp.tsx`) | `shell/windows.rs` | `windows.rs` |
 | Notifications with a click, tray (outside the window) | none | a new Rune-free crate, `crates/sshee-desktop` |
 
 Bringing settings and tabs over from 0.10 at first start (`sshee-app::import`) isn't wired.
 Servers, with their labels and looks, come over when you pick them in "Add a server"
-(`desktop/app/src/servers.rs`); snippets are still 0.10's starters (`screens::palette::State`).
+(`desktop/app/src/servers.rs`). Snippets are this copy's `snippets.json` (`desktop/app/src/recipes.rs`),
+brought over from 0.10 at the first start with the settings (`Shell::seed_snippets`); the palette offers
+`screens::snippets::offered`.
+
+## The security check, recipes, snippets and the first start
+
+- **Backend.** `Backend::recipes(Ask)` (`sshee_app::recipes::Ask`: `Check`, `Fix`, `Facts`,
+  `ReadKey`) answers through `Remote::recipes`, delivered by `screens::checkup::deliver` (which
+  hands recipe facts and keys to `screens::recipes::deliver`). The live one is
+  `desktop/app/src/recipes.rs` on `sshee_core::checkup`, `fixes`, `metrics` (the kernel) and
+  `keys`, each on a thread with the server's saved password read there; the demo's is
+  `app/src/demo/recipes.rs`. `Backend::snippets` / `snippets_changed` keep the list;
+  `Backend::welcome` says whether this start may show the welcome (the program yes; a demo with
+  `--demo-welcome`, a test when it asks); `Backend::version` lets "What's new" open by itself
+  after an update (`--demo-whats-new`).
+- **Nothing runs on its own.** A fix needs Run, then a yes (`Gate::Confirm`), and on a server
+  labelled Production a second yes (`Gate::Production`), which Return doesn't press. A recipe's
+  step is pasted without Return. A snippet that runs with Return on Production asks first.
+- **Dialogs** are drawn by `screens::checkup::dialog` (scrim, modal, Esc), with `header`,
+  `command_block` and `note` shared by the five; each is in `States::any_open` and
+  `close_all`. The recipe stepped aside and a hint are drawn over the page and take no keys.
+- **Where it's opened:** the sidebar's shield (`Shell::open_checkup_here`), the palette's rows
+  (`Action::Checkup`, `Recipes`, `Snippets`, `NewSnippet`, `WhatsNew`, `Tour`), a finding's
+  "Open the recipe". Settings → About's "Take the tour" and "What's new" can call
+  `Shell::open_tour(0, tx)` and `Shell::open_whats_new(tx)`.
 
 ## Open in your own editor (for the Files screen)
 

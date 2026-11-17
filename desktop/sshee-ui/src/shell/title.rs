@@ -129,7 +129,7 @@ impl Shell {
             FootTool::Home => self.show_home(tx),
             FootTool::Settings => self.toggle_settings(tx),
             FootTool::Tor => self.tor_button(tx),
-            FootTool::Check => {}
+            FootTool::Check => self.open_checkup_here(tx),
         }
     }
 }
@@ -268,7 +268,7 @@ pub(crate) fn bar_tools(s: &Shell, t: &'static Theme) -> Option<El> {
     };
     Some(
         tools
-            .child(button("bar-check", Icon::Shield, "Security check", FootTool::Check, false, t.l2))
+            .child(button("bar-check", Icon::Shield, "Security check", FootTool::Check, s.screens.checkup.is_open(), t.l2))
             .child(button("bar-tor", Icon::Tor, "Tor", FootTool::Tor, false, tor_ink).help(crate::screens::tor::button_help(s)).on_secondary_press(|s: &mut Shell, _, tx| s.toggle_tor(tx)))
             .child(button("bar-settings", Icon::Gear, "Settings", FootTool::Settings, s.screens.settings.open, t.l2)),
     )

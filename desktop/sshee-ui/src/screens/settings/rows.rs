@@ -123,6 +123,9 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
                         });
                     }
                     (true, Action::AddServer) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_add_server(tx)),
+                    (true, Action::WhatsNew) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_whats_new(tx)),
+                    (true, Action::Tour) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_tour(0, tx)),
+                    (true, Action::Welcome) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_welcome(tx)),
                     (true, Action::Arrange(how)) => {
                         let how = *how;
                         button = button.on_press_tx(move |s: &mut Shell, tx: &mut Tx| s.arrange(how, tx));
@@ -155,7 +158,19 @@ fn special_control(s: &Shell, t: &'static Theme, r: &'static Row, special: Speci
         Special::LightDark => super::looks::light_dark(s, t),
         Special::Tips => {
             let off = st.hints_seen.iter().any(|h| h == "*");
-            switch(t, r.label, !off, false).key(key)
+            // Off is 0.10's "*" among the tips seen; on again, the ones seen stay seen.
+            switch(t, r.label, !off, true).key(key).on_press_tx(move |s: &mut Shell, tx| {
+                s.change_settings(tx, |st| {
+                    st.set(|v| {
+                        if off {
+                            v.hints_seen.retain(|h| h != "*");
+                        } else {
+                            v.hints_seen.push("*".into());
+                        }
+                    })
+                });
+                s.screens.tour.hint = None;
+            })
         }
         Special::TorSwitch => {
             let on = s.bench.tor() != Tor::Off;

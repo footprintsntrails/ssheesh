@@ -10,20 +10,28 @@
 
 pub mod agent;
 pub mod add_server;
+pub mod checkup;
 pub mod files;
 pub mod home;
 pub mod palette;
+pub mod recipes;
 pub mod prompts;
 pub mod server_card;
 pub mod server_menu;
 pub mod settings;
+pub mod snippets;
 pub mod stats;
-pub mod tor;
+pub mod tour;
 pub mod transfers;
+pub mod welcome;
+pub mod whats_new;
+pub mod tor;
 pub mod tunnels;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tools_tests;
 
 use std::collections::HashMap;
 
@@ -55,6 +63,14 @@ pub struct States {
     pub edits: sshee_app::files::edit::Edits,
     pub stats: HashMap<TabId, stats::State>,
     pub settings: settings::State,
+    /// The security check, recipes and snippets; the welcome, the tour (and hints), and
+    /// "What's new".
+    pub checkup: checkup::State,
+    pub recipes: recipes::State,
+    pub snippets: snippets::State,
+    pub welcome: welcome::State,
+    pub tour: tour::State,
+    pub whats_new: whats_new::State,
     /// Tor's popover, and what it knows of Tor.
     pub tor: tor::State,
     /// A server's tunnels, and every saved tunnel with its state.
@@ -73,7 +89,12 @@ impl States {
     /// Something is open over the window (the palette, a dialog, a menu): no shortcut fires
     /// behind it and no key reaches a terminal, as behind any dialog in 0.10.
     pub fn any_open(&self) -> bool {
-        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some()
+        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some() || self.tools_open()
+    }
+
+    /// The security check, recipes, snippets, the welcome, the tour or "What's new" is open.
+    fn tools_open(&self) -> bool {
+        self.checkup.is_open() || self.recipes.is_open() || self.snippets.is_open() || self.welcome.open || self.tour.open || !self.whats_new.releases.is_empty()
     }
 
     /// Closes what is open over the window, before something else opens there: one at a time.
@@ -83,6 +104,15 @@ impl States {
         self.server_menu.open = None;
         self.server_card.hide();
         self.agent.close();
+        self.checkup = checkup::State::default();
+        // A recipe stepped aside stays aside: its bar brings the steps back.
+        if !self.recipes.aside {
+            self.recipes.close();
+        }
+        self.snippets.close();
+        self.welcome.open = false;
+        self.tour.open = false;
+        self.whats_new.releases.clear();
         self.tor.open = false;
         self.tunnels.open = None;
     }
@@ -95,7 +125,11 @@ pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::s
     let mut out: Vec<El> = [settings::overlay(s, t), server_card::view(s, t)].into_iter().flatten().collect();
     // An agent's question under its tab, the list of agents.
     out.extend(agent::overlays(s, t, cx));
+    // A recipe stepped aside, and a hint.
+    out.extend([recipes::aside(s, t), tour::hint(s, t)].into_iter().flatten());
     out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
+    // The security check, recipes, snippets; the welcome, the tour and "What's new".
+    out.extend([checkup::view(s, t), recipes::view(s, t), snippets::view(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
     out
 }
 

@@ -9,7 +9,9 @@
 //! command palette: what it lists, how typing narrows it, which row Return picks), `servers`
 //! (the "Add a server" form, the imports, and what the window asks its backend to do with the
 //! list), `labels` (a server's icon, colour, label and name), `editors` (the editors on this
-//! computer that Files' "Open in <editor>" can start). `settings_store` holds a running
+//! computer that Files' "Open in <editor>" can start), `recipes` (the security check, its fixes
+//! and the step-by-step recipes), `snippets` (commands kept to run again, with blanks),
+//! `tour` (the welcome, the tour and the hints) and `changelog` ("What's new"). `settings_store` holds a running
 //! 1.0's settings: the file, the rows of Settings, the shortcut and scheme tables.
 
 pub mod raw;
@@ -28,6 +30,10 @@ pub mod palette;
 pub mod servers;
 pub mod agents;
 pub mod editors;
+pub mod recipes;
+pub mod snippets;
+pub mod tour;
+pub mod changelog;
 pub mod prompts;
 pub mod tor;
 pub mod tunnels;
