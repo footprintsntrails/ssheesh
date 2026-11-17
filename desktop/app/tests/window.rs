@@ -1060,6 +1060,51 @@ fn copies_an_earlier_run_left_unsent_are_offered_once_at_start() {
     assert!(run.element("edit-leftovers").is_none());
 }
 
+// ---- the security check, recipes and snippets; the welcome, the tour and "What's new"
+
+#[test]
+fn the_security_check_recipes_and_snippets_in_both_appearances() {
+    for theme in ["dark", "light"] {
+        // The shield on web-7731 (Production): its findings, worst first, and a fix's two questions.
+        let script = json!([tap(0.3, "check"), tap(1.0, "fix-run-0"), tap(1.4, "fix-yes-0"), end(2.0)]);
+        let Some(run) = run(&format!("check-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        for said in ["Security check", "2 to fix", "To fix: Password login", "web-7731 is a Production server", "Run on Production", "Open the recipe"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        assert!(run.rect("find-0")[1] < run.rect("find-2")[1]);
+        // The recipe the first finding points to, its key read from this (made-up) computer.
+        let script = json!([tap(0.3, "check"), tap(1.0, "recipe-0"), end(1.8)]);
+        let Some(run) = self::run(&format!("recipe-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        for said in ["Log in with a key instead of a password", "Put your public key on the server", "id_ed25519", "SSHeesh found a key on this computer"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        // Snippets, from the palette.
+        let script = json!([chord(0.3, Shortcut::Palette), { "t": 0.6, "type": "type", "text": "snippets" }, press(0.9, "Enter", false, false, false), end(1.6)]);
+        let Some(run) = self::run(&format!("snippets-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        for said in ["Snippets", "Tail the shop's log", "This server", "New snippet"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+    }
+}
+
+#[test]
+fn the_welcome_the_tour_and_whats_new_in_both_appearances() {
+    for theme in ["dark", "light"] {
+        let Some(run) = run(&format!("welcome-{theme}"), &["--demo", "--demo-welcome", "--theme", theme], None) else { return };
+        for said in ["Welcome to SSHeesh", "Your servers", "Bring over your server from SSHeesh 0.10", "Pick from 2 in ~/.ssh/config", "Take the one-minute tour"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        let script = json!([tap(0.3, "welcome-tour"), tap(0.8, "tour-next"), tap(1.1, "tour-next"), tap(1.4, "tour-next"), end(2.0)]);
+        let Some(run) = self::run(&format!("tour-{theme}"), &["--demo", "--demo-welcome", "--theme", theme], Some(script)) else { return };
+        assert!(run.tree_text.contains("Check a server's safety"), "{theme}: the tour's fourth card");
+        let Some(run) = self::run(&format!("whats-new-{theme}"), &["--demo", "--demo-whats-new", "--theme", theme], None) else { return };
+        assert!(run.tree_text.contains("What's new in SSHeesh 1.0.0"), "{theme}");
+        // Without the flags the demo is the design's scene, with nothing over it.
+        let Some(run) = self::run(&format!("no-welcome-{theme}"), &["--demo", "--theme", theme], None) else { return };
+        assert!(run.element("welcome").is_none() && run.element("news").is_none());
+    }
+}
+
 #[test]
 fn a_new_server_asks_about_its_key_and_the_session_cards_show_in_both_appearances() {
     // backups is seen for the first time: its terminal asks about its key, and nothing else.

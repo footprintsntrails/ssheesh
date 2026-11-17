@@ -140,7 +140,7 @@ impl Shell {
     }
 
     /// Opens a source's list with its servers ticked as the source says.
-    fn add_server_list(&mut self, source: Source) {
+    pub(crate) fn add_server_list(&mut self, source: Source) {
         let state = &mut self.screens.add_server;
         let Some(sources) = &state.sources else { return };
         state.picks = sources.of(source).iter().filter(|c| c.picked).map(|c| c.id.clone()).collect();

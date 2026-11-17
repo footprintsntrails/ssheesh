@@ -115,6 +115,15 @@ pub enum Action {
     AddServer,
     /// Settings, at a section when one is named.
     Settings(Option<&'static str>),
+    /// The security check of a server.
+    Checkup { server: ServerKey },
+    /// The recipes, for a server.
+    Recipes { server: ServerKey },
+    /// The list of snippets, and a new one with this command in it.
+    Snippets,
+    NewSnippet(String),
+    WhatsNew,
+    Tour,
 }
 
 /// The picture at a row's start; the screen layer has the drawings.
@@ -132,6 +141,10 @@ pub enum Glyph {
     Home,
     Reopen,
     Gear,
+    Shield,
+    Recipe,
+    News,
+    Help,
     SplitRight,
     SplitDown,
     Zoom,
@@ -338,6 +351,10 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         }
         rows.push(files);
         rows.push(row(Group::OnServer, Glyph::Stats, "Stats", Action::Stats { server: key.clone() }).words("stats metrics cpu memory traffic"));
+        if !server.is_local() {
+            rows.push(row(Group::OnServer, Glyph::Shield, "Security check", Action::Checkup { server: key.clone() }).words("security checkup audit firewall ports login updates safe"));
+            rows.push(row(Group::OnServer, Glyph::Recipe, "Recipes", Action::Recipes { server: key.clone() }).words("recipes guide how to firewall fail2ban docker swap https caddy key sudo"));
+        }
         for snippet in ctx.snippets {
             let blanks = has_blanks(&snippet.command);
             let mut r = row(Group::OnServer, Glyph::Terminal, &snippet.command, Action::Run { server: key.clone(), command: snippet.command.clone(), enter: !blanks })
@@ -412,6 +429,10 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         rows.push(row(Group::Window, Glyph::Home, "Main menu", Action::MainMenu).words("home start page new tab"));
     }
     rows.push(row(Group::Window, Glyph::Plus, "Add server…", Action::AddServer).keys(label(Shortcut::AddServer)).words("new host import xpipe ssh config"));
+    rows.push(row(Group::Window, Glyph::Terminal, "Snippets", Action::Snippets).words("snippets saved commands"));
+    rows.push(row(Group::Window, Glyph::Plus, "New snippet…", Action::NewSnippet(String::new())).words("save command snippet add"));
+    rows.push(row(Group::Window, Glyph::News, "What's new", Action::WhatsNew).words("changelog release notes version update"));
+    rows.push(row(Group::Window, Glyph::Help, "Take the tour", Action::Tour).words("tour help introduction welcome"));
 
     // Settings and its sections.
     rows.push(row(Group::Settings, Glyph::Gear, "Settings", Action::Settings(None)).words("preferences options"));
@@ -680,6 +701,22 @@ mod tests {
         let rows = rows(&Context { bench: &w, snippets: &[], mac: false, shortcuts: &changed }, &parse("cmd:"));
         assert_eq!(rows.iter().find(|r| r.action == Action::NewTerminal).unwrap().keys.as_deref(), Some("Ctrl+Alt+N"));
         assert_eq!(rows.iter().find(|r| r.action == Action::CloseTab).unwrap().keys, None);
+    }
+
+    #[test]
+    fn the_security_check_recipes_and_snippets_are_found() {
+        let mut w = bench();
+        w.go_to(WEB);
+        let rows = list(&w, &[], "security");
+        assert_eq!(rows[0].action, Action::Checkup { server: WEB.into() });
+        assert_eq!(first_choice(&rows), Some(0));
+        assert_eq!(list(&w, &[], "fail2ban")[0].action, Action::Recipes { server: WEB.into() });
+        assert!(list(&w, &[], "snippets").iter().any(|r| r.action == Action::Snippets));
+        assert!(list(&w, &[], "changelog").iter().any(|r| r.action == Action::WhatsNew));
+        assert!(list(&w, &[], "tour").iter().any(|r| r.action == Action::Tour));
+        // This computer has no security check: it's for servers.
+        w.go_to("local");
+        assert!(!list(&w, &[], "").iter().any(|r| matches!(r.action, Action::Checkup { .. } | Action::Recipes { .. })));
     }
 
     #[test]

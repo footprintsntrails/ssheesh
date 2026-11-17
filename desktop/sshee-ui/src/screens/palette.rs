@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 
 use rune::{col, row, text, text_input, Align, ClipboardContent, Cx, El, Key, KeyEvent, Mods, ScrollSpec, Side, TextEdit, Tx};
-use sshee_app::model::{Snippet, Snippets};
 use sshee_app::palette::{self, Action, Context, Glyph, Group, Row};
 use sshee_app::workbench::shortcuts::{match_shortcut, Pressed, Shortcut};
 use sshee_app::workbench::{Link, Open, ServerKey, TabId, TabKind};
@@ -47,16 +46,14 @@ pub struct State {
     pub hot: Option<usize>,
     /// Why the last pick did nothing, under the list.
     pub note: Option<String>,
-    /// The snippets it offers (0.10's starters until the program brings yours over).
-    pub snippets: Vec<Snippet>,
     /// Commands for terminals that haven't connected yet: typed (and run, when `true`) once
     /// they have.
-    pending: HashMap<TabId, (String, bool)>,
+    pub(crate) pending: HashMap<TabId, (String, bool)>,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { open: false, query: TextEdit::default(), hot: None, note: None, snippets: Snippets::default().snippets, pending: HashMap::new() }
+        State { open: false, query: TextEdit::default(), hot: None, note: None, pending: HashMap::new() }
     }
 }
 
@@ -81,6 +78,10 @@ fn glyph(g: &Glyph) -> Icon {
         Glyph::Home => Icon::House,
         Glyph::Reopen => Icon::Reopen,
         Glyph::Gear => Icon::Gear,
+        Glyph::Shield => Icon::Shield,
+        Glyph::Recipe => Icon::Doc,
+        Glyph::News => Icon::Sparkle,
+        Glyph::Help => Icon::Info,
         Glyph::SplitRight => Icon::SideBySide,
         Glyph::SplitDown => Icon::SplitDown,
         Glyph::Zoom => Icon::Expand,
@@ -103,7 +104,9 @@ pub(crate) fn send_pending(s: &mut Shell, tx: &mut Tx) {
 impl Shell {
     /// The rows for what is typed now.
     fn palette_rows(&self) -> Vec<Row> {
-        let ctx = Context { bench: &self.bench, snippets: &self.screens.palette.snippets, mac: self.options.mac_keys, shortcuts: &self.options.shortcuts };
+        // Yours, as the snippets screen keeps them: those for every server and this one's own.
+        let snippets = crate::screens::snippets::offered(self);
+        let ctx = Context { bench: &self.bench, snippets: &snippets, mac: self.options.mac_keys, shortcuts: &self.options.shortcuts };
         palette::rows(&ctx, &palette::parse(&self.screens.palette.query.text))
     }
 
@@ -220,6 +223,12 @@ impl Shell {
                 None => self.open_settings(tx),
             },
             Action::Settings(None) => self.open_settings(tx),
+            Action::Checkup { server } => self.open_checkup(&server, tx),
+            Action::Recipes { server } => self.open_recipes(&server, None, tx),
+            Action::Snippets => self.open_snippets(tx),
+            Action::NewSnippet(command) => self.new_snippet(&command, tx),
+            Action::WhatsNew => self.open_whats_new(tx),
+            Action::Tour => self.open_tour(0, tx),
         }
     }
 

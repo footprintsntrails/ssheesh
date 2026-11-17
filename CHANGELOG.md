@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0 — rebuilt from the ground up
+
+- **A new SSHeesh, drawn by itself.** The window no longer runs inside a web browser: it's one program, written in Rust, that draws every pixel itself. It starts faster, uses less memory, and typing in a terminal reaches the screen sooner.
+- **Your servers come along when you say so.** 1.0 keeps a list of its own. The welcome, and Add a server, offer to bring over the servers you had in 0.10 and to pick from your SSH config; your settings and snippets come over by themselves the first time.
+- **Find anything from one bar.** Servers, folders, commands, snippets and settings. A command for a server is never picked for you: you move to it and press Return.
+- **Files can open in your own editor.** Pick a file and choose the editor; every save goes back to the server, and a change made there in the meantime is shown before anything is overwritten.
+- **The security check, recipes and snippets are here.** A fix shows exactly what will run and runs only after you say yes, twice on a server labelled Production.
+
 ## 0.10.14 — files land where you drop them
 
 - **On Windows, files dragged out land in the folder you drop them on.** Let go over the desktop or an Explorer window and they download there; the question names the folder first. Anywhere else, and on macOS and Linux, they still go to Downloads. Nothing already there is replaced.

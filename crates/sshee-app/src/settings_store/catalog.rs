@@ -182,6 +182,10 @@ pub enum Action {
     AddServer,
     /// Rearranges the panes on screen ("Arrange open panes").
     Arrange(crate::workbench::layout::Arrangement),
+    /// "What's new", the tour, the welcome again.
+    WhatsNew,
+    Tour,
+    Welcome,
 }
 
 /// A row's one line of help.
@@ -1014,13 +1018,11 @@ fn build() -> Vec<Row> {
             "about-tour",
             About,
             "Getting to know SSHeesh",
-            Buttons(&[("What's new", Action::Later), ("Take the tour", Action::Later), ("Show the welcome again", Action::Later)]),
+            Buttons(&[("What's new", Action::WhatsNew), ("Take the tour", Action::Tour), ("Show the welcome again", Action::Welcome)]),
         )
-        .later("The tour, the welcome and What's new come later.")
         .words("tour hello onboarding release notes changelog"),
         Row::new("about-tips", About, "Tips", Control::Special(Special::Tips))
             .hint("Small notes the first time you meet a feature, one at a time.")
-            .later("Comes later. Which tips you have seen is kept.")
             .saves(&["hintsSeen"])
             .words("hints help notes"),
     ]

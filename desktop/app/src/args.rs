@@ -9,6 +9,8 @@ usage: ssheesh-preview [options]
                       nothing is read from this computer and nothing connects
   --sheet             show the component sheet (every control in its states) instead of the window
   --demo-leftovers    with --demo: offer two made-up copies an earlier run left unsent
+  --demo-welcome      with --demo: start with the welcome, as at a first start
+  --demo-whats-new    with --demo: start with What's new, as after an update from 0.10.14
   --demo-card STATE   with --demo: the first terminal on backups shows a session card
                       (hostkey-new, hostkey-changed, disconnected, retrying, rejoining,
                       asleep, failed, ended); without it, backups asks to trust its key
@@ -23,6 +25,8 @@ pub struct Args {
     pub demo: bool,
     pub sheet: bool,
     pub demo_leftovers: bool,
+    pub demo_welcome: bool,
+    pub demo_whats_new: bool,
     pub ssh_config: Option<PathBuf>,
     pub demo_card: Option<String>,
 }
@@ -36,6 +40,8 @@ impl Args {
                 "--demo" => &mut args.demo,
                 "--sheet" => &mut args.sheet,
                 "--demo-leftovers" => &mut args.demo_leftovers,
+                "--demo-welcome" => &mut args.demo_welcome,
+                "--demo-whats-new" => &mut args.demo_whats_new,
                 "--demo-card" => {
                     match it.next() {
                         Some(value) if sshee_ui::terminal::replay::status_named(value).is_some() && args.demo_card.is_none() => args.demo_card = Some(value.clone()),
@@ -59,6 +65,9 @@ impl Args {
             if std::mem::replace(switch, true) {
                 return Err(format!("{flag} is given twice"));
             }
+        }
+        if (args.demo_welcome || args.demo_whats_new) && !args.demo {
+            return Err("--demo-welcome and --demo-whats-new go with --demo".into());
         }
         if args.demo_card.is_some() && !args.demo {
             return Err("--demo-card goes with --demo".into());

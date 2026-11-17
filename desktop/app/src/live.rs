@@ -66,6 +66,8 @@ pub struct LiveBackend {
     /// theirs.
     welcome_first: bool,
     welcomed: Vec<String>,
+    /// Writes `snippets.json`, in order.
+    snippets: crate::recipes::SnippetWriter,
     /// The passwords that got a terminal in this run, by server (`crate::signin`).
     known: Known,
     /// Keys fetched for a question about a server's key, so "Trust" saves what was shown.
@@ -118,6 +120,7 @@ impl LiveBackend {
             welcome: full_welcome(),
             welcome_first: false,
             welcomed: vec![],
+            snippets: crate::recipes::SnippetWriter::new(sshee_core::app_identity::current().dir().map(std::path::Path::to_path_buf)),
             known: Known::default(),
             keys: Arc::new(PendingKeys::default()),
             verified: Arc::new(Mutex::new(HashSet::new())),
@@ -430,6 +433,35 @@ impl Backend for LiveBackend {
 
     fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
         self.edit.ask(ask, |host| self.reach(host));
+    }
+
+    /// The security check, a fix you confirmed, what a recipe needs: on a thread of its own
+    /// (`crate::recipes`), with the server's saved password read there.
+    fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
+        let Some(remote) = self.remote.clone() else { return };
+        let server = match &ask {
+            sshee_app::recipes::Ask::Check { server } | sshee_app::recipes::Ask::Fix { server, .. } | sshee_app::recipes::Ask::Facts { server } | sshee_app::recipes::Ask::ReadKey { server, .. } => server.clone(),
+        };
+        let host = self.hosts.lock().ok().and_then(|h| h.get(&server).cloned());
+        let (target, prepare) = self.reach(&server);
+        crate::recipes::answer(ask, target, prepare, host, self.env.clone(), remote);
+    }
+
+    fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
+        sshee_core::app_identity::current().dir().and_then(crate::recipes::load_snippets)
+    }
+
+    fn snippets_changed(&mut self, list: &sshee_app::model::Snippets) {
+        self.snippets.save(list);
+    }
+
+    /// The program shows the welcome when it's due.
+    fn welcome(&mut self) -> bool {
+        true
+    }
+
+    fn version(&mut self) -> Option<String> {
+        Some(env!("CARGO_PKG_VERSION").to_owned())
     }
 
     fn tor_ask(&mut self, ask: sshee_app::tor::Ask) {

@@ -219,7 +219,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         Tor::Failed => RailState::TorFailed,
     };
     let foot = [
-        rail_button(t, Icon::Shield, "Security check", RailState::Plain, false).key("check"),
+        rail_button(t, Icon::Shield, "Security check", if s.screens.checkup.is_open() { RailState::Selected } else { RailState::Plain }, false).key("check").on_press_tx(|s: &mut Shell, tx| s.open_checkup_here(tx)),
         rail_button(t, Icon::Tor, &crate::screens::tor::button_help(s), tor, false)
             .key("tor")
             .on_press_tx(|s: &mut Shell, tx| s.tor_button(tx))
