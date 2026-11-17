@@ -1166,3 +1166,27 @@ fn a_click_shows_a_hidden_secret_but_never_while_streaming_nor_outside_the_windo
     click(&mut w);
     assert!(!w.tree().contains(&secret[4..12]));
 }
+
+#[test]
+fn a_tabs_menu_takes_the_keyboard_and_return_on_it_just_opened_does_nothing() {
+    let mut w = linux();
+    w.click("server-1");
+    w.plus_terminal();
+    let row = w.row();
+    let id = w.rt.state.bench.tabs()[0].id.0;
+    let (x, y) = w.rt.find(&format!("tab-{id}")).unwrap();
+    w.secondary(x, y);
+    assert!(w.rt.find("tab-menu").is_some());
+    // Return on a menu just opened picks nothing, and typing reaches no terminal behind it.
+    w.key(Key::Enter, "");
+    w.typed("x");
+    assert!(w.rt.find("tab-menu").is_some(), "Return on a fresh menu closed it");
+    assert_eq!(w.row(), row);
+    assert!(!w.written(0).contains('x') && !w.written(1).contains('x'), "{:?} {:?}", w.written(0), w.written(1));
+    // Down lights the first row ("Show beside this one"); Return picks it.
+    w.key(Key::Down, "");
+    w.key(Key::Enter, "");
+    assert!(w.rt.find("tab-menu").is_none());
+    let tabs: Vec<_> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    assert!(w.rt.state.bench.together(tabs[0], tabs[1]));
+}
