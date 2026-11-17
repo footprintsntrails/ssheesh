@@ -37,6 +37,8 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 # Comparing the two versions of a file in a conflict, line by line (already in the lock file).
 imara-diff = { version = "0.2", default-features = false }
+# Passwords are wiped from memory when dropped (already in the lock file through rustls and Tor).
+zeroize = "1"
 
 # `openat` and friends, so the edit folder's clean-up never follows a link (already here
 # through many crates).

@@ -34,15 +34,24 @@ pub struct Args {
 }
 
 impl Args {
+    /// The flags of this start. `raw` is every argument after the program's name, as the
+    /// system gave them; `extra` what's left once Rune took its own.
+    ///
+    /// A notification's link (Windows starts the program with it, `"exe" "%1"`) is a launch
+    /// of its own, parsed strictly: the link is all it may carry. A link that comes with
+    /// anything else (a crafted one whose quote splits it into more arguments, say) starts
+    /// the plain window, every other argument ignored: never `--ssh-config` or a demo.
+    pub fn of_launch(raw: &[String], extra: &[String]) -> Result<Args, String> {
+        if raw.iter().any(|a| crate::desktop::is_link(a)) {
+            return Ok(Args::default());
+        }
+        Args::parse(extra)
+    }
+
     pub fn parse(argv: &[String]) -> Result<Args, String> {
         let mut args = Args::default();
         let mut it = argv.iter();
         while let Some(flag) = it.next() {
-            // A notification's link Windows started the program with: the window takes it
-            // (`App::on_open_url`), not these flags.
-            if crate::desktop::is_link(flag) {
-                continue;
-            }
             let switch = match flag.as_str() {
                 "--demo" => &mut args.demo,
                 "--sheet" => &mut args.sheet,
@@ -111,8 +120,25 @@ mod tests {
         assert!(parse(&["--demo", "--demo-update"]).unwrap().demo_update);
         assert!(parse(&["--demo-update"]).is_err());
         assert_eq!(parse(&["--ssh-config", "/tmp/p/ssh_config"]).unwrap().ssh_config, Some("/tmp/p/ssh_config".into()));
+    }
+
+    #[test]
+    fn a_links_launch_takes_nothing_else() {
+        let of = |raw: &[&str], extra: &[&str]| {
+            let owned = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+            Args::of_launch(&owned(raw), &owned(extra))
+        };
         // A toast's click starts the program with its link, for the window to take.
-        assert_eq!(parse(&["ssheesh-preview://notification/3"]).unwrap(), Args::default());
+        let link = "ssheesh-preview://notification/3";
+        assert_eq!(of(&[link], &[link]).unwrap(), Args::default());
+        // A link split into more arguments: everything but the plain window is ignored.
+        let split = [link, "--ssh-config", "/tmp/p/ssh_config", "--demo"];
+        assert_eq!(of(&split, &split).unwrap(), Args::default());
+        let before = ["--ssh-config", "/tmp/p/ssh_config", "SSHEESH-PREVIEW://notification/3"];
+        assert_eq!(of(&before, &before).unwrap(), Args::default());
+        // Without a link the flags are read as ever, and a link is no flag of theirs.
+        assert!(of(&["--demo"], &["--demo"]).unwrap().demo);
+        assert!(parse(&[link]).is_err());
     }
 
     #[test]

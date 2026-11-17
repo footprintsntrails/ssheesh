@@ -122,6 +122,8 @@ fn register(app: &AppInfo) -> windows::core::Result<()> {
     scheme.set_string("", format!("URL:{}", app.name))?;
     scheme.set_string("URL Protocol", "")?;
     classes.create(format!("{}\\DefaultIcon", app.scheme))?.set_string("", format!("\"{exe}\",0"))?;
+    // A crafted link with a quote in it can split into more arguments: the app takes a launch
+    // with a link as that link alone and ignores the rest (ssheesh-preview's `Args::of_launch`).
     classes.create(format!("{}\\shell\\open\\command", app.scheme))?.set_string("", format!("\"{exe}\" \"%1\""))?;
     Ok(())
 }

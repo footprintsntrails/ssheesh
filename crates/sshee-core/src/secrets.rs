@@ -10,6 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Mutex;
 
+use zeroize::Zeroize;
+
 /// The keychain name this copy files passwords under (see `app_identity`):
 /// the app's id for the standard copy, as in every version so far.
 fn service() -> &'static str {
@@ -23,7 +25,8 @@ const FOR_VAR: &str = "SSHEESH_PASSWORD_FOR";
 const HOPS_VAR: &str = "SSHEESH_PASSWORD_HOPS";
 const LABELS_VAR: &str = "SSHEESH_PASSWORD_LABELS";
 
-/// A password that never shows up in logs or debug output.
+/// A password that never shows up in logs or debug output, and is wiped from
+/// memory when dropped.
 #[derive(Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(transparent)]
 pub struct Secret(String);
@@ -34,6 +37,12 @@ impl Secret {
     }
     pub fn expose(&self) -> &str {
         &self.0
+    }
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -129,9 +138,35 @@ pub struct PasswordFor {
     pub labels_questions: bool,
 }
 
+/// The environment for one ssh process that signs in with a password. Its
+/// copy of the password is wiped when it's dropped (the copy the process
+/// builder makes of it is the standard library's, and isn't).
+#[derive(Default)]
+pub struct AskpassEnv(Vec<(&'static str, String)>);
+
+impl AskpassEnv {
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &str)> + '_ {
+        self.0.iter().map(|(k, v)| (*k, v.as_str()))
+    }
+}
+
+impl Drop for AskpassEnv {
+    fn drop(&mut self) {
+        for (_, v) in &mut self.0 {
+            v.zeroize();
+        }
+    }
+}
+
+impl fmt::Debug for AskpassEnv {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.iter().map(|(k, _)| k)).finish()
+    }
+}
+
 /// Environment for an ssh process that should log in to `to` with `password`.
-pub fn askpass_env(program: &std::path::Path, password: &Secret, to: &PasswordFor) -> Vec<(&'static str, String)> {
-    vec![
+pub fn askpass_env(program: &std::path::Path, password: &Secret, to: &PasswordFor) -> AskpassEnv {
+    AskpassEnv(vec![
         ("SSH_ASKPASS", program.display().to_string()),
         ("SSH_ASKPASS_REQUIRE", "force".into()),
         // Older OpenSSH only uses askpass when DISPLAY is set.
@@ -141,7 +176,7 @@ pub fn askpass_env(program: &std::path::Path, password: &Secret, to: &PasswordFo
         (FOR_VAR, to.who.clone()),
         (HOPS_VAR, if to.hops { "1" } else { "0" }.into()),
         (LABELS_VAR, if to.labels_questions { "1" } else { "0" }.into()),
-    ]
+    ])
 }
 
 /// True for ssh's password prompts: "user@host's password:", "Password:".
@@ -193,8 +228,9 @@ pub fn askpass_main() -> Option<i32> {
         labels_questions: std::env::var(LABELS_VAR).as_deref() == Ok("1"),
     };
     match std::env::var(PASSWORD_VAR) {
-        Ok(pw) if answers(&prompt, &to) => {
+        Ok(mut pw) if answers(&prompt, &to) => {
             println!("{pw}");
+            pw.zeroize();
             Some(0)
         }
         _ => {
@@ -255,6 +291,10 @@ mod tests {
     fn secrets_stay_out_of_debug_output() {
         let s = Secret::new("hunter2");
         assert!(!format!("{s:?}").contains("hunter2"));
+        let to = PasswordFor { who: "deploy@203.0.113.17".into(), hops: false, labels_questions: true };
+        let env = askpass_env(std::path::Path::new("ssheesh"), &s, &to);
+        assert!(env.iter().any(|(k, v)| k == PASSWORD_VAR && v == "hunter2"));
+        assert!(!format!("{env:?}").contains("hunter2"));
     }
 
     #[test]

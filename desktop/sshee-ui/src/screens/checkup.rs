@@ -39,8 +39,9 @@ pub const WIDTH: f32 = 600.0;
 /// A fix, once Run was pressed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Run {
-    /// Waiting for the yes (or the second yes, on Production).
-    Asking(Gate),
+    /// Waiting for the yes (or the second yes, on Production), with the command exactly as
+    /// it was shown when Run was pressed: only that one ever runs.
+    Asking(Gate, String),
     Running,
     Ran(Outcome),
 }
@@ -95,22 +96,33 @@ impl Shell {
         self.backend_mut().recipes(Ask::Check { server });
     }
 
-    /// The finding's Run: asks first.
-    fn checkup_run(&mut self, id: &str) {
-        self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(Gate::Confirm));
+    /// The fix a finding of the last check offers now.
+    fn checkup_fix(&self, id: &str) -> Option<String> {
+        self.screens.checkup.report.as_ref()?.findings.iter().find(|f| f.id == id)?.fix.clone()
     }
 
-    /// A yes to the question: the next one (Production), or the fix runs now.
+    /// The finding's Run: asks first, about the command on screen now.
+    fn checkup_run(&mut self, id: &str) {
+        let Some(command) = self.checkup_fix(id) else { return };
+        self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(Gate::Confirm, command));
+    }
+
+    /// A yes to the question: the next one (Production), or the fix runs now. What runs is
+    /// the command you were asked about; if a check that came back meanwhile offers another
+    /// one, nothing runs, and the new command is shown to be run (and asked about) afresh.
     fn checkup_yes(&mut self, id: &str) {
         let state = &self.screens.checkup;
-        let (Some(server), Some(Run::Asking(gate))) = (state.open.clone(), state.runs.get(id).cloned()) else { return };
+        let (Some(server), Some(Run::Asking(gate, command))) = (state.open.clone(), state.runs.get(id).cloned()) else { return };
         let production = self.bench.server(&server).is_some_and(|s| s.is_prod());
         match checkup::after_yes(gate, production) {
             Some(next) => {
-                self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(next));
+                self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(next, command));
             }
             None => {
-                let Some(command) = state.report.as_ref().and_then(|r| r.findings.iter().find(|f| f.id == id)).and_then(|f| f.fix.clone()) else { return };
+                if self.checkup_fix(id).as_deref() != Some(command.as_str()) {
+                    self.screens.checkup.runs.remove(id);
+                    return;
+                }
                 self.screens.checkup.runs.insert(id.to_owned(), Run::Running);
                 self.backend_mut().recipes(Ask::Fix { server, check: id.to_owned(), command });
             }
@@ -315,7 +327,7 @@ fn card(t: &Theme, s: &Shell, server: &str, server_name: &str, f: &Finding, i: u
         let id = f.id.clone();
         let copy = command.clone();
         let mut buttons = row().mt(4.0).gap(8.0).items_center();
-        if !matches!(run, Some(Run::Asking(_))) {
+        if !matches!(run, Some(Run::Asking(..))) {
             buttons = buttons.child(
                 push_button(t, if running { "Running…" } else { "Run…" }, Push::Quiet, !running && !s.screens.checkup.loading)
                     .key(format!("fix-run-{i}"))
@@ -325,7 +337,7 @@ fn card(t: &Theme, s: &Shell, server: &str, server_name: &str, f: &Finding, i: u
         }
         buttons = buttons.child(push_button(t, "Copy", Push::Quiet, true).key(format!("fix-copy-{i}")).on_press_tx(move |_: &mut Shell, tx| tx.copy(copy.clone())));
         words = words.child(buttons);
-        if let Some(Run::Asking(gate)) = run {
+        if let Some(Run::Asking(gate, _)) = run {
             words = words.child(question(t, server_name, *gate, i, &f.id));
         }
     } else if let Some(why) = f.fix_note.as_ref().filter(|_| f.verdict != Verdict::Good) {

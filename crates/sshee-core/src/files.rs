@@ -1259,6 +1259,59 @@ fn answers(t: &SshTarget, env: &SshEnv, xfer: &Transfer) -> bool {
     }
 }
 
+/// The most a server's tar stream may bring when its size couldn't be told
+/// beforehand (64 GiB).
+const STREAM_CEILING: u64 = 64 << 30;
+
+/// How much a server's tar stream may bring, given the size it reported first
+/// (`remote_size`, `du`; 0 when unknown): that plus a tenth plus 64 MiB, for
+/// tar's headers and files that grew meanwhile. A hostile server can't fill
+/// this computer's disk, or another server's, past it.
+fn stream_cap(expected: u64) -> u64 {
+    if expected == 0 {
+        return STREAM_CEILING;
+    }
+    expected.saturating_add(expected / 10).saturating_add(64 << 20)
+}
+
+/// What a stream past its cap ends with.
+#[derive(Debug)]
+struct TooBig;
+
+impl std::fmt::Display for TooBig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stopped: the server sent far more than the size it reported for this, so nothing was kept.")
+    }
+}
+
+impl std::error::Error for TooBig {}
+
+/// A reader that fails with [`TooBig`] once more than `left` bytes came.
+struct Capped<R> {
+    inner: R,
+    left: u64,
+}
+
+impl<R> Capped<R> {
+    fn new(inner: R, cap: u64) -> Self {
+        Capped { inner, left: cap }
+    }
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.left = self.left.checked_sub(n as u64).ok_or_else(|| io::Error::other(TooBig))?;
+        Ok(n)
+    }
+}
+
+/// The plain error for a copy a [`Capped`] stream stopped.
+fn too_big(copied: &io::Result<()>) -> Option<OpError> {
+    let e = copied.as_ref().err()?;
+    e.get_ref().is_some_and(|inner| inner.is::<TooBig>()).then(|| OpError::failed(TooBig.to_string()))
+}
+
 /// Moves bytes from `from` to `to` on a thread of its own, telling `moved`
 /// the running count. `to` is dropped at the end, which closes the pipe it
 /// feeds.
@@ -1835,9 +1888,11 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
 
     // Folders travel as a tar stream: remote tar -> local tar. A tar stream
     // can't be picked up midway, so after a drop the folder starts over.
-    xfer.add_total(remote_size(t, env, remote_path, true));
+    let expected = remote_size(t, env, remote_path, true);
+    xfer.add_total(expected);
     xfer.check()?;
     let base = xfer.done();
+    let cap = stream_cap(expected);
     let mut opening = Opening::new(t);
     let result = resuming(&[t], env, xfer, || loop {
         let _ = std::fs::remove_dir_all(&scratch);
@@ -1866,12 +1921,20 @@ pub fn download(target: &Target, env: &SshEnv, remote_path: &str, is_dir: bool, 
         let unpack = untar.stdin.take().expect("piped stdin");
         // Counted as tar sees it, so the bar stays true however small it travels.
         let moved = move |x: &Transfer, n| x.set_done(base + n);
-        let copy = if small { spawn_copy(SmallStream::new(stream), unpack, xfer.clone(), moved) } else { spawn_copy(stream, unpack, xfer.clone(), moved) };
+        // Never more than the size the server reported, and a margin (counted unpacked).
+        let copy = if small {
+            spawn_copy(Capped::new(SmallStream::new(stream), cap), unpack, xfer.clone(), moved)
+        } else {
+            spawn_copy(Capped::new(stream, cap), unpack, xfer.clone(), moved)
+        };
         let copied = wait_copy(xfer, copy, &mut [&mut ssh, &mut untar], Some(&mut opening))?;
         let (status, unpacked) = (ssh.wait()?, untar.wait()?);
         if opening.moved {
             // A tar stream starts over, which is why this happens only near its start.
             continue;
+        }
+        if let Some(e) = too_big(&copied) {
+            return Err(e);
         }
         if !status.success() {
             return Err(OpError::from_ssh(status.code(), &joined(errors)));
@@ -2170,6 +2233,8 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
     let base = xfer.done();
     // The tar stream is a little bigger than what du counts; the bar stops at the total.
     let cap = if total == 0 { u64::MAX } else { total };
+    // The first server's stream never brings much more than it said it would.
+    let limit = stream_cap(total);
 
     // A tar stream can't be picked up midway: after a drop, once both
     // servers answer again, it starts over.
@@ -2191,9 +2256,12 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
         let (src_errors, dst_errors) = (drain(src.stderr.take()), drain(dst.stderr.take()));
         let stream = src.stdout.take().expect("piped stdout");
         let input = dst.stdin.take().expect("piped stdin");
-        let copy = spawn_copy(stream, input, xfer.clone(), move |x, n| x.set_done(base + n.min(cap)));
+        let copy = spawn_copy(Capped::new(stream, limit), input, xfer.clone(), move |x, n| x.set_done(base + n.min(cap)));
         let copied = wait_copy(xfer, copy, &mut [&mut src, &mut dst], None)?;
         let (packed, unpacked) = (src.wait()?, dst.wait()?);
+        if let Some(e) = too_big(&copied) {
+            return Err(e);
+        }
         match copied {
             Err(e) if e.kind() != io::ErrorKind::BrokenPipe => return Err(e.into()),
             _ => {}
@@ -2335,20 +2403,38 @@ pub fn base_name(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
 }
 
+/// Marks that change the direction text is shown in without showing
+/// themselves: in a name they can make `evil\u{202e}txt.exe` read as
+/// `evilexe.txt`.
+pub(crate) fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Whether Windows takes `name` for a device whatever follows its first dot:
+/// `CON`, `nul.txt`, `CONIN$`, `COM1`, and `LPT²` (superscript digits count
+/// too).
+pub(crate) fn is_windows_device(name: &str) -> bool {
+    let device = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    let numbered = (device.starts_with("COM") || device.starts_with("LPT")) && {
+        let mut rest = device[3..].chars();
+        matches!((rest.next(), rest.next()), (Some(c), None) if c.is_ascii_digit() || matches!(c, '\u{b9}' | '\u{b2}' | '\u{b3}'))
+    };
+    numbered || matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+}
+
 /// The name a server's file gets on this computer, or None if it can't have
 /// one. On Windows `\` and `:` are path syntax, so a Linux file named
 /// `x\..\..\AppData\…\Startup\evil.bat` would otherwise land in Startup:
-/// there they and the other characters Windows refuses become `_`. Whatever
-/// is left must be one plain name inside the download folder.
+/// there they, the other characters Windows refuses and the marks that
+/// reverse how a name reads become `_`, and a device's name gets a `_` in
+/// front. Whatever is left must be one plain name inside the download folder.
 fn local_name(name: &str, windows: bool) -> Option<String> {
     let mut name = name.to_string();
     if windows {
-        name = name.chars().map(|c| if c < ' ' || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+        name = name.chars().map(|c| if c < ' ' || is_bidi_control(c) || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
         // Windows drops trailing dots and spaces, which would make ".." of "...".
         name.truncate(name.trim_end_matches(['.', ' ']).len());
-        let device = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
-        let numbered = device.len() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) && device.as_bytes()[3].is_ascii_digit();
-        if numbered || matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        if is_windows_device(&name) {
             name.insert(0, '_');
         }
     }
@@ -3174,6 +3260,25 @@ mod tests {
     }
 
     #[test]
+    fn a_servers_stream_stops_past_what_it_reported() {
+        // The size reported, a tenth more and 64 MiB; a hard ceiling when it's unknown.
+        assert_eq!(stream_cap(0), STREAM_CEILING);
+        assert_eq!(stream_cap(1000), 1000 + 100 + (64 << 20));
+        assert_eq!(stream_cap(u64::MAX), u64::MAX);
+        let copy = |len: usize, cap: u64| {
+            let mut out = Vec::new();
+            let result = io::copy(&mut Capped::new(io::Cursor::new(vec![7u8; len]), cap), &mut out).map(|_| ());
+            (out.len(), too_big(&result).map(|e| e.message))
+        };
+        assert_eq!(copy(4096, 4096), (4096, None), "exactly the cap is fine");
+        let (_, stopped) = copy(4097, 4096);
+        assert!(stopped.is_some_and(|m| m.contains("far more than the size it reported")));
+        // Any other failure isn't mistaken for it.
+        assert!(too_big(&Err(io::Error::other("broken pipe"))).is_none());
+        assert!(too_big(&Ok(())).is_none());
+    }
+
+    #[test]
     fn a_download_keeps_to_the_download_folder() {
         // A Linux name that is a path on Windows stays one name there.
         let escape = r"x\..\..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\evil.bat";
@@ -3184,6 +3289,19 @@ mod tests {
         assert_eq!(local_name("con.txt", true).unwrap(), "_con.txt");
         assert_eq!(local_name("COM1", true).unwrap(), "_COM1");
         assert_eq!(local_name("COMPANY.txt", true).unwrap(), "COMPANY.txt");
+        // The console's own names, and COM and LPT with a superscript digit, are devices too.
+        assert_eq!(local_name("CONIN$", true).unwrap(), "_CONIN$");
+        assert_eq!(local_name("conout$.log", true).unwrap(), "_conout$.log");
+        assert_eq!(local_name("COM\u{b9}", true).unwrap(), "_COM\u{b9}");
+        assert_eq!(local_name("lpt\u{b2}.txt", true).unwrap(), "_lpt\u{b2}.txt");
+        assert_eq!(local_name("LPT\u{b3}", true).unwrap(), "_LPT\u{b3}");
+        assert_eq!(local_name("nul .txt", true).unwrap(), "_nul .txt");
+        assert_eq!(local_name("COM10", true).unwrap(), "COM10");
+        // Marks that reverse how a name reads can't pass a program off as a text file.
+        assert_eq!(local_name("invoice\u{202e}txt.exe", true).unwrap(), "invoice_txt.exe");
+        for mark in ['\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200e}', '\u{200f}'] {
+            assert_eq!(local_name(&format!("a{mark}b"), true).unwrap(), "a_b", "{mark:?}");
+        }
         for gone in ["", ".", "..", "...", " . "] {
             assert_eq!(local_name(gone, true), None, "{gone:?}");
         }

@@ -650,7 +650,7 @@ fn build_command(spec: &SessionSpec) -> CommandBuilder {
             c.args(["-tt", "--"]);
             c.arg(&t.destination);
             c.arg(durable_command(&spec.key, spec.run.as_deref(), &spec.welcome));
-            for (k, v) in password_env(t, &spec.env).unwrap_or_default() {
+            for (k, v) in password_env(t, &spec.env).unwrap_or_default().iter() {
                 c.env(k, v);
             }
             c

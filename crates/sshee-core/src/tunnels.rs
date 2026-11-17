@@ -147,7 +147,7 @@ fn tunnel_command(t: &SshTarget, env: &SshEnv, forward: &Forward) -> Command {
     let mut cmd = Command::new(ssh_program());
     cmd.args(tunnel_args(t, env, forward));
     if let Some(vars) = password_env(t, env) {
-        cmd.envs(vars);
+        cmd.envs(vars.iter());
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     hide_console(&mut cmd);

@@ -635,26 +635,70 @@ fn read_file(text: &str, platform: Platform) -> Result<ReadFile, String> {
 
 /// Writes `bytes` to `path`, whole or not at all: to a file beside it first, synced, then
 /// over the old one. The file is the user's alone (names of themes and words to highlight are
-/// their own business).
+/// their own business), and so is the folder it's in: made 0700 on Unix when created or found
+/// open to others (that folder only, never the ones above it).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let parent = path.parent().filter(|d| !d.as_os_str().is_empty());
+    let dir = parent.unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
+    if let Some(dir) = parent {
+        private_folder(dir);
+    }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(FILE);
-    let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    let (tmp, mut file) = new_temp(dir, name)?;
     let written = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
+        drop(file);
         std::fs::rename(&tmp, path)
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     written
+}
+
+/// Makes the app's own folder the user's alone (0700) when it's open to anyone else. Best
+/// effort: a folder we can't change (not ours) still gets its files written 0600.
+fn private_folder(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(dir) {
+            if meta.is_dir() && meta.permissions().mode() & 0o077 != 0 {
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// A temporary file beside `name` in `dir`, made new under a name nobody can guess: never an
+/// existing file, and never through a link someone left at that name (`O_EXCL`, and
+/// `O_NOFOLLOW` on Unix).
+fn new_temp(dir: &Path, name: &str) -> std::io::Result<(PathBuf, std::fs::File)> {
+    use std::hash::{BuildHasher, Hasher};
+    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut tries = 0;
+    loop {
+        // Randomly keyed per call (std's hasher seeds), plus a count for this process.
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let tmp = dir.join(format!(".{name}.{}.{:016x}.tmp", std::process::id(), h.finish()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        match options.open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => tries += 1,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// What the store and its writing thread share.
@@ -781,6 +825,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn atomic_writes_keep_the_folder_private_and_follow_no_link() {
+        let dir = folder("atomic").join("app");
+        let path = dir.join(FILE);
+        write_atomic(&path, b"one").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"one");
+        // Nothing is left beside it.
+        let names = |d: &Path| std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        assert_eq!(names(&dir), [FILE]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir), 0o700, "made private when created");
+            assert_eq!(mode(&path), 0o600);
+            // Found open to others: made private again. The folder above is left as it was.
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let above = mode(dir.parent().unwrap());
+            write_atomic(&path, b"two").unwrap();
+            assert_eq!(mode(&dir), 0o700);
+            assert_eq!(mode(dir.parent().unwrap()), above);
+            // A link planted at the name the temporary file once had is never written through.
+            let outside = dir.parent().unwrap().join("outside");
+            std::fs::write(&outside, b"untouched").unwrap();
+            std::os::unix::fs::symlink(&outside, dir.join(format!("{FILE}.{}.tmp", std::process::id()))).unwrap();
+            write_atomic(&path, b"three").unwrap();
+            assert_eq!(std::fs::read(&outside).unwrap(), b"untouched");
+            assert_eq!(std::fs::read(&path).unwrap(), b"three");
+        }
+        // Each temporary file is made new: two in a row never share a name.
+        let (a, _fa) = new_temp(&dir, FILE).unwrap();
+        let (b, _fb) = new_temp(&dir, FILE).unwrap();
+        assert_ne!(a, b);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     fn linux() -> OpenOptions {

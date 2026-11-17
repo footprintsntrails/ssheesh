@@ -367,17 +367,14 @@ pub struct OpenRequest {
 /// extension. Never one of SSHeesh's own names, which all start with a dot.
 pub fn local_file_name(remote_path: &str) -> String {
     let base = files::base_name(remote_path);
-    let hidden = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-    let mut name: String = base.chars().map(|c| if c.is_control() || hidden(c) || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+    let mut name: String = base.chars().map(|c| if c.is_control() || files::is_bidi_control(c) || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
     name.truncate(name.trim_end_matches(['.', ' ']).len());
     let name = name.trim_start_matches(' ');
     let mut name = if name.is_empty() { "file".to_string() } else { name.to_string() };
     if name.starts_with(['.', '-']) {
         name.insert(0, '_');
     }
-    let device = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
-    let numbered = device.len() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) && device.as_bytes()[3].is_ascii_digit();
-    if numbered || matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+    if files::is_windows_device(&name) {
         name.insert(0, '_');
     }
     const MAX: usize = 100;
