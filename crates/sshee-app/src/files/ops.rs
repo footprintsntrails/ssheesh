@@ -6,6 +6,7 @@
 use super::{Entry, Failure, FailureKind, Listing, Notice, Tone};
 use crate::paths;
 use crate::transfers::{cleaning_note, Kind, Transfer};
+use crate::workbench::{ServerKey, TabId};
 
 /// A question asked before something that can't be taken back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,9 +108,15 @@ pub fn drop_folder(dir: &str, dragged: &[String], on: DropOn<'_>) -> Option<Stri
     }
 }
 
-/// "Undo" on the note after a move: moves `names` from `from` back into `to`.
+/// "Undo" on the note after a move: moves `names` from `from` back into `to`, on the machine
+/// the move was made on, whatever tab is on screen when it's pressed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Undo {
+    /// The Files tab that moved them: its answer goes there (or only to the folder cache, if
+    /// it closed meanwhile).
+    pub tab: TabId,
+    /// The machine they were moved on.
+    pub server: ServerKey,
     /// Where they are now.
     pub from: String,
     /// Where they were.
@@ -117,9 +124,10 @@ pub struct Undo {
     pub names: Vec<String>,
 }
 
-/// The notes after moving `moved` from `from` into `to`: what went (with Undo), what stayed
-/// because its name is taken there, and what stopped the rest.
-pub fn move_notices(from: &str, to: &str, moved: &[String], taken: &[String], failure: Option<&Failure>) -> Vec<Notice> {
+/// The notes after moving `moved` from `from` into `to` on `server`, from the Files tab `tab`:
+/// what went (with Undo), what stayed because its name is taken there, and what stopped the
+/// rest.
+pub fn move_notices(tab: TabId, server: &str, from: &str, to: &str, moved: &[String], taken: &[String], failure: Option<&Failure>) -> Vec<Notice> {
     let mut notices = Vec::new();
     if let Some(failure) = failure {
         notices.push(Notice::failed("Couldn't move", failure));
@@ -133,7 +141,7 @@ pub fn move_notices(from: &str, to: &str, moved: &[String], taken: &[String], fa
         if !taken.is_empty() {
             notice = notice.body(format!("{} stayed: {} taken there.", taken.join(", "), if taken.len() == 1 { "that name is" } else { "those names are" }));
         }
-        notice.undo = Some(Undo { from: to.to_owned(), to: from.to_owned(), names: moved.to_vec() });
+        notice.undo = Some(Undo { tab, server: server.to_owned(), from: to.to_owned(), to: from.to_owned(), names: moved.to_vec() });
         notices.push(notice);
     } else if !taken.is_empty() {
         notices.push(Notice::new(Tone::Error, "Nothing moved").body(format!("{place} already has {}.", taken.join(", "))));
@@ -167,7 +175,9 @@ pub fn unpacked(name: &str, made: &Result<String, Failure>) -> Notice {
 pub fn downloaded(label: &str, saved: &Result<Vec<String>, Failure>) -> Notice {
     match saved {
         Ok(at) => {
-            let notice = Notice::new(Tone::Success, format!("Downloaded {label}"));
+            let mut notice = Notice::new(Tone::Success, format!("Downloaded {label}"));
+            // "Show in folder": where they landed.
+            notice.folder = at.first().map(|first| std::path::PathBuf::from(paths::parent(&first.replace('\\', "/"))));
             match at.as_slice() {
                 [] => notice,
                 [one] => notice.body(one.clone()),
@@ -197,6 +207,210 @@ pub fn uploaded(card: &Transfer, dir: &str, result: &Result<(), Failure>) -> Not
         Err(f) if f.kind == FailureKind::Cancelled => Notice::new(Tone::Info, if copy { "Copy stopped" } else { "Upload stopped" }).body(card.label.clone()),
         Err(f) => Notice::failed(if copy { "Copy failed" } else { "Upload failed" }, f),
     }
+}
+
+// ---- new files, archives, copies
+
+/// What the name field starts with for a new file.
+pub const NEW_FILE: &str = "untitled.txt";
+/// What the name field starts with for a new folder.
+pub const NEW_FOLDER: &str = "New folder";
+
+/// The name an archive of `names` in `dir` is offered under: the one item's name, else the
+/// folder's ("archive" at the top of the disk), then ".tar.gz".
+pub fn archive_name(names: &[String], dir: &str) -> String {
+    let stem = match names {
+        [one] => one.as_str(),
+        _ => match paths::name(dir) {
+            "" | "/" | "~" => "archive",
+            folder => folder,
+        },
+    };
+    format!("{stem}.tar.gz")
+}
+
+/// The name typed for an archive, with ".tar.gz" put on when it has neither that nor ".tgz".
+pub fn archive_file(typed: &str) -> String {
+    if typed.ends_with(".tar.gz") || typed.ends_with(".tgz") {
+        typed.to_owned()
+    } else {
+        format!("{typed}.tar.gz")
+    }
+}
+
+/// The status line while an archive is made.
+pub fn packing(archive: &str) -> String {
+    format!("Packing {archive}…")
+}
+
+pub fn made_file_failed(failure: &Failure) -> Notice {
+    Notice::failed("Couldn't create the file", failure)
+}
+
+/// An archive of `count` items ended.
+pub fn archived(archive: &str, count: usize, result: &Result<(), Failure>) -> Notice {
+    match result {
+        Ok(()) => Notice::new(Tone::Success, format!("Made {archive}")).body(format!("{count} item{} packed", if count == 1 { "" } else { "s" })),
+        Err(failure) => Notice::failed("Couldn't create the archive", failure),
+    }
+}
+
+/// A copy to another server ended. `card` is its card as it stood; `server` the name of the
+/// server it went to.
+pub fn copied_to(card: &Transfer, server: &str, dir: &str, result: &Result<(), Failure>) -> Notice {
+    match result {
+        Ok(()) => {
+            let body = match card.cleaning.as_ref().filter(|c| !c.removed.is_empty()) {
+                Some(cleaning) => format!("{} · {dir}", cleaning_note(cleaning)),
+                None => dir.to_owned(),
+            };
+            Notice::new(Tone::Success, format!("Copied {} to {server}", card.label)).body(body)
+        }
+        Err(f) if f.kind == FailureKind::Cancelled => Notice::new(Tone::Info, "Copy stopped").body(card.label.clone()),
+        Err(f) => Notice::failed("Copy failed", f),
+    }
+}
+
+/// The title of "Copy to another server": `“notes.md”` or `3 items`, and where from.
+pub fn copy_title(names: &[String], from_server: bool) -> String {
+    let shown: Vec<&str> = names.iter().map(String::as_str).collect();
+    format!("Copy {} to {}", what(&shown), if from_server { "another folder or server" } else { "a server" })
+}
+
+// ---- files copied on this computer, pasted into a folder
+
+/// Whether a path of this computer looks private: keys, credentials and where they're kept
+/// (`.ssh`, `.env`, `id_ed25519`, `*.pem`...). 0.10's `PRIVATE` in src/lib/upload.ts.
+pub fn is_private(path: &str) -> bool {
+    path.split(['/', '\\']).any(|part| {
+        let p = part.to_ascii_lowercase();
+        let named = |stem: &str| p == stem || p.strip_prefix(stem).is_some_and(|rest| rest.starts_with('.'));
+        let ends = |e: &str| p.len() > e.len() && p.ends_with(e);
+        matches!(p.as_str(), ".ssh" | ".gnupg" | ".aws" | ".azure" | ".kube" | ".docker" | ".password-store" | ".netrc" | ".npmrc" | ".pgpass")
+            || named(".env")
+            || ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"].iter().any(|k| p.starts_with(k))
+            || [".pem", ".key", ".p12", ".pfx", ".kdbx"].iter().any(|e| ends(e))
+            || p.starts_with("credentials")
+            || named("secret")
+            || named("secrets")
+    })
+}
+
+/// What the clipboard's file list really holds of files somebody copied (sshee-core's
+/// `copied_files`, for the screen): only full paths; and none when the clipboard's text says
+/// the same as a link (`file:///…`) or a path, because a server can put text on the
+/// clipboard (OSC 52) and that must never pick a file to send. A file copied in a file
+/// manager has its name for text, not its path.
+pub fn copied_files(paths: &[std::path::PathBuf], text: &str) -> Vec<std::path::PathBuf> {
+    let full: Vec<std::path::PathBuf> = paths.iter().filter(|p| is_full(&p.to_string_lossy())).cloned().collect();
+    let text = text.trim();
+    let said_as_text = text.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) || full.iter().any(|p| p.to_string_lossy() == text);
+    if said_as_text {
+        return Vec::new();
+    }
+    full
+}
+
+/// A full path on any of the three systems: `/x`, `C:\x`, `C:/x`, `\\server\share`.
+fn is_full(path: &str) -> bool {
+    let b = path.as_bytes();
+    path.starts_with('/') || path.starts_with("\\\\") || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+}
+
+/// The question before files copied on this computer go to a server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasteQuestion {
+    pub confirm: Confirm,
+    /// Something looks private: Cancel is the button Return presses.
+    pub risky: bool,
+}
+
+/// Before files on the clipboard go to `server` into `dir`. Picked or dropped files were
+/// chosen there and then; these were copied some time ago, maybe by another program, and
+/// what's sent can't be taken back: it names them in full (six, then a count), where they
+/// go, and what of them looks private. `files`: each path and whether it's a folder.
+pub fn paste_question(files: &[(String, bool)], server: &str, dir: &str) -> PasteQuestion {
+    let risky: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).filter(|p| is_private(p)).collect();
+    let mut lines: Vec<String> = files.iter().take(NAMED).map(|(p, d)| if *d { format!("{p} (folder, with all that's in it)") } else { p.clone() }).collect();
+    if files.len() > NAMED {
+        lines.push(format!("and {} more", files.len() - NAMED));
+    }
+    let mut body = format!("Into {dir}");
+    if !risky.is_empty() {
+        let named = risky.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+        body.push_str(&format!("\n\nThis looks private: {named}{}. Once on the server, it can't be taken back.", if risky.len() > 3 { "…" } else { "" }));
+    }
+    let title = match files.len() {
+        1 => format!("Upload this to {server}?"),
+        n => format!("Upload these {n} items to {server}?"),
+    };
+    let confirm = Confirm { title, body, lines, confirm_label: if risky.is_empty() { "Upload" } else { "Upload anyway" }, danger: !risky.is_empty() };
+    PasteQuestion { confirm, risky: !risky.is_empty() }
+}
+
+/// Ctrl+V with no files on the clipboard.
+pub fn nothing_to_paste(key: &str) -> Notice {
+    Notice::new(Tone::Info, "No files to paste").body(format!("Copy files on your computer first, then {key} here puts them in this folder."))
+}
+
+// ---- a terminal in a folder
+
+/// The shell a command is typed into: sh and its kin on servers, PowerShell on Windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    Posix,
+    PowerShell,
+}
+
+/// `s` quoted for `shell`, or `None` when it has a control character, which a terminal would
+/// take as a key (0.10's `typedQuote`).
+pub fn typed_quote(s: &str, shell: Shell) -> Option<String> {
+    if s.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    Some(match shell {
+        // PowerShell closes a string at any of these, and doubling one escapes it.
+        Shell::PowerShell => format!("'{}'", s.chars().flat_map(|c| if matches!(c, '\'' | '‘' | '’' | '‚' | '‛') { vec![c, c] } else { vec![c] }).collect::<String>()),
+        Shell::Posix if s.is_empty() => "''".into(),
+        Shell::Posix => {
+            let mut out = String::new();
+            let mut run = String::new();
+            for c in s.chars() {
+                if c == '\'' || c == '\\' {
+                    if !run.is_empty() {
+                        out.push_str(&format!("'{run}'"));
+                        run.clear();
+                    }
+                    out.push('\\');
+                    out.push(c);
+                } else {
+                    run.push(c);
+                }
+            }
+            if !run.is_empty() {
+                out.push_str(&format!("'{run}'"));
+            }
+            out
+        }
+    })
+}
+
+/// Typed into a shell: go into `dir`, then run `next` if that worked. `None` when `dir`
+/// can't be typed ([`typed_quote`]). Windows PowerShell 5.1 has no `&&`, and -LiteralPath
+/// keeps `[` `]` in a path from acting as wildcards (0.10's `typedCd`).
+pub fn typed_cd(dir: &str, shell: Shell, next: Option<&str>) -> Option<String> {
+    let quoted = typed_quote(dir, shell)?;
+    Some(match (shell, next) {
+        (Shell::PowerShell, Some(next)) => format!("Set-Location -LiteralPath {quoted}; if ($?) {{ {next} }}"),
+        (Shell::PowerShell, None) => format!("Set-Location -LiteralPath {quoted}"),
+        (Shell::Posix, Some(next)) => format!("cd -- {quoted} && {next}"),
+        (Shell::Posix, None) => format!("cd -- {quoted}"),
+    })
+}
+
+/// A folder whose name would act as keys in a terminal.
+pub fn cant_open_terminal() -> Notice {
+    Notice::new(Tone::Error, "Can't open a terminal there").body("This folder's name has control characters in it, which a terminal would take as keystrokes.")
 }
 
 #[cfg(test)]
@@ -284,26 +498,27 @@ mod tests {
     #[test]
     fn a_move_says_what_went_what_stayed_and_can_be_undone() {
         let (from, to) = ("/home/deploy", "/home/deploy/shop");
-        let all = move_notices(from, to, &names(&["a.txt"]), &[], None);
+        let all = move_notices(TabId(3), "host:web", from, to, &names(&["a.txt"]), &[], None);
         assert_eq!(all.len(), 1);
         assert_eq!((all[0].tone, all[0].title.as_str(), all[0].body.as_deref()), (Tone::Success, "Moved a.txt to shop", None));
-        assert_eq!(all[0].undo, Some(Undo { from: to.into(), to: from.into(), names: names(&["a.txt"]) }));
+        // Undo goes to the tab and machine of the move, not to whatever is on screen then.
+        assert_eq!(all[0].undo, Some(Undo { tab: TabId(3), server: "host:web".into(), from: to.into(), to: from.into(), names: names(&["a.txt"]) }));
 
-        let some = move_notices(from, to, &names(&["a.txt", "b.txt"]), &names(&["c.txt"]), None);
+        let some = move_notices(TabId(3), "host:web", from, to, &names(&["a.txt", "b.txt"]), &names(&["c.txt"]), None);
         assert_eq!((some[0].tone, some[0].title.as_str()), (Tone::Info, "Moved 2 items to shop"));
         assert_eq!(some[0].body.as_deref(), Some("c.txt stayed: that name is taken there."));
-        let two = move_notices(from, to, &names(&["a.txt"]), &names(&["c.txt", "d.txt"]), None);
+        let two = move_notices(TabId(3), "host:web", from, to, &names(&["a.txt"]), &names(&["c.txt", "d.txt"]), None);
         assert_eq!(two[0].body.as_deref(), Some("c.txt, d.txt stayed: those names are taken there."));
 
-        let none = move_notices(from, to, &[], &names(&["c.txt", "d.txt"]), None);
+        let none = move_notices(TabId(3), "host:web", from, to, &[], &names(&["c.txt", "d.txt"]), None);
         assert_eq!((none[0].tone, none[0].title.as_str(), none[0].body.as_deref()), (Tone::Error, "Nothing moved", Some("shop already has c.txt, d.txt.")));
         assert!(none[0].undo.is_none());
         // Into the top of the disk.
-        assert_eq!(move_notices("/srv", "/", &names(&["a"]), &[], None)[0].title, "Moved a to /");
+        assert_eq!(move_notices(TabId(3), "host:web", "/srv", "/", &names(&["a"]), &[], None)[0].title, "Moved a to /");
         // Something broke halfway: both are said.
-        let broke = move_notices(from, to, &names(&["a.txt"]), &[], Some(&Failure::new(FailureKind::Network, "Can't reach the server.")));
+        let broke = move_notices(TabId(3), "host:web", from, to, &names(&["a.txt"]), &[], Some(&Failure::new(FailureKind::Network, "Can't reach the server.")));
         assert_eq!(broke.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Couldn't move", "Moved a.txt to shop"]);
-        assert!(move_notices(from, to, &[], &[], None).is_empty());
+        assert!(move_notices(TabId(3), "host:web", from, to, &[], &[], None).is_empty());
     }
 
     #[test]
@@ -315,7 +530,9 @@ mod tests {
         assert_eq!(unpacked("site.zip", &Ok("site".into())), Notice::new(Tone::Success, "Unpacked site.zip").body("Into “site”"));
         assert_eq!(unpacked("site.zip", &Err(denied.clone())).title, "Couldn't unpack site.zip");
 
-        assert_eq!(downloaded("notes.md", &Ok(vec!["/home/dev/Downloads/notes.md".into()])), Notice::new(Tone::Success, "Downloaded notes.md").body("/home/dev/Downloads/notes.md"));
+        let one = downloaded("notes.md", &Ok(vec!["/home/dev/Downloads/notes.md".into()]));
+        assert_eq!((one.title.as_str(), one.body.as_deref()), ("Downloaded notes.md", Some("/home/dev/Downloads/notes.md")));
+        assert_eq!(one.folder, Some(std::path::PathBuf::from("/home/dev/Downloads")), "Show in folder opens where it landed");
         let two = downloaded("2 items", &Ok(vec!["C:\\Users\\dev\\Downloads\\a".into(), "C:\\Users\\dev\\Downloads\\b".into()]));
         assert_eq!(two.body.as_deref(), Some("C:/Users/dev/Downloads"));
         let stopped = Failure::new(FailureKind::Cancelled, "Cancelled.");
@@ -343,5 +560,71 @@ mod tests {
         assert_eq!(uploaded(&copy, "/tmp/x", &Ok(())).title, "Copied 2 items");
         assert_eq!(uploaded(&copy, "/tmp/x", &Err(stopped)).title, "Copy stopped");
         assert_eq!(uploaded(&copy, "/tmp/x", &Err(denied)).title, "Copy failed");
+    }
+
+    #[test]
+    fn archives_are_named_after_what_goes_in() {
+        assert_eq!(archive_name(&names(&["site"]), "/srv/www"), "site.tar.gz");
+        assert_eq!(archive_name(&names(&["a", "b"]), "/srv/www"), "www.tar.gz");
+        assert_eq!(archive_name(&[], "/"), "archive.tar.gz");
+        assert_eq!(archive_file("backup"), "backup.tar.gz");
+        assert_eq!(archive_file("backup.tgz"), "backup.tgz");
+        assert_eq!(archive_file("b.tar.gz"), "b.tar.gz");
+        assert_eq!(archived("www.tar.gz", 3, &Ok(())), Notice::new(Tone::Success, "Made www.tar.gz").body("3 items packed"));
+        assert_eq!(archived("a.tar.gz", 1, &Ok(())).body.as_deref(), Some("1 item packed"));
+        assert_eq!(packing("a.tar.gz"), "Packing a.tar.gz…");
+        assert_eq!(copy_title(&names(&["a.txt"]), true), "Copy “a.txt” to another folder or server");
+        assert_eq!(copy_title(&names(&["a", "b"]), false), "Copy 2 items to a server");
+    }
+
+    #[test]
+    fn private_files_are_told_apart() {
+        for p in ["/home/dev/.ssh", "/home/dev/.ssh/config", "C:\\Users\\dev\\.env", "/srv/.env.production", "/k/id_ed25519.pub", "/k/server.PEM", "/k/credentials.json", "/k/secrets", "/k/secret.txt", "/home/dev/.aws/config", "/d/vault.kdbx"] {
+            assert!(is_private(p), "{p}");
+        }
+        for p in ["/home/dev/notes.md", "/srv/environment", "/k/keys.txt", "/home/dev/.envrc", "/k/my.key.txt", "/k/.key"] {
+            assert!(!is_private(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn only_files_somebody_copied_are_pasted() {
+        use std::path::PathBuf;
+        let copied = vec![PathBuf::from("/home/dev/a.txt"), PathBuf::from("relative/b.txt"), PathBuf::from("C:\\Users\\dev\\c.txt")];
+        assert_eq!(copied_files(&copied, "a.txt"), [PathBuf::from("/home/dev/a.txt"), PathBuf::from("C:\\Users\\dev\\c.txt")]);
+        // Text a server could have put there says the same as the list: nothing.
+        assert!(copied_files(&copied, "file:///home/dev/.ssh/id_ed25519").is_empty());
+        assert!(copied_files(&[PathBuf::from("/home/dev/a.txt")], " /home/dev/a.txt\n").is_empty());
+    }
+
+    #[test]
+    fn pasting_asks_with_every_name_and_warns_of_private_ones() {
+        let plain = paste_question(&[("/home/dev/a.txt".into(), false)], "web-7731", "/srv/www");
+        assert_eq!(plain.confirm.title, "Upload this to web-7731?");
+        assert_eq!(plain.confirm.body, "Into /srv/www");
+        assert_eq!((plain.confirm.confirm_label, plain.risky, plain.confirm.danger), ("Upload", false, false));
+        let files: Vec<(String, bool)> = (1..=8).map(|n| (format!("/home/dev/f{n}"), n == 1)).chain([("/home/dev/.ssh".to_owned(), true)]).collect();
+        let risky = paste_question(&files, "web-7731", "/srv/www");
+        assert_eq!(risky.confirm.title, "Upload these 9 items to web-7731?");
+        assert_eq!(risky.confirm.lines[0], "/home/dev/f1 (folder, with all that's in it)");
+        assert_eq!(risky.confirm.lines.last().map(String::as_str), Some("and 3 more"));
+        assert!(risky.risky && risky.confirm.danger);
+        assert_eq!(risky.confirm.confirm_label, "Upload anyway");
+        assert!(risky.confirm.body.ends_with("This looks private: /home/dev/.ssh. Once on the server, it can't be taken back."));
+    }
+
+    #[test]
+    fn a_terminal_goes_into_a_folder_typed_safely() {
+        assert_eq!(typed_cd("/srv/www", Shell::Posix, None).as_deref(), Some("cd -- '/srv/www'"));
+        assert_eq!(typed_cd("/srv/it's", Shell::Posix, Some("clear")).as_deref(), Some("cd -- '/srv/it'\\''s' && clear"));
+        assert_eq!(typed_quote("a\\b", Shell::Posix).as_deref(), Some("'a'\\\\'b'"));
+        assert_eq!(typed_quote("", Shell::Posix).as_deref(), Some("''"));
+        assert_eq!(typed_cd("C:/Users/it's", Shell::PowerShell, Some("clear")).as_deref(), Some("Set-Location -LiteralPath 'C:/Users/it''s'; if ($?) { clear }"));
+        assert_eq!(typed_quote("a’b", Shell::PowerShell).as_deref(), Some("'a’’b'"));
+        // A name that would press keys in the terminal.
+        assert_eq!(typed_cd("/srv/a\nrm -rf ~", Shell::Posix, None), None);
+        assert_eq!(typed_cd("/srv/\u{1b}[2J", Shell::Posix, None), None);
+        assert_eq!(typed_cd("/srv/\u{9b}x", Shell::PowerShell, None), None);
+        assert_eq!(cant_open_terminal().title, "Can't open a terminal there");
     }
 }

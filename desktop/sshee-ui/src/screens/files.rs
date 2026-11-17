@@ -24,6 +24,7 @@ use std::time::Instant;
 use rune::{Cx, El};
 
 pub mod edit;
+mod markdown_view;
 mod view;
 
 pub use view::{key, overlay};
@@ -50,6 +51,29 @@ pub struct Replace {
     pub question: Confirm,
     paths: Vec<PathBuf>,
     dir: String,
+    /// A copy to a server (its key and the paths on this tab's machine), not an upload.
+    copy: Option<(String, Vec<String>)>,
+}
+
+/// "Copy to another folder or server": what goes, and where it's going so far.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyTo {
+    /// Full paths on the tab's machine, all in one folder.
+    pub paths: Vec<String>,
+    /// The server picked to copy to.
+    pub to: Option<String>,
+    /// The folder there being looked at, once listed, with the folders in it.
+    pub place: Option<(String, Vec<String>)>,
+    /// The folder asked for, while it's being listed.
+    pub asked: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Files copied on this computer, waiting for a yes before they go to the server.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Paste {
+    pub question: ops::PasteQuestion,
+    paths: Vec<PathBuf>,
 }
 
 /// One Files tab's own state.
@@ -64,6 +88,13 @@ pub struct State {
     pub busy: Option<String>,
     /// Waiting for a yes or no.
     pub replace: Option<Replace>,
+    pub paste: Option<Paste>,
+    /// "Copy to another folder or server", while it's open.
+    pub copy: Option<CopyTo>,
+    /// The folder looked into with », and the row it hangs from.
+    pub peek: Option<(String, usize)>,
+    /// A folder pointed at, and when it's listed ahead if the pointer stays (0.10's 150 ms).
+    hover: Option<(String, f64)>,
     /// What only the drawing keeps: the text being typed, the menu or question on screen.
     pub(crate) ui: view::Ui,
     /// A path from a terminal to open once its folder is listed ([`show_path`]).
@@ -72,7 +103,19 @@ pub struct State {
 
 impl State {
     fn new(server: &str, path: &str) -> State {
-        State { browser: Browser::new(server, path), editor: None, tickets: Tickets::default(), busy: None, replace: None, ui: view::Ui::default(), reveal: None }
+        State {
+            browser: Browser::new(server, path),
+            editor: None,
+            tickets: Tickets::default(),
+            busy: None,
+            replace: None,
+            paste: None,
+            copy: None,
+            peek: None,
+            hover: None,
+            ui: view::Ui::default(),
+            reveal: None,
+        }
     }
 }
 
@@ -112,11 +155,8 @@ fn note(s: &mut Shell, notice: Notice) {
     let mut toast = Toast::new(tone, notice.title);
     toast.body = notice.body;
     if let Some(undo) = notice.undo {
-        toast = toast.action("Undo", move |s| {
-            if let Some(tab) = s.bench.active_id() {
-                undo_move(s, tab, &undo);
-            }
-        });
+        // Back on the machine it moved on, through the tab that moved it, whatever is on screen.
+        toast = toast.action("Undo", move |s| undo_move(s, &undo));
     } else if let Some(path) = notice.folder {
         toast = toast.action("Show in folder", move |s| s.edit_ask(sshee_app::files::edit::EditAsk::ShowFolder { path: path.clone() }));
     }
@@ -128,8 +168,101 @@ fn note(s: &mut Shell, notice: Notice) {
 fn keep_place(s: &mut Shell, tab: TabId) {
     let Some(state) = s.screens.files.get(&tab).filter(|st| st.browser.listing().is_some()) else { return };
     let (server, dir) = (state.browser.server().to_owned(), state.browser.dir().to_owned());
-    bookmarks::visit(&mut s.screens.bookmarks, &server, &dir);
+    if bookmarks::visit(&mut s.screens.bookmarks, &server, &dir) {
+        bookmarks_changed(s);
+    }
     s.bench.set_path(tab, Some(dir));
+}
+
+// ---- bookmarks between runs
+
+/// Files' bookmarks as the backend kept them, once when the window starts.
+pub(crate) fn start(s: &mut Shell) {
+    if let Some(b) = s.backend_mut().bookmarks() {
+        s.screens.bookmarks = b;
+    }
+}
+
+/// 0.10's bookmarks and recent folders, brought in after this copy's own (a first start).
+pub fn seed_bookmarks(s: &mut Shell, from: &sshee_app::model::Bookmarks) {
+    if bookmarks::merge(&mut s.screens.bookmarks, from) {
+        bookmarks_changed(s);
+    }
+}
+
+fn bookmarks_changed(s: &mut Shell) {
+    let b = s.screens.bookmarks.clone();
+    s.backend_mut().bookmarks_changed(&b);
+}
+
+/// "Remove bookmark" in the list of places.
+pub fn remove_bookmark(s: &mut Shell, server: &str, path: &str) {
+    bookmarks::remove_pin(&mut s.screens.bookmarks, server, path);
+    bookmarks_changed(s);
+}
+
+/// "Remove from recent" in the list of places.
+pub fn forget_recent(s: &mut Shell, server: &str, path: &str) {
+    bookmarks::forget_recent(&mut s.screens.bookmarks, server, path);
+    bookmarks_changed(s);
+}
+
+/// A place (or the recent folders) in or out of the list of places: Settings' `hiddenPlaces`.
+pub fn toggle_place(s: &mut Shell, id: &str, tx: &mut rune::Tx) {
+    let id = id.to_owned();
+    s.change_settings(tx, move |st| st.set(|v| bookmarks::toggle_hidden(&mut v.hidden_places, &id)));
+}
+
+/// "Show everything": no place hidden.
+pub fn show_every_place(s: &mut Shell, tx: &mut rune::Tx) {
+    s.change_settings(tx, |st| st.set(|v| v.hidden_places.clear()));
+}
+
+/// The machine's home folder's full path, once a "~" listing told it.
+pub fn home_of(s: &Shell, server: &str) -> Option<String> {
+    s.screens.dirs.get(server, "~").map(|c| c.listing.path.clone())
+}
+
+// ---- folders listed ahead
+
+/// The folder `path` of `tab`'s machine into the cache, unless it's there and fresh: a folder
+/// looked into, pointed at, or shown in "Copy to…" (`server`: that one's machine).
+pub fn peek_into(s: &mut Shell, tab: TabId, server: &str, path: &str) {
+    if s.screens.dirs.get(server, path).is_some() && s.screens.dirs.is_fresh(server, path, now_ms(s)) {
+        return;
+    }
+    s.files_ask(Ask { tab, server: server.to_owned(), want: Want::Peek { path: path.to_owned() } });
+}
+
+/// The pointer rests on a folder (`Some`) or left it: listed ahead after 150 ms.
+pub fn point_at(s: &mut Shell, tab: TabId, folder: Option<String>, clock: f64) {
+    if let Some(state) = s.screens.files.get_mut(&tab) {
+        state.hover = folder.map(|f| (f, clock + 0.15));
+    }
+}
+
+/// Every frame (`Shell::poll`): a folder pointed at long enough is listed ahead.
+pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut rune::Tx) {
+    let due: Vec<(TabId, String, String)> = s
+        .screens
+        .files
+        .iter_mut()
+        .filter_map(|(id, st)| match &st.hover {
+            Some((path, at)) if *at <= clock => {
+                let path = path.clone();
+                st.hover = None;
+                Some((*id, st.browser.server().to_owned(), path))
+            }
+            Some((_, at)) => {
+                tx.wake_after(std::time::Duration::from_secs_f64((at - clock).max(0.0)));
+                None
+            }
+            None => None,
+        })
+        .collect();
+    for (tab, server, path) in due {
+        peek_into(s, tab, &server, &path);
+    }
 }
 
 /// Runs one of the browser's moves, and asks the backend for the listing it wants.
@@ -340,9 +473,193 @@ pub fn move_into(s: &mut Shell, tab: TabId, names: &[String], to: &str) {
     run(s, tab, "Moving", names, |from, names| Want::Move { from, names, to: to.to_owned() });
 }
 
-/// "Undo" on the note after a move.
-pub fn undo_move(s: &mut Shell, tab: TabId, undo: &Undo) {
-    ask(s, tab, Want::Move { from: undo.from.clone(), names: undo.names.clone(), to: undo.to.clone() });
+/// "Undo" on the note after a move: on the machine it was made on, answered to the tab that
+/// made it (only the folder cache, if that tab closed).
+pub fn undo_move(s: &mut Shell, undo: &Undo) {
+    s.files_ask(Ask { tab: undo.tab, server: undo.server.clone(), want: Want::Move { from: undo.from.clone(), names: undo.names.clone(), to: undo.to.clone() } });
+}
+
+/// "New file" with the name typed. Never over a file: the name is checked here, and the
+/// backend makes it only where nothing has that name.
+pub fn new_file(s: &mut Shell, tab: TabId, name: &str) -> bool {
+    let Some(state) = s.screens.files.get(&tab) else { return false };
+    let name = name.trim();
+    if let Err(notice) = ops::check_name(name, state.browser.listing().map(|l| &**l)) {
+        note(s, notice);
+        return false;
+    }
+    let path = state.browser.path_of(name);
+    ask(s, tab, Want::MakeFile { path });
+    true
+}
+
+/// Packs `names` into a .tar.gz named `typed` (".tar.gz" put on when it lacks one).
+pub fn archive(s: &mut Shell, tab: TabId, names: &[String], typed: &str) -> bool {
+    let Some(state) = s.screens.files.get_mut(&tab) else { return false };
+    let archive = ops::archive_file(typed.trim());
+    if let Err(notice) = ops::check_name(&archive, state.browser.listing().map(|l| &**l)) {
+        note(s, notice);
+        return false;
+    }
+    state.busy = Some(ops::packing(&archive));
+    let dir = state.browser.dir().to_owned();
+    ask(s, tab, Want::Archive { dir, names: names.to_vec(), archive });
+    true
+}
+
+// ---- copies to a folder or a server
+
+/// "Copy to another folder or server…": the dialog, for these rows. It opens on the server you
+/// copied to last time, else this one (when it's a server), else the first server.
+pub fn open_copy(s: &mut Shell, tab: TabId, names: &[String]) {
+    let Some(state) = s.screens.files.get(&tab) else { return };
+    let paths: Vec<String> = names.iter().map(|n| state.browser.path_of(n)).collect();
+    if paths.is_empty() {
+        return;
+    }
+    let here = state.browser.server().to_owned();
+    let servers = copy_targets(s);
+    let last = s.screens.copy_last.as_ref().map(|(server, _)| server.clone()).filter(|k| servers.contains(k));
+    let to = last.or_else(|| servers.iter().find(|k| **k == here).cloned()).or_else(|| servers.first().cloned());
+    if let Some(state) = s.screens.files.get_mut(&tab) {
+        state.copy = Some(CopyTo { paths, to: None, place: None, asked: None, error: None });
+    }
+    if let Some(to) = to {
+        copy_server(s, tab, &to);
+    }
+}
+
+/// The servers a copy can go to: every server in the list (the same one too), not this
+/// computer, which has Download.
+pub fn copy_targets(s: &Shell) -> Vec<String> {
+    s.bench.servers().iter().filter(|sv| !sv.is_local()).map(|sv| sv.key()).collect()
+}
+
+/// The copy goes to `server`: its folder from last time there, else the one this tab shows
+/// (on the same server), else its home.
+pub fn copy_server(s: &mut Shell, tab: TabId, server: &str) {
+    let Some(state) = s.screens.files.get(&tab) else { return };
+    let start = match &s.screens.copy_last {
+        Some((last, dir)) if last == server => dir.clone(),
+        _ if state.browser.server() == server => state.browser.dir().to_owned(),
+        _ => "~".to_owned(),
+    };
+    if let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()) {
+        copy.to = Some(server.to_owned());
+        copy.place = None;
+    }
+    copy_go(s, tab, &start);
+}
+
+/// Looks inside a folder of the server the copy goes to.
+pub fn copy_go(s: &mut Shell, tab: TabId, path: &str) {
+    let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()) else { return };
+    let Some(server) = copy.to.clone() else { return };
+    copy.asked = Some(path.to_owned());
+    copy.error = None;
+    // Seen a moment ago: at once, and asked again all the same.
+    copy_listed(s, tab, &server, path);
+    s.files_ask(Ask { tab, server, want: Want::Peek { path: path.to_owned() } });
+}
+
+/// A listing of the copy's server came: the dialog shows it if it waits for it.
+fn copy_listed(s: &mut Shell, tab: TabId, server: &str, asked: &str) {
+    let Some(cached) = s.screens.dirs.get(server, asked).map(|c| c.listing.clone()) else { return };
+    let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()) else { return };
+    if copy.to.as_deref() != Some(server) || copy.asked.as_deref() != Some(asked) {
+        return;
+    }
+    let mut dirs: Vec<String> = cached.entries.iter().filter(|e| e.is_dir() && !e.is_hidden()).map(|e| e.name.clone()).collect();
+    dirs.sort_by(|a, b| sshee_app::files::browser::natural_cmp(a, b));
+    copy.place = Some((cached.path.clone(), dirs));
+    copy.asked = None;
+}
+
+/// "Copy here": the copy starts, under a card, into the folder the dialog shows.
+pub fn copy_here(s: &mut Shell, tab: TabId) {
+    let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.take()) else { return };
+    let (Some(to), Some((dir, _))) = (copy.to, copy.place) else { return };
+    s.screens.copy_last = Some((to.clone(), dir.clone()));
+    send_copy(s, tab, to, copy.paths, dir, false);
+}
+
+fn send_copy(s: &mut Shell, tab: TabId, to: String, paths: Vec<String>, dir: String, overwrite: bool) {
+    let Some(state) = s.screens.files.get(&tab) else { return };
+    let from = state.browser.server().to_owned();
+    let id = s.screens.transfers.begin(Kind::Copy, files_label(&paths), tab, &from);
+    ask(s, tab, Want::CopyTo { id, to, paths, dir, overwrite });
+}
+
+// ---- files copied on this computer
+
+/// A paste while a Files tab is on screen (`Shell::paste`). True: Files took it. Files copied
+/// on this computer go into the folder on screen: to a server only after a question that
+/// names them all and what of them looks private.
+pub fn paste(s: &mut Shell, content: &rune::ClipboardContent) -> bool {
+    let Some(tab) = s.bench.active().filter(|t| t.kind == TabKind::Files).map(|t| t.id) else { return false };
+    let Some(state) = s.screens.files.get(&tab) else { return false };
+    if state.browser.listing().is_none() {
+        return true;
+    }
+    let paths = ops::copied_files(content.files(), content.text());
+    if paths.is_empty() {
+        note(s, ops::nothing_to_paste(if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" }));
+        return true;
+    }
+    if !on_server(s, tab) {
+        upload(s, tab, paths);
+        return true;
+    }
+    let server = s.bench.server(state.browser.server()).map(|sv| s.server_shown(&sv.key(), &sv.name).into_owned()).unwrap_or_default();
+    let files: Vec<(String, bool)> = paths.iter().map(|p| (s.text_shown(&p.to_string_lossy()).into_owned(), p.is_dir())).collect();
+    let question = ops::paste_question(&files, &server, &s.text_shown(state.browser.dir()));
+    if let Some(state) = s.screens.files.get_mut(&tab) {
+        state.paste = Some(Paste { question, paths });
+    }
+    true
+}
+
+/// The answer to [`State::paste`].
+pub fn answer_paste(s: &mut Shell, tab: TabId, yes: bool) {
+    let Some(Paste { paths, .. }) = s.screens.files.get_mut(&tab).and_then(|st| st.paste.take()) else { return };
+    if yes {
+        upload(s, tab, paths);
+    }
+}
+
+/// Files dropped on the list from another app (`El::on_drop_files`): into `folder` (a row's
+/// folder they landed on) or the folder on screen. The seam the platform's drag and drop
+/// feeds; on this computer it's a copy.
+pub fn dropped(s: &mut Shell, tab: TabId, paths: Vec<PathBuf>, folder: Option<String>) {
+    let Some(dir) = folder.or_else(|| s.screens.files.get(&tab).map(|st| st.browser.dir().to_owned())) else { return };
+    send(s, tab, paths, dir, false);
+}
+
+// ---- terminals in a folder
+
+fn shell_of(s: &Shell, tab: TabId) -> ops::Shell {
+    if !on_server(s, tab) && cfg!(windows) {
+        ops::Shell::PowerShell
+    } else {
+        ops::Shell::Posix
+    }
+}
+
+/// "Open new terminal here": a new terminal on the tab's machine, in `folder`.
+pub fn terminal_here(s: &mut Shell, tab: TabId, folder: &str, tx: &mut rune::Tx) {
+    let Some(cmd) = ops::typed_cd(folder, shell_of(s, tab), Some("clear")) else { return note(s, ops::cant_open_terminal()) };
+    let Some(server) = s.screens.files.get(&tab).map(|st| st.browser.server().to_owned()) else { return };
+    let id = s.bench.open(TabKind::Terminal, &server);
+    s.settle(tx);
+    s.screens.palette.pending.insert(id, (cmd, true));
+}
+
+/// "Open in main terminal": the terminal you already use on this machine goes into `folder`
+/// (a new one when there's none).
+pub fn main_terminal_here(s: &mut Shell, tab: TabId, folder: &str, tx: &mut rune::Tx) {
+    let Some(cmd) = ops::typed_cd(folder, shell_of(s, tab), None) else { return note(s, ops::cant_open_terminal()) };
+    let Some(server) = s.screens.files.get(&tab).map(|st| st.browser.server().to_owned()) else { return };
+    s.run_on(&server, &cmd, true, tx);
 }
 
 // ---- transfers
@@ -382,9 +699,11 @@ pub fn upload(s: &mut Shell, tab: TabId, paths: Vec<PathBuf>) {
 
 /// The answer to [`State::replace`]: yes sends the same again, replacing; no leaves it all.
 pub fn answer_replace(s: &mut Shell, tab: TabId, yes: bool) {
-    let Some(Replace { paths, dir, .. }) = s.screens.files.get_mut(&tab).and_then(|st| st.replace.take()) else { return };
-    if yes {
-        send(s, tab, paths, dir, true);
+    let Some(Replace { paths, dir, copy, .. }) = s.screens.files.get_mut(&tab).and_then(|st| st.replace.take()) else { return };
+    match (yes, copy) {
+        (true, Some((to, from))) => send_copy(s, tab, to, from, dir, true),
+        (true, None) => send(s, tab, paths, dir, true),
+        _ => {}
     }
 }
 
@@ -403,6 +722,7 @@ pub fn stop_transfer(s: &mut Shell, id: TransferId) {
 pub fn toggle_bookmark(s: &mut Shell, tab: TabId, path: &str) {
     let Some(server) = s.screens.files.get(&tab).map(|st| st.browser.server().to_owned()) else { return };
     bookmarks::toggle_pin(&mut s.screens.bookmarks, &server, path);
+    bookmarks_changed(s);
 }
 
 /// What a right click offers: on the row `clicked`, or on the empty space (`None`). Call
@@ -416,8 +736,13 @@ pub fn menu_for(s: &Shell, tab: TabId, clicked: Option<&str>) -> Vec<MenuRow> {
         dir: browser.dir(),
         clicked: clicked.and_then(|name| browser.entry(name)),
         selected: &browser.selected_entries(),
+        visible: browser.len(),
         on_server: !local,
         on_this_windows: local && cfg!(windows),
+        can_copy_out: !copy_targets(s).is_empty(),
+        can_back: browser.can_go_back(),
+        can_forward: browser.can_go_forward(),
+        paste_key: if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" },
         pins: bookmarks::pins(&s.screens.bookmarks, browser.server()),
         show_hidden: browser.show_hidden(),
         editor: chosen.as_ref().map(|e| e.name.as_str()),
@@ -478,6 +803,54 @@ fn apply(s: &mut Shell, reply: Reply) {
                 }
                 AfterSave::Again(want) => ask(s, tab, want),
                 AfterSave::Failed(notice) => note(s, notice),
+            }
+        }
+        Answer::Peeked { asked, result } => {
+            if let Ok((listing, clock)) = result {
+                let now = now_ms(s);
+                s.screens.dirs.remember(&server, &asked, listing, clock, now);
+                copy_listed(s, tab, &server, &asked);
+            } else if let Err(failure) = result {
+                if let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()).filter(|c| c.to.as_deref() == Some(&*server) && c.asked.as_deref() == Some(&*asked)) {
+                    copy.error = Some(failure.message);
+                    copy.asked = None;
+                }
+            }
+        }
+        Answer::MadeFile { path, result } => match result {
+            Ok(()) => {
+                let dir = paths::parent(&path);
+                if let Some(state) = s.screens.files.get_mut(&tab).filter(|st| st.browser.dir() == dir) {
+                    state.browser.select_when_listed(paths::name(&path));
+                }
+                changed(s, &server, &dir);
+            }
+            Err(failure) => note(s, ops::made_file_failed(&failure)),
+        },
+        Answer::Archived { dir, archive, count, result } => {
+            if let Some(state) = s.screens.files.get_mut(&tab) {
+                state.busy = None;
+                if result.is_ok() && state.browser.dir() == dir {
+                    state.browser.select_when_listed(&archive);
+                }
+            }
+            note(s, ops::archived(&archive, count, &result));
+            if result.is_ok() {
+                changed(s, &server, &dir);
+            }
+        }
+        Answer::CopiedTo { id, to, paths: from, dir, overwrite, result } => {
+            let Some(card) = s.screens.transfers.end(id) else { return };
+            if let (Err(failure), false) = (&result, overwrite) {
+                if let Some(state) = s.screens.files.get_mut(&tab).filter(|_| failure.kind == FailureKind::Exists) {
+                    state.replace = Some(Replace { question: ops::replace_question(&failure.message, card.kind), paths: Vec::new(), dir, copy: Some((to, from)) });
+                    return;
+                }
+            }
+            let name = s.bench.server(&to).map(|sv| sv.name.clone()).unwrap_or_else(|| to.clone());
+            note(s, ops::copied_to(&card, &name, &dir, &result));
+            if result.is_ok() {
+                changed(s, &to, &dir);
             }
         }
         Answer::MadeDir { path, result } => match result {
@@ -542,7 +915,7 @@ fn apply(s: &mut Shell, reply: Reply) {
                 state.busy = None;
                 state.browser.clear_selection();
             }
-            for notice in ops::move_notices(&from, &to, &moved, &taken, failure.as_ref()) {
+            for notice in ops::move_notices(tab, &server, &from, &to, &moved, &taken, failure.as_ref()) {
                 note(s, notice);
             }
             changed(s, &server, &from);
@@ -559,7 +932,7 @@ fn apply(s: &mut Shell, reply: Reply) {
             // Names are taken and nothing was sent: ask, in the tab that sent it.
             if let (Err(failure), false) = (&result, overwrite) {
                 if let Some(state) = s.screens.files.get_mut(&tab).filter(|_| failure.kind == FailureKind::Exists) {
-                    state.replace = Some(Replace { question: ops::replace_question(&failure.message, card.kind), paths, dir });
+                    state.replace = Some(Replace { question: ops::replace_question(&failure.message, card.kind), paths, dir, copy: None });
                     return;
                 }
             }
@@ -912,12 +1285,121 @@ mod tests {
             rows.into_iter().map(|r| match r { MenuRow::Item(i) => i.label, MenuRow::Separator => "---".into() }).collect()
         };
         w.s.screens.files.get_mut(&w.tab).unwrap().browser.context_click("shop");
-        assert_eq!(labels(menu_for(&w.s, w.tab, Some("shop"))), ["Open", "Download", "Rename", "Copy path", "Add to bookmarks", "---", "Delete"]);
+        assert_eq!(
+            labels(menu_for(&w.s, w.tab, Some("shop"))),
+            [
+                "Open",
+                "Download",
+                "Copy to another folder or server…",
+                "Rename",
+                "Archive “shop”",
+                "Copy path",
+                "Add to bookmarks",
+                "Open in main terminal",
+                "Open new terminal here",
+                "---",
+                "Delete"
+            ]
+        );
         toggle_bookmark(&mut w.s, w.tab, "/home/deploy/shop");
-        assert_eq!(labels(menu_for(&w.s, w.tab, Some("shop")))[4], "Remove bookmark");
-        assert_eq!(labels(menu_for(&w.s, w.tab, Some("site.zip")))[5], "Unpack “site.zip”");
-        assert_eq!(labels(menu_for(&w.s, w.tab, None))[..2], ["New folder", "Upload files…"]);
+        assert_eq!(labels(menu_for(&w.s, w.tab, Some("shop")))[6], "Remove bookmark");
+        assert_eq!(labels(menu_for(&w.s, w.tab, Some("site.zip")))[6], "Unpack “site.zip”");
+        assert_eq!(labels(menu_for(&w.s, w.tab, None))[..4], ["New file", "New folder", "Upload files…", "Paste files"]);
         assert!(menu_for(&w.s, TabId(99), None).is_empty());
+    }
+
+    #[test]
+    fn undo_goes_to_the_tab_and_machine_of_the_move_whatever_is_on_screen() {
+        let mut w = Window::at_home();
+        move_into(&mut w.s, w.tab, &["site.zip".into()], "/home/deploy/shop");
+        w.answer(Answer::Moved { from: "/home/deploy".into(), to: "/home/deploy/shop".into(), moved: vec!["site.zip".into()], taken: vec![], failure: None });
+        w.asked.lock().unwrap().clear();
+        // Another tab is on screen now, on this computer.
+        let other = w.s.bench.open(TabKind::Terminal, "local");
+        w.s.bench.focus(other);
+        let moved = w.s.screens.notes.toasts().last().map(|(id, _)| id).unwrap();
+        w.s.act_on_toast(moved);
+        let asked = std::mem::take(&mut *w.asked.lock().unwrap());
+        assert_eq!(asked, [Ask { tab: w.tab, server: WEB.into(), want: Want::Move { from: "/home/deploy/shop".into(), names: vec!["site.zip".into()], to: "/home/deploy".into() } }]);
+    }
+
+    #[test]
+    fn a_new_file_an_archive_and_a_copy_to_another_folder_of_the_same_server() {
+        let mut w = Window::at_home();
+        assert!(!new_file(&mut w.s, w.tab, "notes.md"), "a file that's there is never emptied");
+        assert!(new_file(&mut w.s, w.tab, "todo.txt"));
+        assert_eq!(w.wants(), [Want::MakeFile { path: "/home/deploy/todo.txt".into() }]);
+        w.answer(Answer::MadeFile { path: "/home/deploy/todo.txt".into(), result: Ok(()) });
+        assert_eq!(w.state().browser.selected(), ["todo.txt"]);
+        w.wants();
+
+        assert!(archive(&mut w.s, w.tab, &["shop".into(), "notes.md".into()], "backup"));
+        assert_eq!(w.state().busy.as_deref(), Some("Packing backup.tar.gz…"));
+        assert_eq!(w.wants(), [Want::Archive { dir: "/home/deploy".into(), names: vec!["shop".into(), "notes.md".into()], archive: "backup.tar.gz".into() }]);
+        w.answer(Answer::Archived { dir: "/home/deploy".into(), archive: "backup.tar.gz".into(), count: 2, result: Ok(()) });
+        assert_eq!(w.titles().last(), Some(&"Made backup.tar.gz"));
+        w.wants();
+
+        // The dialog opens on this server, in this folder; the copy goes into a folder in it.
+        open_copy(&mut w.s, w.tab, &["notes.md".into()]);
+        let asked = std::mem::take(&mut *w.asked.lock().unwrap());
+        assert_eq!(asked.last().map(|a| (a.server.as_str(), a.want.clone())), Some((WEB, Want::Peek { path: "/home/deploy".into() })));
+        w.answer(Answer::Peeked { asked: "/home/deploy".into(), result: Ok((home(), Clock::default())) });
+        assert_eq!(w.state().copy.as_ref().unwrap().place, Some(("/home/deploy".into(), vec!["shop".into()])));
+        copy_go(&mut w.s, w.tab, "/home/deploy/shop");
+        w.answer(Answer::Peeked { asked: "/home/deploy/shop".into(), result: Ok((Listing { path: "/home/deploy/shop".into(), entries: vec![] }, Clock::default())) });
+        w.wants();
+        copy_here(&mut w.s, w.tab);
+        let wants = w.wants();
+        let [Want::CopyTo { id, ref to, ref paths, ref dir, overwrite: false }] = wants[..] else { panic!("{wants:?}") };
+        assert_eq!((to.as_str(), paths.as_slice(), dir.as_str()), (WEB, &["/home/deploy/notes.md".to_owned()][..], "/home/deploy/shop"));
+        assert!(w.state().copy.is_none());
+        // Taken there: asks, and yes sends it again to replace.
+        w.answer(Answer::CopiedTo { id, to: WEB.into(), paths: paths.clone(), dir: dir.clone(), overwrite: false, result: Err(Failure::new(FailureKind::Exists, "“notes.md” already there.")) });
+        assert!(w.state().replace.is_some());
+        answer_replace(&mut w.s, w.tab, true);
+        assert!(matches!(w.wants()[..], [Want::CopyTo { overwrite: true, .. }]));
+    }
+
+    #[test]
+    fn files_copied_on_this_computer_are_pasted_after_a_question_that_warns_of_private_ones() {
+        let mut w = Window::at_home();
+        let content = rune::ClipboardContent::new("id_ed25519").with_files([PathBuf::from("/home/dev/.ssh/id_ed25519"), PathBuf::from("relative.txt")]);
+        assert!(paste(&mut w.s, &content));
+        let question = &w.state().paste.as_ref().unwrap().question;
+        assert!(question.risky && question.confirm.lines == ["/home/dev/.ssh/id_ed25519"]);
+        assert!(w.wants().is_empty(), "nothing goes before the yes");
+        answer_paste(&mut w.s, w.tab, true);
+        assert!(matches!(&w.wants()[..], [Want::Upload { paths, .. }] if paths == &[PathBuf::from("/home/dev/.ssh/id_ed25519")]));
+        // Text a server could have written: no files.
+        assert!(paste(&mut w.s, &rune::ClipboardContent::new("file:///etc/passwd").with_files([PathBuf::from("/etc/passwd")])));
+        assert!(w.state().paste.is_none());
+        assert_eq!(w.titles().last(), Some(&"No files to paste"));
+    }
+
+    #[test]
+    fn a_terminal_in_a_folder_and_one_whose_name_would_type_keys() {
+        let mut w = Window::at_home();
+        let mut tx = rune::Tx::default();
+        terminal_here(&mut w.s, w.tab, "/home/deploy/it's", &mut tx);
+        let pending: Vec<String> = w.s.screens.palette.pending.values().map(|(c, _)| c.clone()).collect();
+        assert_eq!(pending, ["cd -- '/home/deploy/it'\\''s' && clear"]);
+        terminal_here(&mut w.s, w.tab, "/home/deploy/a\nrm -rf ~", &mut tx);
+        assert_eq!(w.titles().last(), Some(&"Can't open a terminal there"));
+    }
+
+    #[test]
+    fn bookmarks_are_kept_by_the_backend_and_0_10s_come_in_after() {
+        let mut w = Window::at_home();
+        toggle_bookmark(&mut w.s, w.tab, "/srv/www");
+        let mut old = sshee_app::model::Bookmarks::default();
+        bookmarks::toggle_pin(&mut old, WEB, "/etc");
+        seed_bookmarks(&mut w.s, &old);
+        assert_eq!(bookmarks::pins(&w.s.screens.bookmarks, WEB), ["/srv/www", "/etc"]);
+        remove_bookmark(&mut w.s, WEB, "/srv/www");
+        forget_recent(&mut w.s, WEB, "/home/deploy");
+        assert_eq!(bookmarks::pins(&w.s.screens.bookmarks, WEB), ["/etc"]);
+        assert!(bookmarks::recent(&w.s.screens.bookmarks, WEB).is_empty());
     }
 
     #[test]

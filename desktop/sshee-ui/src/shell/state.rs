@@ -259,6 +259,16 @@ pub trait Backend {
         let _ = ask;
     }
 
+    /// Once, when the window starts: Files' pinned and recent folders kept between runs.
+    fn bookmarks(&mut self) -> Option<sshee_app::model::Bookmarks> {
+        None
+    }
+
+    /// Files' bookmarks or recent folders changed: keep them.
+    fn bookmarks_changed(&mut self, b: &sshee_app::model::Bookmarks) {
+        let _ = b;
+    }
+
     /// Once, when the window starts: the snippets kept between runs (`None`: 0.10's
     /// starters).
     fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
@@ -422,6 +432,7 @@ impl Shell {
         crate::screens::files::edit::start(&mut shell);
         // Your snippets; the welcome or "What's new", when one is due.
         crate::screens::snippets::start(&mut shell);
+        crate::screens::files::start(&mut shell);
         crate::screens::welcome::start(&mut shell);
         shell
     }
@@ -797,6 +808,10 @@ impl Shell {
         if self.screens.settings.open {
             return;
         }
+        // Files copied on this computer, into the folder on screen.
+        if crate::screens::files::paste(self, content) {
+            return;
+        }
         if let Some(pane) = self.active_pane() {
             pane.paste(content, tx);
         }
@@ -848,6 +863,8 @@ impl Shell {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // The screens' own clockwork: who started to wait, a server's card coming up.
         let ticked = crate::screens::home::tick(self, clock, tx);
+        // A folder pointed at in Files is listed ahead.
+        crate::screens::files::tick(self, clock, tx);
         // A hint whose moment came; "Add a server" opened from the welcome, at its list.
         let ticked = crate::screens::tour::tick(self, clock) | crate::screens::welcome::tick(self) | ticked;
         let winked = crate::looks::tick_logo(self, clock, tx);

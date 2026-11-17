@@ -1,6 +1,7 @@
-//! What a right click in Files offers: on a row, on several selected rows, and on the empty
-//! space of the folder. A port of `menuItems` in 0.10's `FilesPane.tsx`, as far as 1.0 goes in
-//! this step: no new file, archive, paste, copy to another server or "open terminal here" yet.
+//! What Files' menus offer: a right click on a row, on several selected rows and on the empty
+//! space of the folder, and the toolbar's "+" (new) and "⋯" (more) menus, which hold every
+//! button a narrow pane has no room for. A port of `menuItems`, `newItems` and `moreItems` in
+//! 0.10's `FilesPane.tsx`.
 
 use super::kinds::can_unpack;
 use super::Entry;
@@ -15,9 +16,13 @@ pub enum Action {
     /// Opens the file beside the list.
     OpenPreview,
     Download,
+    /// "Copy to another folder or server…": a server and a folder there to pick, then a copy.
+    CopyToServer,
     /// The row's name becomes a field.
     Rename,
     Unpack,
+    /// A name field for a .tar.gz of the clicked rows (or of the selection, from "+").
+    Archive,
     /// The row's full path to the clipboard.
     CopyPath,
     /// Pins the clicked folder, or takes its pin away.
@@ -25,14 +30,25 @@ pub enum Action {
     /// Asks first ([`super::ops::delete_question`]).
     Delete,
     /// A new row with a name field.
+    NewFile,
     NewFolder,
     /// The system's file picker, then an upload into this folder.
     Upload,
+    /// Files copied on this computer, into this folder (asks first).
+    PasteFiles,
+    /// The terminal you already use on this machine goes into the folder.
+    MainTerminalHere,
+    /// A new terminal on this machine, in the folder.
+    TerminalHere,
     /// Pins the folder on screen, or takes its pin away.
     BookmarkHere,
     CopyFolderPath,
     ToggleHidden,
     Refresh,
+    /// The ⋯ menu's Back, Forward and Up one folder.
+    Back,
+    Forward,
+    Up,
     /// "Open in <editor>": the chosen editor (`super::edit::Edits::chosen`).
     OpenInEditor,
     /// "Open in…": the editors found, to pick one ([`editor_menu`]).
@@ -55,6 +71,8 @@ pub struct MenuItem {
     pub destructive: bool,
     /// A tick in front, on or off; `None` for an item that isn't a switch.
     pub checked: Option<bool>,
+    /// Drawn faint, does nothing: Back with nowhere to go back to.
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +82,7 @@ pub enum MenuRow {
 }
 
 fn item(action: Action, label: impl Into<String>) -> MenuItem {
-    MenuItem { action, label: label.into(), hint: None, destructive: false, checked: None }
+    MenuItem { action, label: label.into(), hint: None, destructive: false, checked: None, disabled: false }
 }
 
 /// Where the menu opened and what it knows.
@@ -72,15 +90,19 @@ fn item(action: Action, label: impl Into<String>) -> MenuItem {
 pub struct Context<'a> {
     /// The folder on screen ([`super::Browser::dir`]).
     pub dir: &'a str,
-    /// The row clicked; `None` for the empty space under the rows.
+    /// The row clicked; `None` for the empty space under the rows and the toolbar's menus.
     pub clicked: Option<&'a Entry>,
     /// The selected rows ([`super::Browser::selected_entries`]), after
     /// [`super::Browser::context_click`].
     pub selected: &'a [&'a Entry],
+    /// How many rows are visible: "Archive everything here" needs one.
+    pub visible: usize,
     /// A server, not this computer: there is something to download from and upload to.
     pub on_server: bool,
     /// This computer, and it runs Windows (it unpacks only .zip and .tar itself).
     pub on_this_windows: bool,
+    /// There's a server to copy to besides this machine.
+    pub can_copy_out: bool,
     /// The machine's pinned folders ([`super::bookmarks::pins`]).
     pub pins: &'a [String],
     pub show_hidden: bool,
@@ -88,6 +110,11 @@ pub struct Context<'a> {
     pub editor: Option<&'a str>,
     /// The clicked file is open in an editor elsewhere.
     pub editing: bool,
+    /// For the ⋯ menu: Back and Forward have somewhere to go.
+    pub can_back: bool,
+    pub can_forward: bool,
+    /// The paste shortcut as this system writes it: "Ctrl+V", "⌘V".
+    pub paste_key: &'static str,
 }
 
 /// The rows an action from a row's menu applies to: all the selected ones when the click
@@ -110,56 +137,124 @@ pub fn editor_menu(found: &[crate::editors::Editor]) -> Vec<MenuRow> {
     rows
 }
 
-/// The menu, top to bottom.
+/// `None` is the line between groups.
+fn rows(items: Vec<Option<MenuItem>>) -> Vec<MenuRow> {
+    items.into_iter().map(|i| i.map_or(MenuRow::Separator, MenuRow::Item)).collect()
+}
+
+fn copy_out(count: usize, on_server: bool) -> MenuItem {
+    let many = if count > 1 { format!("{count} items ") } else { String::new() };
+    item(Action::CopyToServer, format!("Copy {many}to {}…", if on_server { "another folder or server" } else { "a server" }))
+}
+
+fn terminals() -> [Option<MenuItem>; 2] {
+    [Some(item(Action::MainTerminalHere, "Open in main terminal")), Some(item(Action::TerminalHere, "Open new terminal here"))]
+}
+
+fn paste(cx: &Context<'_>) -> MenuItem {
+    MenuItem { hint: Some(cx.paste_key), ..item(Action::PasteFiles, "Paste files") }
+}
+
+fn hidden_switch(cx: &Context<'_>) -> MenuItem {
+    MenuItem { checked: Some(cx.show_hidden), ..item(Action::ToggleHidden, "Show hidden files") }
+}
+
+fn bookmark_here(cx: &Context<'_>) -> MenuItem {
+    item(Action::BookmarkHere, if cx.pins.iter().any(|p| p == cx.dir) { "Remove bookmark" } else { "Bookmark this folder" })
+}
+
+/// The menu of a right click, top to bottom.
 pub fn menu(cx: &Context<'_>) -> Vec<MenuRow> {
     let pinned = |path: &str| cx.pins.iter().any(|p| p == path);
-    // `None` is the line between groups.
     let mut items: Vec<Option<MenuItem>> = Vec::new();
-    if let Some(entry) = cx.clicked {
-        let count = targets(entry, cx.selected).len();
-        let many = count > 1;
-        if !many {
-            let open = if entry.is_dir() { item(Action::Open, "Open") } else { item(Action::OpenPreview, "Open preview") };
-            items.push(Some(MenuItem { hint: Some("↵"), ..open }));
-            if !entry.is_dir() {
-                if let Some(name) = cx.editor {
-                    items.push(Some(item(Action::OpenInEditor, format!("Open in {name}"))));
-                }
-                items.push(Some(item(Action::OpenInOther, "Open in…")));
-                if cx.editing {
-                    items.push(Some(item(Action::StopEditing, "Stop editing")));
-                }
-                // Opening stands apart from what changes the file.
-                items.push(None);
-            }
-        }
-        if cx.on_server {
-            items.push(Some(item(Action::Download, if many { format!("Download {count} items") } else { "Download".into() })));
-        }
-        if !many {
-            items.push(Some(MenuItem { hint: Some("F2"), ..item(Action::Rename, "Rename") }));
-            if !entry.is_dir() && can_unpack(&entry.name, cx.on_this_windows) {
-                items.push(Some(item(Action::Unpack, format!("Unpack “{}”", entry.name))));
-            }
-            items.push(Some(item(Action::CopyPath, "Copy path")));
-            if entry.is_dir() {
-                items.push(Some(item(Action::ToggleBookmark, if pinned(&paths::join(cx.dir, &entry.name)) { "Remove bookmark" } else { "Add to bookmarks" })));
-            }
-        }
-        items.push(None);
-        items.push(Some(MenuItem { destructive: true, ..item(Action::Delete, if many { format!("Delete {count} items") } else { "Delete".into() }) }));
-    } else {
+    let Some(entry) = cx.clicked else {
+        items.push(Some(item(Action::NewFile, "New file")));
         items.push(Some(item(Action::NewFolder, "New folder")));
         if cx.on_server {
             items.push(Some(item(Action::Upload, "Upload files…")));
         }
+        items.push(Some(paste(cx)));
+        items.extend(terminals());
         items.push(None);
-        items.push(Some(item(Action::BookmarkHere, if pinned(cx.dir) { "Remove bookmark" } else { "Bookmark this folder" })));
+        items.push(Some(bookmark_here(cx)));
         items.push(Some(item(Action::CopyFolderPath, "Copy folder path")));
-        items.push(Some(MenuItem { checked: Some(cx.show_hidden), ..item(Action::ToggleHidden, "Show hidden files") }));
+        items.push(Some(hidden_switch(cx)));
         items.push(Some(item(Action::Refresh, "Refresh")));
+        return rows(items);
+    };
+    let count = targets(entry, cx.selected).len();
+    let many = count > 1;
+    if !many {
+        let open = if entry.is_dir() { item(Action::Open, "Open") } else { item(Action::OpenPreview, "Open preview") };
+        items.push(Some(MenuItem { hint: Some("↵"), ..open }));
+        if !entry.is_dir() {
+            if let Some(name) = cx.editor {
+                items.push(Some(item(Action::OpenInEditor, format!("Open in {name}"))));
+            }
+            items.push(Some(item(Action::OpenInOther, "Open in…")));
+            if cx.editing {
+                items.push(Some(item(Action::StopEditing, "Stop editing")));
+            }
+            // Opening stands apart from what changes the file.
+            items.push(None);
+        }
     }
-    items.into_iter().map(|i| i.map_or(MenuRow::Separator, MenuRow::Item)).collect()
+    if cx.on_server {
+        items.push(Some(item(Action::Download, if many { format!("Download {count} items") } else { "Download".into() })));
+    }
+    if cx.can_copy_out {
+        items.push(Some(copy_out(count, cx.on_server)));
+    }
+    if many {
+        items.push(Some(item(Action::Archive, format!("Archive {count} items"))));
+    } else {
+        items.push(Some(MenuItem { hint: Some("F2"), ..item(Action::Rename, "Rename") }));
+        // An archive is unpacked, not packed again.
+        if !entry.is_dir() && can_unpack(&entry.name, cx.on_this_windows) {
+            items.push(Some(item(Action::Unpack, format!("Unpack “{}”", entry.name))));
+        } else {
+            items.push(Some(item(Action::Archive, format!("Archive “{}”", entry.name))));
+        }
+        items.push(Some(item(Action::CopyPath, "Copy path")));
+        if entry.is_dir() {
+            items.push(Some(item(Action::ToggleBookmark, if pinned(&paths::join(cx.dir, &entry.name)) { "Remove bookmark" } else { "Add to bookmarks" })));
+            items.extend(terminals());
+        }
+    }
+    items.push(None);
+    items.push(Some(MenuItem { destructive: true, ..item(Action::Delete, if many { format!("Delete {count} items") } else { "Delete".into() }) }));
+    rows(items)
+}
+
+/// The toolbar's "+": a new file or folder, and an archive of what's selected (of everything
+/// in the folder when nothing is).
+pub fn new_menu(cx: &Context<'_>) -> Vec<MenuRow> {
+    let n = cx.selected.len();
+    let archive = match cx.selected {
+        [one] => item(Action::Archive, format!("Archive “{}”", one.name)),
+        [] => MenuItem { disabled: cx.visible == 0, ..item(Action::Archive, "Archive everything here") },
+        _ => item(Action::Archive, format!("Archive {n} items")),
+    };
+    rows(vec![Some(item(Action::NewFile, "New file")), Some(item(Action::NewFolder, "New folder")), None, Some(archive)])
+}
+
+/// The toolbar's "⋯": everything the toolbar holds, for a pane too narrow to show it all.
+pub fn more_menu(cx: &Context<'_>) -> Vec<MenuRow> {
+    let mut items = vec![
+        Some(MenuItem { disabled: !cx.can_back, ..item(Action::Back, "Back") }),
+        Some(MenuItem { disabled: !cx.can_forward, ..item(Action::Forward, "Forward") }),
+        Some(MenuItem { disabled: !paths::has_parent(cx.dir), ..item(Action::Up, "Up one folder") }),
+        None,
+        Some(hidden_switch(cx)),
+        None,
+        Some(bookmark_here(cx)),
+    ];
+    if cx.on_server {
+        items.push(Some(item(Action::Upload, "Upload files…")));
+    }
+    items.push(Some(paste(cx)));
+    items.push(Some(item(Action::Refresh, "Refresh")));
+    rows(items)
 }
 
 #[cfg(test)]
@@ -168,10 +263,9 @@ mod tests {
     use super::*;
 
     /// The menu as lines: labels, "---" for a separator, a hint in brackets, "!" when
-    /// destructive, a tick or a space for a switch.
-    fn lines(cx: &Context<'_>) -> Vec<String> {
-        menu(cx)
-            .into_iter()
+    /// destructive, "~" when disabled, a tick or a space for a switch.
+    fn lines(menu: Vec<MenuRow>) -> Vec<String> {
+        menu.into_iter()
             .map(|row| match row {
                 MenuRow::Separator => "---".into(),
                 MenuRow::Item(i) => {
@@ -180,36 +274,56 @@ mod tests {
                         Some(false) => "  ",
                         None => "",
                     };
-                    format!("{tick}{}{}{}", i.label, i.hint.map(|h| format!(" [{h}]")).unwrap_or_default(), if i.destructive { " !" } else { "" })
+                    let hint = i.hint.map(|h| format!(" [{h}]")).unwrap_or_default();
+                    format!("{tick}{}{hint}{}{}", i.label, if i.destructive { " !" } else { "" }, if i.disabled { " ~" } else { "" })
                 }
             })
             .collect()
     }
 
     fn base<'a>() -> Context<'a> {
-        Context { dir: "/home/deploy", clicked: None, selected: &[], on_server: true, on_this_windows: false, pins: &[], show_hidden: false, editor: None, editing: false }
+        Context {
+            dir: "/home/deploy",
+            clicked: None,
+            selected: &[],
+            visible: 3,
+            on_server: true,
+            on_this_windows: false,
+            can_copy_out: false,
+            pins: &[],
+            show_hidden: false,
+            editor: None,
+            editing: false,
+            can_back: false,
+            can_forward: false,
+            paste_key: "Ctrl+V",
+        }
     }
 
     #[test]
     fn on_a_file() {
         let readme = file("README.md", 1, 1);
         let cx = Context { clicked: Some(&readme), selected: &[&readme], ..base() };
-        assert_eq!(lines(&cx), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Copy path", "---", "Delete !"]);
-        // This computer has nothing to download from.
-        assert_eq!(lines(&Context { on_server: false, ..cx }), ["Open preview [↵]", "Open in…", "---", "Rename [F2]", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(menu(&cx)), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Archive “README.md”", "Copy path", "---", "Delete !"]);
+        // This computer has nothing to download from; another server to copy to is offered.
+        assert_eq!(
+            lines(menu(&Context { on_server: false, can_copy_out: true, ..cx })),
+            ["Open preview [↵]", "Open in…", "---", "Copy to a server…", "Rename [F2]", "Archive “README.md”", "Copy path", "---", "Delete !"]
+        );
+        assert_eq!(lines(menu(&Context { can_copy_out: true, ..cx }))[4], "Copy to another folder or server…");
     }
 
     #[test]
     fn a_file_opens_in_an_editor_elsewhere() {
         let env = file(".env", 1, 1);
         let cx = Context { clicked: Some(&env), selected: &[&env], editor: Some("VS Code"), ..base() };
-        assert_eq!(lines(&cx)[..3], ["Open preview [↵]", "Open in VS Code", "Open in…"]);
-        assert_eq!(lines(&Context { editing: true, ..cx })[3], "Stop editing");
+        assert_eq!(lines(menu(&cx))[..3], ["Open preview [↵]", "Open in VS Code", "Open in…"]);
+        assert_eq!(lines(menu(&Context { editing: true, ..cx }))[3], "Stop editing");
         // Never for a folder, nor for several files at once.
         let shop = dir("shop");
-        assert!(!lines(&Context { clicked: Some(&shop), selected: &[&shop], ..cx }).iter().any(|l| l.starts_with("Open in")));
+        assert!(!lines(menu(&Context { clicked: Some(&shop), selected: &[&shop], ..cx })).iter().any(|l| l.starts_with("Open in VS") || l == "Open in…"));
         let other = file("b", 1, 1);
-        assert!(!lines(&Context { selected: &[&env, &other], ..cx }).iter().any(|l| l.starts_with("Open in")));
+        assert!(!lines(menu(&Context { selected: &[&env, &other], ..cx })).iter().any(|l| l.starts_with("Open in")));
         // "Open in…": every editor found, then the picker.
         let found = [crate::editors::Editor { id: "zed".into(), name: "Zed".into(), program: "/usr/bin/zed".into(), args: vec![], vscode_like: false }];
         let rows = editor_menu(&found);
@@ -221,43 +335,84 @@ mod tests {
     fn on_a_folder_with_and_without_a_bookmark() {
         let shop = dir("shop");
         let cx = Context { clicked: Some(&shop), selected: &[&shop], ..base() };
-        assert_eq!(lines(&cx), ["Open [↵]", "Download", "Rename [F2]", "Copy path", "Add to bookmarks", "---", "Delete !"]);
+        assert_eq!(
+            lines(menu(&cx)),
+            ["Open [↵]", "Download", "Rename [F2]", "Archive “shop”", "Copy path", "Add to bookmarks", "Open in main terminal", "Open new terminal here", "---", "Delete !"]
+        );
         let pins = ["/home/deploy/shop".to_owned()];
-        assert_eq!(lines(&Context { pins: &pins, ..cx })[4], "Remove bookmark");
+        assert_eq!(lines(menu(&Context { pins: &pins, ..cx }))[5], "Remove bookmark");
         // A folder named like an archive isn't one.
         let odd = dir("old.zip");
-        assert!(!lines(&Context { clicked: Some(&odd), selected: &[&odd], ..base() }).iter().any(|l| l.starts_with("Unpack")));
+        assert!(!lines(menu(&Context { clicked: Some(&odd), selected: &[&odd], ..base() })).iter().any(|l| l.starts_with("Unpack")));
     }
 
     #[test]
-    fn an_archive_can_be_unpacked_where_the_machine_can() {
+    fn an_archive_is_unpacked_where_the_machine_can_and_not_packed_again() {
         let site = file("site.tar.gz", 1, 1);
         let cx = Context { clicked: Some(&site), selected: &[&site], ..base() };
-        assert_eq!(lines(&cx), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Unpack “site.tar.gz”", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(menu(&cx)), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Unpack “site.tar.gz”", "Copy path", "---", "Delete !"]);
         let squeezed = file("dump.sql.gz", 1, 1);
         let here = Context { clicked: Some(&squeezed), selected: &[&squeezed], on_server: false, on_this_windows: true, ..base() };
-        assert!(!lines(&here).iter().any(|l| l.starts_with("Unpack")));
-        assert!(lines(&Context { on_this_windows: false, ..here }).contains(&"Unpack “dump.sql.gz”".to_owned()));
+        assert!(!lines(menu(&here)).iter().any(|l| l.starts_with("Unpack")));
+        assert!(lines(menu(&here)).contains(&"Archive “dump.sql.gz”".to_owned()));
+        assert!(lines(menu(&Context { on_this_windows: false, ..here })).contains(&"Unpack “dump.sql.gz”".to_owned()));
     }
 
     #[test]
     fn on_one_of_several_selected_rows_it_is_about_all_of_them() {
         let (a, b, c) = (file("a.txt", 1, 1), dir("b"), file("c.txt", 1, 1));
         let selected = [&a, &b];
-        let cx = Context { clicked: Some(&a), selected: &selected, ..base() };
-        assert_eq!(lines(&cx), ["Download 2 items", "---", "Delete 2 items !"]);
-        assert_eq!(lines(&Context { on_server: false, ..cx }), ["---", "Delete 2 items !"]);
+        let cx = Context { clicked: Some(&a), selected: &selected, can_copy_out: true, ..base() };
+        assert_eq!(lines(menu(&cx)), ["Download 2 items", "Copy 2 items to another folder or server…", "Archive 2 items", "---", "Delete 2 items !"]);
+        assert_eq!(lines(menu(&Context { on_server: false, can_copy_out: false, ..cx })), ["Archive 2 items", "---", "Delete 2 items !"]);
         assert_eq!(targets(&a, &selected).len(), 2);
         // A row outside the selection is about itself (the browser selects it first).
         assert_eq!(targets(&c, &selected), [&c]);
-        assert_eq!(lines(&Context { clicked: Some(&c), selected: &selected, ..base() })[0], "Open preview [↵]");
+        assert_eq!(lines(menu(&Context { clicked: Some(&c), selected: &selected, ..base() }))[0], "Open preview [↵]");
     }
 
     #[test]
     fn on_the_empty_space() {
-        assert_eq!(lines(&base()), ["New folder", "Upload files…", "---", "Bookmark this folder", "Copy folder path", "  Show hidden files", "Refresh"]);
+        assert_eq!(
+            lines(menu(&base())),
+            [
+                "New file",
+                "New folder",
+                "Upload files…",
+                "Paste files [Ctrl+V]",
+                "Open in main terminal",
+                "Open new terminal here",
+                "---",
+                "Bookmark this folder",
+                "Copy folder path",
+                "  Show hidden files",
+                "Refresh"
+            ]
+        );
         let pins = ["/home/deploy".to_owned()];
-        let here = Context { on_server: false, pins: &pins, show_hidden: true, ..base() };
-        assert_eq!(lines(&here), ["New folder", "---", "Remove bookmark", "Copy folder path", "✓ Show hidden files", "Refresh"]);
+        let here = Context { on_server: false, pins: &pins, show_hidden: true, paste_key: "⌘V", ..base() };
+        let here = lines(menu(&here));
+        assert_eq!(here[..3], ["New file", "New folder", "Paste files [⌘V]"]);
+        assert_eq!(here[6..], ["Remove bookmark", "Copy folder path", "✓ Show hidden files", "Refresh"]);
+    }
+
+    #[test]
+    fn the_new_menu_archives_the_selection_or_everything() {
+        assert_eq!(lines(new_menu(&base())), ["New file", "New folder", "---", "Archive everything here"]);
+        assert_eq!(lines(new_menu(&Context { visible: 0, ..base() }))[3], "Archive everything here ~");
+        let (a, b) = (file("a.txt", 1, 1), dir("b"));
+        assert_eq!(lines(new_menu(&Context { selected: &[&a], ..base() }))[3], "Archive “a.txt”");
+        assert_eq!(lines(new_menu(&Context { selected: &[&a, &b], ..base() }))[3], "Archive 2 items");
+    }
+
+    #[test]
+    fn the_more_menu_holds_every_button() {
+        assert_eq!(
+            lines(more_menu(&base())),
+            ["Back ~", "Forward ~", "Up one folder", "---", "  Show hidden files", "---", "Bookmark this folder", "Upload files…", "Paste files [Ctrl+V]", "Refresh"]
+        );
+        let top = Context { dir: "/", can_back: true, on_server: false, ..base() };
+        assert_eq!(lines(more_menu(&top))[..3], ["Back", "Forward ~", "Up one folder ~"]);
+        assert!(!lines(more_menu(&top)).contains(&"Upload files…".to_owned()));
     }
 }

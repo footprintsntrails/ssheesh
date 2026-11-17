@@ -363,6 +363,38 @@ impl Disk {
         }
         Ok(())
     }
+
+    /// An empty file, only where nothing has that name.
+    pub fn make_file(&mut self, path: &str) -> Result<(), Failure> {
+        if self.nodes.contains_key(path) {
+            return Err(failure(FailureKind::Exists, "Something with that name already exists here."));
+        }
+        if !self.is_dir(&paths::parent(path)) {
+            return Err(not_found());
+        }
+        self.file(path, "", NOW.now, "-rw-r--r--");
+        Ok(())
+    }
+
+    /// A made-up .tar.gz of `names` in `dir`: its size is theirs, its bytes nothing.
+    pub fn archive(&mut self, dir: &str, names: &[String], archive: &str) -> Result<(), Failure> {
+        let path = paths::join(dir, archive);
+        if self.nodes.contains_key(&path) {
+            return Err(failure(FailureKind::Exists, "Something with that name already exists here."));
+        }
+        let size: u64 = names.iter().flat_map(|n| self.copy_of(&paths::join(dir, n))).map(|(_, n)| n.size.unwrap_or(n.bytes.len() as u64)).sum();
+        self.file(&path, Vec::new(), NOW.now, "-rw-r--r--");
+        if let Some(node) = self.nodes.get_mut(&path) {
+            node.size = Some(size / 3 + 120);
+        }
+        Ok(())
+    }
+
+    /// `path` and all inside it, by their paths below `path`'s folder.
+    fn copy_of(&self, path: &str) -> Vec<(String, Node)> {
+        let base = paths::parent(path);
+        self.nodes.iter().filter(|(p, _)| *p == path || paths::within(p, path)).map(|(p, n)| (p[base.len()..].trim_start_matches('/').to_owned(), n.clone())).collect()
+    }
 }
 
 /// Every machine's disk, and the downloads that are staged to never finish.
@@ -429,12 +461,40 @@ impl DemoFiles {
                 Want::Move { from, to, .. } => Answer::Moved { from, to, moved: Vec::new(), taken: Vec::new(), failure: Some(gone()) },
                 Want::Download { id, .. } => Answer::Downloaded { id, result: Err(gone()) },
                 Want::Upload { id, paths, dir, overwrite } => Answer::Uploaded { id, paths, dir, overwrite, result: Err(gone()) },
+                Want::Peek { path } => Answer::Peeked { asked: path, result: Err(gone()) },
+                Want::MakeFile { path } => Answer::MadeFile { path, result: Err(gone()) },
+                Want::Archive { dir, names, archive } => Answer::Archived { dir, archive, count: names.len(), result: Err(gone()) },
+                Want::CopyTo { id, to, paths, dir, overwrite } => Answer::CopiedTo { id, to, paths, dir, overwrite, result: Err(gone()) },
                 Want::CancelTransfer { .. } => return Vec::new(),
             };
             return vec![ask.reply(answer)];
         };
         let mut answers = Vec::new();
+        // A copy reads this disk and writes another (or this one again).
+        if let Want::CopyTo { id, to, paths: from, dir, overwrite } = ask.want.clone() {
+            let items: Vec<(String, Node)> = from.iter().flat_map(|p| disk.copy_of(p)).collect();
+            let result = match self.disks.get_mut(&to) {
+                None => Err(gone()),
+                Some(dest) if !dest.is_dir(&dir) => Err(not_found()),
+                Some(dest) => {
+                    let taken: Vec<String> = from.iter().map(|p| paths::name(p).to_owned()).filter(|n| dest.nodes.contains_key(&paths::join(&dir, n))).collect();
+                    if !overwrite && !taken.is_empty() {
+                        Err(failure(FailureKind::Exists, &format!("{} already there.", taken.iter().map(|n| format!("“{n}”")).collect::<Vec<_>>().join(", "))))
+                    } else {
+                        for (rel, node) in items {
+                            dest.put(&paths::join(&dir, &rel), node);
+                        }
+                        Ok(())
+                    }
+                }
+            };
+            return vec![ask.reply(Answer::CopiedTo { id, to, paths: from, dir, overwrite, result })];
+        }
         match ask.want.clone() {
+            Want::Peek { path } => answers.push(Answer::Peeked { result: disk.list(&path).map(|l| (l, NOW)), asked: path }),
+            Want::MakeFile { path } => answers.push(Answer::MadeFile { result: disk.make_file(&path), path }),
+            Want::Archive { dir, names, archive } => answers.push(Answer::Archived { result: disk.archive(&dir, &names, &archive), count: names.len(), dir, archive }),
+            Want::CopyTo { .. } => {}
             Want::List { ticket, path } => answers.push(Answer::Listed { ticket, result: disk.list(&path).map(|l| (l, NOW)), asked: path }),
             Want::Read { ticket, path } => answers.push(Answer::Read { ticket, result: disk.read(&path), path }),
             Want::ReadImage { ticket, path } => answers.push(Answer::Image { ticket, result: disk.read_image(&path), path }),
@@ -743,5 +803,24 @@ mod tests {
         let stopped = files.answer(&ask(Want::CancelTransfer { id: TransferId(2) }));
         assert!(matches!(&stopped[0].answer, Answer::Downloaded { id: TransferId(2), result: Err(f) } if f.kind == FailureKind::Cancelled));
         assert!(files.answer(&ask(Want::CancelTransfer { id: TransferId(2) })).is_empty());
+    }
+
+    #[test]
+    fn new_files_archives_and_copies_to_a_server_never_replace_anything() {
+        let mut files = demo();
+        let Answer::MadeFile { result: Ok(()), .. } = one(&mut files, Want::MakeFile { path: "/home/deploy/todo.txt".into() }) else { panic!() };
+        let Answer::MadeFile { result: Err(f), .. } = one(&mut files, Want::MakeFile { path: "/home/deploy/todo.txt".into() }) else { panic!() };
+        assert_eq!(f.kind, FailureKind::Exists);
+        assert!(names(&mut files, "/home/deploy").contains(&"todo.txt".to_owned()));
+        let Answer::Archived { result: Ok(()), count: 1, .. } = one(&mut files, Want::Archive { dir: "/home/deploy".into(), names: vec!["todo.txt".into()], archive: "todo.tar.gz".into() }) else { panic!() };
+        let Answer::Archived { result: Err(_), .. } = one(&mut files, Want::Archive { dir: "/home/deploy".into(), names: vec!["todo.txt".into()], archive: "todo.tar.gz".into() }) else { panic!() };
+        let Answer::Peeked { result: Ok((l, _)), .. } = one(&mut files, Want::Peek { path: "/home/deploy".into() }) else { panic!() };
+        assert!(l.entries.iter().any(|e| e.name == "todo.tar.gz"));
+        // To another folder of the same server; then again, which asks first.
+        let copy = Want::CopyTo { id: TransferId(9), to: WEB.into(), paths: vec!["/home/deploy/todo.txt".into()], dir: "/home/deploy/shop".into(), overwrite: false };
+        let Answer::CopiedTo { result: Ok(()), .. } = one(&mut files, copy.clone()) else { panic!() };
+        let Answer::CopiedTo { result: Err(f), .. } = one(&mut files, copy) else { panic!() };
+        assert_eq!(f.kind, FailureKind::Exists);
+        assert!(names(&mut files, "/home/deploy/shop").contains(&"todo.txt".to_owned()));
     }
 }

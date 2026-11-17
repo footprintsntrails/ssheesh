@@ -70,6 +70,8 @@ pub struct LiveBackend {
     welcomed: Vec<String>,
     /// System notifications and the tray (`crate::desktop`); none in a headless run.
     desktop: Option<crate::desktop::Glue>,
+    /// Writes `bookmarks.json`, in order.
+    bookmarks: crate::bookmarks::Writer,
     /// Writes `snippets.json`, in order.
     snippets: crate::recipes::SnippetWriter,
     /// The passwords that got a terminal in this run, by server (`crate::signin`).
@@ -127,6 +129,7 @@ impl LiveBackend {
             welcome_first: false,
             welcomed: vec![],
             desktop: None,
+            bookmarks: crate::bookmarks::Writer::new(sshee_core::app_identity::current().dir().map(std::path::Path::to_path_buf)),
             snippets: crate::recipes::SnippetWriter::new(sshee_core::app_identity::current().dir().map(std::path::Path::to_path_buf)),
             known: Known::default(),
             keys: Arc::new(PendingKeys::default()),
@@ -480,7 +483,12 @@ impl Backend for LiveBackend {
 
     fn files(&mut self, ask: sshee_app::files::Ask) {
         let (target, prepare) = self.reach(&ask.server);
-        self.files.ask(ask, target, prepare);
+        // A copy to another server reaches that one too.
+        let to = match &ask.want {
+            sshee_app::files::Want::CopyTo { to, .. } => Some(self.reach(to)),
+            _ => None,
+        };
+        self.files.ask_to(ask, target, prepare, to);
     }
 
     fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
@@ -505,6 +513,14 @@ impl Backend for LiveBackend {
 
     fn snippets_changed(&mut self, list: &sshee_app::model::Snippets) {
         self.snippets.save(list);
+    }
+
+    fn bookmarks(&mut self) -> Option<sshee_app::model::Bookmarks> {
+        sshee_core::app_identity::current().dir().and_then(crate::bookmarks::load)
+    }
+
+    fn bookmarks_changed(&mut self, b: &sshee_app::model::Bookmarks) {
+        self.bookmarks.save(b);
     }
 
     /// The program shows the welcome when it's due.

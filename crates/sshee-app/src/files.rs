@@ -15,6 +15,8 @@ pub mod edit;
 pub mod editor;
 pub mod format;
 pub mod kinds;
+pub mod layout;
+pub mod markdown;
 pub mod menu;
 pub mod ops;
 pub mod protocol;

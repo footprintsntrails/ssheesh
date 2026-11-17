@@ -37,6 +37,10 @@ pub struct Item {
 pub enum Want {
     /// A folder's contents. `path` may be "~".
     List { ticket: u64, path: String },
+    /// A folder's contents for the folder cache only, not for what the tab shows: a folder
+    /// pointed at for a moment (listed ahead), one looked into with », or one of another
+    /// server in "Copy to another server". The answer is [`Answer::Peeked`].
+    Peek { path: String },
     /// A file as text, up to [`super::MAX_TEXT`], with the stamp to save it back with.
     Read { ticket: u64, path: String },
     /// A picture's bytes, up to [`super::MAX_IMAGE`].
@@ -45,6 +49,12 @@ pub enum Want {
     /// stamp, only where there's no file yet.
     Save { ticket: u64, path: String, text: String, expected: Option<Stamp> },
     MakeDir { path: String },
+    /// An empty file, only where nothing has that name: never over a file made there since
+    /// the folder was listed ([`super::FailureKind::Exists`]).
+    MakeFile { path: String },
+    /// Packs `names` (all in `dir`) into `dir/archive`, a .tar.gz. Never over something
+    /// that's there.
+    Archive { dir: String, names: Vec<String>, archive: String },
     /// Never over something that's there: that's [`super::FailureKind::Exists`].
     Rename { from: String, to: String },
     /// Deletes `names` in `dir`, folders with all that's in them. One that fails doesn't stop
@@ -61,6 +71,10 @@ pub enum Want {
     /// sent if any name is taken there ([`super::FailureKind::Exists`]): the screen asks, and
     /// sends the same again with `overwrite`.
     Upload { id: TransferId, paths: Vec<PathBuf>, dir: String, overwrite: bool },
+    /// Copies `paths` (all in one folder of the asking machine) into `dir` on the server `to`,
+    /// under one card. Like an upload, nothing is sent if a name is taken there unless
+    /// `overwrite`.
+    CopyTo { id: TransferId, to: ServerKey, paths: Vec<String>, dir: String, overwrite: bool },
     /// Stops a transfer; its end still arrives, as [`super::FailureKind::Cancelled`].
     CancelTransfer { id: TransferId },
 }
@@ -86,11 +100,16 @@ pub struct Reply {
 pub enum Answer {
     /// `asked` is the request's path; the listing's own may differ ("~").
     Listed { ticket: u64, asked: String, result: Result<(Listing, Clock), Failure> },
+    /// The answer to [`Want::Peek`]: for the folder cache, on the reply's machine.
+    Peeked { asked: String, result: Result<(Listing, Clock), Failure> },
     Read { ticket: u64, path: String, result: Result<(TextFile, Stamp), Failure> },
     Image { ticket: u64, path: String, result: Result<Vec<u8>, Failure> },
     /// The stamp of what was saved, for the next save.
     Saved { ticket: u64, path: String, result: Result<Stamp, SaveFailure> },
     MadeDir { path: String, result: Result<(), Failure> },
+    MadeFile { path: String, result: Result<(), Failure> },
+    /// How many items went in, for the note.
+    Archived { dir: String, archive: String, count: usize, result: Result<(), Failure> },
     Renamed { from: String, to: String, result: Result<(), Failure> },
     /// What went, and what didn't with why.
     Deleted { dir: String, deleted: Vec<String>, failed: Vec<(String, Failure)> },
@@ -105,6 +124,8 @@ pub enum Answer {
     Downloaded { id: TransferId, result: Result<Vec<String>, Failure> },
     /// An upload ended. The request's fields come back so it can be sent again to replace.
     Uploaded { id: TransferId, paths: Vec<PathBuf>, dir: String, overwrite: bool, result: Result<(), Failure> },
+    /// A copy to another server ended. The request's fields come back, as for an upload.
+    CopiedTo { id: TransferId, to: ServerKey, paths: Vec<String>, dir: String, overwrite: bool, result: Result<(), Failure> },
 }
 
 impl Ask {
