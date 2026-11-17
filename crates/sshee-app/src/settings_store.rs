@@ -65,6 +65,9 @@ pub struct Additions {
     /// The editor "Open in <editor>" in Files starts (`editors::SETTING_KEY`): an editor's id,
     /// or `custom:<path>` for one picked with "Choose an app…". `None`: the default one found.
     pub external_editor: Option<String>,
+    /// A test build looks for a newer test build and offers to restart into it
+    /// (`canary`). On by default; builds made on this computer never look.
+    pub canary_updates: bool,
     /// Fields a newer 1.x wrote, as saved.
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -72,7 +75,7 @@ pub struct Additions {
 
 impl Default for Additions {
     fn default() -> Self {
-        Additions { tabs_name_server: true, program_clipboard: true, external_editor: None, extra: JsonMap::new() }
+        Additions { tabs_name_server: true, program_clipboard: true, external_editor: None, canary_updates: true, extra: JsonMap::new() }
     }
 }
 
@@ -327,6 +330,11 @@ impl SettingsStore {
     /// On by default.
     pub fn program_clipboard(&self) -> bool {
         self.more.program_clipboard
+    }
+
+    /// Settings → Updates → "Check for test builds" (`Additions::canary_updates`).
+    pub fn canary_updates(&self) -> bool {
+        self.more.canary_updates
     }
 
     // ---- What features read. One accessor per setting a feature built outside Settings

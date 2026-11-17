@@ -422,9 +422,10 @@ fn a_row_that_comes_later_is_shown_and_cannot_be_changed() {
     w.click("layout-tabs-control/seg-0");
     assert_eq!(*w.settings(), before);
     assert!(w.says("Tabs run along the top for now."));
+    // Install updates works now: Never check stops the looking for test builds too.
     w.go(Section::Updates);
     w.click("updates-mode-control/seg-2");
-    assert_eq!(w.settings().update_mode.as_str(), "auto");
+    assert_eq!(w.settings().update_mode.as_str(), "manual");
     // Clean files before uploading works, in Privacy as in 0.10.
     w.go(Section::Privacy);
     w.click("files-clean-control");

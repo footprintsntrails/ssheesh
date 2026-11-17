@@ -10,6 +10,7 @@
 
 pub mod agent;
 pub mod add_server;
+pub mod canary;
 pub mod checkup;
 pub mod containers;
 pub mod files;
@@ -70,6 +71,8 @@ pub struct States {
     pub notes: crate::shell::notes::Notes,
     /// What the desktop outside the window was last told (`shell::desktop`).
     pub desktop: crate::shell::desktop::State,
+    /// A newer test build: the line across the top of the page.
+    pub canary: canary::State,
     /// The security check, recipes and snippets; the welcome, the tour (and hints), and
     /// "What's new".
     pub checkup: checkup::State,

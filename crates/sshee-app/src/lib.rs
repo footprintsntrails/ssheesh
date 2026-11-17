@@ -11,7 +11,8 @@
 //! list), `labels` (a server's icon, colour, label and name), `editors` (the editors on this
 //! computer that Files' "Open in <editor>" can start), `recipes` (the security check, its fixes
 //! and the step-by-step recipes), `snippets` (commands kept to run again, with blanks),
-//! `tour` (the welcome, the tour and the hints) and `changelog` ("What's new"). `settings_store` holds a running
+//! `tour` (the welcome, the tour and the hints) and `changelog` ("What's new"), `canary`
+//! (which test build this is and what the window says when a newer one is ready). `settings_store` holds a running
 //! 1.0's settings: the file, the rows of Settings, the shortcut and scheme tables.
 
 pub mod raw;
@@ -30,6 +31,7 @@ pub mod palette;
 pub mod servers;
 pub mod agents;
 pub mod editors;
+pub mod canary;
 pub mod recipes;
 pub mod snippets;
 pub mod tour;

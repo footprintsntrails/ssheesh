@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0-canary.125",
+  "sha": "4edfea3",
+  "pub_date": "2026-11-14T21:15:33Z",
+  "platforms": {
+    "linux-x64": {
+      "url": "https://github.com/footprintsntrails/ssheesh/releases/download/canary/ssheesh-1.0.0-canary-linux-x64.tar.gz",
+      "size": 5,
+      "sha256": "caf90169eefa5f807d577486b9f795ab86ae2983c5c20806cff959117e90af18",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRVjNpdmJTYzl0U1pnR3pTM2NWY21HdWdVZlVMenlEZWczRWx5OFNuQ1NRTGkrVTJUL24vUDNKWlZaeGdNU0JQU0ZLQ0xhbVV5MG5ZbGs5dWZxVllOS3RMdE5zanhpemdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjkwOTIyCWZpbGU6c3NoZWVzaC0xLjAuMC1jYW5hcnkuMTI1LWxpbnV4LXg2NC50YXIuZ3oKVC91TmFEKytxbnFSVnVRbVRDT2VPR0p2dnJMUDJ6MldZRkVVUWdMMUMvdU9QOWxYa2t3K1IyZmZPcEhKUHlhY2VlL2p3S2VWVERNZTBiVmFGUGJiQXc9PQo="
+    },
+    "windows-x64": {
+      "url": "https://github.com/footprintsntrails/ssheesh/releases/download/canary/ssheesh-1.0.0-canary-windows-x64.zip",
+      "size": 3,
+      "sha256": "823a3180dad3c9c3c4dea43ab2baf9f04bac9c3a7711745ff5f702551496d735",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRVjNpdmJTYzl0U1REcTJ1dk1ONnA0UkFEN1FqSVk2cUg2MkhtTC9zVzZRcnM2ZlZXaXQxa0VWRzJUMndMRGxic1RRVWkwZjY3VmZ2M01tUXJ1Vlp2QTBJZFllek40T1FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NjkwOTMzCWZpbGU6c3NoZWVzaC0xLjAuMC1jYW5hcnkuMTI1LXdpbmRvd3MteDY0LnppcAovbFhJU2pmMUdmL05PTmo3T1ZZRVRNMllrVlliRG0xL1pLZmtDZEwyeDRYWkJBR0g3dWthc1NmQUY5UDVlU25qcjhZUWlNQjVSSU4xSFllZmNmWmtBQT09Cg=="
+    }
+  }
+}

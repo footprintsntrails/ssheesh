@@ -104,6 +104,8 @@ pub struct DemoBackend {
     files: files::DemoFiles,
     /// "Open in your own editor", without an editor: the status flow only.
     edit: edit::DemoEdit,
+    /// A made-up newer test build is ready at start (`--demo-update`).
+    update: bool,
     /// `--demo-welcome`: the welcome, as at a first start.
     welcome: bool,
     /// `--demo-whats-new`: "What's new" opens, as after an update from 0.10.14.
@@ -128,8 +130,15 @@ impl DemoBackend {
         self
     }
 
+    /// A made-up newer test build is ready at start (`--demo-update`); restarting into it
+    /// says why it can't.
+    pub fn with_update(mut self, on: bool) -> DemoBackend {
+        self.update = on;
+        self
+    }
+
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), welcome: false, whats_new: false, card: "hostkey-new".into(), containers: containers::DemoContainers::new() }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), welcome: false, whats_new: false, card: "hostkey-new".into(), containers: containers::DemoContainers::new(), update: false }
     }
 
     /// The welcome at the start (`--demo-welcome`), "What's new" (`--demo-whats-new`).
@@ -244,6 +253,9 @@ impl Backend for DemoBackend {
             // The agents' own clock of it: the card under the tab says "waiting 2 min" too.
             sshee_ui::screens::agent::seed_wait(s, 130);
         });
+        if self.update {
+            remote.update(|s| sshee_ui::screens::canary::show(s, sshee_app::canary::Notice::Ready { version: "1.0.0-canary.125".into() }));
+        }
         tor::start(&remote);
         tor::tunnels_start(&remote);
         // What a full look at the machines with numbers would say (the Stats page).
@@ -365,6 +377,10 @@ impl Backend for DemoBackend {
             },
         };
         Box::new(ReplayLink::new(fixture, None))
+    }
+
+    fn restart_to_update(&mut self) -> Result<(), String> {
+        Err("the demo doesn't install anything".into())
     }
 
     fn replays(&self) -> bool {

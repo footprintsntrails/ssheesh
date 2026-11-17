@@ -386,7 +386,15 @@ fn network(s: &Shell, t: &'static Theme) -> El {
         vec![
             item(Icon::Server, "Your servers", if tor { "Only the ones you open, through your own ssh and Tor." } else { "Only the ones you open, through your own ssh." }),
             item(Icon::Tor, "The Tor network", if tor { "While Tor is on: your servers are reached through it." } else { "Only while Tor is on." }),
-            item(Icon::Globe, "GitHub, for updates", "Not yet: the preview doesn't check for updates."),
+            item(
+                Icon::Globe,
+                "GitHub, for updates",
+                match (s.options.build.updates_itself() && s.settings.canary_updates(), tor) {
+                    (true, true) => "A test build asks it for a newer one every few hours, through Tor.",
+                    (true, false) => "A test build asks it for a newer one every few hours.",
+                    (false, _) => "Not from this copy: it doesn't look for updates.",
+                },
+            ),
             row().w_full().px(12.0).py(9.0).child(
                 text("That's all. No account, no analytics, no crash reports. Your server list and settings stay on this computer.")
                     .font(theme::HELP)
@@ -464,12 +472,13 @@ fn wide(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
 /// A row that is a card or a picture of its own, outside the boxes.
 fn alone(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
     let Control::Special(special) = r.control else { return None };
-    let version = env!("CARGO_PKG_VERSION");
+    // Which build this is: its version, commit and canary run (`sshee_app::canary::Build`).
+    let version = s.options.build.label();
     Some(match special {
         Special::TerminalPreview => terminal_preview(s, t),
         Special::Network => col().w_full().gap(6.0).child(form_heading(t, r.label, None)).child(network(s, t)),
         Special::UpdateCard => {
-            version_card(t, "updates-card", 40.0, (&format!("SSHeesh Preview {version}"), "Early preview build. Checking for updates comes later."), Some("Check now"))
+            version_card(t, "updates-card", 40.0, (&format!("SSHeesh Preview {version}"), if s.options.build.updates_itself() { "A test build: it looks for newer test builds by itself." } else { "Built on this computer: it doesn't update itself." }), Some("Check now"))
         }
         Special::AboutCard => col()
             .w_full()

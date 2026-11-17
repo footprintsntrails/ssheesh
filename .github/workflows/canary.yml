@@ -3,6 +3,19 @@ name: Canary
 # Test builds of 1.0, the app on Rune in desktop/. Runs for the canary branch only. Nothing here
 # makes a release, touches latest.json or reaches anyone on 0.10: the builds are files to
 # download from this run's page.
+#
+# Test builds update themselves from the `canary` pre-release's canary.json (desktop/app/src/
+# update.rs). The archives are signed with a canary key of their own, never 0.10's updater key,
+# from two repository secrets:
+#   CANARY_SIGNING_KEY           the private key file's contents (`tauri signer generate`)
+#   CANARY_SIGNING_KEY_PASSWORD  its password
+# Made once, on your own computer:
+#   npx @tauri-apps/cli@2.12.4 signer generate -w ~/.tauri/ssheesh-canary.key
+#   gh secret set CANARY_SIGNING_KEY < ~/.tauri/ssheesh-canary.key
+#   gh secret set CANARY_SIGNING_KEY_PASSWORD        (asks for it)
+# and the public key (~/.tauri/ssheesh-canary.key.pub, one line) goes into CANARY_PUBLIC_KEY in
+# desktop/app/src/update.rs. Without the secrets the archives and canary.json are published
+# unsigned, and test builds only offer the download page.
 on:
   push:
     branches: [canary]
@@ -80,8 +93,14 @@ jobs:
 
       # The terminal prototype (one window, one pane, for measuring) and SSHeesh Preview (the
       # 1.0 window: tabs for every server, the sidebar, the status bar).
+      # The build knows its commit and, when it's published from the canary branch, its run:
+      # what it compares canary.json with (desktop/app/build.rs). Only this step sets them, so the
+      # tests above build nothing that would look for updates.
       - name: Build the prototype and SSHeesh Preview
         working-directory: desktop
+        env:
+          SSHEESH_BUILD_SHA: ${{ github.sha }}
+          SSHEESH_CANARY_RUN: ${{ github.ref == 'refs/heads/canary' && github.run_number || '' }}
         run: cargo build --profile perf -p ssheesh-proto -p ssheesh-preview
 
       - name: Collect the files
@@ -133,6 +152,58 @@ jobs:
           (cd dl/ssheesh-preview-Windows && zip -q ../../up/ssheesh-1.0.0-canary-windows-x64.zip ssheesh-preview.exe)
           ls -la up
 
+      # canary.json: the version (by this run's number), the commit, and each archive's address,
+      # size, SHA-256 and minisign signature. Each archive is signed under a name that carries
+      # the version (ssheesh-1.0.0-canary.<run>-linux-x64.tar.gz), which the signature's trusted
+      # comment says, so a signature can't be moved onto another build. With no key the
+      # signatures are empty and the app only offers the download page.
+      - name: Sign the archives and write canary.json
+        env:
+          CANARY_SIGNING_KEY: ${{ secrets.CANARY_SIGNING_KEY }}
+          CANARY_SIGNING_KEY_PASSWORD: ${{ secrets.CANARY_SIGNING_KEY_PASSWORD }}
+          RUN: ${{ github.run_number }}
+        run: |
+          version="1.0.0-canary.$RUN"
+          mkdir -p sign
+          for platform in linux-x64 macos-arm64 windows-x64; do
+            file=$(cd up && ls ssheesh-1.0.0-canary-$platform.*)
+            ext=${file#ssheesh-1.0.0-canary-$platform.}
+            named="sign/ssheesh-$version-$platform.$ext"
+            cp "up/$file" "$named"
+            if [ -n "$CANARY_SIGNING_KEY" ]; then
+              TAURI_SIGNING_PRIVATE_KEY="$CANARY_SIGNING_KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$CANARY_SIGNING_KEY_PASSWORD" \
+                npx --yes @tauri-apps/cli@2.12.4 signer sign "$named" > /dev/null
+              test -s "$named.sig"
+            fi
+          done
+          if [ -z "$CANARY_SIGNING_KEY" ]; then
+            echo "::warning::No CANARY_SIGNING_KEY secret: canary.json goes out unsigned, and test builds won't install it by themselves."
+          fi
+          python3 - "$version" "${GITHUB_SHA::7}" "$GITHUB_REPOSITORY" <<'PY'
+          import datetime, hashlib, json, os, sys
+          version, sha, repo = sys.argv[1:4]
+          platforms = {}
+          for platform in ("linux-x64", "macos-arm64", "windows-x64"):
+              [file] = [f for f in os.listdir("up") if f.startswith(f"ssheesh-1.0.0-canary-{platform}.")]
+              data = open(f"up/{file}", "rb").read()
+              ext = file[len(f"ssheesh-1.0.0-canary-{platform}."):]
+              sig = f"sign/ssheesh-{version}-{platform}.{ext}.sig"
+              platforms[platform] = {
+                  "url": f"https://github.com/{repo}/releases/download/canary/{file}",
+                  "size": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "signature": open(sig).read().strip() if os.path.exists(sig) else "",
+              }
+          manifest = {
+              "version": version,
+              "sha": sha,
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": platforms,
+          }
+          json.dump(manifest, open("up/canary.json", "w"), indent=2)
+          PY
+          cat up/canary.json
+
       - name: Replace the canary pre-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -140,7 +211,7 @@ jobs:
         run: |
           short="${GITHUB_SHA::7}"
           cat > notes.md <<NOTES
-          A test build of SSHeesh 1.0, the app rewritten in Rust. Built from \`$short\` (run ${{ github.run_number }}). It is replaced by every new canary build; nothing here updates itself yet.
+          A test build of SSHeesh 1.0, the app rewritten in Rust. Built from \`$short\` (run ${{ github.run_number }}). It is replaced by every new canary build, and a test build from here looks for the next one by itself (Settings → Updates → Check for test builds).
 
           It keeps its own folder (\`~/.sshee-preview\`) and its own keychain entries, so it runs beside 0.10 and changes nothing of it. To try it without any real server, start it with \`--demo\`.
 

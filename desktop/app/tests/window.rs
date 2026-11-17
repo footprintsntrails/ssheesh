@@ -1109,6 +1109,48 @@ fn a_confirmation_dims_the_window_in_both_appearances() {
     });
 }
 
+// ---- a newer test build (`screens::canary`): one line across the top of the page.
+
+#[test]
+fn a_new_test_build_is_offered_across_the_top_in_both_appearances() {
+    for (theme, group) in [("dark", "#242426"), ("light", "#f5f5f7")] {
+        let Some(run) = run(&format!("canary-{theme}"), &["--demo", "--demo-update", "--theme", theme], None) else { return };
+        assert!(run.tree_text.contains("A new test build is ready (1.0.0-canary.125)."), "{theme}");
+        assert_eq!(run.label("canary-restart"), "Restart to update", "{theme}");
+        assert_eq!(run.label("canary-later"), "Later", "{theme}");
+        // The top of the page, its whole width, over the tab's terminal.
+        let [page_x, page_y, page_w, _] = run.rect("page");
+        let [x, y, w, h] = run.rect("canary-notice");
+        assert_eq!((x, y, w), (page_x, page_y, page_w), "{theme}");
+        assert!((36.0..=48.0).contains(&h), "{theme}: {h}");
+        assert!(run.rect("term")[1] >= y + h, "{theme}: the terminal is under the line");
+        assert_eq!(run.fill("canary-notice"), format!("{group}ff"), "{theme}");
+        // The picture: the line's colour at its start, and the blue of the button that does it.
+        let px = run.pixels();
+        assert_eq!(at(&px, (x + 40.0) as u32, (y + 3.0) as u32), group, "{theme}");
+        let [bx, by, bw, bh] = run.rect("canary-restart");
+        let button = [bx as u32, by as u32, (bx + bw) as u32, (by + bh) as u32];
+        assert!(near(&px, button, [0x00, 0x71, 0xe3]) + near(&px, button, [0x0a, 0x84, 0xff]) > 100, "{theme}: Restart isn't blue");
+    }
+    // Without the flag, nothing is said.
+    let Some(run) = self::run("canary-none", &["--demo"], None) else { return };
+    assert!(run.element("canary-notice").is_none());
+}
+
+#[test]
+fn later_puts_the_line_away_and_a_failed_restart_says_why() {
+    let later = json!([tap(0.5, "canary-later"), end(1.2)]);
+    let Some(run) = run("canary-later", &["--demo", "--demo-update", "--theme", "dark"], Some(later)) else { return };
+    assert!(run.element("canary-notice").is_none(), "Later didn't put it away");
+    assert_eq!(run.rect("term")[1], run.rect("page")[1], "the terminal has the page again");
+    // The demo installs nothing: the line says why and offers the download page instead.
+    let restart = json!([tap(0.5, "canary-restart"), end(1.2)]);
+    let Some(run) = self::run("canary-restart", &["--demo", "--demo-update", "--theme", "light"], Some(restart)) else { return };
+    assert!(run.tree_text.contains("It didn't install: the demo doesn't install anything"));
+    assert_eq!(run.label("canary-download"), "Download");
+    assert!(run.element("canary-restart").is_none());
+}
+
 // ---- the security check, recipes and snippets; the welcome, the tour and "What's new"
 
 #[test]
