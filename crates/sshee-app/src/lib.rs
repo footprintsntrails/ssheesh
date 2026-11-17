@@ -27,6 +27,7 @@ pub mod transfers;
 pub mod settings_store;
 pub mod home;
 pub mod labels;
+pub mod roles;
 pub mod palette;
 pub mod servers;
 pub mod agents;

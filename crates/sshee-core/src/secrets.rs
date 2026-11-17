@@ -108,6 +108,13 @@ impl PasswordStore {
     }
 }
 
+/// A password another copy of SSHeesh saved under its own keychain name (`service`): 1.0
+/// reads 0.10's this way, only after you said yes. Nothing is written or kept.
+pub fn read_saved(service: &str, host_id: &str) -> Option<Secret> {
+    let (service, id) = (service.to_string(), host_id.to_string());
+    off_runtime(move || keyring::Entry::new(&service, &id).ok()?.get_password().ok()).flatten().map(Secret::new)
+}
+
 /// Who a saved password is for, as ssh names them in its prompts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PasswordFor {

@@ -194,7 +194,10 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
             }
             r
         } else {
-            rail_button(t, glyph, &name, if selected { RailState::Selected } else { RailState::Plain }, waiting)
+            let state = if selected { RailState::Selected } else { RailState::Plain };
+            // Its picture, else its icon in its own colour (`screens::server_menu::glyph`).
+            let drawn = crate::screens::server_menu::glyph(s, server, theme::ICON_RAIL, crate::kit::rail::rail_ink(t, state));
+            crate::kit::rail::rail_button_with(t, drawn, &name, state, waiting)
         };
         b = b
             .key(format!("server-{i}"))
@@ -211,6 +214,21 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
     }
     if !wide {
         rail = rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
+    }
+    // New hosts in ~/.ssh/config: a quiet note, not a dialog (0.10's `ConfigNotice`).
+    let new = s.screens.home.config_new;
+    if new > 0 {
+        let words = format!("{new} new in ~/.ssh/config · Review");
+        let note = if wide {
+            list_row(t, Icon::Doc, &words, false)
+        } else {
+            rail_button(t, Icon::Doc, &words, RailState::Plain, false).child(
+                el().absolute(theme::RAIL_BUTTON - 15.0, 1.0).h(14.0).min_w(14.0).px(3.0).radius(7.0).fill(t.blue).items_center().justify_center().a11y_hidden().child(
+                    rune::text(new.min(99).to_string()).font(theme::SMALL).color(t.on_color).single_line(),
+                ),
+            )
+        };
+        rail = rail.child(note.key("config-new").help(words.clone()).label(words).on_press_tx(|s: &mut Shell, tx| s.review_config(tx)));
     }
     let tor = match s.bench.tor() {
         Tor::Off => RailState::Plain,

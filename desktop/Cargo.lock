@@ -5909,6 +5909,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "flate2",
+ "image",
  "indexmap 2.14.2",
  "libc",
  "minisign-verify",

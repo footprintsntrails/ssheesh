@@ -855,6 +855,8 @@ impl Shell {
         crate::screens::files::signed_in(self, id);
         self.sync_watch();
         crate::screens::agent::linked(self);
+        // The first connect: what the server is for, for its icon.
+        crate::screens::server_menu::linked(self, id);
     }
 
     /// The start of every frame (`AppSpec::poll`): every pane takes what its session sent, the

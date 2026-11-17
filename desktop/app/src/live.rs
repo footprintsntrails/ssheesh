@@ -190,6 +190,7 @@ fn show(remote: &Remote, shown: Shown, answer: Option<sshee_app::servers::Answer
     remote.update(move |s| {
         s.bench.set_servers(shown.servers);
         s.set_server_looks(shown.colors, shown.config_new, shown.old_new);
+        s.set_server_faces(shown.faces);
         if let Some(answer) = answer {
             s.servers_answer(answer);
         }
@@ -358,12 +359,39 @@ impl Backend for LiveBackend {
     /// own. The answer and the new list are posted while the list is still held, so they
     /// reach the window in the order the list changed.
     fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        use sshee_app::servers::Ask as S;
         let (Some(store), Some(remote)) = (self.store.clone(), self.remote.clone()) else { return };
+        // What needs ssh or this computer's keys, done here; the list keeps what it found.
+        let (env, keys) = (self.env.clone(), self.keys.clone());
+        let (target, prepare) = match &ask {
+            S::Detect { server, .. } => self.reach(server),
+            _ => (None, Box::new(|_: &mut Target| {}) as crate::files::Prepare),
+        };
         let hosts = self.hosts.clone();
         let failed = remote.clone();
         let spawned = std::thread::Builder::new().name("servers".into()).spawn(move || {
+            let answer = match &ask {
+                S::LocalAuth => return remote.update(|s| s.servers_answer(sshee_app::servers::Answer::LocalAuth(crate::servers::local_auth()))),
+                S::Test(new) | S::TrustTest(new) => {
+                    let answer = crate::servers::test(&keys, &env, new, matches!(ask, S::TrustTest(_)));
+                    return remote.update(move |s| s.servers_answer(answer));
+                }
+                S::Detect { server, first } => {
+                    // The shell just opened goes first.
+                    if *first {
+                        std::thread::sleep(std::time::Duration::from_millis(sshee_app::roles::AFTER_CONNECT_MS));
+                    }
+                    let icon = target.map(|mut t| {
+                        prepare(&mut t);
+                        t
+                    });
+                    let icon = icon.and_then(|t| crate::servers::detect(&t, &env));
+                    Some(store.lock().unwrap_or_else(|e| e.into_inner()).guessed(server, icon))
+                }
+                _ => None,
+            };
             let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
-            let answer = store.handle(ask);
+            let answer = answer.unwrap_or_else(|| store.handle(ask));
             let shown = store.shown();
             if let Ok(mut hosts) = hosts.lock() {
                 *hosts = by_key(&shown.hosts);

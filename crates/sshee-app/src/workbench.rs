@@ -261,6 +261,27 @@ pub struct SavedTabs {
     /// Tabs split side by side and one above another, each tab by its place in `tabs`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub splits: Vec<layout::SavedSplit>,
+    /// The tab you were last on at each machine, by its place in `tabs`: a click on a server
+    /// brings you back where you were, after a restart too.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub last_on: std::collections::BTreeMap<ServerKey, usize>,
+    /// Tabs closed lately, newest first, to bring back (0.10 kept them too).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub closed: Vec<SavedClosed>,
+}
+
+/// A closed tab, kept to bring back.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SavedClosed {
+    pub server: ServerKey,
+    pub kind: PaneKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerRef>,
 }
 
 /// One saved tab.
@@ -733,6 +754,12 @@ impl Workbench {
             active: self.active_id().and_then(|id| self.index_of(id)),
             sidebar_hidden: !self.sidebar,
             splits: self.layout.saved(&self.tabs.iter().map(|t| t.id).collect::<Vec<_>>()),
+            last_on: self.last_on.iter().filter_map(|(server, id)| Some((server.clone(), self.index_of(*id)?))).collect(),
+            closed: self
+                .closed
+                .iter()
+                .map(|c| SavedClosed { server: c.server.clone(), kind: c.kind.pane_kind(), title: c.title.clone(), path: c.path.clone(), container: c.container.clone() })
+                .collect(),
         }
     }
 
@@ -778,6 +805,19 @@ impl Workbench {
         }
         self.layout = layout::Layout::restore(&saved.splits, |i| placed.get(i).copied().flatten());
         self.sidebar = !saved.sidebar_hidden;
+        // Where you were on each machine: only a tab of that machine counts.
+        for (server, at) in &saved.last_on {
+            let id = placed.get(*at).copied().flatten().filter(|id| self.tab(*id).is_some_and(|t| t.server == *server));
+            if let Some(id) = id {
+                self.last_on.insert(server.clone(), id);
+            }
+        }
+        self.closed = saved
+            .closed
+            .iter()
+            .filter_map(|c| Some(ClosedTab { server: c.server.clone(), kind: TabKind::from_pane_kind(&c.kind)?, title: c.title.clone(), path: c.path.clone(), container: c.container.clone() }))
+            .take(CLOSED_KEPT)
+            .collect();
         match active.or(self.tabs.first().map(|t| t.id)) {
             // The main menu was showing: it shows again, with a tab to come back to.
             Some(id) if saved.active.is_none() => {
@@ -1198,6 +1238,35 @@ mod tests {
         assert!(w.showing_home());
         assert_eq!(w.step(1), Some(a));
         assert!(!w.showing_home());
+    }
+
+    #[test]
+    fn closed_tabs_and_where_you_were_are_kept_between_runs() {
+        let mut w = bench();
+        let first = w.go_to(WEB);
+        let second = w.new_terminal();
+        let files = w.open_with(TabKind::Files, DB, Open { path: Some("/var/log".into()), ..Open::default() });
+        w.close(files);
+        // Back on web's first terminal, then on the database's.
+        w.focus(first);
+        w.go_to(DB);
+        let saved = w.saved();
+        assert_eq!(saved.closed.len(), 1);
+        let json = serde_json::to_string(&saved).unwrap();
+        let mut again = bench();
+        again.restore(&serde_json::from_str(&json).unwrap());
+        assert_eq!(again.closed().len(), 1);
+        assert_eq!(again.closed()[0].path.as_deref(), Some("/var/log"));
+        // A click on web lands where you were there, not on its newest tab.
+        let web = again.go_to(WEB);
+        assert_eq!(again.tab(web).unwrap().n, w.tab(first).unwrap().n);
+        assert_ne!(again.tab(web).unwrap().n, w.tab(second).unwrap().n);
+        // A place that isn't that machine's tab is ignored.
+        let mut odd = saved.clone();
+        odd.last_on.insert(STAGING.into(), 0);
+        let mut third = bench();
+        third.restore(&odd);
+        assert_eq!(third.saved().last_on.get(STAGING), None);
     }
 
     #[test]

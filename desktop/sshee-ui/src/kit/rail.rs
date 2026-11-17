@@ -25,12 +25,22 @@ pub enum RailState {
 /// A sidebar button named `name` (its tooltip and what a screen reader says). `waiting`: the
 /// orange "needs you" dot. The caller adds the key and `.on_press_tx(..)`.
 pub fn rail_button(t: &Theme, glyph: Icon, name: &str, state: RailState, waiting: bool) -> El {
-    let size = theme::RAIL_BUTTON;
-    let ink = match state {
+    rail_button_with(t, icon(glyph, theme::ICON_RAIL, rail_ink(t, state)), name, state, waiting)
+}
+
+/// The ink of a button's icon in `state`.
+pub fn rail_ink(t: &Theme, state: RailState) -> rune::Color {
+    match state {
         RailState::Plain | RailState::TorFailed => t.l2,
         RailState::Selected => t.l1,
         RailState::TorOn | RailState::TorStarting => t.green,
-    };
+    }
+}
+
+/// [`rail_button`] around a drawing of the caller's: a server's icon in its colour, or its
+/// picture.
+pub fn rail_button_with(t: &Theme, glyph: El, name: &str, state: RailState, waiting: bool) -> El {
+    let size = theme::RAIL_BUTTON;
     let mut b = rune::el()
         .size(size, size)
         .radius(theme::RADIUS)
@@ -47,7 +57,7 @@ pub fn rail_button(t: &Theme, glyph: Icon, name: &str, state: RailState, waiting
         RailState::TorOn => b.fill(t.tor_tile()),
         _ => b,
     };
-    b = b.child(icon(glyph, theme::ICON_RAIL, ink));
+    b = b.child(glyph);
     if state == RailState::TorStarting {
         b = b.child(progress_ring(size - 6.0, 1.5, t.green).absolute(3.0, 3.0));
     }

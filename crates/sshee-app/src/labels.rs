@@ -106,13 +106,107 @@ pub struct Listed {
 }
 
 /// A server's icon and colour as shown.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Look {
     pub icon: String,
     /// `#rrggbb`.
     pub color: String,
     /// You picked it; else the icon is the guessed one and the colour the server's own.
     pub picked: bool,
+    /// A picture of your own instead of the icon: a small PNG as a data URL (0.10's own
+    /// shape). Never drawn while streaming.
+    pub image: Option<String>,
+    /// What SSHeesh guessed the server is for ([`crate::roles`]), once it has looked: the
+    /// icon "Automatic" goes back to.
+    pub guessed: Option<String>,
+}
+
+/// A picture as the window draws it: straight-alpha RGBA, rows top first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: std::sync::Arc<[u8]>,
+}
+
+/// What the window needs to draw one server and offer its menu: its look, its picture made
+/// ready to draw (the backend decodes it, off the UI thread), and whether a password is saved
+/// for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Face {
+    pub look: Look,
+    pub picture: Option<Picture>,
+    pub saved_password: bool,
+}
+
+/// How big a server's picture is kept: 0.10 made every picture this square (`hostImageFrom`).
+pub const IMAGE_SIDE: u32 = 64;
+
+/// The biggest picture file read to make a server's icon from.
+pub const IMAGE_FILE_MAX: u64 = 8 * 1024 * 1024;
+
+/// More colours than the six, for "Your own colour": hues and greys any server can wear. The
+/// six of [`HOST_COLORS`] come first in the picker.
+pub const MORE_COLORS: [&str; 12] =
+    ["#e5484d", "#f76b15", "#ffb224", "#46a758", "#12a594", "#3e63dd", "#8e4ec6", "#d6409f", "#a18072", "#6e56cf", "#29a383", "#1f2328"];
+
+/// A colour as typed: `#2389e2`, `2389E2`, or `#28e` read as `#2288ee` (lower case, six
+/// digits). `None` when it isn't one.
+pub fn parse_color(text: &str) -> Option<String> {
+    let hex = text.trim();
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let six = match hex.len() {
+        3 => hex.chars().flat_map(|c| [c, c]).collect::<String>(),
+        6 => hex.to_owned(),
+        _ => return None,
+    };
+    Some(format!("#{}", six.to_ascii_lowercase()))
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// A PNG's bytes as the data URL 0.10 keeps a server's picture in (`data:image/png;base64,…`).
+pub fn image_data_url(png: &[u8]) -> String {
+    let mut out = String::from("data:image/png;base64,");
+    for chunk in png.chunks(3) {
+        let b = [chunk[0], chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(BASE64[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// The bytes of a picture kept as a data URL (`data:image/…;base64,…`). `None` for anything
+/// else: a link to somewhere is never followed.
+pub fn image_bytes(url: &str) -> Option<Vec<u8>> {
+    let (head, body) = url.strip_prefix("data:image/")?.split_once(',')?;
+    if !head.ends_with(";base64") {
+        return None;
+    }
+    let mut out = Vec::with_capacity(body.len() / 4 * 3);
+    let (mut n, mut bits) = (0u32, 0);
+    for b in body.bytes().filter(|b| !b.is_ascii_whitespace()) {
+        if b == b'=' {
+            break;
+        }
+        let v = BASE64.iter().position(|c| *c == b)? as u32;
+        n = ((n << 6) | v) & 0xff_ffff;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((n >> bits) as u8);
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Everything 1.0 keeps about how servers look and what they're called.
@@ -144,37 +238,98 @@ impl Looks {
     /// The look a server shows: yours, else the guessed icon (or the plain server) in the
     /// server's own colour (0.10's `lookOf`).
     pub fn look(&self, host_id: &str) -> Look {
+        let auto = self.automatic_look(host_id);
         match self.labels.looks.get(host_id) {
             Some(mine) => Look {
                 icon: if mine.icon.is_empty() { "server".into() } else { mine.icon.clone() },
                 color: if mine.color.is_empty() { host_color(host_id).into() } else { mine.color.clone() },
                 picked: true,
+                // A picture that doesn't read is left in the file, and not drawn.
+                image: mine.image.clone().filter(|i| image_bytes(i).is_some()),
+                guessed: auto.guessed,
             },
-            None => {
-                let guessed = self.labels.auto_looks.get(host_id).map(|l| l.icon.as_str()).filter(|i| !i.is_empty());
-                Look { icon: guessed.unwrap_or("server").into(), color: host_color(host_id).into(), picked: false }
-            }
+            None => auto,
         }
     }
 
-    /// Picks an icon; the colour stays as it shows.
+    /// The look "Automatic" shows: the guessed icon (or the plain server) in the server's own
+    /// colour.
+    pub fn automatic_look(&self, host_id: &str) -> Look {
+        let guessed = self.labels.auto_looks.get(host_id).map(|l| l.icon.clone()).filter(|i| !i.is_empty());
+        Look { icon: guessed.clone().unwrap_or_else(|| "server".into()), color: host_color(host_id).into(), picked: false, image: None, guessed }
+    }
+
+    /// Picks an icon; the colour stays as it shows and a picture goes (0.10's look picker:
+    /// picking an icon or a colour drops the picture).
     pub fn set_icon(&mut self, host_id: &str, icon: &str) {
         let shown = self.look(host_id);
         let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
         look.icon = icon.to_owned();
+        look.image = None;
         if look.color.is_empty() {
             look.color = shown.color;
         }
     }
 
-    /// Picks a colour (`#rrggbb`); the icon stays as it shows.
+    /// Picks a colour (anything [`parse_color`] reads); the icon stays as it shows and a
+    /// picture goes. A colour that doesn't read changes nothing.
     pub fn set_color(&mut self, host_id: &str, color: &str) {
+        let Some(color) = parse_color(color) else { return };
         let shown = self.look(host_id);
         let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
-        look.color = color.to_owned();
+        look.color = color;
+        look.image = None;
         if look.icon.is_empty() {
             look.icon = shown.icon;
         }
+    }
+
+    /// A picture of your own instead of the icon (a data URL: [`image_data_url`]), or `None`
+    /// to take it away. Taking away a picture put on "Automatic" goes back to it (0.10's
+    /// `LookPopover`).
+    pub fn set_image(&mut self, host_id: &str, image: Option<String>) {
+        let shown = self.look(host_id);
+        match image {
+            Some(image) => {
+                let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
+                look.icon = shown.icon;
+                look.color = shown.color;
+                look.image = Some(image);
+            }
+            None => {
+                let auto = self.automatic_look(host_id);
+                if shown.icon == auto.icon && shown.color == auto.color {
+                    self.labels.looks.shift_remove(host_id);
+                } else if let Some(look) = self.labels.looks.get_mut(host_id) {
+                    look.image = None;
+                }
+            }
+        }
+    }
+
+    /// "Automatic": the look you picked goes, and the server shows what SSHeesh guessed, in
+    /// its own colour.
+    pub fn automatic(&mut self, host_id: &str) {
+        self.labels.looks.shift_remove(host_id);
+    }
+
+    /// What SSHeesh guessed a server is for (0.10's `setAutoLook`): kept for good, even "just a
+    /// server", so it isn't looked at again on every connect. A look you picked still wins.
+    pub fn set_guess(&mut self, host_id: &str, icon: &str) {
+        self.labels.auto_looks.entry(host_id.to_owned()).or_default().icon = icon.to_owned();
+    }
+
+    /// Whether a server is worth looking at to guess its icon: you haven't picked one and
+    /// SSHeesh hasn't guessed yet (0.10's `startRoleDetection`).
+    pub fn wants_guess(&self, host_id: &str) -> bool {
+        !self.labels.looks.contains_key(host_id) && !self.labels.auto_looks.contains_key(host_id)
+    }
+
+    /// A look given when a server is added: what was picked in the form.
+    pub fn set_look(&mut self, host_id: &str, look: HostLook) {
+        let mut look = look;
+        look.color = parse_color(&look.color).unwrap_or_else(|| host_color(host_id).into());
+        self.labels.looks.insert(host_id.to_owned(), look);
     }
 
     pub fn env(&self, host_id: &str) -> Option<&EnvLabel> {
@@ -282,6 +437,11 @@ impl Looks {
     pub fn colors(&self, hosts: &[Listed]) -> IndexMap<ServerKey, String> {
         hosts.iter().filter(|h| self.shown(h)).map(|h| (format!("host:{}", h.id), self.look(&h.id).color)).collect()
     }
+
+    /// Each shown server's whole look, by its key in the sidebar.
+    pub fn shown_looks(&self, hosts: &[Listed]) -> IndexMap<ServerKey, Look> {
+        hosts.iter().filter(|h| self.shown(h)).map(|h| (format!("host:{}", h.id), self.look(&h.id))).collect()
+    }
 }
 
 #[cfg(test)]
@@ -322,16 +482,98 @@ mod tests {
     #[test]
     fn a_look_is_yours_else_the_guessed_icon_in_the_servers_own_colour() {
         let mut looks = Looks::default();
-        assert_eq!(looks.look("saved:1"), Look { icon: "server".into(), color: host_color("saved:1").into(), picked: false });
+        assert_eq!(looks.look("saved:1"), Look { icon: "server".into(), color: host_color("saved:1").into(), picked: false, ..Look::default() });
         looks.labels.auto_looks.insert("saved:1".into(), AutoLook { icon: "database".into(), ..AutoLook::default() });
         assert_eq!(looks.look("saved:1").icon, "database");
         // Picking an icon keeps the colour it showed; picking a colour keeps the icon.
         looks.set_icon("saved:1", "globe");
-        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: host_color("saved:1").into(), picked: true });
-        looks.set_color("saved:1", "#7e8590");
-        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: "#7e8590".into(), picked: true });
+        let guessed = Some("database".to_owned());
+        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: host_color("saved:1").into(), picked: true, guessed: guessed.clone(), image: None });
+        looks.set_color("saved:1", "#7E8590");
+        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: "#7e8590".into(), picked: true, guessed, image: None });
         looks.set_color("saved:2", "#2389e2");
         assert_eq!(looks.look("saved:2").icon, "server");
+        // A colour that isn't one changes nothing.
+        looks.set_color("saved:1", "blue");
+        assert_eq!(looks.look("saved:1").color, "#7e8590");
+    }
+
+    #[test]
+    fn any_colour_reads_as_six_lower_case_digits() {
+        assert_eq!(parse_color("#2389E2").as_deref(), Some("#2389e2"));
+        assert_eq!(parse_color(" 2389e2 ").as_deref(), Some("#2389e2"));
+        assert_eq!(parse_color("#28e").as_deref(), Some("#2288ee"));
+        for bad in ["", "#", "#12345", "#1234567", "#ggg000", "blue", "##123456"] {
+            assert_eq!(parse_color(bad), None, "{bad}");
+        }
+        // The extra colours are colours, and none is one of the six.
+        for c in MORE_COLORS {
+            assert_eq!(parse_color(c).as_deref(), Some(c));
+            assert!(!HOST_COLORS.contains(&c));
+        }
+    }
+
+    #[test]
+    fn a_picture_is_kept_as_0_10_keeps_it_and_read_back() {
+        for bytes in [&b"\x89PNG"[..], b"\x89PNG\r", b"\x89PNG\r\n", &[0u8, 255, 128, 7, 9]] {
+            let url = image_data_url(bytes);
+            assert!(url.starts_with("data:image/png;base64,"));
+            assert_eq!(image_bytes(&url).as_deref(), Some(bytes), "{url}");
+        }
+        // As a browser writes it.
+        assert_eq!(image_data_url(b"Man"), "data:image/png;base64,TWFu");
+        assert_eq!(image_data_url(b"Ma"), "data:image/png;base64,TWE=");
+        assert_eq!(image_bytes("data:image/jpeg;base64,TWE="), Some(b"Ma".to_vec()));
+        // Only a picture carried in the URL itself: nothing is fetched.
+        for not in ["https://example.com/a.png", "data:text/plain;base64,TWFu", "data:image/png,Man", "data:image/png;base64,T!Fu", "data:image/png;base64,"] {
+            assert_eq!(image_bytes(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn a_picture_replaces_the_icon_until_an_icon_or_a_colour_is_picked() {
+        let mut looks = Looks::default();
+        let picture = image_data_url(b"\x89PNG");
+        looks.set_image("saved:1", Some(picture.clone()));
+        let look = looks.look("saved:1");
+        assert_eq!((look.picked, look.image.as_deref(), look.icon.as_str()), (true, Some(picture.as_str()), "server"));
+        // Taking it away from "Automatic" goes back to it.
+        looks.set_image("saved:1", None);
+        assert!(!looks.look("saved:1").picked);
+        // Over an icon you picked, the icon stays.
+        looks.set_icon("saved:1", "globe");
+        looks.set_image("saved:1", Some(picture.clone()));
+        looks.set_image("saved:1", None);
+        assert_eq!((looks.look("saved:1").icon.as_str(), looks.look("saved:1").picked), ("globe", true));
+        // An icon or a colour drops it.
+        looks.set_image("saved:1", Some(picture.clone()));
+        looks.set_color("saved:1", "#7577e3");
+        assert_eq!(looks.look("saved:1").image, None);
+        // One that doesn't read isn't drawn.
+        looks.labels.looks.get_mut("saved:1").unwrap().image = Some("https://example.com/a.png".into());
+        assert_eq!(looks.look("saved:1").image, None);
+    }
+
+    #[test]
+    fn automatic_goes_back_to_the_guess_and_a_guess_is_asked_for_once() {
+        let mut looks = Looks::default();
+        assert!(looks.wants_guess("saved:1"));
+        looks.set_guess("saved:1", "server");
+        assert!(!looks.wants_guess("saved:1"));
+        looks.set_guess("saved:1", "globe");
+        assert_eq!(looks.look("saved:1").icon, "globe");
+        looks.set_icon("saved:1", "database");
+        assert_eq!(looks.look("saved:1").guessed.as_deref(), Some("globe"));
+        looks.automatic("saved:1");
+        assert_eq!(looks.look("saved:1"), looks.automatic_look("saved:1"));
+        assert_eq!(looks.look("saved:1").icon, "globe");
+        // A picked look means nothing is guessed.
+        looks.set_look("saved:2", HostLook { icon: "shop".into(), color: "#ABC".into(), ..HostLook::default() });
+        assert!(!looks.wants_guess("saved:2"));
+        assert_eq!(looks.look("saved:2").color, "#aabbcc");
+        looks.set_look("saved:3", HostLook { icon: "shop".into(), color: "nope".into(), ..HostLook::default() });
+        assert_eq!(looks.look("saved:3").color, host_color("saved:3"));
+        assert_eq!(looks.shown_looks(&[saved("3", "shop")])["host:saved:3"].icon, "shop");
     }
 
     #[test]
@@ -410,7 +652,7 @@ mod tests {
         looks.set_env("cfg:web-7731", Some(EnvLabel::Prod));
         looks.carry(&old, &[("saved:old1".into(), "saved:new1".into())]);
         assert_eq!(looks.env("saved:new1"), Some(&EnvLabel::Prod));
-        assert_eq!(looks.look("saved:new1"), Look { icon: "database".into(), color: "#0997b4".into(), picked: true });
+        assert_eq!(looks.look("saved:new1"), Look { icon: "database".into(), color: "#0997b4".into(), picked: true, ..Look::default() });
         assert_eq!(looks.env("cfg:web-7731"), Some(&EnvLabel::Prod));
         assert_eq!(looks.look("cfg:web-7731").icon, "globe");
         // A saved server that wasn't brought over brings nothing.

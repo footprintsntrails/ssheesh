@@ -20,7 +20,7 @@ use indexmap::IndexMap;
 use sshee_app::labels::{Listed, Looks};
 use sshee_app::legacy::APP_IDENTIFIER;
 use sshee_app::model::Labels;
-use sshee_app::servers::{host_id, imported_note, Answer, Ask, Candidate, NewServer, Source, Sources};
+use sshee_app::servers::{forgot_note, host_id, imported_note, old_passwords_note, Answer, Ask, Candidate, NewServer, Source, Sources};
 use sshee_app::workbench::{Server, ServerKey};
 use sshee_core::secrets::{PasswordStore, Secret};
 use sshee_core::{AppIdentity, Host, HostSource, HostStore, NewHost};
@@ -37,6 +37,9 @@ pub trait Keychain: Send + Sync {
     /// has it).
     fn get(&self, host_id: &str, remembered: bool) -> Option<Secret>;
     fn forget(&self, host_id: &str);
+    /// A password SSHeesh 0.10 saved, under its own keychain name: read only after you said
+    /// yes (the system may ask you too).
+    fn old(&self, host_id: &str) -> Option<Secret>;
 }
 
 impl Keychain for PasswordStore {
@@ -50,6 +53,10 @@ impl Keychain for PasswordStore {
 
     fn forget(&self, host_id: &str) {
         PasswordStore::forget(self, host_id);
+    }
+
+    fn old(&self, host_id: &str) -> Option<Secret> {
+        sshee_core::secrets::read_saved(AppIdentity::standard().keychain_service(), host_id)
     }
 }
 
@@ -87,6 +94,33 @@ pub struct Shown {
     pub old_new: usize,
     /// Every host, for the sessions.
     pub hosts: Vec<Host>,
+    /// Each shown server's look, picture (decoded here, off the UI thread) and saved password.
+    pub faces: IndexMap<ServerKey, sshee_app::labels::Face>,
+}
+
+/// A server's picture, decoded for the window: the data URL 0.10 keeps, as RGBA.
+pub fn picture(look: &sshee_app::labels::Look) -> Option<sshee_app::labels::Picture> {
+    let bytes = sshee_app::labels::image_bytes(look.image.as_deref()?)?;
+    let decoded = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let (width, height) = decoded.dimensions();
+    (width > 0 && height > 0 && width <= 1024 && height <= 1024).then(|| sshee_app::labels::Picture { width, height, rgba: decoded.into_raw().into() })
+}
+
+/// A picture file made into a server's icon, as 0.10 did (`hostImageFrom`): the middle square,
+/// [`sshee_app::labels::IMAGE_SIDE`] pixels, as a PNG data URL.
+pub fn picture_from_file(path: &Path) -> Result<String, String> {
+    let size = std::fs::metadata(path).map_err(|e| format!("Couldn't read that picture: {e}"))?.len();
+    if size > sshee_app::labels::IMAGE_FILE_MAX {
+        return Err("That picture is too big. Pick one under 8 MB.".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("Couldn't read that picture: {e}"))?;
+    let decoded = image::load_from_memory(&bytes).map_err(|_| "That file isn't a picture SSHeesh can read. Try a PNG or a JPEG.".to_owned())?;
+    let side = decoded.width().min(decoded.height());
+    let square = decoded.crop_imm((decoded.width() - side) / 2, (decoded.height() - side) / 2, side, side);
+    let small = square.resize_exact(sshee_app::labels::IMAGE_SIDE, sshee_app::labels::IMAGE_SIDE, image::imageops::FilterType::Lanczos3);
+    let mut png = Vec::new();
+    small.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| format!("Couldn't make the icon: {e}"))?;
+    Ok(sshee_app::labels::image_data_url(&png))
 }
 
 /// The list, its looks and its passwords.
@@ -175,8 +209,34 @@ impl ServerStore {
             colors: self.looks.colors(&list),
             config_new: self.looks.undecided(&list).len(),
             old_new: self.old_candidates(&hosts).len(),
+            faces: sshee_app::servers::faces(&self.looks.shown_looks(&list), |key| hosts.iter().any(|h| format!("host:{}", h.id) == key && h.remembered_password), picture),
             hosts,
         }
+    }
+
+    /// This copy's servers brought over from 0.10 whose password 0.10 kept and this copy
+    /// doesn't have: `(id here, id in 0.10, name)`, matched by address.
+    fn old_passwords(&mut self) -> Vec<(String, String, String)> {
+        let old = self.old_hosts();
+        self.hosts()
+            .into_iter()
+            .filter(|h| h.source != HostSource::SshConfig && !h.remembered_password)
+            .filter_map(|h| {
+                let from = old.iter().find(|o| o.remembered_password && address(o) == address(&h))?;
+                Some((h.id.clone(), from.id.clone(), h.name.clone()))
+            })
+            .collect()
+    }
+
+    /// A look at a server is over: what it guessed is kept, for good.
+    pub fn guessed(&mut self, server: &str, icon: Option<&str>) -> Answer {
+        if let (Some(id), Some(icon)) = (host_id(server), icon) {
+            self.looks.set_guess(id, icon);
+            if let Err(why) = self.save_looks() {
+                return Answer::Refused { server: server.to_owned(), doing: "Couldn't keep the server's icon".into(), why };
+            }
+        }
+        Answer::Detected { server: server.to_owned(), icon: icon.map(str::to_owned) }
     }
 
     /// The password to sign in to a host with, when one was saved or typed this run. Asks
@@ -238,6 +298,7 @@ impl ServerStore {
             xpipe_locked: scan.locked,
             xpipe_through_jump: scan.through_jump,
             old: self.old_candidates(&mine),
+            old_passwords: self.old_passwords().len(),
         }
     }
 
@@ -245,8 +306,21 @@ impl ServerStore {
     fn add(&mut self, new: NewServer, identity_agent: Option<String>) -> Result<(Host, Option<String>), String> {
         let password = new.password.as_ref().filter(|p| !p.is_empty()).map(|p| Secret::new(p.expose()));
         let remember = new.remember_password;
+        let identity_agent = new.identity_agent.or(identity_agent);
         let input = NewHost { name: new.name, address: new.address, identity_file: new.identity_file, password: password.clone(), remember_password: remember, identity_agent };
         let mut host = self.hosts.add(input)?;
+        // The look and label picked in the form, right away.
+        let mut looks_failed = None;
+        if new.look.is_some() || new.env.is_some() {
+            if let Some(look) = &new.look {
+                self.looks.set_look(&host.id, look.kept());
+            }
+            if new.env.is_some() {
+                self.looks.set_env(&host.id, new.env.clone());
+            }
+            // Added all the same; it says so.
+            looks_failed = self.save_looks().err();
+        }
         let mut warning = None;
         if let Some(password) = password {
             // The keychain refused: the server is added all the same, and its password works
@@ -257,15 +331,15 @@ impl ServerStore {
                 warning = Some(why);
             }
         }
-        Ok((host, warning))
+        Ok((host, warning.or(looks_failed)))
     }
 
-    fn import(&mut self, source: Source, picks: &[String], offered: &[String]) -> Result<String, String> {
+    fn import(&mut self, source: Source, picks: &[String], offered: &[String]) -> Result<(String, usize), String> {
         match source {
             Source::SshConfig => {
                 self.looks.choose_config(offered, picks);
                 self.save_looks()?;
-                Ok(imported_note(source, picks.len(), &[], 0))
+                Ok((imported_note(source, picks.len(), &[], 0), 0))
             }
             Source::Xpipe => {
                 let (mut added, mut failed, mut with_password) = (0, Vec::new(), 0);
@@ -279,7 +353,7 @@ impl ServerStore {
                         Err(_) => failed.push(x.name),
                     }
                 }
-                Ok(imported_note(source, added, &failed, with_password))
+                Ok((imported_note(source, added, &failed, with_password), 0))
             }
             Source::Old => {
                 let (mut moved, mut failed, mut with_password) = (Vec::new(), Vec::new(), 0);
@@ -300,14 +374,22 @@ impl ServerStore {
                         self.save_looks()?;
                     }
                 }
-                Ok(imported_note(source, moved.len(), &failed, with_password))
+                // Their passwords are offered next, asked first.
+                Ok((imported_note(source, moved.len(), &failed, 0), with_password))
             }
         }
     }
 
-    /// Does what the window asked. Slow: files, the keychain.
+    /// Does what the window asked. Slow: files, the keychain. A check of a server, a look at
+    /// what it runs and the keys on this computer need ssh: the backend does those
+    /// ([`crate::live`]) and only keeps what they found here.
     pub fn handle(&mut self, ask: Ask) -> Answer {
-        let done = |saved: Result<(), String>| saved.map_or_else(Answer::Failed, |()| Answer::Changed);
+        let looks = |store: &mut ServerStore, ask: &Ask, change: &dyn Fn(&mut Looks, &str)| {
+            if let Some(id) = ask.server().and_then(host_id) {
+                change(&mut store.looks, id);
+            }
+            store.save_looks().map_or_else(|why| Answer::failed(ask, why), |()| Answer::Changed)
+        };
         match ask {
             Ask::Sources => Answer::Sources(self.sources()),
             Ask::Add(new) => match self.add(new, None) {
@@ -315,36 +397,57 @@ impl ServerStore {
                 Err(why) => Answer::Failed(why),
             },
             Ask::Import { source, picks, offered } => match self.import(source, &picks, &offered) {
-                Ok(note) => Answer::Imported { source, note },
+                Ok((note, old_passwords)) => Answer::Imported { source, note, old_passwords },
                 Err(why) => Answer::Failed(why),
             },
-            Ask::Rename { server, name } => {
-                if let Some(host) = host_id(&server).and_then(|id| self.hosts.get(id)) {
-                    self.looks.rename(&listed(&host), &name);
+            Ask::UseOldPasswords => {
+                let (mut copied, mut failed) = (0, Vec::new());
+                for (here, there, name) in self.old_passwords() {
+                    match self.keychain.old(&there).map(|pw| self.keychain.set(&here, pw, true)) {
+                        Some(Ok(())) => {
+                            let _ = self.hosts.set_remembered_password(&here, true);
+                            copied += 1;
+                        }
+                        _ => failed.push(name),
+                    }
                 }
-                done(self.save_looks())
+                Answer::Note(old_passwords_note(copied, &failed))
             }
-            Ask::SetIcon { server, icon } => {
-                if let Some(id) = host_id(&server) {
-                    self.looks.set_icon(id, &icon);
+            Ask::Rename { ref server, ref name } => {
+                if let Some(host) = host_id(server).and_then(|id| self.hosts.get(id)) {
+                    self.looks.rename(&listed(&host), name);
                 }
-                done(self.save_looks())
+                self.save_looks().map_or_else(|why| Answer::failed(&ask, why), |()| Answer::Changed)
             }
-            Ask::SetColor { server, color } => {
-                if let Some(id) = host_id(&server) {
-                    self.looks.set_color(id, &color);
-                }
-                done(self.save_looks())
+            Ask::SetIcon { ref icon, .. } => {
+                let icon = icon.clone();
+                looks(self, &ask, &|l, id| l.set_icon(id, &icon))
             }
-            Ask::SetEnv { server, env } => {
-                if let Some(id) = host_id(&server) {
-                    self.looks.set_env(id, env);
+            Ask::SetColor { ref color, .. } => match sshee_app::labels::parse_color(color) {
+                Some(color) => looks(self, &ask, &|l, id| l.set_color(id, &color)),
+                None => Answer::failed(&ask, "That isn't a colour. Type it as #2389e2."),
+            },
+            Ask::SetImage { ref path, .. } => match picture_from_file(path) {
+                Ok(url) => looks(self, &ask, &|l, id| l.set_image(id, Some(url.clone()))),
+                Err(why) => Answer::failed(&ask, why),
+            },
+            Ask::ClearImage { .. } => looks(self, &ask, &|l, id| l.set_image(id, None)),
+            Ask::Automatic { .. } => looks(self, &ask, &|l, id| l.automatic(id)),
+            Ask::SetEnv { ref env, .. } => {
+                let env = env.clone();
+                looks(self, &ask, &|l, id| l.set_env(id, env.clone()))
+            }
+            Ask::ForgetPassword { ref server } => {
+                let Some(host) = host_id(server).and_then(|id| self.hosts.get(id)) else { return Answer::failed(&ask, "That server isn't in your list anymore.") };
+                self.keychain.forget(&host.id);
+                if let Err(why) = self.hosts.set_remembered_password(&host.id, false) {
+                    return Answer::failed(&ask, why);
                 }
-                done(self.save_looks())
+                Answer::Note(forgot_note(self.looks.name(&listed(&host))))
             }
             Ask::Remove { server } => {
                 let Some(host) = host_id(&server).and_then(|id| self.hosts.list().into_iter().find(|h| h.id == id)) else {
-                    return Answer::Failed("That server isn't in your list anymore.".into());
+                    return Answer::failed(&Ask::Remove { server }, "That server isn't in your list anymore.");
                 };
                 if host.source == HostSource::SshConfig {
                     // It stays in the file; here it's hidden.
@@ -352,15 +455,17 @@ impl ServerStore {
                 } else {
                     self.keychain.forget(&host.id);
                     if let Err(why) = self.hosts.remove(&host.id) {
-                        return Answer::Failed(why);
+                        return Answer::failed(&Ask::Remove { server }, why);
                     }
                     self.looks.forget(&host.id);
                 }
                 match self.save_looks() {
                     Ok(()) => Answer::Removed { server },
-                    Err(why) => Answer::Failed(why),
+                    Err(why) => Answer::failed(&Ask::Remove { server }, why),
                 }
             }
+            // ssh's work: the backend does it (`live.rs`).
+            Ask::LocalAuth | Ask::Test(_) | Ask::TrustTest(_) | Ask::Detect { .. } => Answer::failed(&ask, "This needs the program's backend."),
         }
     }
 }
@@ -389,6 +494,75 @@ pub fn import_of_0_10() -> (sshee_app::legacy::Found, Option<sshee_app::import::
 /// in it). Without one, 1.0 starting with no settings is a new install, not a doubt.
 pub fn ran_0_10_here() -> bool {
     dirs::data_dir().map(|d| d.join(APP_IDENTIFIER)).is_some_and(|dir| dir.exists())
+}
+
+/// The keys in `~/.ssh` and the key agents here (0.10's `local_auth`), told without sshee-core.
+pub fn local_auth() -> sshee_app::servers::LocalAuth {
+    let found = sshee_core::keys::discover();
+    sshee_app::servers::LocalAuth {
+        keys: found.keys.into_iter().map(|k| sshee_app::servers::LocalKey { path: k.path, name: k.name, kind: k.kind, comment: k.comment }).collect(),
+        agents: found.agents.into_iter().map(|a| sshee_app::servers::KeyAgent { name: a.name, socket: a.socket, keys: a.keys }).collect(),
+    }
+}
+
+/// "Check before adding" (0.10's `test_connection`): is the server there, is its identity
+/// known, does signing in work, is tmux installed. `trust`: keep the identity shown before
+/// first ("Trust it and continue"). Nothing is saved but a trusted identity.
+pub fn test(keys: &sshee_core::hostkeys::PendingKeys, env: &sshee_core::ssh::SshEnv, new: &NewServer, trust: bool) -> Answer {
+    use sshee_app::servers::{HostKeyState, Tested};
+    use sshee_core::hostkeys::HostKeyCheck;
+    let input = NewHost {
+        name: new.name.clone(),
+        address: new.address.clone(),
+        identity_file: new.identity_file.clone(),
+        password: new.password.as_ref().map(|p| Secret::new(p.expose())),
+        remember_password: false,
+        identity_agent: new.identity_agent.clone(),
+    };
+    let host = match sshee_core::hosts::preview(&input) {
+        Ok(host) => host,
+        Err(why) => return Answer::Failed(why),
+    };
+    let mut t = host.target();
+    t.password = input.password.clone().filter(|p| !p.expose().is_empty());
+    if trust {
+        if let Err(e) = keys.trust(&host.id, &t) {
+            return Answer::Failed(e.message);
+        }
+    }
+    let prints = |list: Vec<sshee_core::hostkeys::Fingerprint>| list.into_iter().map(|f| (f.kind, f.sha256)).collect();
+    let host_key = match keys.check(&host.id, &t, false) {
+        Ok(HostKeyCheck::Known) => HostKeyState::Known,
+        Ok(HostKeyCheck::Unknown { fingerprints }) => HostKeyState::Unknown { fingerprints: prints(fingerprints) },
+        Ok(HostKeyCheck::Changed { .. }) => HostKeyState::Changed,
+        Ok(HostKeyCheck::Unreachable { message }) => HostKeyState::Unreachable { message: Some(message).filter(|m| !m.is_empty()) },
+        Err(e) => HostKeyState::Unreachable { message: Some(e.message) },
+    };
+    if host_key != HostKeyState::Known {
+        return Answer::Tested(Tested { host_key, signed_in: false, tmux: None, message: None });
+    }
+    let probe = "if command -v tmux >/dev/null 2>&1; then echo tmux=yes; else echo tmux=no; fi";
+    Answer::Tested(match sshee_core::ssh::run_remote(&t, env, probe, None) {
+        Ok(out) => Tested { host_key, signed_in: true, tmux: Some(String::from_utf8_lossy(&out).contains("tmux=yes")), message: None },
+        Err(e) => Tested { host_key, signed_in: false, tmux: None, message: Some(e.message) },
+    })
+}
+
+/// A look at what a server runs, for its icon (0.10's `detectRole`): its listening ports and
+/// its containers. `None` when it couldn't tell, so it's looked at again another time.
+pub fn detect(target: &sshee_core::ssh::Target, env: &sshee_core::ssh::SshEnv) -> Option<&'static str> {
+    use sshee_app::roles::{Listening, Scan};
+    let scan = match sshee_core::tunnels::scan(target, env) {
+        Ok(s) => Ok(Some(Scan {
+            apps: s.apps.into_iter().map(|a| Listening { port: a.port, process: a.process, known_as: a.known_as, scheme: a.scheme, web: a.web }).collect(),
+            curl: s.curl,
+        })),
+        // A server without ss or netstat goes by its containers alone.
+        Err(e) if e.code == sshee_core::error::ErrorCode::Unsupported => Ok(None),
+        Err(_) => Err(()),
+    };
+    let containers = sshee_core::containers::list(target, env).map(|l| l.containers.iter().any(|c| c.running)).map_err(|_| ());
+    sshee_app::roles::guess(&(scan, containers))
 }
 
 #[cfg(test)]
@@ -420,6 +594,11 @@ mod tests {
 
         fn forget(&self, host_id: &str) {
             self.kept.lock().unwrap().retain(|(id, ..)| id != host_id);
+        }
+
+        fn old(&self, host_id: &str) -> Option<Secret> {
+            // 0.10 kept a password for its server "old-db" only.
+            (host_id == "saved:old-db").then(|| Secret::new("from-0.10"))
         }
     }
 
@@ -482,7 +661,7 @@ mod tests {
     ]"#;
 
     fn by_hand(address: &str, password: Option<&str>, remember: bool) -> Ask {
-        Ask::Add(NewServer { name: None, address: address.into(), identity_file: None, password: password.map(Password::new), remember_password: remember })
+        Ask::Add(NewServer { name: None, address: address.into(), identity_file: None, password: password.map(Password::new), remember_password: remember, ..NewServer::default() })
     }
 
     #[test]
@@ -535,7 +714,7 @@ mod tests {
         assert_eq!(offered, [("web-7731", "deploy@203.0.113.17", true), ("old-box", "203.0.113.99:2200", true)]);
         let ids: Vec<String> = sources.config.iter().map(|c| c.id.clone()).collect();
         let answer = store.handle(Ask::Import { source: Source::SshConfig, picks: ids[..1].to_vec(), offered: ids.clone() });
-        assert_eq!(answer, Answer::Imported { source: Source::SshConfig, note: "1 server shows from ~/.ssh/config.".into() });
+        assert_eq!(answer, Answer::Imported { source: Source::SshConfig, note: "1 server shows from ~/.ssh/config.".into(), old_passwords: 0 });
         assert_eq!(w.names(&mut store), ["web-7731"]);
         assert_eq!(store.shown().config_new, 0);
         // Hidden from its menu; the choice is kept in the copy's folder, the config untouched.
@@ -560,7 +739,7 @@ mod tests {
         assert_eq!(offered, [("db-main", "postgres@203.0.113.31:2222", true), ("backups", "backup@2001:db8::24", false)]);
         let picks: Vec<String> = sources.old.iter().map(|c| c.id.clone()).collect();
         let answer = store.handle(Ask::Import { source: Source::Old, picks: picks.clone(), offered: picks });
-        assert_eq!(answer, Answer::Imported { source: Source::Old, note: "Added 2 servers from SSHeesh 0.10. 1 server will ask for a password the first time.".into() });
+        assert_eq!(answer, Answer::Imported { source: Source::Old, note: "Added 2 servers from SSHeesh 0.10.".into(), old_passwords: 1 });
         // Here under new ids, with the label and look 0.10 kept, and nothing of its keychain.
         let shown = store.shown();
         let db = shown.servers.iter().find(|s| s.name == "db-main").unwrap();
@@ -577,6 +756,17 @@ mod tests {
         assert_eq!(store.shown().old_new, 0);
         assert_eq!(std::fs::read(w.root.join("old").join("hosts.json")).unwrap(), before);
         assert!(!w.root.join("old").join(LOOKS_FILE).exists());
+        // 0.10's password is offered, and read only on a yes.
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        assert_eq!(sources.old_passwords, 1);
+        assert_eq!(store.handle(Ask::UseOldPasswords), Answer::Note("Brought over the saved passwords of 1 server.".into()));
+        assert_eq!(w.keychain.kept.lock().unwrap()[0].1, "from-0.10");
+        assert!(store.shown().faces[&db.key()].saved_password);
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        assert_eq!(sources.old_passwords, 0);
+        // Forgotten: out of the keychain, and the server asks again.
+        assert!(matches!(store.handle(Ask::ForgetPassword { server: db.key() }), Answer::Note(_)));
+        assert!(w.keychain.kept.lock().unwrap().is_empty() && !store.shown().faces[&db.key()].saved_password);
     }
 
     #[test]
@@ -595,7 +785,7 @@ mod tests {
         assert_eq!((sources.xpipe.len(), sources.xpipe_locked, sources.xpipe_here), (1, 1, 0));
         let picks = vec![sources.xpipe[0].id.clone()];
         let answer = store.handle(Ask::Import { source: Source::Xpipe, picks: picks.clone(), offered: picks });
-        assert_eq!(answer, Answer::Imported { source: Source::Xpipe, note: "Added 1 server from XPipe.".into() });
+        assert_eq!(answer, Answer::Imported { source: Source::Xpipe, note: "Added 1 server from XPipe.".into(), old_passwords: 0 });
         assert_eq!(w.names(&mut store), ["mail"]);
         let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
         assert_eq!((sources.xpipe.len(), sources.xpipe_here), (0, 1));
@@ -631,7 +821,7 @@ mod tests {
         assert!(w.names(&mut again).is_empty());
         assert!(w.keychain.kept.lock().unwrap().is_empty());
         assert!(!w.copy_file(LOOKS_FILE).contains("Shop"));
-        assert!(matches!(again.handle(Ask::Remove { server }), Answer::Failed(_)));
+        assert!(matches!(again.handle(Ask::Remove { server }), Answer::Refused { .. }));
     }
 
     #[test]

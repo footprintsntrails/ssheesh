@@ -20,7 +20,7 @@ use serde_json::Value;
 use sshee_app::labels::{Listed, Looks};
 use sshee_app::model::{EnvLabel, Settings};
 use sshee_app::settings_store::SettingsStore;
-use sshee_app::servers::{Ask, Book, Candidate, Sources};
+use sshee_app::servers::{Ask, Book, Candidate, KeyAgent, LocalAuth, LocalKey, Sources};
 use sshee_app::workbench::{Open, Server, Tab, TabKind, Tor, Vitals, Workbench};
 use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
@@ -63,7 +63,19 @@ pub fn book() -> Book {
         old: vec![offer("metrics", "ops@203.0.113.60", false)],
         ..Sources::default()
     };
-    Book::new(hosts, looks, sources)
+    let mut book = Book::new(hosts, looks, sources);
+    // Keys and a password manager "found" here, and a password saved for the database.
+    book.local = LocalAuth {
+        keys: vec![
+            LocalKey { path: "~/.ssh/id_ed25519".into(), name: "id_ed25519".into(), kind: "ED25519".into(), comment: "someone@laptop".into() },
+            LocalKey { path: "~/.ssh/deploy_rsa".into(), name: "deploy_rsa".into(), kind: "RSA".into(), comment: String::new() },
+        ],
+        agents: vec![KeyAgent { name: "ssh-agent".into(), socket: None, keys: Some(1) }, KeyAgent { name: "1Password".into(), socket: Some("~/.1password/agent.sock".into()), keys: Some(3) }],
+    };
+    book.passwords.push("demo-db".into());
+    // The web server's identity is known; a new one shows a fingerprint first.
+    book.trusted.push("203.0.113.17".into());
+    book
 }
 
 /// The made-up servers, tabs and numbers.
@@ -160,16 +172,27 @@ impl DemoBackend {
     fn show(&self, answer: Option<sshee_app::servers::Answer>) {
         let Some(remote) = &self.remote else { return };
         let (servers, colors, config_new, old_new) = (self.book.servers(), self.book.colors(), self.book.config_new(), self.book.sources.old.len());
+        let faces = self.book.faces(crate::servers::picture);
         remote.update(move |s| {
             let mut all = vec![Server::this_computer()];
             all.extend(servers);
             s.bench.set_servers(all);
             s.set_server_looks(colors, config_new, old_new);
+            s.set_server_faces(faces);
             if let Some(answer) = answer {
                 s.servers_answer(answer);
             }
         });
     }
+}
+
+/// A made-up picture for a server: a small square of soft colour, as a PNG data URL.
+pub fn made_up_picture() -> String {
+    let side = sshee_app::labels::IMAGE_SIDE;
+    let picture = image::RgbaImage::from_fn(side, side, |x, y| image::Rgba([40 + (x * 3) as u8, 120 + (y * 2) as u8, 200, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(picture).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).expect("a PNG in memory");
+    sshee_app::labels::image_data_url(&png)
 }
 
 /// A fixture written in this crate: it reads, or the build is broken.
@@ -267,7 +290,17 @@ impl Backend for DemoBackend {
     }
 
     fn servers(&mut self, ask: Ask) {
-        let answer = self.book.handle(ask);
+        // Nothing is read: a picture picked becomes a made-up one.
+        let answer = match ask {
+            Ask::SetImage { server, .. } => match sshee_app::servers::host_id(&server) {
+                Some(id) => {
+                    self.book.looks.set_image(id, Some(made_up_picture()));
+                    sshee_app::servers::Answer::Changed
+                }
+                None => self.book.handle(Ask::SetImage { server, path: Default::default() }),
+            },
+            ask => self.book.handle(ask),
+        };
         self.show(Some(answer));
     }
 

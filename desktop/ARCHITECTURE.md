@@ -244,8 +244,8 @@ never touched.
   relative one, then the server's `find_path`) and shows it in Files beside the terminal;
   `path:line` says its lines in a note, the editor doesn't mark them yet. A web link whose
   text hides where it goes opens on a second click, not from a dialog.
-- Saved passwords aren't read (0.10's keychain needs the owner's yes); a server that asks for
-  one asks in the terminal. A server's key is checked before signing in
+- 0.10's saved passwords are read from its keychain entry only after the owner's yes
+  ("Use them here?", `Ask::UseOldPasswords`). A server's key is checked before signing in
   (`LiveLink::begin`, `hostkeys::check`) and asked about on the pane's card
   (`screens/prompts.rs`), so ssh never asks it, in the terminal or of askpass.
 - Tor's round trip is the one sshee-core timed when it picked the route used last
@@ -280,8 +280,8 @@ never touched.
 |---|---|---|
 | Main menu: search field, server tiles, agents at work, closed tabs | `screens/home.rs` | `home.rs` |
 | Command palette (`srv:` `cmd:` `file:` `set:`; a command for a server is never preselected) | `screens/palette.rs` | `palette.rs` |
-| Add a server: by hand, from the ssh config, XPipe and 0.10 | `screens/add_server.rs` | `servers.rs` (`Form`, `Ask`, `Answer`, and `Book`, the list in memory a demo and the tests answer from) |
-| A server's menu (rename, icon and colour, label, remove) and its card under the pointer | `screens/server_menu.rs`, `screens/server_card.rs` | `labels.rs`, `home.rs` (`Card`) |
+| Add a server: by hand (keys found in ~/.ssh, password managers, the eye, "Check before adding", icon, colour and label right away; the body scrolls in a low window), from the ssh config, XPipe and 0.10 | `screens/add_server.rs` | `servers.rs` (`Form`, `Ask`, `Answer`, and `Book`, the list in memory a demo and the tests answer from) |
+| A server's menu (New terminal, Files, terminal and files side by side, Stats, Containers, Tunnels, Copy address, rename, the look picker with Automatic, any colour and a picture, label, Forget saved password, remove; a change that fails says so) and its card under the pointer; every server's face (`State::faces`: its colour and picture on the sidebar icon) and the icon guessed on the first connect | `screens/server_menu.rs`, `screens/server_card.rs` | `labels.rs`, `roles.rs`, `home.rs` (`Card`) |
 | Security check: findings worst first in plain words, each fix shown in full, run only after a yes and on Production after a second one; a fix that needs you opens in a terminal. From the sidebar's shield (a list of servers from the main menu) and the palette | `screens/checkup.rs` | `recipes.rs`, `recipes/checkup.rs` |
 | Recipes: eight step-by-step guides (0.10's, word for word), the server's system guessed from its kernel, fields, the key from `~/.ssh`, Paste into terminal without Return, the bar it steps aside into | `screens/recipes.rs` | `recipes.rs`, `recipes/book.rs` |
 | Snippets: the list, the editor (one server or every server), the blanks asked before it goes into the terminal; Production asks before Return | `screens/snippets.rs` | `snippets.rs` |

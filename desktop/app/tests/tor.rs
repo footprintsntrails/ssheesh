@@ -110,7 +110,7 @@ fn switched_off_tor_says_so_and_the_status_bar_lets_go() {
 #[test]
 fn a_servers_tunnels_open_from_its_menu() {
     for theme in ["dark", "light"] {
-        let script = json!([{ "t": 0.3, "type": "tap", "key": "server-1", "button": "secondary" }, tap(0.6, "sm-2"), end(1.2)]);
+        let script = json!([{ "t": 0.3, "type": "tap", "key": "server-1", "button": "secondary" }, tap(0.6, "sm-5"), end(1.2)]);
         let Some(run) = run(&format!("tunnels-{theme}"), theme, script) else { return };
         assert!(run.element("tunnels-dialog").is_some(), "{theme}");
         // web-7731's three: Grafana on, the proxy off, the dev site on the server.
@@ -122,7 +122,7 @@ fn a_servers_tunnels_open_from_its_menu() {
 
 #[test]
 fn a_tunnel_that_cant_get_its_port_says_so() {
-    let script = json!([{ "t": 0.3, "type": "tap", "key": "server-4", "button": "secondary" }, tap(0.6, "sm-2"), tap(0.9, "tunnel-tun-4-edit"), end(1.4)]);
+    let script = json!([{ "t": 0.3, "type": "tap", "key": "server-4", "button": "secondary" }, tap(0.6, "sm-5"), tap(0.9, "tunnel-tun-4-edit"), end(1.4)]);
     let Some(run) = run("tunnels-form-dark", "dark", script) else { return };
     assert!(run.element("tunnels-form").is_some());
     assert!(run.says("localhost:5432 on this computer opens the server's port 5432."), "{}", run.tree_text);

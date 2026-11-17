@@ -5,27 +5,35 @@
 //! ```text
 //! add-scrim    dims the window; the dialog is modal (Esc closes; a click outside doesn't,
 //! └── add-dialog                                      so a slip doesn't lose what was typed)
-//!     Form   add-from-<source> rows · add-address, add-port, add-user · add-key | add-password,
-//!            add-key-file / add-secret, add-remember · add-name · add-error · add-cancel, add-save
+//!     Form   add-body (scrolls) · add-from-<source> rows · add-address, add-port, add-user ·
+//!            add-key | add-password | add-manager · key-usual, key-0 …, key-other, add-key-file ·
+//!            add-secret, add-eye, add-remember · manager-0 … · add-look (icons open in place:
+//!            look-<id>), look-color-0 … 5, look-env-<prod|staging|dev> · add-name ·
+//!            add-test, test-step-0 …, add-trust · add-error · add-cancel, add-save
 //!     List   add-back · pick-0 … (ticks) · add-all, add-none · add-cancel, add-import
 //! ```
 //!
 //! The form's rules (what an address may be, what's wrong with a port) are
-//! `sshee_app::servers::Form`. Saving, the keychain and reading other programs' files wait,
-//! so the window only asks (`Ask`) and the backend answers later ([`Shell::servers_answer`]):
-//! the dialog says "Adding…" meanwhile and shows what went wrong in the backend's own words.
-//! The password is typed into a secure field (no screen reader, trace or tree ever holds it)
-//! and leaves this file only inside an `Ask::Add`.
+//! `sshee_app::servers::Form`. Saving, the keychain, a check of the server and reading other
+//! programs' files wait, so the window only asks (`Ask`) and the backend answers later
+//! ([`Shell::servers_answer`]): the dialog says "Adding…" or "Checking…" meanwhile and shows
+//! what went wrong in the backend's own words. The password is typed into a secure field (no
+//! screen reader, trace or tree ever holds it; the eye shows its characters, nothing else) and
+//! leaves this file only inside an `Ask::Add` or `Ask::Test`.
 
 use rune::{col, row, text, text_input, El, ScrollSpec, TextEdit, Tx};
-use sshee_app::servers::{import_button, Answer, Ask, Form, Password, SignIn, Source, Sources};
+use sshee_app::labels::{icon_name, env_name, env_order, HOST_COLORS, HOST_ICONS};
+use sshee_app::model::EnvLabel;
+use sshee_app::servers::{
+    import_button, old_passwords_question, Answer, Ask, Connection, Form, LocalAuth, Password, PickedLook, SignIn, Source, Sources, StepTone, Tested, OLD_PASSWORDS_MEANING,
+};
 
 use crate::icons::{icon, Icon};
 use crate::kit::field::{code_input, field, input, labelled};
 use crate::kit::list::{list_row, ListRow};
 use crate::kit::popover::popover;
-use crate::kit::push::{check_box, choice, choices, push_button, Push};
-use crate::shell::Shell;
+use crate::kit::push::{check_box, choice, choices, icon_button, push_button, Push};
+use crate::shell::{Confirm, Shell, Toast};
 use crate::theme::{self, Theme};
 
 /// The dialog's width.
@@ -40,6 +48,18 @@ pub enum Page {
     List(Source),
 }
 
+/// Which key signs in, when it's a key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum KeyChoice {
+    /// Your usual keys: ssh picks.
+    #[default]
+    Usual,
+    /// One of the keys found in `~/.ssh`, by path.
+    Found(String),
+    /// A key file typed in.
+    Other,
+}
+
 /// The dialog's own state.
 pub struct State {
     pub open: bool,
@@ -49,16 +69,35 @@ pub struct State {
     pub user: TextEdit,
     pub name: TextEdit,
     pub key_file: TextEdit,
-    /// Secure: drawn as dots, and its text is wiped when the dialog closes.
+    pub key: KeyChoice,
+    /// Secure: drawn as dots (unless the eye is open), and its text is wiped when the dialog
+    /// closes.
     pub password: TextEdit,
+    pub show_password: bool,
     pub sign_in: SignIn,
     pub remember: bool,
+    /// The password manager's socket.
+    pub agent: String,
+    /// The keys and managers found here; `None` while the backend looks.
+    pub local: Option<LocalAuth>,
+    /// An icon, a colour picked in the form; `None`: the guessed icon in its own colour.
+    pub look: Option<PickedLook>,
+    pub env: Option<EnvLabel>,
+    /// The icons are open under the name.
+    pub icons_open: bool,
     /// What's wrong, under the form.
     pub error: Option<String>,
     /// The backend is saving.
     pub busy: bool,
+    /// The backend is checking the server.
+    pub testing: bool,
+    /// What the last check found, and the form it was made for: a change to how it connects
+    /// makes it stale.
+    pub tested: Option<(Tested, Connection)>,
     /// What the sources hold; `None` while the backend looks.
     pub sources: Option<Sources>,
+    /// Open this source's list as soon as the sources are known ("Review" in the sidebar).
+    pub want: Option<Source>,
     /// The ids ticked on the List page.
     pub picks: Vec<String>,
     /// What the last import did, over the form.
@@ -75,12 +114,22 @@ impl Default for State {
             user: TextEdit::default(),
             name: TextEdit::default(),
             key_file: TextEdit::default(),
+            key: KeyChoice::Usual,
             password: TextEdit::default().secure(),
+            show_password: false,
             sign_in: SignIn::Key,
             remember: true,
+            agent: String::new(),
+            local: None,
+            look: None,
+            env: None,
+            icons_open: false,
             error: None,
             busy: false,
+            testing: false,
+            tested: None,
             sources: None,
+            want: None,
             picks: Vec::new(),
             notice: None,
         }
@@ -88,19 +137,33 @@ impl Default for State {
 }
 
 impl State {
-    /// The form as its rules read it. `with_password`: for saving; what is drawn never needs
-    /// the password, so it isn't copied on every frame.
+    /// The form as its rules read it. `with_password`: for saving and checking; what is drawn
+    /// never needs the password, so it isn't copied on every frame.
     fn form(&self, with_password: bool) -> Form {
+        let key_file = match &self.key {
+            KeyChoice::Usual => String::new(),
+            KeyChoice::Found(path) => path.clone(),
+            KeyChoice::Other => self.key_file.text.clone(),
+        };
         Form {
             address: self.address.text.clone(),
             port: self.port.text.clone(),
             user: self.user.text.clone(),
             name: self.name.text.clone(),
             sign_in: self.sign_in,
-            key_file: self.key_file.text.clone(),
-            password: if with_password { Password::new(self.password.text.clone()) } else { Password::default() },
+            key_file,
+            password: if with_password { Password::new(self.password.text.clone()) } else { Password::new("•".repeat(self.password.text.chars().count())) },
             remember: self.remember,
+            agent: self.agent.clone(),
+            look: self.look.clone(),
+            env: self.env.clone(),
         }
+    }
+
+    /// The last check, while it still holds for the form.
+    fn check_shown(&self) -> Option<&Tested> {
+        let (tested, made_for) = self.tested.as_ref()?;
+        (*made_for == self.form(false).connection()).then_some(tested)
     }
 }
 
@@ -112,9 +175,17 @@ impl Shell {
         let mut state = State { open: true, ..State::default() };
         state.address.focused = true;
         self.screens.add_server = state;
-        // What could be brought in: files to read, so the backend looks and says later.
+        // What could be brought in, and the keys here: files to read, so the backend looks
+        // and says later.
         self.backend_mut().servers(Ask::Sources);
+        self.backend_mut().servers(Ask::LocalAuth);
         tx.instant();
+    }
+
+    /// "N new in ~/.ssh/config · Review": the dialog, on that list.
+    pub fn review_config(&mut self, tx: &mut Tx) {
+        self.open_add_server(tx);
+        self.screens.add_server.want = Some(Source::SshConfig);
     }
 
     /// Closes it; what was typed is gone (the password's text is wiped by its field).
@@ -139,6 +210,23 @@ impl Shell {
         }
     }
 
+    /// "Check before adding", and "Trust it and continue" (`trust`).
+    fn add_server_test(&mut self, trust: bool) {
+        let state = &mut self.screens.add_server;
+        if state.testing || state.busy {
+            return;
+        }
+        match state.form(true).check() {
+            Ok(server) => {
+                state.error = None;
+                state.testing = true;
+                state.tested = None;
+                self.backend_mut().servers(if trust { Ask::TrustTest(server) } else { Ask::Test(server) });
+            }
+            Err(why) => state.error = Some(why),
+        }
+    }
+
     /// Opens a source's list with its servers ticked as the source says.
     pub(crate) fn add_server_list(&mut self, source: Source) {
         let state = &mut self.screens.add_server;
@@ -158,34 +246,70 @@ impl Shell {
         self.backend_mut().servers(ask);
     }
 
+    /// "SSHeesh 0.10 saved passwords for 3 servers. Use them here?": 0.10's keychain is read
+    /// only on a yes.
+    pub fn offer_old_passwords(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        self.confirm(Confirm::new(old_passwords_question(n), OLD_PASSWORDS_MEANING, "Use them"), |s, _| s.backend_mut().servers(Ask::UseOldPasswords));
+    }
+
     /// The backend's answer to an [`Ask`], from its thread through `Remote`.
     pub fn servers_answer(&mut self, answer: Answer) {
         let state = &mut self.screens.add_server;
         match answer {
-            Answer::Sources(sources) => state.sources = Some(sources),
-            Answer::Added { server, warning, .. } => {
+            Answer::Sources(sources) => {
+                state.sources = Some(sources);
+                if let Some(source) = state.want.take().filter(|_| state.open) {
+                    self.add_server_list(source);
+                }
+            }
+            Answer::LocalAuth(local) => state.local = Some(local),
+            Answer::Added { server, name, warning } => {
                 // "Add and connect": the dialog goes and the new server's terminal opens. A
-                // half-right add (the keychain refused the password) still added it.
-                let _ = warning;
+                // half-right add (the keychain refused the password) still added it, and says.
                 *state = State::default();
                 if self.bench.server(&server).is_some() {
                     self.bench.go_to(&server);
                 }
                 self.screens.home.settle_due = true;
+                let shown = self.server_shown(&server, &name).into_owned();
+                self.toast(match warning {
+                    Some(warning) => Toast::info(format!("Added {shown}")).body(warning),
+                    None => Toast::success(format!("Added {shown}")),
+                });
             }
-            Answer::Imported { note, .. } => {
+            Answer::Tested(tested) => {
+                state.testing = false;
+                let made_for = state.form(false).connection();
+                state.tested = Some((tested, made_for));
+            }
+            Answer::Imported { note, old_passwords, .. } => {
                 state.busy = false;
                 state.page = Page::Form;
                 state.notice = Some(note);
                 if state.open {
                     self.backend_mut().servers(Ask::Sources);
                 }
+                self.offer_old_passwords(old_passwords);
             }
             // The list that comes with these says the rest.
             Answer::Removed { .. } | Answer::Changed => {}
+            Answer::Detected { server, icon } => self.server_detected(&server, icon.is_some()),
+            Answer::Note(note) => {
+                let note = self.text_shown(&note).into_owned();
+                self.toast(Toast::info(note));
+            }
+            Answer::Refused { server, doing, why } => self.server_menu_refused(&server, &doing, &why),
             Answer::Failed(why) => {
                 state.busy = false;
-                state.error = Some(why);
+                state.testing = false;
+                if state.open {
+                    state.error = Some(why);
+                } else {
+                    self.toast(Toast::error("Something didn't work").body(why));
+                }
             }
         }
     }
@@ -201,9 +325,246 @@ fn error_line(t: &Theme, why: &str) -> El {
     row().key("add-error").w_full().gap(6.0).items_start().role("alert").child(icon(Icon::Warning, 13.0, t.red).mt(1.0)).child(text(why).font(theme::NOTE).color(t.red).grow(1.0).shrink().min_w(0.0).wrap())
 }
 
-fn form_page(state: &State, t: &Theme) -> El {
+/// One of a list of choices, with a line under it (0.10's `Choice`): a ring, filled when
+/// chosen. The caller adds the key and the press.
+fn radio(t: &Theme, title: &str, badge: Option<&str>, detail: &str, chosen: bool, mono: bool) -> El {
+    let ring = rune::el().size(16.0, 16.0).radius(8.0).items_center().justify_center();
+    let ring = if chosen { ring.fill(t.blue).child(rune::el().size(6.0, 6.0).radius(3.0).fill(t.on_color)) } else { ring.border(1.0, t.l2.alpha(0.5)) };
+    let mut head = row().gap(6.0).items_center().child(text(title).font(if mono { theme::CODE } else { theme::TEXT }).color(t.l1).single_line().truncate().shrink().min_w(0.0));
+    if let Some(badge) = badge {
+        head = head.child(rune::el().px(5.0).radius(4.0).fill(t.hov2).child(text(badge).font(theme::SMALL).color(t.l2).single_line()));
+    }
+    let mut words = col().grow(1.0).shrink().min_w(0.0).gap(1.0).child(head);
+    if !detail.is_empty() {
+        words = words.child(text(detail).font(theme::SMALL).color(t.l2).single_line().truncate());
+    }
+    let b = row()
+        .w_full()
+        .px(10.0)
+        .py(6.0)
+        .gap(10.0)
+        .items_center()
+        .radius(theme::RADIUS_ROW)
+        .border(1.0, if chosen { t.blue.alpha(0.6) } else { t.hair })
+        .focusable(true)
+        .role("radio")
+        .checked(chosen)
+        .label(if detail.is_empty() { title.to_owned() } else { format!("{title}. {detail}") })
+        .child(ring)
+        .child(words.a11y_hidden());
+    if chosen {
+        b.fill(t.blue.alpha(0.1))
+    } else {
+        b.hover(t.hov2).press(t.down)
+    }
+}
+
+/// "Sign in with": a key (yours, one found in `~/.ssh`, or a file), a password, or a password
+/// manager.
+fn sign_in(state: &State, t: &Theme) -> El {
+    let managers = state.local.as_ref().map(|l| l.managers()).unwrap_or_default();
+    let mut ways = vec![
+        choice(t, "SSH key", state.sign_in == SignIn::Key).key("add-key").on_press_tx(|s: &mut Shell, _| s.screens.add_server.sign_in = SignIn::Key),
+        choice(t, "Password", state.sign_in == SignIn::Password).key("add-password").on_press_tx(|s: &mut Shell, _| s.screens.add_server.sign_in = SignIn::Password),
+    ];
+    if !managers.is_empty() || state.sign_in == SignIn::Manager {
+        ways.push(choice(t, "Password manager", state.sign_in == SignIn::Manager).key("add-manager").on_press_tx(|s: &mut Shell, _| {
+            let st = &mut s.screens.add_server;
+            st.sign_in = SignIn::Manager;
+            // The only one there is, chosen for you.
+            if st.agent.is_empty() {
+                if let Some(socket) = st.local.as_ref().and_then(|l| l.managers().first().and_then(|a| a.socket.clone())) {
+                    st.agent = socket;
+                }
+            }
+        }));
+    }
+    let how = match state.sign_in {
+        SignIn::Key => {
+            let usual = state.local.as_ref().map(LocalAuth::usual_keys_note).unwrap_or_else(|| "ssh picks from the keys in ~/.ssh".into());
+            let mut keys = col().key("add-keys").w_full().gap(6.0).role("radiogroup").label_static("Key");
+            keys = keys.child(radio(t, "Your usual keys", None, &usual, state.key == KeyChoice::Usual, false).key("key-usual").on_press_tx(|s: &mut Shell, _| s.screens.add_server.key = KeyChoice::Usual));
+            for (i, k) in state.local.iter().flat_map(|l| l.keys.iter()).enumerate() {
+                let path = k.path.clone();
+                let chosen = state.key == KeyChoice::Found(path.clone());
+                keys = keys.child(
+                    radio(t, &k.name, Some(&k.kind), LocalAuth::key_note(k), chosen, true).key(format!("key-{i}")).on_press_tx(move |s: &mut Shell, _| s.screens.add_server.key = KeyChoice::Found(path.clone())),
+                );
+            }
+            keys = keys.child(radio(t, "Another key file", None, "", state.key == KeyChoice::Other, false).key("key-other").on_press_tx(|s: &mut Shell, _| {
+                let st = &mut s.screens.add_server;
+                st.key = KeyChoice::Other;
+                st.key_file.focused = true;
+            }));
+            if state.key == KeyChoice::Other {
+                let key_file = code_input(t, &state.key_file, "~/.ssh/my_key").key("add-key-file").on_edit(|s: &mut Shell| &mut s.screens.add_server.key_file);
+                keys = keys.child(field(t, key_file, false));
+            }
+            keys
+        }
+        SignIn::Password => {
+            let secret = text_input(&state.password, theme::TEXT)
+                .secure()
+                .revealed(state.show_password)
+                .single_line()
+                .key("add-secret")
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .color(t.l1)
+                .placeholder("Password", t.l2)
+                .caret(t.ring, t.ring.alpha(0.35))
+                .label_static("Password")
+                .on_edit(|s: &mut Shell| &mut s.screens.add_server.password);
+            let eye = icon_button(t, if state.show_password { Icon::EyeOff } else { Icon::Eye }, if state.show_password { "Hide password" } else { "Show password" }, true)
+                .key("add-eye")
+                .on_press_tx(|s: &mut Shell, _| s.screens.add_server.show_password ^= true);
+            let kept = if state.remember { "Saved in your system keychain, never in SSHeesh's own files." } else { "Kept only until you quit SSHeesh." };
+            col()
+                .w_full()
+                .gap(6.0)
+                .child(row().w_full().gap(4.0).items_center().child(field(t, secret, false).grow(1.0).min_w(0.0)).child(eye))
+                .child(check_box(t, "Remember password", state.remember).key("add-remember").on_press_tx(|s: &mut Shell, _| s.screens.add_server.remember ^= true))
+                .child(text(kept).font(theme::SMALL).color(t.l2).single_line())
+        }
+        SignIn::Manager => {
+            let mut list = col().key("add-managers").w_full().gap(6.0).role("radiogroup").label_static("Password manager");
+            for (i, a) in managers.iter().enumerate() {
+                let socket = a.socket.clone().unwrap_or_default();
+                let chosen = state.agent == socket;
+                list = list.child(radio(t, &a.name, None, &LocalAuth::manager_note(a), chosen, false).key(format!("manager-{i}")).on_press_tx(move |s: &mut Shell, _| s.screens.add_server.agent = socket.clone()));
+            }
+            if managers.is_empty() {
+                list = list.child(text("No password manager with keys is running here.").font(theme::SMALL).color(t.l2).wrap());
+            }
+            list
+        }
+    };
+    section(t, "Sign in with", col().w_full().gap(8.0).items_start().child(choices(t, ways)).child(how))
+}
+
+/// "In your list": the icon (its picker opens in place), the colour, the label, the name.
+fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
+    let look = state.look.clone().unwrap_or_default();
+    let icon_id = if look.icon.is_empty() { "server" } else { look.icon.as_str() };
+    let ink = rune::color::hex(&look.color).unwrap_or(t.l2);
+    let button = rune::el()
+        .key("add-look")
+        .size(theme::FIELD, theme::FIELD)
+        .radius(theme::RADIUS_ROW)
+        .items_center()
+        .justify_center()
+        .border(1.0, if state.icons_open { t.blue.alpha(0.6) } else { t.hair })
+        .fill(t.field())
+        .hover(t.hov2)
+        .focusable(true)
+        .role("button")
+        .label(format!("Icon: {}. Change", icon_name(icon_id)))
+        .help("Icon")
+        .on_press_tx(|s: &mut Shell, _| s.screens.add_server.icons_open ^= true)
+        .child(icon(Icon::for_server(icon_id), 17.0, if state.look.is_some() { ink } else { t.l2 }));
+    let name = input(t, &state.name, if shown_host.is_empty() { "Name" } else { shown_host }).key("add-name").on_edit(|s: &mut Shell| &mut s.screens.add_server.name);
+    let mut body = col().w_full().gap(8.0).child(row().w_full().gap(8.0).items_center().child(button).child(field(t, name, false).grow(1.0).min_w(0.0)));
+    if state.icons_open {
+        let mut icons = row().key("add-icons").w_full().flex_wrap().gap(4.0).padding(6.0).radius(theme::RADIUS).fill(t.hov2).role("radiogroup").label_static("Icon");
+        for (id, name) in HOST_ICONS {
+            let chosen = state.look.as_ref().is_some_and(|l| l.icon == id);
+            let mut b = rune::el()
+                .key(format!("look-{id}"))
+                .size(32.0, 32.0)
+                .radius(theme::RADIUS)
+                .items_center()
+                .justify_center()
+                .focusable(true)
+                .role("radio")
+                .checked(chosen)
+                .label_static(name)
+                .help(name)
+                .on_press_tx(move |s: &mut Shell, _| {
+                    let st = &mut s.screens.add_server;
+                    let color = st.look.as_ref().map(|l| l.color.clone()).unwrap_or_else(|| HOST_COLORS[0].to_owned());
+                    st.look = Some(PickedLook { icon: id.to_owned(), color, image: None });
+                    st.icons_open = false;
+                })
+                .child(icon(Icon::for_server(id), theme::ICON_RAIL, ink));
+            b = if chosen { b.fill(t.selrail) } else { b.hover(t.down) };
+            icons = icons.child(b);
+        }
+        body = body.child(icons);
+    }
+    let mut colors = row().gap(6.0).items_center().role("radiogroup").label_static("Icon colour");
+    for (i, hex) in HOST_COLORS.into_iter().enumerate() {
+        let chosen = state.look.as_ref().is_some_and(|l| l.color.eq_ignore_ascii_case(hex));
+        let mut b = rune::el()
+            .key(format!("look-color-{i}"))
+            .size(22.0, 22.0)
+            .radius(11.0)
+            .items_center()
+            .justify_center()
+            .focusable(true)
+            .role("radio")
+            .checked(chosen)
+            .label(format!("Colour {}", i + 1))
+            .on_press_tx(move |s: &mut Shell, _| {
+                let st = &mut s.screens.add_server;
+                let icon = st.look.as_ref().map(|l| l.icon.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| "server".into());
+                st.look = Some(PickedLook { icon, color: hex.to_owned(), image: None });
+            })
+            .child(rune::el().size(16.0, 16.0).radius(8.0).fill(rune::color::hex(hex).unwrap_or(t.l2)));
+        if chosen {
+            b = b.border(1.5, t.l1);
+        }
+        colors = colors.child(b);
+    }
+    let labels = choices(
+        t,
+        env_order().into_iter().map(|env| {
+            let chosen = state.env.as_ref() == Some(&env);
+            let key = format!("look-env-{}", env.as_str());
+            let name = env_name(&env).to_owned();
+            choice(t, &name, chosen).key(key).on_press_tx(move |s: &mut Shell, _| {
+                let st = &mut s.screens.add_server;
+                // A click on the label it has takes it off.
+                st.env = if st.env.as_ref() == Some(&env) { None } else { Some(env.clone()) };
+            })
+        }),
+    );
+    body = body.child(row().w_full().gap(12.0).items_center().flex_wrap().child(colors).child(rune::spacer()).child(labels));
+    section(t, "In your list", body)
+}
+
+/// "Check before adding" and what it found (0.10's `TestResult`).
+fn check(state: &State, t: &Theme, ready: bool) -> El {
+    let label = if state.testing { "Checking…" } else { "Check before adding" };
+    let mut out = col().w_full().gap(8.0).items_start().child(push_button(t, label, Push::Quiet, ready && !state.testing && !state.busy).key("add-test").on_press_tx(|s: &mut Shell, _| s.add_server_test(false)));
+    let Some(tested) = state.check_shown() else { return out };
+    let mut steps = col().key("add-tested").w_full().gap(6.0);
+    for (i, step) in tested.steps().into_iter().enumerate() {
+        let (mark, color) = match step.tone {
+            StepTone::Ok => (Icon::Check, t.green),
+            StepTone::Bad => (Icon::Warning, t.red),
+            StepTone::Warn => (Icon::Warning, t.orange_dot),
+            StepTone::Ask => (Icon::Shield, t.blue),
+        };
+        let mut words = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(text(&step.title).font(theme::TEXT).color(t.l1).wrap());
+        if let Some(detail) = &step.detail {
+            words = words.child(text(detail).font(theme::SMALL).color(t.l2).wrap());
+        }
+        if step.tone == StepTone::Ask {
+            for (kind, sha) in tested.fingerprints() {
+                words = words.child(rune::el().w_full().px(8.0).py(5.0).radius(theme::RADIUS_ROW).fill(t.hov2).child(text(format!("{kind} {sha}")).font(theme::CODE).color(t.l1).wrap()));
+            }
+            words = words.child(push_button(t, "Trust it and continue", Push::Primary, !state.testing).key("add-trust").on_press_tx(|s: &mut Shell, _| s.add_server_test(true)));
+        }
+        steps = steps.child(row().key(format!("test-step-{i}")).w_full().gap(8.0).items_start().child(icon(mark, 14.0, color).mt(2.0)).child(words));
+    }
+    out = out.child(steps);
+    out
+}
+
+fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
     let form = state.form(false);
-    let mut page = col().w_full().px(20.0).pt(18.0).pb(4.0).gap(16.0).child(text("Add a server").font(theme::TITLE).color(t.l1).single_line());
+    let mut page = col().w_full().px(20.0).pt(4.0).pb(16.0).gap(16.0);
 
     // Where servers can be brought in from, once the backend has looked.
     if let Some(sources) = &state.sources {
@@ -221,9 +582,15 @@ fn form_page(state: &State, t: &Theme) -> El {
             }
             page = page.child(rows);
         }
+        if sources.old_passwords > 0 {
+            let n = sources.old_passwords;
+            let spec = ListRow { icon: Some(Icon::Key), label: "Use 0.10's saved passwords", note: &format!("{n}"), ..ListRow::default() };
+            page = page.child(list_row(t, &spec).key("add-old-passwords").mx(-8.0).hover(t.hov2).focusable(true).role("button").on_press_tx(move |s: &mut Shell, _| s.offer_old_passwords(n)));
+        }
     }
     if let Some(notice) = &state.notice {
-        page = page.child(row().key("add-notice").w_full().gap(6.0).items_start().child(icon(Icon::Check, 13.0, t.l2on).mt(1.0)).child(text(notice).font(theme::NOTE).color(t.l2on).grow(1.0).shrink().min_w(0.0).wrap()));
+        let notice = s.text_shown(notice);
+        page = page.child(row().key("add-notice").w_full().gap(6.0).items_start().child(icon(Icon::Check, 13.0, t.l2on).mt(1.0)).child(text(notice.as_ref()).font(theme::NOTE).color(t.l2on).grow(1.0).shrink().min_w(0.0).wrap()));
     }
 
     // Where.
@@ -248,52 +615,11 @@ fn form_page(state: &State, t: &Theme) -> El {
         }
     }
     page = page.child(section(t, "Where", place));
+    page = page.child(sign_in(state, t));
+    let shown_host = form.parsed().host;
+    page = page.child(in_your_list(state, t, shown_host.trim()));
+    page = page.child(check(state, t, form.ready()));
 
-    // Sign in with.
-    let ways = choices(
-        t,
-        [
-            choice(t, "SSH key", state.sign_in == SignIn::Key).key("add-key").on_press_tx(|s: &mut Shell, _| s.screens.add_server.sign_in = SignIn::Key),
-            choice(t, "Password", state.sign_in == SignIn::Password).key("add-password").on_press_tx(|s: &mut Shell, _| s.screens.add_server.sign_in = SignIn::Password),
-        ],
-    );
-    let how = match state.sign_in {
-        SignIn::Key => {
-            let key_file = code_input(t, &state.key_file, "~/.ssh/my_key").key("add-key-file").on_edit(|s: &mut Shell| &mut s.screens.add_server.key_file);
-            col().w_full().gap(4.0).child(field(t, key_file, false)).child(text("Leave it empty to use your usual keys.").font(theme::SMALL).color(t.l2).single_line())
-        }
-        SignIn::Password => {
-            let secret = text_input(&state.password, theme::TEXT)
-                .secure()
-                .single_line()
-                .key("add-secret")
-                .grow(1.0)
-                .shrink()
-                .min_w(0.0)
-                .color(t.l1)
-                .placeholder("Password", t.l2)
-                .caret(t.ring, t.ring.alpha(0.35))
-                .label_static("Password")
-                .on_edit(|s: &mut Shell| &mut s.screens.add_server.password);
-            let kept = if state.remember { "Saved in your system keychain, never in SSHeesh's own files." } else { "Kept only until you quit SSHeesh." };
-            col()
-                .w_full()
-                .gap(6.0)
-                .child(field(t, secret, false))
-                .child(check_box(t, "Remember password", state.remember).key("add-remember").on_press_tx(|s: &mut Shell, _| s.screens.add_server.remember ^= true))
-                .child(text(kept).font(theme::SMALL).color(t.l2).single_line())
-        }
-    };
-    page = page.child(section(t, "Sign in with", col().w_full().gap(8.0).items_start().child(ways).child(how)));
-
-    // In your list.
-    let shown = form.parsed().host;
-    let name = input(t, &state.name, if shown.trim().is_empty() { "Name" } else { shown.trim() }).key("add-name").on_edit(|s: &mut Shell| &mut s.screens.add_server.name);
-    page = page.child(section(t, "In your list", field(t, name, false)));
-
-    if let Some(why) = &state.error {
-        page = page.child(error_line(t, why));
-    }
     page
 }
 
@@ -360,7 +686,13 @@ fn list_page(state: &State, t: &Theme, source: Source, streaming: bool) -> El {
 }
 
 /// The dialog, when it's open: a last child of the window's root.
-pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
+/// The dialog, when it's open: a last child of the window's root. Its body scrolls between the
+/// title and the buttons, so it fits a low window (600 points) whole.
+pub fn view(s: &Shell, t: &'static Theme, cx: &mut rune::Cx<Shell>) -> Option<El> {
+    // As tall as the window lets it be, with a margin; the body scrolls in what is left after
+    // the title, the error line and the buttons.
+    let room = cx.layout_size("window").map_or(crate::shell::SIZE.1, |[_, h]| h);
+    let dialog_max = (room - 48.0).clamp(240.0, 720.0);
     let state = &s.screens.add_server;
     if !state.open {
         return None;
@@ -375,7 +707,17 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
                 // Return in any field presses it.
                 save = save.default_button().on_press_tx(|s: &mut Shell, _| s.add_server_submit());
             }
-            (form_page(state, t), save)
+            let head = text("Add a server").font(theme::TITLE).color(t.l1).single_line();
+            let body_max = (dialog_max - 56.0 - 68.0 - if state.error.is_some() { 40.0 } else { 0.0 }).max(80.0);
+            let page = col().w_full().child(rune::el().w_full().px(20.0).pt(18.0).pb(12.0).child(head)).child(
+                col().key("add-body").w_full().max_h(body_max).scroll(ScrollSpec { stick_bottom: false }).child(form_page(s, state, t)),
+            );
+            // What is wrong stays in sight, over the buttons, however far the body scrolled.
+            let page = match &state.error {
+                Some(why) => page.child(rune::el().w_full().px(20.0).pt(10.0).child(error_line(t, why))),
+                None => page,
+            };
+            (page, save)
         }
         Page::List(source) => {
             let label = if state.busy { "Adding…".to_owned() } else { import_button(source, state.picks.len()) };
@@ -387,10 +729,11 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         }
     };
     let foot = row().w_full().h(54.0).px(20.0).mt(14.0).gap(8.0).items_center().border_sides([1.0, 0.0, 0.0, 0.0], t.hair).child(rune::spacer()).child(cancel).child(done);
+    // As tall as the window lets it be, with a margin.
     let dialog = popover(t, WIDTH)
         .key("add-dialog")
         .label_static("Add a server")
-        .max_h(720.0)
+        .max_h(dialog_max)
         .modal_tx(false, |s: &mut Shell, tx| {
             // Esc leaves the dialog, unless the backend is in the middle of saving.
             if !s.screens.add_server.busy {
