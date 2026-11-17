@@ -38,6 +38,7 @@ use crate::theme::{self, Theme};
 pub const WIDTH: f32 = 560.0;
 
 /// The palette's own state.
+#[derive(Default)]
 pub struct State {
     pub open: bool,
     /// What is typed.
@@ -51,11 +52,6 @@ pub struct State {
     pub(crate) pending: HashMap<TabId, (String, bool)>,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State { open: false, query: TextEdit::default(), hot: None, note: None, pending: HashMap::new() }
-    }
-}
 
 impl State {
     /// A tab closed: nothing waits to be typed into it.

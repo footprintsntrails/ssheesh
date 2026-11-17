@@ -42,6 +42,7 @@ pub enum Page {
     Fill { id: String, server: String },
 }
 
+#[derive(Default)]
 pub struct State {
     pub page: Option<Page>,
     /// Every snippet, as the backend keeps them.
@@ -59,11 +60,6 @@ pub struct State {
     pub note: Option<String>,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State { page: None, list: Snippets::default(), name: TextEdit::default(), command: TextEdit::default(), only_here: false, error: None, blanks: HashMap::new(), asking: None, note: None }
-    }
-}
 
 impl State {
     pub fn is_open(&self) -> bool {
