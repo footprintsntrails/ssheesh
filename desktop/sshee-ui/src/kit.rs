@@ -18,6 +18,7 @@ pub mod button;
 pub mod chip;
 pub mod field;
 pub mod form;
+pub mod graph;
 pub mod keycap;
 pub mod list;
 pub mod menu;

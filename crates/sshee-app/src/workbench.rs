@@ -27,11 +27,11 @@ pub mod shortcuts;
 pub mod titles;
 pub mod vitals;
 
-use crate::model::{EnvLabel, PaneKind, TargetRef};
+use crate::model::{ContainerRef, EnvLabel, PaneKind, TargetRef};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub use vitals::{Reading, Vital, Vitals};
+pub use vitals::{History, Reading, Vital, Vitals};
 
 /// How many closed tabs are kept to bring back (0.10's `CLOSED_KEPT`).
 pub const CLOSED_KEPT: usize = 20;
@@ -95,7 +95,12 @@ pub enum TabKind {
     Terminal,
     Files,
     Stats,
+    /// A machine's Docker and Podman containers.
+    Containers,
 }
+
+/// 0.10 had no Containers tab: 1.0 saves it under this word of its own.
+const CONTAINERS: &str = "containers";
 
 impl TabKind {
     /// "Terminal", "Files", "Stats": what a tab is called until something names it.
@@ -104,6 +109,7 @@ impl TabKind {
             TabKind::Terminal => "Terminal",
             TabKind::Files => "Files",
             TabKind::Stats => "Stats",
+            TabKind::Containers => "Containers",
         }
     }
 
@@ -113,6 +119,7 @@ impl TabKind {
             TabKind::Terminal => PaneKind::Terminal,
             TabKind::Files => PaneKind::Files,
             TabKind::Stats => PaneKind::Stats,
+            TabKind::Containers => PaneKind::Other(CONTAINERS.into()),
         }
     }
 
@@ -123,6 +130,7 @@ impl TabKind {
             PaneKind::Terminal => Some(TabKind::Terminal),
             PaneKind::Files => Some(TabKind::Files),
             PaneKind::Stats => Some(TabKind::Stats),
+            PaneKind::Other(other) if other == CONTAINERS => Some(TabKind::Containers),
             PaneKind::Empty | PaneKind::Other(_) => None,
         }
     }
@@ -191,6 +199,8 @@ pub struct Tab {
     pub needs_you: bool,
     /// The AI agent running in it ("Claude Code"), when one is.
     pub agent: Option<String>,
+    /// A terminal opened into a container: a shell there, or its logs.
+    pub container: Option<ContainerRef>,
 }
 
 impl Tab {
@@ -224,6 +234,7 @@ pub struct ClosedTab {
     pub kind: TabKind,
     pub title: Option<String>,
     pub path: Option<String>,
+    pub container: Option<ContainerRef>,
 }
 
 /// What a new tab starts with, beyond its kind and machine.
@@ -233,6 +244,8 @@ pub struct Open {
     pub path: Option<String>,
     /// The agent running in it, when it's known from the start.
     pub agent: Option<String>,
+    /// A terminal into a container.
+    pub container: Option<ContainerRef>,
 }
 
 /// The tabs as they're kept between runs: the row in order, the tab you were on, and whether
@@ -264,6 +277,9 @@ pub struct SavedTab {
     pub session_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// A terminal into a container: what it opens again into (0.10's pane `container`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerRef>,
 }
 
 /// Tor, as the sidebar and the status bar show it.
@@ -316,6 +332,8 @@ pub struct Workbench {
     /// Settings' "Tabs on screen: Side by side": a new tab joins the page of the tab you were
     /// on instead of filling it alone.
     together: bool,
+    /// Each machine's looks so far, for the graphs.
+    history: HashMap<ServerKey, History>,
 }
 
 const UNKNOWN_SERVER: &str = "Unknown server";
@@ -337,6 +355,7 @@ impl Workbench {
             vitals: HashMap::new(),
             layout: layout::Layout::new(),
             together: false,
+            history: HashMap::new(),
         };
         w.set_servers(servers);
         w
@@ -486,6 +505,7 @@ impl Workbench {
             link: Link::Idle,
             needs_you: false,
             agent: open.agent,
+            container: open.container,
         };
         // Next to the tab you were on there; a machine's first tab ends the row.
         let at = self.anchor_on(server).and_then(|a| self.index_of(a)).map_or(self.tabs.len(), |i| i + 1);
@@ -564,7 +584,7 @@ impl Workbench {
         };
         let tab = self.tabs.remove(at);
         self.last_on.retain(|_, last| *last != id);
-        self.closed.insert(0, ClosedTab { server: tab.server.clone(), kind: tab.kind, title: tab.title.clone(), path: tab.path.clone() });
+        self.closed.insert(0, ClosedTab { server: tab.server.clone(), kind: tab.kind, title: tab.title.clone(), path: tab.path.clone(), container: tab.container.clone() });
         self.closed.truncate(CLOSED_KEPT);
         if self.focused == Some(id) {
             // On the main menu the menu stays; only the tab to come back to changes.
@@ -594,7 +614,7 @@ impl Workbench {
         while !self.closed.is_empty() {
             let c = self.closed.remove(0);
             if self.server(&c.server).is_some() {
-                return Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None }));
+                return Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None, container: c.container }));
             }
         }
         None
@@ -605,7 +625,7 @@ impl Workbench {
     pub fn reopen_closed_at(&mut self, index: usize) -> Option<TabId> {
         let c = self.closed.get(index).filter(|c| self.server(&c.server).is_some())?.clone();
         self.closed.remove(index);
-        Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None }))
+        Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None, container: c.container }))
     }
 
     /// Ctrl+Tab and Ctrl+Shift+Tab: the next (`1`) or previous (`-1`) tab in the row, around
@@ -700,7 +720,15 @@ impl Workbench {
             tabs: self
                 .tabs
                 .iter()
-                .map(|t| SavedTab { server: t.server.clone(), kind: t.kind.pane_kind(), n: t.n, title: t.title.clone(), session_key: t.session_key.clone(), path: t.path.clone() })
+                .map(|t| SavedTab {
+                    server: t.server.clone(),
+                    kind: t.kind.pane_kind(),
+                    n: t.n,
+                    title: t.title.clone(),
+                    session_key: t.session_key.clone(),
+                    path: t.path.clone(),
+                    container: t.container.clone(),
+                })
                 .collect(),
             active: self.active_id().and_then(|id| self.index_of(id)),
             sidebar_hidden: !self.sidebar,
@@ -728,7 +756,7 @@ impl Workbench {
             self.next_id += 1;
             let session_key = match kind {
                 TabKind::Terminal => Some(t.session_key.clone().filter(|k| !k.is_empty()).unwrap_or_else(new_session_key)),
-                TabKind::Files | TabKind::Stats => None,
+                TabKind::Files | TabKind::Stats | TabKind::Containers => None,
             };
             self.tabs.push(Tab {
                 id,
@@ -741,6 +769,7 @@ impl Workbench {
                 link: Link::Idle,
                 needs_you: false,
                 agent: None,
+                container: t.container.clone().filter(|_| kind == TabKind::Terminal),
             });
             if saved.active == Some(i) {
                 active = Some(id);
@@ -928,12 +957,24 @@ impl Workbench {
     pub fn set_vitals(&mut self, server: &str, vitals: Option<Vitals>) {
         match vitals {
             Some(v) => {
+                self.history.entry(server.to_owned()).or_default().push(&v);
                 self.vitals.insert(server.to_owned(), v);
             }
             None => {
                 self.vitals.remove(server);
+                self.history.remove(server);
             }
         }
+    }
+
+    /// A machine's vital signs, when they're known: the Stats page and the sidebar's card.
+    pub fn vitals(&self, server: &str) -> Option<&Vitals> {
+        self.vitals.get(server)
+    }
+
+    /// A machine's looks so far, oldest first.
+    pub fn history(&self, server: &str) -> Option<&History> {
+        self.history.get(server)
     }
 
     /// The vital signs of the machine on screen, when they're known.
@@ -1504,8 +1545,42 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_into_a_container_is_kept_and_comes_back_into_it() {
+        use crate::model::{ContainerRun, Engine};
+        let mut w = bench();
+        let logs = ContainerRef { engine: Engine::Docker, id: "a1b2c3d4e5f6".into(), name: "app-api-1".into(), run: ContainerRun::Logs, extra: Default::default() };
+        let id = w.open_with(TabKind::Terminal, WEB, Open { title: Some("app-api-1 logs".into()), container: Some(logs.clone()), ..Open::default() });
+        w.open(TabKind::Containers, WEB);
+        // Saved and read back, as the next run does: the same container, the same tab kinds.
+        let json = serde_json::to_string(&w.saved()).unwrap();
+        assert!(json.contains(r#""kind":"containers""#) && json.contains(r#""run":"logs""#), "{json}");
+        let mut again = bench();
+        again.restore(&serde_json::from_str(&json).unwrap());
+        assert_eq!(again.tabs()[0].container.as_ref(), Some(&logs));
+        assert_eq!((again.tabs()[0].label(), again.tabs()[1].kind), ("app-api-1 logs".to_owned(), TabKind::Containers));
+        // Closed and brought back: into the container still.
+        w.close(id);
+        let back = w.reopen_closed().unwrap();
+        assert_eq!(w.tab(back).unwrap().container.as_ref(), Some(&logs));
+    }
+
+    #[test]
+    fn a_machines_looks_make_its_history() {
+        let mut w = bench();
+        assert!(w.history(WEB).is_none() && w.vitals(WEB).is_none());
+        for cpu in [0.1, 0.2, 0.3] {
+            w.set_vitals(WEB, Some(Vitals { cpu: Some(cpu), ..Vitals::default() }));
+        }
+        assert_eq!(w.history(WEB).unwrap().series(|s| s.cpu), [0.1, 0.2, 0.3]);
+        assert_eq!(w.vitals(WEB).unwrap().cpu, Some(0.3));
+        // A machine that can't be asked anymore forgets its history.
+        w.set_vitals(WEB, None);
+        assert!(w.history(WEB).is_none());
+    }
+
+    #[test]
     fn kinds_map_to_0_10s() {
-        for kind in [TabKind::Terminal, TabKind::Files, TabKind::Stats] {
+        for kind in [TabKind::Terminal, TabKind::Files, TabKind::Stats, TabKind::Containers] {
             assert_eq!(TabKind::from_pane_kind(&kind.pane_kind()), Some(kind));
         }
         assert_eq!(TabKind::from_pane_kind(&PaneKind::Empty), None);

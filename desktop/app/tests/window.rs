@@ -1094,3 +1094,99 @@ fn a_new_server_asks_about_its_key_and_the_session_cards_show_in_both_appearance
         }
     }
 }
+
+// ---- Containers and Stats
+
+/// The palette, `words` typed into it, and Return: the Containers or Stats tab of the machine
+/// on screen (web-7731 in the demo).
+fn from_palette(words: &str) -> Vec<Value> {
+    vec![chord(0.3, Shortcut::Palette), json!({ "t": 0.6, "type": "type", "text": words }), press(1.0, "Enter", false, false, false)]
+}
+
+#[test]
+fn containers_are_a_tab_grouped_by_project_in_both_appearances() {
+    for (theme, _, page) in LOOKS {
+        let mut events = from_palette("containers");
+        // The pointer on the first row: its buttons show.
+        events.push(json!({ "t": 1.5, "type": "move", "key": "ctr-0" }));
+        events.push(end(2.0));
+        let Some(run) = run(&format!("containers-{theme}"), &["--demo", "--theme", theme], Some(Value::Array(events))) else { return };
+        assert_eq!(run.rect("containers-toolbar"), [52.0, 44.0, 1228.0, 40.0], "{theme}");
+        for said in [
+            "Containers",
+            "7 containers, 5 running",
+            "shop",
+            "5 running",
+            "Not in a project",
+            "shop-api-1",
+            "registry.example/shop/api:2.14.0",
+            "healthy",
+            "127.0.0.1:8080 → 8080",
+            "443 → 443, 80 → 80",
+            "Stopped 2 days ago, exit code 137",
+            "Logs",
+            "Shell",
+            "Restart",
+        ] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        assert!(run.tree_text.contains("Containers (web-7731)") || run.tree_text.contains("Containers"), "{theme}");
+        let px = run.pixels();
+        assert_eq!(at(&px, 700, 760), page, "{theme}: the page's background under the list");
+        // Nothing blue but what's selected: no row is.
+        assert_eq!(near(&px, [60, 90, 1270, 700], [0x00, 0x71, 0xe3]), 0, "{theme}: blue on the page");
+    }
+    // A machine without Docker says how to install it.
+    let mut events = vec![tap(0.3, "server-3")];
+    events.extend(from_palette("containers").into_iter().map(|mut e| {
+        e["t"] = json!(e["t"].as_f64().unwrap() + 0.6);
+        e
+    }));
+    events.push(end(2.4));
+    let Some(run) = run("containers-none", &["--demo"], Some(Value::Array(events))) else { return };
+    for said in ["No Docker here", "curl -fsSL https://get.docker.com | sudo sh", "Copy", "Type it in a terminal"] {
+        assert!(run.tree_text.contains(said), "{said} isn't on the page");
+    }
+}
+
+#[test]
+fn logs_open_in_a_new_tab_inside_the_container() {
+    let mut events = from_palette("containers");
+    events.push(json!({ "t": 1.5, "type": "move", "key": "ctr-0" }));
+    events.push(tap(1.8, "ctr-0-logs"));
+    events.push(end(2.6));
+    let Some(run) = run("containers-logs", &["--demo"], Some(Value::Array(events))) else { return };
+    assert!(run.tree_text.contains("shop-api-1 logs"), "no tab for the logs");
+    assert!(run.element("term").is_some(), "the logs' terminal isn't on screen");
+}
+
+#[test]
+fn stats_has_graphs_meters_and_programs_in_both_appearances() {
+    for (theme, _, page) in LOOKS {
+        let mut events = from_palette("stats");
+        events.push(end(2.0));
+        let Some(run) = run(&format!("stats-{theme}"), &["--demo", "--theme", theme], Some(Value::Array(events))) else { return };
+        assert_eq!(run.rect("stats-toolbar")[3], 40.0, "{theme}");
+        for said in [
+            "Last 5 minutes",
+            "CPU 38%",
+            "8 cores",
+            "Load 1.12  0.94  0.88",
+            "Memory 60%",
+            "Network",
+            "November: ↓ 96 GB  ↑ 31 GB",
+            "/srv/shop: 211 GB of 500 GB",
+            "web-7731, Linux 6.8.0-45-generic, up 37 d 5 h",
+            "Busiest programs",
+            "node",
+            "14.2%",
+        ] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        let px = run.pixels();
+        let graph = run.rect("stat-cpu");
+        // The graph's line: the page's quiet ink, never blue.
+        assert_eq!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x00, 0x71, 0xe3]), 0, "{theme}");
+        assert_eq!(at(&px, 1270, 790), page, "{theme}");
+    }
+}

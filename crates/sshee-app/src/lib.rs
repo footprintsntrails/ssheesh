@@ -31,3 +31,5 @@ pub mod editors;
 pub mod prompts;
 pub mod tor;
 pub mod tunnels;
+pub mod containers;
+pub mod stats;

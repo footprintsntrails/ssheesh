@@ -113,5 +113,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         c.address = None;
         c.waiting = c.waiting.iter().map(|w| s.text_shown(w).into_owned()).collect();
     }
-    Some(card(t, &c).key("server-card").inert().anchored(format!("server-{index}"), Side::Right, Align::Start, 10.0))
+    // Its load, while it's being looked at (`screens::stats`).
+    let load = super::stats::card_load(s, &server.key(), t);
+    Some(card(t, &c).children(load).key("server-card").inert().anchored(format!("server-{index}"), Side::Right, Align::Start, 10.0))
 }

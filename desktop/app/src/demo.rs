@@ -8,6 +8,7 @@
 //! documentation). Secrets in the output are made at run time, never written in a fixture.
 //! Each server's files are a made-up tree in memory (`files`).
 
+mod containers;
 mod edit;
 mod files;
 mod tor;
@@ -75,14 +76,15 @@ pub fn bench() -> Workbench {
     bench.focus(shop);
     bench.set_needs_you(agent, true);
     bench.set_tor(Tor::On { latency_ms: Some(tor::LATENCY_MS) });
-    bench.set_vitals(
-        WEB,
-        Some(Vitals { cpu: Some(0.38), memory: 0.6, disk: Some((0.44, None)), uptime_secs: 37 * 86_400 + 5 * 3_600, down: Some(1.6 * 1_048_576.0), up: Some(315.0 * 1024.0) }),
-    );
-    bench.set_vitals(
-        DB,
-        Some(Vitals { cpu: Some(0.12), memory: 0.71, disk: Some((0.92, None)), uptime_secs: 212 * 86_400 + 9 * 3_600, down: Some(48.0 * 1024.0), up: Some(22.0 * 1024.0) }),
-    );
+    let web = Vitals { cpu: Some(0.38), memory: 0.6, disk: Some((0.44, None)), uptime_secs: 37 * 86_400 + 5 * 3_600, down: Some(1.6 * 1_048_576.0), up: Some(315.0 * 1024.0) };
+    let db = Vitals { cpu: Some(0.12), memory: 0.71, disk: Some((0.92, None)), uptime_secs: 212 * 86_400 + 9 * 3_600, down: Some(48.0 * 1024.0), up: Some(22.0 * 1024.0) };
+    // Five made-up minutes before now, for the Stats page's graphs.
+    for (server, now, seed) in [(WEB, web, 1), (DB, db, 2)] {
+        for v in containers::history(&now, seed) {
+            bench.set_vitals(server, Some(v));
+        }
+        bench.set_vitals(server, Some(now));
+    }
     bench
 }
 
@@ -103,6 +105,8 @@ pub struct DemoBackend {
     /// What the first terminal on backups shows (`--demo-card`): by default, its key's
     /// question, as a server seen for the first time.
     card: String,
+    /// Each machine's made-up containers.
+    containers: containers::DemoContainers,
 }
 
 impl Default for DemoBackend {
@@ -119,7 +123,7 @@ impl DemoBackend {
     }
 
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), card: "hostkey-new".into() }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), card: "hostkey-new".into(), containers: containers::DemoContainers::new() }
     }
 
     /// The first terminal on backups shows `card` (`--demo-card`), not its key's question.
@@ -196,6 +200,27 @@ fn card(state: &str) -> Fixture {
     Fixture::from_json(&value, Path::new("."), 1).expect("a card's fixture reads")
 }
 
+/// A terminal into a made-up container: a root prompt there, or its log as it comes.
+fn container(inside: &sshee_app::model::ContainerRef) -> Fixture {
+    let events = if inside.run == sshee_app::model::ContainerRun::Logs {
+        let line = |t: &str, what: &str| format!("\u{1b}[90m2026-11-14T{t}Z\u{1b}[0m {what}\r\n");
+        let first: String = [
+            line("10:02:11", "\u{1b}[36mINFO \u{1b}[0m listening on :8080"),
+            line("10:02:14", "\u{1b}[36mINFO \u{1b}[0m GET /api/health 200 2 ms"),
+            line("10:02:19", "\u{1b}[36mINFO \u{1b}[0m GET /api/orders/1042 200 18 ms"),
+            line("10:02:21", "\u{1b}[33mWARN \u{1b}[0m slow query (412 ms): orders by customer"),
+            line("10:02:24", "\u{1b}[36mINFO \u{1b}[0m POST /api/checkout 201 64 ms"),
+        ]
+        .concat();
+        serde_json::json!({ "events": [ { "t": 0.0, "out": first }, { "t": 2.0, "out": line("10:02:26", "\u{1b}[36mINFO \u{1b}[0m GET /api/orders/1043 200 15 ms") } ] })
+    } else {
+        let id: String = inside.id.chars().take(12).collect();
+        let out = format!("\u{1b}[32mroot@{id}\u{1b}[0m:\u{1b}[34m/app\u{1b}[0m# ");
+        serde_json::json!({ "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true } ] })
+    };
+    Fixture::from_json(&events, Path::new("."), 1).expect("a container's fixture reads")
+}
+
 impl Backend for DemoBackend {
     fn start(&mut self, remote: Remote) {
         // The scene's agent has waited two minutes, as the design's card says.
@@ -208,6 +233,10 @@ impl Backend for DemoBackend {
         });
         tor::start(&remote);
         tor::tunnels_start(&remote);
+        // What a full look at the machines with numbers would say (the Stats page).
+        for (server, facts) in containers::facts() {
+            remote.set_facts(server.to_owned(), Ok(facts));
+        }
         self.remote = Some(remote);
         self.show(None);
     }
@@ -239,6 +268,20 @@ impl Backend for DemoBackend {
         }
     }
 
+    /// Answered from the made-up machines at once, through the window's queue.
+    fn containers(&mut self, ask: sshee_app::containers::Ask) {
+        let answer = self.containers.answer(&ask);
+        if let Some(remote) = &self.remote {
+            remote.containers(ask.reply(answer));
+        }
+    }
+
+    fn stats(&mut self, ask: sshee_app::stats::Ask) {
+        if let Some(remote) = &self.remote {
+            remote.stats(ask.reply(Ok(containers::programs(&ask.server))));
+        }
+    }
+
     fn settings(&mut self) -> SettingsStore {
         SettingsStore::in_memory(settings())
     }
@@ -264,6 +307,9 @@ impl Backend for DemoBackend {
     }
 
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
+        if let Some(inside) = &tab.container {
+            return Box::new(ReplayLink::new(container(inside), None));
+        }
         let fixture = match (tab.server.as_str(), tab.title.as_deref()) {
             (WEB, Some("~/shop")) => fixture(SHOP),
             (DB, Some("Migration 0042")) => fixture(AGENT),

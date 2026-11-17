@@ -107,6 +107,71 @@ impl Vitals {
     }
 }
 
+/// How many looks a machine's history keeps: five minutes at a look every two seconds (0.10
+/// kept two).
+pub const HISTORY: usize = 150;
+
+/// One look in a machine's history: what the Stats page and the sidebar's card draw over time.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Sample {
+    /// `None` for the first look, which has nothing to compare with.
+    pub cpu: Option<f64>,
+    pub memory: f64,
+    /// Bytes a second.
+    pub down: Option<f64>,
+    pub up: Option<f64>,
+}
+
+/// A machine's last [`HISTORY`] looks, oldest first.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct History {
+    samples: std::collections::VecDeque<Sample>,
+}
+
+impl History {
+    /// Another look; the oldest goes once there are [`HISTORY`].
+    pub fn push(&mut self, v: &Vitals) {
+        if self.samples.len() == HISTORY {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(Sample { cpu: v.cpu, memory: v.memory, down: v.down, up: v.up });
+    }
+
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    pub fn samples(&self) -> impl Iterator<Item = &Sample> {
+        self.samples.iter()
+    }
+
+    /// One value of every look that has it, oldest first.
+    pub fn series(&self, of: impl Fn(&Sample) -> Option<f64>) -> Vec<f64> {
+        self.samples.iter().filter_map(of).collect()
+    }
+
+    /// The top of the network graph: the busiest second, with room above it, never under
+    /// 64 KB/s, so a quiet line stays low (0.10's `netMax`).
+    pub fn net_scale(&self) -> f64 {
+        let peak = self.samples.iter().flat_map(|s| [s.down.unwrap_or(0.0), s.up.unwrap_or(0.0)]).fold(0.0, f64::max);
+        (peak.max(64.0 * 1024.0)) * 1.15
+    }
+}
+
+/// The fullest disk's line ("Disk", "Disk /var"), the warning a card says under the meters,
+/// if one: a disk past [`FULL`] first, else memory.
+pub fn warning(v: &Vitals) -> Option<String> {
+    if let Some((used, mount)) = v.disk.as_ref().filter(|(used, _)| *used >= FULL) {
+        let label = mount.as_ref().map_or("Disk".to_owned(), |m| format!("Disk {m}"));
+        return Some(format!("{label} {} full", percent(*used)));
+    }
+    (v.memory >= FULL).then(|| format!("Memory {} used", percent(v.memory)))
+}
+
 /// 0.376 → "38%".
 pub fn percent(fraction: f64) -> String {
     format!("{}%", (fraction.clamp(0.0, 1.0) * 100.0).round() as u32)
@@ -236,6 +301,33 @@ mod tests {
         // No memory or disks reported at all.
         let v = Vitals::between(None, &Reading::default());
         assert_eq!((v.memory, v.disk.clone()), (0.0, None));
+    }
+
+    #[test]
+    fn history_keeps_five_minutes_and_scales_the_network() {
+        let mut h = History::default();
+        assert!(h.is_empty());
+        for i in 0..HISTORY + 10 {
+            h.push(&Vitals { cpu: (i > 0).then_some(i as f64 / 1000.0), memory: 0.5, down: Some(1_000.0), up: Some(10.0), ..Vitals::default() });
+        }
+        assert_eq!(h.len(), HISTORY);
+        // The oldest went: the first kept is the eleventh look.
+        assert_eq!(h.series(|s| s.cpu).first(), Some(&0.01));
+        // A quiet line sits low on a 64 KB/s scale; a busy one sets its own.
+        assert_eq!(h.net_scale(), 64.0 * 1024.0 * 1.15);
+        h.push(&Vitals { down: Some(1_000_000.0), ..Vitals::default() });
+        assert_eq!(h.net_scale(), 1_000_000.0 * 1.15);
+    }
+
+    #[test]
+    fn a_card_warns_of_a_full_disk_first() {
+        let mut v = Vitals { memory: 0.95, disk: Some((0.5, None)), ..Vitals::default() };
+        assert_eq!(warning(&v).as_deref(), Some("Memory 95% used"));
+        v.disk = Some((0.91, Some("/var".into())));
+        assert_eq!(warning(&v).as_deref(), Some("Disk /var 91% full"));
+        v.disk = Some((0.92, None));
+        assert_eq!(warning(&v).as_deref(), Some("Disk 92% full"));
+        assert_eq!(warning(&Vitals { memory: 0.4, ..Vitals::default() }), None);
     }
 
     #[test]

@@ -174,6 +174,53 @@ pub fn parse(text: &str) -> Metrics {
     m
 }
 
+/// A program running on the machine, as `ps` sees it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Process {
+    pub pid: u32,
+    /// Its share of one core since it started, in percent (`ps`'s `%CPU`).
+    pub cpu: f64,
+    /// Resident memory, in bytes.
+    pub memory: u64,
+    /// The program's name only (`comm`): its arguments may hold passwords.
+    pub command: String,
+}
+
+/// Every program, busiest first. One `ps`, and only while a Stats page asks.
+const PROCESSES: &str = "export LC_ALL=C; ps -eo pid=,pcpu=,rss=,comm= 2>/dev/null; exit 0";
+
+/// The programs running on the machine, busiest first. A machine whose `ps` can't say (BusyBox
+/// without its extra columns) is `Unsupported`.
+pub fn processes(target: &Target, env: &SshEnv) -> Result<Vec<Process>, OpError> {
+    let out = match target {
+        Target::Ssh(t) => run_remote_poll(t, env, PROCESSES)?,
+        Target::Local => run_local(PROCESSES)?,
+    };
+    let list = parse_processes(&String::from_utf8_lossy(&out));
+    if list.is_empty() {
+        return Err(OpError::new(ErrorCode::Unsupported, "This machine's ps doesn't list programs with their CPU and memory."));
+    }
+    Ok(list)
+}
+
+/// `ps -eo pid=,pcpu=,rss=,comm=`: a program's name may hold spaces, and is last.
+pub fn parse_processes(text: &str) -> Vec<Process> {
+    let mut list: Vec<Process> = text
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split_whitespace();
+            let pid = f.next()?.parse().ok()?;
+            let cpu = f.next()?.parse().ok()?;
+            let rss: u64 = f.next()?.parse().ok()?;
+            let command = f.collect::<Vec<_>>().join(" ");
+            (!command.is_empty()).then_some(Process { pid, cpu, memory: rss * 1024, command })
+        })
+        .collect();
+    list.sort_by(|a, b| b.cpu.total_cmp(&a.cpu).then(b.memory.cmp(&a.memory)));
+    list
+}
+
 fn is_virtual_iface(name: &str) -> bool {
     // Bridges, bonds and VLANs (eth0.100) carry traffic the physical
     // interface counts too; so do Proxmox's vmbr/tap/fw* devices.
@@ -321,6 +368,24 @@ exit 0"#;
         // macOS has no /proc: the look ends cleanly, so the UI can be told it's unsupported.
         let m = run(&["sh"], &script(true).replace("/proc/", "/no-such-proc/")).unwrap();
         assert_eq!((m.cpu_total, m.mem_total), (0, 0));
+    }
+
+    #[test]
+    fn programs_come_busiest_first_with_names_that_have_spaces() {
+        let out = "    1  0.0  11904 systemd\n  812 12.5 204800 postgres\n 9001  3.1  51200 Web Content\nnot a line\n  77 12.5 409600 node\n";
+        let p = parse_processes(out);
+        let names: Vec<&str> = p.iter().map(|p| p.command.as_str()).collect();
+        assert_eq!(names, ["node", "postgres", "Web Content", "systemd"]);
+        assert_eq!((p[0].pid, p[0].cpu, p[0].memory), (77, 12.5, 409600 * 1024));
+        assert!(parse_processes("").is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn this_machine_lists_its_programs() {
+        if let Ok(list) = processes(&Target::Local, &SshEnv::default()) {
+            assert!(list.iter().any(|p| p.pid > 0 && !p.command.is_empty()));
+        }
     }
 
     #[test]

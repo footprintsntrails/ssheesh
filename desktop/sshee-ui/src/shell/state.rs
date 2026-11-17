@@ -79,6 +79,29 @@ impl Remote {
         self.update(move |s| crate::screens::files::deliver(s, reply));
     }
 
+    /// A Containers tab's answer: a look, or how a start, stop or restart went
+    /// (`screens::containers::deliver`, which times the next look).
+    pub fn containers(&self, reply: sshee_app::containers::Reply) {
+        (self.post)(Box::new(move |s, tx| {
+            crate::screens::containers::deliver(s, reply, tx);
+            true
+        }));
+    }
+
+    /// The programs on a machine, for a Stats tab (`screens::stats::deliver`).
+    pub fn stats(&self, reply: sshee_app::stats::Reply) {
+        (self.post)(Box::new(move |s, tx| {
+            crate::screens::stats::deliver(s, reply, tx);
+            true
+        }));
+    }
+
+    /// What a look at a machine told beyond its vital signs (name, kernel, load, every disk),
+    /// or why it can't be asked.
+    pub fn set_facts(&self, server: ServerKey, facts: Result<sshee_app::stats::Facts, String>) {
+        self.update(move |s| crate::screens::stats::set_facts(s, server, facts));
+    }
+
     /// News from the edit bridge: a file open in an editor elsewhere, an answer to what was
     /// asked of it (`screens::files::edit::deliver`).
     pub fn edit(&self, reply: sshee_app::files::edit::EditReply) {
@@ -128,6 +151,17 @@ pub trait Backend {
     /// Never answered here: the work runs on a thread of its own and the answer comes back
     /// through [`Remote::files`], addressed with `ask.reply(..)`.
     fn files(&mut self, ask: sshee_app::files::Ask) {
+        let _ = ask;
+    }
+
+    /// A Containers tab asks for a look or a start, stop or restart. Done on a thread of its
+    /// own; the answer comes back through [`Remote::containers`].
+    fn containers(&mut self, ask: sshee_app::containers::Ask) {
+        let _ = ask;
+    }
+
+    /// A Stats tab asks which programs run. Answered through [`Remote::stats`].
+    fn stats(&mut self, ask: sshee_app::stats::Ask) {
         let _ = ask;
     }
 
@@ -736,6 +770,8 @@ impl Shell {
         if unmade {
             self.settle_in_place(tx);
         }
+        // Containers and Stats tabs on screen look again when it's time.
+        let ticked = crate::screens::containers::tick(self, clock) | crate::screens::stats::tick(self, clock) | ticked;
         let mut changed = false;
         let mut asked = Vec::new();
         let mut wishes = Vec::new();

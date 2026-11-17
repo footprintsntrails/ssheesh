@@ -165,6 +165,7 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             // A terminal whose pane isn't made yet draws next frame.
             None if tab.kind == TabKind::Terminal => el().key("pane-pending").w_full().h_full(),
             None if tab.kind == TabKind::Files => screens::files::view(s, tab, t, cx),
+            None if tab.kind == TabKind::Containers => screens::containers::view(s, tab, t, cx),
             None => screens::stats::view(s, tab, t, cx),
         },
         None => screens::home::view(s, t, cx),

@@ -10,6 +10,7 @@
 
 pub mod agent;
 pub mod add_server;
+pub mod containers;
 pub mod files;
 pub mod home;
 pub mod palette;
@@ -54,6 +55,10 @@ pub struct States {
     /// Files open in an editor elsewhere, and the editors on this computer.
     pub edits: sshee_app::files::edit::Edits,
     pub stats: HashMap<TabId, stats::State>,
+    /// Each Containers tab's last look and what's being done to its containers.
+    pub containers: HashMap<TabId, containers::State>,
+    /// What the looks at each machine tell beyond its vital signs (the Stats page).
+    pub machines: stats::Machines,
     pub settings: settings::State,
     /// Tor's popover, and what it knows of Tor.
     pub tor: tor::State,
@@ -66,6 +71,7 @@ impl States {
     pub fn retain(&mut self, open: impl Fn(TabId) -> bool) {
         self.files.retain(|id, _| open(*id));
         self.stats.retain(|id, _| open(*id));
+        self.containers.retain(|id, _| open(*id));
         self.palette.retain(&open);
         self.agent.retain(&open);
     }
