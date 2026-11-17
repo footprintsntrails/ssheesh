@@ -1,5 +1,5 @@
-// Copying files to another server: right-click files in Files, pick the
-// server and the folder there. Mount <CopyToServer /> once;
+// Copying files to another server, or to another folder on the same one:
+// right-click files in Files, pick the server and the folder there. Mount <CopyToServer /> once;
 // openCopyToServer(from, paths) shows it.
 
 import { ArrowUp, Folder, LoaderCircle, Send } from "lucide-react";
@@ -41,16 +41,21 @@ export function CopyToServer() {
 /** The folder on the server you're looking at, and the folders in it. */
 type Place = { path: string; dirs: string[] } | null;
 
+const trimSlash = (p: string) => p.replace(/\/+$/, "") || "/";
+
 const parentOf = (p: string) => (p === "/" ? "/" : p.replace(/\/[^/]+\/?$/, "") || "/");
 
 function CopyDialog({ asked }: { asked: Asked }) {
   const names = useNames();
   const hosts = useStore((s) => s.hosts);
-  const others = hosts.filter((h) => !(asked.from.kind === "host" && asked.from.hostId === h.id));
+  // The server they're on is a choice too: a copy into another folder there.
+  const fromHost = asked.from.kind === "host" ? asked.from.hostId : null;
   const [hostId, setHostId] = useState(() => {
     const last = useCopyAsk.getState().lastHost;
-    return others.some((h) => h.id === last) ? last : (others[0]?.id ?? null);
+    if (hosts.some((h) => h.id === last)) return last;
+    return (hosts.find((h) => h.id !== fromHost) ?? hosts[0])?.id ?? null;
   });
+  const fromDir = parentOf(asked.paths[0] ?? "/");
   const to: TargetRef | null = hostId ? { kind: "host", hostId } : null;
   const [place, setPlace] = useState<Place>(null);
   const [typed, setTyped] = useState("");
@@ -76,17 +81,26 @@ function CopyDialog({ asked }: { asked: Asked }) {
       .finally(() => n === asking.current && setLoading(false));
   };
 
-  // Each server opens where you copied to last time, else in its home folder.
+  // Each server opens where you copied to last time, else in its home
+  // folder; the one they're on opens in their folder, to step out of it.
   useEffect(() => {
     if (!hostId) return;
     setPlace(null);
     setTyped("");
-    go(useCopyAsk.getState().lastDir[hostId] ?? "~");
+    go(useCopyAsk.getState().lastDir[hostId] ?? (hostId === fromHost ? fromDir : "~"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostId]);
 
   const label = filesLabel(asked.paths);
-  const ready = !!to && !!place && !loading && typed.trim() === place.path;
+  // On their own server: not the folder they're in, and not into themselves.
+  const blocked = (() => {
+    if (hostId !== fromHost || !place) return null;
+    const dest = trimSlash(place.path);
+    if (dest === trimSlash(fromDir)) return "They're already in this folder. Pick another one.";
+    const inside = asked.paths.find((p) => dest === trimSlash(p) || dest.startsWith(`${trimSlash(p)}/`));
+    return inside ? `Can't copy ${inside.split("/").pop()} into itself. Pick a folder outside it.` : null;
+  })();
+  const ready = !!to && !!place && !loading && typed.trim() === place.path && !blocked;
   const send = () => {
     if (!to || !place || !hostId) return;
     useCopyAsk.setState((s) => ({ lastHost: hostId, lastDir: { ...s.lastDir, [hostId]: place.path } }));
@@ -111,7 +125,7 @@ function CopyDialog({ asked }: { asked: Asked }) {
         </span>
         <div className="min-w-0">
           <h2 className="text-[15px] font-semibold text-fg">
-            Copy {asked.paths.length === 1 ? `“${label}”` : label} to {asked.from.kind === "host" ? "another server" : "a server"}
+            Copy {asked.paths.length === 1 ? `“${label}”` : label} to {fromHost ? "another folder or server" : "a server"}
           </h2>
           <p className="mt-0.5 truncate text-[12px] text-fg-3">
             From {names.target(asked.from)}
@@ -120,13 +134,13 @@ function CopyDialog({ asked }: { asked: Asked }) {
         </div>
       </div>
 
-      {others.length === 0 ? (
-        <p className="mt-4 text-[12.5px] text-fg-2">There's no other server to copy to yet. Add one from the sidebar first.</p>
+      {hosts.length === 0 ? (
+        <p className="mt-4 text-[12.5px] text-fg-2">There's no server to copy to yet. Add one from the sidebar first.</p>
       ) : (
         <>
           <span className="mt-4 block text-[12px] font-medium text-fg-2">To</span>
           <div role="radiogroup" aria-label="Server" className="mt-1.5 flex max-h-[132px] flex-wrap gap-1.5 overflow-y-auto">
-            {others.map((h) => (
+            {hosts.map((h) => (
               <button
                 key={h.id}
                 type="button"
@@ -140,6 +154,7 @@ function CopyDialog({ asked }: { asked: Asked }) {
               >
                 <HostIcon hostId={h.id} size={14} />
                 <span className="max-w-[180px] truncate">{names.host(h)}</span>
+                {h.id === fromHost && <span className="shrink-0 text-fg-3">this one</span>}
               </button>
             ))}
           </div>
@@ -169,6 +184,7 @@ function CopyDialog({ asked }: { asked: Asked }) {
               {loading && <LoaderCircle size={14} className="absolute top-2.5 right-3 animate-spin text-fg-3" />}
             </div>
           </div>
+          {blocked && !error && <p className="mt-1.5 text-[12px] text-fg-3">{names.text(blocked)}</p>}
           <div className="mt-1.5 h-[168px] overflow-y-auto rounded-[9px] bg-ink/[0.025] p-1 ring-1 ring-inset ring-ink/[0.06]">
             {error ? (
               <p className="p-2 text-[12px] leading-snug text-bad">{names.text(error)}</p>

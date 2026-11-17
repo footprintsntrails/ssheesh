@@ -2148,12 +2148,19 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
         return Err(OpError::failed("Pick files from one folder to copy together."));
     }
     let names: Vec<String> = paths.iter().map(|p| base_name(p)).collect();
+    let same = same_server(a, b);
+    if same {
+        copy_here_check(&parent, paths, dest_dir)?;
+    }
     if !overwrite {
         check_free(b, env, &names, dest_dir)?;
     }
     xfer.check()?;
     let quoted = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
     let staging = join_remote(dest_dir, &scratch_name("copy"));
+    if same {
+        return copy_on_server(b, env, &parent, &quoted, &names, dest_dir, &staging, overwrite, xfer);
+    }
     let (pack, size, unpack) = copy_scripts(&parent, &quoted, &staging);
     let total = run_remote(a, env, &size, None)
         .map(|out| String::from_utf8_lossy(&out).lines().filter_map(|l| l.split_whitespace().next()?.parse::<u64>().ok()).sum::<u64>() * 1024)
@@ -2214,6 +2221,64 @@ pub fn copy_between(from: &Target, to: &Target, env: &SshEnv, paths: &[String], 
         Err(e) => {
             discard_remote(b, env, &staging);
             Err(e)
+        }
+    }
+}
+
+/// Whether two targets are the same server, so a copy between them can stay on it.
+fn same_server(a: &SshTarget, b: &SshTarget) -> bool {
+    a.destination == b.destination && a.user == b.user && a.port.unwrap_or(22) == b.port.unwrap_or(22)
+}
+
+/// On one server, a copy into the folder the files are already in, or into
+/// a folder being copied, can't work: the first would copy them onto
+/// themselves, the second would never end.
+fn copy_here_check(parent: &str, paths: &[String], dest_dir: &str) -> Result<(), OpError> {
+    let dest = dest_dir.trim_end_matches('/');
+    let dest = if dest.is_empty() { "/" } else { dest };
+    if dest == parent.trim_end_matches('/') || (dest == "/" && parent == "/") {
+        return Err(OpError::new(ErrorCode::Exists, "They're already in this folder. Pick another one."));
+    }
+    for p in paths {
+        let p = p.trim_end_matches('/');
+        if dest == p || dest.starts_with(&format!("{p}/")) {
+            return Err(OpError::failed(format!("Can't copy {} into itself. Pick a folder outside it.", base_name(p))));
+        }
+    }
+    Ok(())
+}
+
+/// The one script `copy_on_server` runs: pack and unpack on the server,
+/// then put the copies in place. Both halves must succeed: a pipe alone only
+/// reports the second.
+fn on_server_script(pack: &str, unpack: &str, quoted: &str, dest_dir: &str, staging: &str, overwrite: bool) -> String {
+    format!(
+        r#"r=$( {{ {{ ({pack}); echo "p$?" >&3; }} | {{ ({unpack}); echo "u$?" >&3; }}; }} 3>&1 ); case "$r" in *p0*) ;; *) exit 1 ;; esac; case "$r" in *u0*) ;; *) exit 1 ;; esac; {}"#,
+        copy_finish_script(quoted, dest_dir, staging, overwrite)
+    )
+}
+
+/// A copy to another folder on the same server: tar packs and unpacks right
+/// there, so nothing comes through this computer. As between servers, it
+/// lands under a hidden name first and replaces nothing unless `overwrite`.
+#[allow(clippy::too_many_arguments)]
+fn copy_on_server(t: &SshTarget, env: &SshEnv, parent: &str, quoted: &str, names: &[String], dest_dir: &str, staging: &str, overwrite: bool, xfer: &Arc<Transfer>) -> Result<(), OpError> {
+    let (pack, size, unpack) = copy_scripts(parent, quoted, staging);
+    let total = run_remote(t, env, &size, None)
+        .map(|out| String::from_utf8_lossy(&out).lines().filter_map(|l| l.split_whitespace().next()?.parse::<u64>().ok()).sum::<u64>() * 1024)
+        .unwrap_or(0);
+    xfer.add_total(total);
+    xfer.check()?;
+    let base = xfer.done();
+    let script = on_server_script(&pack, &unpack, quoted, dest_dir, staging, overwrite);
+    match run_remote(t, env, &script, None) {
+        Ok(_) => {
+            xfer.settle(base + total);
+            Ok(())
+        }
+        Err(e) => {
+            discard_remote(t, env, staging);
+            Err(if e.message == "EXISTS" { OpError::new(ErrorCode::Exists, exists_message(names)) } else { e })
         }
     }
 }
@@ -2852,6 +2917,46 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dest.join("link/sub/mine.txt")).unwrap(), "kept");
         assert!(!Path::new(&staging).exists());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_copy_on_one_server_refuses_its_own_folder_and_itself() {
+        let paths = vec!["/srv/www/site".to_string(), "/srv/www/notes.txt".to_string()];
+        assert_eq!(copy_here_check("/srv/www", &paths, "/srv/www").unwrap_err().code, ErrorCode::Exists);
+        assert_eq!(copy_here_check("/srv/www", &paths, "/srv/www/").unwrap_err().code, ErrorCode::Exists);
+        assert!(copy_here_check("/srv/www", &paths, "/srv/www/site").is_err());
+        assert!(copy_here_check("/srv/www", &paths, "/srv/www/site/old").is_err());
+        assert!(copy_here_check("/srv/www", &paths, "/srv/www/site-old").is_ok());
+        assert!(copy_here_check("/srv/www", &paths, "/srv").is_ok());
+        assert!(copy_here_check("/", &["/etc".to_string()], "/").is_err());
+        #[cfg(unix)]
+        {
+            let base = std::env::temp_dir().join(format!("sshee-on-server-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(base.join("www/site")).unwrap();
+            std::fs::create_dir_all(base.join("backup")).unwrap();
+            std::fs::write(base.join("www/site/index.html"), "hi").unwrap();
+            let (www, dest) = (base.join("www").to_string_lossy().to_string(), base.join("backup").to_string_lossy().to_string());
+            let staging = base.join("backup/.copy.part").to_string_lossy().to_string();
+            let run = |script: &str| Command::new("sh").arg("-c").arg(script).output().unwrap();
+            let (pack, _, unpack) = copy_scripts(&www, "'site'", &staging);
+            assert!(run(&on_server_script(&pack, &unpack, "'site'", &dest, &staging, false)).status.success());
+            assert_eq!(std::fs::read_to_string(base.join("backup/site/index.html")).unwrap(), "hi");
+            assert!(!Path::new(&staging).exists());
+            // Once it's there, a second copy replaces nothing.
+            let again = run(&on_server_script(&pack, &unpack, "'site'", &dest, &staging, false));
+            assert_eq!(String::from_utf8_lossy(&again.stderr).trim(), "EXISTS");
+            // A source that's gone fails instead of landing half a copy.
+            let _ = std::fs::remove_dir_all(&staging);
+            let (pack, _, unpack) = copy_scripts(&www, "'missing'", &staging);
+            assert!(!run(&on_server_script(&pack, &unpack, "'missing'", &dest, &staging, false)).status.success());
+            assert!(!base.join("backup/missing").exists());
+            std::fs::remove_dir_all(&base).unwrap();
+        }
+        let a = SshTarget { destination: "web-7731".into(), ..Default::default() };
+        let b = SshTarget { port: Some(22), ..a.clone() };
+        assert!(same_server(&a, &b));
+        assert!(!same_server(&a, &SshTarget { user: Some("deploy".into()), ..a.clone() }));
     }
 
     #[cfg(unix)]
