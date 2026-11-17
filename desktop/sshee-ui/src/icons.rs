@@ -143,6 +143,12 @@ pub enum Icon {
     /// Fill the window with a pane, and back.
     Expand,
     Shrink,
+    /// More: three dots, a menu of everything a narrow toolbar has no room for.
+    More,
+    /// Files: look inside a folder without going there (two chevrons).
+    Peek,
+    /// Files: a new file.
+    FilePlus,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -172,7 +178,7 @@ const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 74] = [
+    pub const ALL: [Icon; 77] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -247,10 +253,13 @@ impl Icon {
         Icon::Expand,
         Icon::Shrink,
         Icon::Copy,
+        Icon::More,
+        Icon::Peek,
+        Icon::FilePlus,
     ];
 
     /// The signs that aren't a server's icon, for the component sheet.
-    pub const SIGNS: [Icon; 44] = [
+    pub const SIGNS: [Icon; 47] = [
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -295,6 +304,9 @@ impl Icon {
         Icon::SplitDown,
         Icon::Expand,
         Icon::Shrink,
+        Icon::More,
+        Icon::Peek,
+        Icon::FilePlus,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -415,6 +427,9 @@ impl Icon {
             Icon::SplitDown => (16.0, &[WINDOW, Path("M1.8 8h12.4")]),
             Icon::Expand => (16.0, &[Path("M9.6 2.6h3.8v3.8M13.4 2.6 9.2 6.8M6.4 13.4H2.6V9.6M2.6 13.4l4.2-4.2")]),
             Icon::Shrink => (16.0, &[Path("M13.4 2.6 9.4 6.6M9.4 3.4v3.2h3.2M2.6 13.4l4-4M3.4 9.4h3.2v3.2")]),
+            Icon::More => (16.0, &[Oval(3.6, 8.0, 0.5, 0.5), Oval(8.0, 8.0, 0.5, 0.5), Oval(12.4, 8.0, 0.5, 0.5)]),
+            Icon::Peek => (16.0, &[Path("M3.8 4.4 7.4 8l-3.6 3.6M8.6 4.4 12.2 8l-3.6 3.6")]),
+            Icon::FilePlus => (16.0, &[Path("M9.2 1.9H4.6a1.4 1.4 0 0 0-1.4 1.4v9.4a1.4 1.4 0 0 0 1.4 1.4h6.8a1.4 1.4 0 0 0 1.4-1.4V5.5zM9.2 1.9v3.6h3.6M8 7.8v4M6 9.8h4")]),
         }
     }
 

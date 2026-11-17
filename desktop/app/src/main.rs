@@ -12,6 +12,7 @@
 
 mod agents;
 mod args;
+mod bookmarks;
 mod containers;
 mod demo;
 mod desktop;
@@ -54,13 +55,26 @@ impl Backend for Live {
         // the window takes them when done. A copy with its own settings file ignores the
         // answer. 0.10's servers aren't copied: "Add a server" offers to bring them over.
         let seeder = remote.clone();
-        let spawned = settings::first_start().then(|| std::thread::Builder::new().name("import".into()).spawn(move || {
+        let first = settings::first_start();
+        // Files' bookmarks come over from 0.10 once, also into a copy that has its settings.
+        let no_bookmarks = sshee_core::app_identity::current().dir().is_some_and(|d| !bookmarks::has(d));
+        let spawned = (first || no_bookmarks).then(|| std::thread::Builder::new().name("import".into()).spawn(move || {
             let (found, imported) = servers::import_of_0_10();
+            let marks = imported.as_ref().map(|i| i.state.bookmarks.clone()).filter(|_| no_bookmarks);
+            if !first {
+                if let Some(marks) = marks {
+                    seeder.update(move |s| sshee_ui::screens::files::seed_bookmarks(s, &marks));
+                }
+                return;
+            }
             let seed = settings::seed(&found, imported.as_ref(), servers::ran_0_10_here());
             // 0.10's snippets, unless this copy keeps its own already.
             let snippets = imported.map(|i| i.state.snippets).filter(|_| !sshee_core::app_identity::current().dir().is_some_and(recipes::has_snippets));
             seeder.update(move |s| {
                 s.seed_settings(seed);
+                if let Some(marks) = marks {
+                    sshee_ui::screens::files::seed_bookmarks(s, &marks);
+                }
                 if let Some(list) = snippets {
                     s.seed_snippets(list);
                 }
@@ -147,6 +161,14 @@ impl Backend for Live {
 
     fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
         self.inner.snippets()
+    }
+
+    fn bookmarks(&mut self) -> Option<sshee_app::model::Bookmarks> {
+        self.inner.bookmarks()
+    }
+
+    fn bookmarks_changed(&mut self, b: &sshee_app::model::Bookmarks) {
+        self.inner.bookmarks_changed(b);
     }
 
     fn snippets_changed(&mut self, list: &sshee_app::model::Snippets) {

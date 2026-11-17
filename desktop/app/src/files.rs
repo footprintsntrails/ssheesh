@@ -124,6 +124,8 @@ struct Work {
     started: Instant,
     /// Where downloads land.
     downloads: PathBuf,
+    /// The server a copy goes to (`Want::CopyTo`), ready to use.
+    to: Option<Target>,
 }
 
 /// Files' side of the live backend.
@@ -135,10 +137,12 @@ pub struct Files {
 /// The name of a request's thread: what it does, never a path or a server.
 fn thread_name(want: &Want) -> &'static str {
     match want {
-        Want::List { .. } => "files-list",
+        Want::List { .. } | Want::Peek { .. } => "files-list",
         Want::Read { .. } | Want::ReadImage { .. } => "files-read",
         Want::Save { .. } => "files-save",
-        Want::MakeDir { .. } | Want::Rename { .. } | Want::Move { .. } => "files-change",
+        Want::MakeDir { .. } | Want::MakeFile { .. } | Want::Rename { .. } | Want::Move { .. } => "files-change",
+        Want::Archive { .. } => "files-pack",
+        Want::CopyTo { .. } => "files-copy",
         Want::Delete { .. } => "files-delete",
         Want::Extract { .. } => "files-unpack",
         Want::Download { .. } => "files-download",
@@ -153,7 +157,7 @@ pub type Prepare = Box<dyn FnOnce(&mut Target) + Send>;
 
 impl Files {
     pub fn new(env: SshEnv) -> Files {
-        Files { work: Work { env, running: Arc::default(), started: Instant::now(), downloads: downloads_dir() }, remote: None }
+        Files { work: Work { env, running: Arc::default(), started: Instant::now(), downloads: downloads_dir(), to: None }, remote: None }
     }
 
     /// How answers reach the window (`Backend::start`).
@@ -164,8 +168,9 @@ impl Files {
     /// Does what a Files tab asks on `target` (`None`: its server left the list) and answers
     /// through the window's `Remote`. Returns at once. `prepare` runs on the work's thread
     /// before the target is used: it reads the server's saved password, which may wait on the
-    /// keychain.
-    pub fn ask(&self, ask: Ask, target: Option<Target>, prepare: Prepare) {
+    /// keychain. A copy to a server (`Want::CopyTo`) reaches that one too: `to` is its target
+    /// and what prepares it.
+    pub fn ask_to(&self, ask: Ask, target: Option<Target>, prepare: Prepare, to: Option<(Option<Target>, Prepare)>) {
         // Stopping is a flag the transfer's own thread sees; its end is that thread's answer.
         if let Want::CancelTransfer { id } = ask.want {
             if let Some(xfer) = self.work.running.lock().unwrap().get(&id) {
@@ -174,7 +179,7 @@ impl Files {
             return;
         }
         let Some(remote) = self.remote.clone() else { return };
-        let work = self.work.clone();
+        let mut work = self.work.clone();
         let name = thread_name(&ask.want);
         let lost = ask.clone();
         let spawned = std::thread::Builder::new().name(name.into()).spawn({
@@ -187,6 +192,12 @@ impl Files {
                 let mut target = target;
                 if let Some(target) = target.as_mut() {
                     prepare(target);
+                }
+                if let Some((to, prepare_to)) = to {
+                    work.to = to.map(|mut t| {
+                        prepare_to(&mut t);
+                        t
+                    });
                 }
                 let answer = answer(&ask.want, target.as_ref(), &work, &report);
                 remote.files(ask.reply(answer));
@@ -210,6 +221,10 @@ impl FailedWith for Answer {
     fn failed_with(self, failure: Failure) -> Answer {
         match self {
             Answer::Listed { ticket, asked, .. } => Answer::Listed { ticket, asked, result: Err(failure) },
+            Answer::Peeked { asked, .. } => Answer::Peeked { asked, result: Err(failure) },
+            Answer::MadeFile { path, .. } => Answer::MadeFile { path, result: Err(failure) },
+            Answer::Archived { dir, archive, count, .. } => Answer::Archived { dir, archive, count, result: Err(failure) },
+            Answer::CopiedTo { id, to, paths, dir, overwrite, .. } => Answer::CopiedTo { id, to, paths, dir, overwrite, result: Err(failure) },
             Answer::Read { ticket, path, .. } => Answer::Read { ticket, path, result: Err(failure) },
             Answer::Image { ticket, path, .. } => Answer::Image { ticket, path, result: Err(failure) },
             Answer::Saved { ticket, path, .. } => Answer::Saved { ticket, path, result: Err(SaveFailure::Failed(failure)) },
@@ -263,6 +278,30 @@ fn answer(want: &Want, target: Option<&Target>, work: &Work, report: &(impl Fn(A
                 Err(e) => Err(SaveFailure::Failed(failure(e))),
             };
             Answer::Saved { ticket: *ticket, path: path.clone(), result }
+        }
+        Want::Peek { path } => Answer::Peeked { asked: path.clone(), result: on().and_then(|t| core::list(t, env, path)).map(|l| (listing(l), clock())).map_err(failure) },
+        // Only where nothing is: a file made there since the listing is never emptied.
+        Want::MakeFile { path } => Answer::MadeFile {
+            path: path.clone(),
+            result: on()
+                .and_then(|t| {
+                    core::save_guarded(t, env, path, b"", None).map(|_| ()).map_err(|e| match e {
+                        core::SaveError::Conflict(_) => OpError::new(ErrorCode::Exists, "Something with that name already exists here."),
+                        core::SaveError::Failed(e) => e,
+                    })
+                })
+                .map_err(failure),
+        },
+        Want::Archive { dir, names, archive } => {
+            Answer::Archived { dir: dir.clone(), archive: archive.clone(), count: names.len(), result: on().and_then(|t| core::archive(t, env, dir, names, archive)).map_err(failure) }
+        }
+        Want::CopyTo { id, to, paths, dir, overwrite } => {
+            let result = transfer(*id, work, report, |xfer| {
+                let from = on()?;
+                let dest = work.to.as_ref().ok_or_else(gone)?;
+                core::copy_between(from, dest, env, paths, dir, *overwrite, clean_uploads(), xfer)
+            });
+            Answer::CopiedTo { id: *id, to: to.clone(), paths: paths.clone(), dir: dir.clone(), overwrite: *overwrite, result }
         }
         Want::MakeDir { path } => Answer::MadeDir { path: path.clone(), result: on().and_then(|t| core::make_dir(t, env, path)).map_err(failure) },
         Want::Rename { from, to } => Answer::Renamed { from: from.clone(), to: to.clone(), result: on().and_then(|t| core::rename(t, env, from, to)).map_err(failure) },
@@ -400,7 +439,7 @@ mod tests {
 
     #[test]
     fn a_server_that_left_the_list_answers_every_request_with_that() {
-        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: PathBuf::from("/nowhere") };
+        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: PathBuf::from("/nowhere"), to: None };
         let quiet = |_: Answer| {};
         let Answer::Listed { ticket: 3, result: Err(f), .. } = answer(&Want::List { ticket: 3, path: "~".into() }, None, &work, &quiet) else { panic!() };
         assert_eq!(f, Failure::new(FailureKind::NotFound, "That server isn't in your list anymore."));
@@ -429,7 +468,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("shop")).unwrap();
         std::fs::write(dir.join("notes.md"), "one\r\ntwo\r\n").unwrap();
         let at = dir.to_string_lossy().replace('\\', "/");
-        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: dir.join("dl") };
+        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: dir.join("dl"), to: None };
         let quiet = |_: Answer| {};
         let ask = |want: Want| answer(&want, Some(&Target::Local), &work, &quiet);
 
@@ -550,7 +589,7 @@ mod tests {
         let srv = base.join("srv").display().to_string();
         std::fs::write(base.join("srv/README.md"), "# shop\n").unwrap();
         std::fs::write(base.join("local/upload.txt"), "from this computer\n").unwrap();
-        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: base.join("downloads") };
+        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: base.join("downloads"), to: None };
         let seen = Arc::new(Mutex::new(Vec::new()));
         let report = {
             let seen = seen.clone();

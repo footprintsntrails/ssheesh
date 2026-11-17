@@ -86,23 +86,46 @@ pub fn media_kind(name: &str) -> Option<MediaKind> {
 /// What opening a file does in 1.0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opens {
-    /// Read as text; the read says if it's binary or too big after all.
+    /// Read as text; the read says if it's binary or too big after all. An SVG is text too,
+    /// shown drawn or as its source ([`has_preview`]).
     Text,
     /// Read whole and decoded as a picture (png, jpg, gif, webp, bmp, ico).
     Image,
-    /// A video, an SVG or a picture Rune can't decode: nothing is read, the screen says it
-    /// can't be shown and offers the download.
+    /// A video or a picture Rune can't decode: nothing is read, the screen says it can't be
+    /// shown and offers the download.
     Nothing,
 }
 
 pub fn opens_as(name: &str) -> Opens {
     if ends_in(name, SHOWN) {
         Opens::Image
+    } else if is_svg(name) {
+        Opens::Text
     } else if media_kind(name).is_some() {
         Opens::Nothing
     } else {
         Opens::Text
     }
+}
+
+/// Markdown, shown formatted with a switch to its source (0.10's `MARKDOWN`).
+pub fn is_markdown(name: &str) -> bool {
+    ends_in(name, &["md", "markdown"])
+}
+
+pub fn is_svg(name: &str) -> bool {
+    ends_in(name, &["svg"])
+}
+
+/// A text that has a drawn form beside its source: Markdown and SVG get "Preview" and
+/// "Source".
+pub fn has_preview(name: &str) -> bool {
+    is_markdown(name) || is_svg(name)
+}
+
+/// What the preview steps to with the arrows while a picture is open: another picture.
+pub fn is_picture(name: &str) -> bool {
+    ends_in(name, SHOWN) || is_svg(name)
 }
 
 /// An archive Files can unpack. sshee-core's `PACKED` (files.rs) must match.
@@ -200,6 +223,13 @@ mod tests {
     }
 
     #[test]
+    fn markdown_and_svg_have_a_preview_and_pictures_step_with_the_arrows() {
+        assert!(is_markdown("README.md") && is_markdown("notes.MARKDOWN") && !is_markdown("a.mdx") && !is_markdown("md"));
+        assert!(has_preview("logo.svg") && has_preview("README.md") && !has_preview("a.txt"));
+        assert!(is_picture("a.png") && is_picture("a.svg") && !is_picture("a.mp4") && !is_picture("a.heic"));
+    }
+
+    #[test]
     fn windows_unpacks_only_zip_and_tar_on_itself() {
         assert!(can_unpack("a.zip", true) && can_unpack("a.tar.gz", true));
         assert!(!can_unpack("a.gz", true) && !can_unpack("a.7z", true) && !can_unpack("a.rar", true));
@@ -216,10 +246,11 @@ mod tests {
         for name in ["a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "A.PNG"] {
             assert_eq!(opens_as(name), Opens::Image, "{name}");
         }
-        for name in ["a.svg", "a.avif", "a.heic", "a.tiff", "a.mp4", "a.webm"] {
+        for name in ["a.avif", "a.heic", "a.tiff", "a.mp4", "a.webm"] {
             assert_eq!(opens_as(name), Opens::Nothing, "{name}");
         }
-        for name in ["a.md", "Makefile", ".env", "a.bin", "a.tar.gz"] {
+        // An SVG is text, drawn in its preview, edited as its source.
+        for name in ["a.md", "Makefile", ".env", "a.bin", "a.tar.gz", "logo.svg", "LOGO.SVG"] {
             assert_eq!(opens_as(name), Opens::Text, "{name}");
         }
     }

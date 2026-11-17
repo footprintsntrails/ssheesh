@@ -182,6 +182,7 @@ wraps it (`term-box`) with what sits over the text, each in its own file with it
   (menu, question, bookmarks, transfer cards) is drawn from `shell/view.rs`'s root.
 - **Backends**: `desktop/app/src/files.rs` runs every `Ask` on its own thread on sshee-core;
   `demo/files.rs` is a made-up disk in memory with a fixed clock.
+- **Between runs**: bookmarks and recent folders are `bookmarks.json` in the copy's folder (`desktop/app/src/bookmarks.rs`, `Backend::bookmarks`), brought over from 0.10 once. Files dropped from another app land through `El::on_drop_files` on the list (`screens::files::dropped`), so the platform's drag and drop is the only part left to Rune. Rules for what fits a pane's width are `files::layout`, Markdown is `files::markdown`.
 - **Signed in once, signed in everywhere** (`desktop/app/src/signin.rs`): macOS and Linux
   share the terminal's ssh connection; Windows' OpenSSH can't, so the password that got a
   terminal in (typed at ssh's own prompt while connecting, or the saved one) is kept in
@@ -312,7 +313,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 
 | Screen (0.10's source) | Owns in `sshee-ui/src/` | Owns in `crates/sshee-app/src/` |
 |---|---|---|
-| Files, what is left (the list, the editor with its guarded save, menus, transfers, drag onto a folder and bookmarks are built: see "Files" below): a filter box, typing a path, new file, archive, paste copied files, copy to another server, open a terminal here, a folder's peek, Markdown and video, drag in from and out to the desktop (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
+| Files, what is left (everything of 0.10's Files is built but these): a video player (Rune has no video element), SVG drawn (Rune's `svg` feature is off; SVG opens as its source), more than one file per pick in "Upload files…" (Rune's Open dialog picks one), the editor over 128 KB (Rune's text field shapes the whole text on every key), a card flying with the pointer while rows are dragged, drag onto a Files tab in the row of tabs | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | The load drawn on each server's sidebar icon (`RailLoad` in `ServerLoad.tsx`: Settings' `railStatus`) | `kit/rail.rs` | `stats.rs` (`Load`) |
 | Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, pixel icons, server load, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |

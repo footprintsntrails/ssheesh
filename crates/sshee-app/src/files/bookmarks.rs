@@ -63,6 +63,49 @@ pub fn forget_recent(b: &mut Bookmarks, server: &str, path: &str) {
     }
 }
 
+/// What 0.10 kept, brought into what this copy keeps: its pins after this copy's own (each
+/// once), and its recent folders after this copy's, six at most. True when anything changed.
+pub fn merge(into: &mut Bookmarks, from: &Bookmarks) -> bool {
+    let before = into.clone();
+    for (server, pins) in &from.pins {
+        let list = into.pins.entry(server.clone()).or_default();
+        for p in pins {
+            if !list.contains(p) {
+                list.push(p.clone());
+            }
+        }
+    }
+    for (server, recent) in &from.recent {
+        let list = into.recent.entry(server.clone()).or_default();
+        for p in recent {
+            if !list.contains(p) {
+                list.push(p.clone());
+            }
+        }
+        list.truncate(MAX_RECENT);
+    }
+    *into != before
+}
+
+/// The recent folders the list of places shows: not those pinned, not the one you're in, five
+/// at most.
+pub fn recent_shown(b: &Bookmarks, server: &str, dir: &str) -> Vec<String> {
+    let pins = pins(b, server);
+    recent(b, server).iter().filter(|p| !pins.contains(p) && *p != dir).take(5).cloned().collect()
+}
+
+/// The id that hides the recent folders in the list of places (Settings' `hiddenPlaces`).
+pub const RECENT_ID: &str = "recent";
+
+/// A place, or the recent folders ([`RECENT_ID`]), in or out of the list of places: what
+/// Settings keeps as `hiddenPlaces`.
+pub fn toggle_hidden(hidden: &mut Vec<String>, id: &str) {
+    match hidden.iter().position(|h| h == id) {
+        Some(at) => drop(hidden.remove(at)),
+        None => hidden.push(id.to_owned()),
+    }
+}
+
 /// A folder worth one click on any machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
@@ -91,9 +134,53 @@ pub fn places(on_server: bool, home: Option<&str>) -> Vec<Place> {
     list
 }
 
+/// The places the list shows: [`places`] without those hidden.
+pub fn shown_places(on_server: bool, home: Option<&str>, hidden: &[String]) -> Vec<Place> {
+    places(on_server, home).into_iter().filter(|p| !hidden.iter().any(|h| h == p.id)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_0_10_kept_comes_after_what_this_copy_has() {
+        let mut here = Bookmarks::default();
+        toggle_pin(&mut here, WEB, "/srv/app");
+        visit(&mut here, WEB, "/srv/app");
+        let mut old = Bookmarks::default();
+        toggle_pin(&mut old, WEB, "/etc");
+        toggle_pin(&mut old, WEB, "/srv/app");
+        toggle_pin(&mut old, "local", "/home/dev");
+        for n in 1..=7 {
+            visit(&mut old, WEB, &format!("/d/{n}"));
+        }
+        assert!(merge(&mut here, &old));
+        assert_eq!(pins(&here, WEB), ["/srv/app", "/etc"]);
+        assert_eq!(pins(&here, "local"), ["/home/dev"]);
+        assert_eq!(recent(&here, WEB), ["/srv/app", "/d/7", "/d/6", "/d/5", "/d/4", "/d/3"]);
+        // Twice changes nothing.
+        assert!(!merge(&mut here, &old));
+    }
+
+    #[test]
+    fn places_can_be_hidden_and_recent_folders_skip_pins_and_where_you_are() {
+        let mut hidden = Vec::new();
+        toggle_hidden(&mut hidden, "/var/log");
+        toggle_hidden(&mut hidden, RECENT_ID);
+        assert_eq!(hidden, ["/var/log", "recent"]);
+        let shown = shown_places(true, None, &hidden);
+        assert!(!shown.iter().any(|p| p.id == "/var/log") && shown.len() == 6);
+        toggle_hidden(&mut hidden, "/var/log");
+        assert_eq!(hidden, ["recent"]);
+        let mut b = Bookmarks::default();
+        for p in ["/a", "/b", "/c", "/d", "/e", "/f"] {
+            visit(&mut b, WEB, p);
+        }
+        toggle_pin(&mut b, WEB, "/e");
+        assert_eq!(recent_shown(&b, WEB, "/f"), ["/d", "/c", "/b", "/a"]);
+        assert_eq!(recent_shown(&b, WEB, "/x").len(), 5);
+    }
 
     const WEB: &str = "host:web";
 

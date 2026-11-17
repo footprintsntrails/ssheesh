@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use super::kinds::{opens_as, Opens};
+use super::kinds::{media_kind, opens_as, MediaKind, Opens};
 use super::protocol::{SaveFailure, Want};
 use super::{Failure, Notice, Stamp, TextFile, Tickets, Tone, MAX_EDIT};
 use crate::paths;
@@ -137,6 +137,8 @@ pub struct Editor {
     saving: Option<Saving>,
     conflict: Option<Conflict>,
     revision: u64,
+    /// The file's size as it was read, for the preview's header; `None` until it was.
+    size: Option<u64>,
 }
 
 /// The most names tried for a copy before giving up.
@@ -172,7 +174,7 @@ impl Editor {
     /// not read at all; the request to send comes back with the editor.
     pub fn open(dir: &str, name: &str, tickets: &mut Tickets) -> (Editor, Option<Want>) {
         let mut editor =
-            Editor { dir: dir.to_owned(), name: name.to_owned(), body: Body::Loading, crlf: false, stamp: None, reading: 0, saving: None, conflict: None, revision: 0 };
+            Editor { dir: dir.to_owned(), name: name.to_owned(), body: Body::Loading, crlf: false, stamp: None, reading: 0, saving: None, conflict: None, revision: 0, size: None };
         let want = match opens_as(name) {
             Opens::Nothing => {
                 editor.body = Body::NoPreview;
@@ -204,6 +206,11 @@ impl Editor {
 
     pub fn path(&self) -> String {
         paths::join(&self.dir, &self.name)
+    }
+
+    /// The file's size when it was read (a text's, a picture's), for the preview's header.
+    pub fn size(&self) -> Option<u64> {
+        self.size
     }
 
     pub fn body(&self) -> &Body {
@@ -261,6 +268,10 @@ impl Editor {
         match &self.body {
             Body::Binary => plain("This is a binary file."),
             Body::TooBig => plain("This file is too big to edit here (over 2 MB)."),
+            // Rune has no video player yet: say so rather than "this kind of file".
+            Body::NoPreview if media_kind(&self.name) == Some(MediaKind::Video) => {
+                Some(("Videos can't be played here yet.".into(), if on_server { "Download it to watch it.".into() } else { String::new() }))
+            }
             Body::NoPreview => Some(("This kind of file can't be shown here.".into(), if on_server { "Download it to open it.".into() } else { String::new() })),
             Body::Failed(failure) => Some((format!("Couldn't open {}", self.name), failure.message.clone())),
             Body::Loading | Body::Text { .. } | Body::Image(_) => None,
@@ -287,6 +298,7 @@ impl Editor {
         match result {
             Ok((file, stamp)) => {
                 self.crlf = file.crlf;
+                self.size = Some(file.size);
                 self.stamp = Some(stamp);
                 self.body = match file.content {
                     Some(text) => {
@@ -315,7 +327,10 @@ impl Editor {
         }
         self.reading = 0;
         self.body = match result {
-            Ok(bytes) => Body::Image(bytes.into()),
+            Ok(bytes) => {
+                self.size = Some(bytes.len() as u64);
+                Body::Image(bytes.into())
+            }
             Err(failure) => Body::Failed(failure),
         };
         true
@@ -381,6 +396,7 @@ impl Editor {
                 if let Body::Text { saved, .. } = &mut self.body {
                     *saved = saving.sent;
                 }
+                self.size = Some(stamp.size);
                 self.stamp = Some(stamp);
                 let notice = match &copy {
                     Some((name, _)) => {
@@ -444,8 +460,11 @@ mod tests {
         assert!(e.is_loading());
         let (e, want) = Editor::open(DIR, "intro.mp4", &mut tickets);
         assert_eq!((want, e.body()), (None, &Body::NoPreview));
-        assert_eq!(e.message(true), Some(("This kind of file can't be shown here.".into(), "Download it to open it.".into())));
+        assert_eq!(e.message(true), Some(("Videos can't be played here yet.".into(), "Download it to watch it.".into())));
         assert_eq!(e.message(false).unwrap().1, "");
+        let (e, _) = Editor::open(DIR, "photo.heic", &mut tickets);
+        assert_eq!(e.message(true), Some(("This kind of file can't be shown here.".into(), "Download it to open it.".into())));
+        assert_eq!(e.size(), None);
         let (e, want) = Editor::open("/", "fstab", &mut tickets);
         assert_eq!(want, Some(Want::Read { ticket: 2, path: "/fstab".into() }));
         assert_eq!((e.name(), e.dir(), e.path().as_str()), ("fstab", "/", "/fstab"));
@@ -455,6 +474,7 @@ mod tests {
     fn text_opens_for_editing_and_knows_when_it_changed() {
         let (e, _) = opened("one\ntwo\n");
         assert_eq!(e.text(), Some("one\ntwo\n"));
+        assert_eq!(e.size(), Some(8));
         assert!(e.can_edit() && e.read_only().is_none() && !e.is_loading());
         assert_eq!(e.revision(), 1);
         assert!(!e.is_dirty("one\ntwo\n") && e.is_dirty("one\ntwo\nthree\n"));
