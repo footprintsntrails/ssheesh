@@ -16,6 +16,9 @@ sshee-ui.workspace = true
 sshee-core.workspace = true
 sshee-term.workspace = true
 sshee-app.workspace = true
+# System notifications whose click comes back, and the tray (no Rune: `desktop.rs` joins it to
+# the window).
+sshee-desktop.workspace = true
 # The demo's fixtures.
 serde_json = "1"
 # Where 0.10 kept its server list, and the Downloads folder.

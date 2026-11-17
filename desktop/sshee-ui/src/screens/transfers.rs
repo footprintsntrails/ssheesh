@@ -1,16 +1,14 @@
-//! Uploads and downloads in progress, and notes about what just finished or failed: cards in
-//! the window's bottom right corner, over whatever tab is on screen (0.10's Transfers.tsx and
-//! its toasts). A card says how far the transfer got and how fast it goes, and has a button
-//! to stop it; a note stays until it's dismissed. The words are sshee-app's
+//! Uploads and downloads in progress, and the toasts under them: cards in the window's bottom
+//! right corner, over whatever tab is on screen (0.10's Transfers.tsx and its toasts). A card
+//! says how far the transfer got and how fast it goes, and has a button to stop it; a toast
+//! ("Downloaded site.zip") leaves by itself (`shell::notes`). The words are sshee-app's
 //! (`sshee_app::transfers::Transfer::card`, `sshee_app::files::Notice`). Names and paths in
 //! them go through `Shell::text_shown`, for streamer mode.
 
 use rune::{col, el, row, text, El};
-use sshee_app::files::Tone;
 use sshee_app::transfers::Kind;
 
 use crate::icons::{icon, Icon};
-use crate::kit::push::{push_button, Push};
 use crate::kit::popover::popover;
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
@@ -24,34 +22,11 @@ fn cross(t: &Theme, name: String) -> El {
 
 /// The cards, or nothing when nothing runs and nothing is to be said.
 pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
-    let (notices, transfers) = (&s.screens.notices, s.screens.transfers.items());
-    if notices.is_empty() && transfers.is_empty() {
+    let (toasts, transfers) = (crate::shell::notes::toast_cards(s, t), s.screens.transfers.items());
+    if toasts.is_empty() && transfers.is_empty() {
         return None;
     }
     let mut stack = col().key("transfers").pin(None, None, Some(14.0), Some(theme::STATUS_HEIGHT + 12.0)).w(WIDTH).gap(8.0);
-    for (i, n) in notices.iter().enumerate() {
-        let mut head = row().w_full().gap(8.0).items_center().child(
-            text(s.text_shown(&n.title).into_owned()).font(theme::TAB_NAME).color(if n.tone == Tone::Error { t.red } else { t.l1 }).single_line().truncate().grow(1.0).min_w(0.0),
-        );
-        if let Some(undo) = n.undo.clone() {
-            head = head.child(push_button(t, "Undo", Push::Quiet, true).key(format!("note-undo-{i}")).on_press_tx(move |s: &mut Shell, tx| {
-                if let Some(tab) = s.bench.active_id() {
-                    super::files::undo_move(s, tab, &undo);
-                }
-                super::files::dismiss_notice(s, i);
-                tx.instant();
-            }));
-        }
-        head = head.child(cross(t, "Dismiss".into()).key(format!("note-close-{i}")).on_press_tx(move |s: &mut Shell, tx| {
-            super::files::dismiss_notice(s, i);
-            tx.instant();
-        }));
-        let mut card = popover(t, WIDTH).key(format!("note-{i}")).role("status").px(12.0).py(9.0).gap(3.0).child(head);
-        if let Some(body) = &n.body {
-            card = card.child(text(s.text_shown(body).into_owned()).font(theme::NOTE).color(t.l2).max_lines(3));
-        }
-        stack = stack.child(card);
-    }
     for tr in transfers {
         let card = tr.card();
         let id = tr.id;
@@ -89,5 +64,6 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         }
         stack = stack.child(body);
     }
-    Some(stack)
+    // The toasts nearest the corner, newest last.
+    Some(stack.children(toasts))
 }

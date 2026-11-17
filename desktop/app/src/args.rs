@@ -36,6 +36,11 @@ impl Args {
         let mut args = Args::default();
         let mut it = argv.iter();
         while let Some(flag) = it.next() {
+            // A notification's link Windows started the program with: the window takes it
+            // (`App::on_open_url`), not these flags.
+            if crate::desktop::is_link(flag) {
+                continue;
+            }
             let switch = match flag.as_str() {
                 "--demo" => &mut args.demo,
                 "--sheet" => &mut args.sheet,
@@ -98,6 +103,8 @@ mod tests {
         assert!(parse(&["--demo", "--demo-leftovers"]).unwrap().demo_leftovers);
         assert!(parse(&["--demo-leftovers"]).is_err());
         assert_eq!(parse(&["--ssh-config", "/tmp/p/ssh_config"]).unwrap().ssh_config, Some("/tmp/p/ssh_config".into()));
+        // A toast's click starts the program with its link, for the window to take.
+        assert_eq!(parse(&["ssheesh-preview://notification/3"]).unwrap(), Args::default());
     }
 
     #[test]

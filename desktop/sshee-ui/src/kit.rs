@@ -16,6 +16,7 @@
 
 pub mod button;
 pub mod chip;
+pub mod dialog;
 pub mod field;
 pub mod form;
 pub mod keycap;
@@ -31,6 +32,7 @@ pub mod status;
 pub mod switch;
 pub mod tab;
 pub mod tile;
+pub mod toast;
 
 use rune::{canvas, el, Color, El, LineCap, Shape};
 

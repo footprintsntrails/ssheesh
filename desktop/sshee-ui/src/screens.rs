@@ -53,16 +53,18 @@ pub struct States {
     pub agent: agent::State,
     pub files: HashMap<TabId, files::State>,
     /// Files, window-wide: folders seen lately, pinned and recent folders, uploads and
-    /// downloads in progress, and notes about what finished or failed (oldest first, until the
-    /// screen dismisses them).
+    /// downloads in progress (what finished or failed is said in a toast: `notes`).
     pub dirs: sshee_app::dir_cache::DirCache,
     pub bookmarks: sshee_app::model::Bookmarks,
     pub transfers: sshee_app::transfers::Transfers,
-    pub notices: Vec<sshee_app::files::Notice>,
     /// Files open in an editor elsewhere, and the editors on this computer.
     pub edits: sshee_app::files::edit::Edits,
     pub stats: HashMap<TabId, stats::State>,
     pub settings: settings::State,
+    /// Toasts and the open confirmation (`shell::notes`).
+    pub notes: crate::shell::notes::Notes,
+    /// What the desktop outside the window was last told (`shell::desktop`).
+    pub desktop: crate::shell::desktop::State,
     /// The security check, recipes and snippets; the welcome, the tour (and hints), and
     /// "What's new".
     pub checkup: checkup::State,
@@ -89,7 +91,7 @@ impl States {
     /// Something is open over the window (the palette, a dialog, a menu): no shortcut fires
     /// behind it and no key reaches a terminal, as behind any dialog in 0.10.
     pub fn any_open(&self) -> bool {
-        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some() || self.tools_open()
+        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some() || self.tools_open() || self.notes.asking()
     }
 
     /// The security check, recipes, snippets, the welcome, the tour or "What's new" is open.
@@ -104,6 +106,7 @@ impl States {
         self.server_menu.open = None;
         self.server_card.hide();
         self.agent.close();
+        self.notes.close();
         self.checkup = checkup::State::default();
         // A recipe stepped aside stays aside: its bar brings the steps back.
         if !self.recipes.aside {

@@ -4,7 +4,9 @@
 //! and how to add a screen: desktop/ARCHITECTURE.md.
 
 pub mod compact;
+pub mod desktop;
 pub mod keys;
+pub mod notes;
 pub mod rail;
 pub mod sheet;
 pub mod split;
@@ -25,6 +27,8 @@ use sshee_app::workbench::{Server, Tab, Workbench};
 use crate::terminal::{NoLink, TermLink};
 use crate::theme;
 
+pub use desktop::{WindowAsk, WindowControl};
+pub use notes::{Confirm, Toast, ToastId};
 pub use state::{Backend, Options, Post, Remote, Shell};
 
 /// The window's title (taskbar, window list). Never a server's name: window lists and Rune's
@@ -88,12 +92,25 @@ pub fn run(launch: Launch) {
         App::new(spec).titlebar(Titlebar::new(theme::BAR_HEIGHT).traffic_lights(theme::LIGHTS_AT.0, theme::LIGHTS_AT.1))
     };
     let handle = app.handle();
+    // A notification's click and the tray bring the window forward, hide it, quit
+    // (`desktop.rs`): Rune's handle does it, from any thread.
+    let window = handle.clone();
+    let window: WindowControl = Arc::new(move |ask| match ask {
+        WindowAsk::Raise { token: Some(token) } => window.activate(token),
+        WindowAsk::Raise { token: None } => window.open(),
+        WindowAsk::Hide => window.hide(),
+        WindowAsk::Quit => window.quit(),
+    });
     // Sessions' threads and background work reach the state through this, in order.
-    let remote = Remote::new(Arc::new(move |f| handle.update_if(move |s: &mut Shell, tx| f(s, tx))));
+    let remote = Remote::new(Arc::new(move |f| handle.update_if(move |s: &mut Shell, tx| f(s, tx)))).with_window(window);
     let Launch { bench, backend, options } = launch;
     app.on_focus(|s, focused, tx| s.window_focus(focused, tx))
         .on_ime(|s, ev, tx| s.ime(ev, tx))
         .on_close(|s, _| s.close())
+        // The tray's Quit ends the app without closing the window first.
+        .on_quit(|s, _| s.close())
+        // A Windows toast's click, handed over by the program Windows started for it.
+        .on_open_url(|s, link, tx| s.open_link(link, tx))
         .init(move || Shell::new(bench, backend, options, Some(remote)))
         .run();
 }

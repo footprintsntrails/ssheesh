@@ -26,6 +26,7 @@ rune = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb7
 sshee-core = { path = "../crates/sshee-core" }
 sshee-term = { path = "../crates/sshee-term" }
 sshee-app = { path = "../crates/sshee-app" }
+sshee-desktop = { path = "../crates/sshee-desktop" }
 sshee-ui = { path = "sshee-ui" }
 # The version Rune already locks: cmap coverage and font metrics for the terminal's cells.
 swash = "0.2.10"

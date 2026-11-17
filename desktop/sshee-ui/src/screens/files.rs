@@ -39,11 +39,9 @@ use sshee_app::paths;
 use sshee_app::transfers::{files_label, Kind, TransferId};
 use sshee_app::workbench::{Tab, TabId, TabKind};
 
-use crate::shell::Shell;
+use crate::kit::toast::Tone;
+use crate::shell::{Shell, Toast};
 use crate::theme::Theme;
-
-/// The most notes kept for the screen to show; older ones go first.
-const NOTICES_KEPT: usize = 5;
 
 /// An upload found names that are taken and sent nothing: the question to ask, and what to
 /// send again on yes ([`answer_replace`]).
@@ -103,12 +101,26 @@ fn ask(s: &mut Shell, tab: TabId, want: Want) {
     s.files_ask(Ask { tab, server, want });
 }
 
+/// A note about what finished or failed: a toast that leaves by itself (`shell::notes`), with
+/// Undo for a move and "Show in folder" for a copy kept on this computer.
 fn note(s: &mut Shell, notice: Notice) {
-    let notices = &mut s.screens.notices;
-    notices.push(notice);
-    if notices.len() > NOTICES_KEPT {
-        notices.remove(0);
+    let tone = match notice.tone {
+        sshee_app::files::Tone::Info => Tone::Info,
+        sshee_app::files::Tone::Success => Tone::Success,
+        sshee_app::files::Tone::Error => Tone::Error,
+    };
+    let mut toast = Toast::new(tone, notice.title);
+    toast.body = notice.body;
+    if let Some(undo) = notice.undo {
+        toast = toast.action("Undo", move |s| {
+            if let Some(tab) = s.bench.active_id() {
+                undo_move(s, tab, &undo);
+            }
+        });
+    } else if let Some(path) = notice.folder {
+        toast = toast.action("Show in folder", move |s| s.edit_ask(sshee_app::files::edit::EditAsk::ShowFolder { path: path.clone() }));
     }
+    s.toast(toast);
 }
 
 /// The folder on screen is where the tab is (kept for the next run) and the newest of the
@@ -413,13 +425,6 @@ pub fn menu_for(s: &Shell, tab: TabId, clicked: Option<&str>) -> Vec<MenuRow> {
     })
 }
 
-/// Takes a note off the screen (its cross, its time ran out, its Undo was pressed).
-pub fn dismiss_notice(s: &mut Shell, index: usize) {
-    if index < s.screens.notices.len() {
-        s.screens.notices.remove(index);
-    }
-}
-
 // ---- answers
 
 /// A backend's answer, on the UI thread (`Remote::files`): to the tab that asked, the folder
@@ -572,7 +577,7 @@ mod tests {
 
     use sshee_app::files::editor::Body;
     use sshee_app::files::protocol::SaveFailure;
-    use sshee_app::files::{Clock, Entry, EntryKind, Failure, Listing, Stamp, TextFile, Tone};
+    use sshee_app::files::{Clock, Entry, EntryKind, Failure, Listing, Stamp, TextFile};
     use sshee_app::transfers::Progress;
     use sshee_app::workbench::{Server, Workbench};
 
@@ -654,7 +659,7 @@ mod tests {
         }
 
         fn titles(&self) -> Vec<&str> {
-            self.s.screens.notices.iter().map(|n| n.title.as_str()).collect()
+            self.s.screens.notes.titles()
         }
     }
 
@@ -836,10 +841,10 @@ mod tests {
         assert_eq!(w.state().busy.as_deref(), Some("Moving site.zip…"));
         assert_eq!(w.wants(), [Want::Move { from: "/home/deploy".into(), names: vec!["site.zip".into()], to: "/home/deploy/shop".into() }]);
         w.answer(Answer::Moved { from: "/home/deploy".into(), to: "/home/deploy/shop".into(), moved: vec!["site.zip".into()], taken: vec![], failure: None });
-        let moved = w.s.screens.notices.last().unwrap().clone();
-        assert_eq!((moved.tone, moved.title.as_str()), (Tone::Success, "Moved site.zip to shop"));
+        let (moved, toast) = w.s.screens.notes.toasts().last().map(|(id, t)| (id, t.clone())).unwrap();
+        assert_eq!((toast.tone, toast.title.as_str(), toast.action.as_ref().map(|(l, _)| l.as_str())), (crate::kit::toast::Tone::Success, "Moved site.zip to shop", Some("Undo")));
         w.wants();
-        undo_move(&mut w.s, w.tab, moved.undo.as_ref().unwrap());
+        w.s.act_on_toast(moved);
         assert_eq!(w.wants(), [Want::Move { from: "/home/deploy/shop".into(), names: vec!["site.zip".into()], to: "/home/deploy".into() }]);
 
         unpack(&mut w.s, w.tab, "site.zip");
@@ -848,8 +853,9 @@ mod tests {
         w.answer(Answer::Extracted { dir: "/home/deploy".into(), name: "site.zip".into(), result: Ok("site".into()) });
         assert_eq!(w.titles().last(), Some(&"Unpacked site.zip"));
         assert_eq!(w.state().browser.selected(), ["site"]);
-        dismiss_notice(&mut w.s, 0);
-        assert_eq!(w.titles().len(), 2);
+        let first = w.s.screens.notes.toasts().next().unwrap().0;
+        w.s.dismiss_toast(first);
+        assert_eq!(w.titles().len(), 1);
     }
 
     #[test]
@@ -988,7 +994,7 @@ mod tests {
         assert!(matches!(&edit_asks(&w)[..], [EditAsk::Open { editor, .. }] if editor.name == "kate"));
         // A pick that can't be started says why, and changes nothing.
         edit::deliver(&mut w.s, EditReply::Chosen(Err("That isn't a program that can be started.".into())));
-        assert_eq!(w.s.screens.notices.last().unwrap().title, "Can't open files in that app");
+        assert_eq!(w.titles().last(), Some(&"Can't open files in that app"));
         // Leftovers at start are marked offered as they're shown.
         let left = sshee_app::files::edit::Leftover { id: "l1".into(), host: WEB.into(), remote_path: "/home/deploy/a".into(), local: "/tmp/e/l1/a".into(), size: 3 };
         edit::deliver(&mut w.s, EditReply::Leftovers(vec![left]));

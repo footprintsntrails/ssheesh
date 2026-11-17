@@ -35,6 +35,7 @@ use sshee_app::workbench::{Tab, TabId, TabKind};
 
 use crate::icons::{icon, Icon};
 use crate::kit::button::toolbar_button;
+use crate::kit::dialog;
 use crate::kit::push::{push_button, Push};
 use crate::kit::menu::{menu, menu_row, menu_row_destructive, RowState};
 use crate::kit::popover::popover;
@@ -274,6 +275,12 @@ fn pick_upload(tab: TabId, tx: &mut Tx) {
     });
 }
 
+/// Copies a path, and says so.
+fn copied(s: &mut Shell, path: String, tx: &mut Tx) {
+    tx.copy(path.clone());
+    s.toast(crate::shell::Toast::info("Copied the path").body(path));
+}
+
 fn run_action(s: &mut Shell, tab: TabId, action: Action, clicked: Option<String>, tx: &mut Tx) {
     let Some(state) = s.screens.files.get(&tab) else { return };
     let dir = state.browser.dir().to_owned();
@@ -283,13 +290,13 @@ fn run_action(s: &mut Shell, tab: TabId, action: Action, clicked: Option<String>
         (Action::Download, Some(name)) => super::download(s, tab, &targets(s, tab, &name)),
         (Action::Rename, Some(name)) => start_naming(s, tab, Naming::Rename(name)),
         (Action::Unpack, Some(name)) => super::unpack(s, tab, &name),
-        (Action::CopyPath, Some(_)) => tx.copy(path.unwrap_or_default()),
+        (Action::CopyPath, Some(_)) => copied(s, path.unwrap_or_default(), tx),
         (Action::ToggleBookmark, Some(_)) => super::toggle_bookmark(s, tab, &path.unwrap_or_default()),
         (Action::Delete, Some(name)) => ask_delete(s, tab, targets(s, tab, &name)),
         (Action::NewFolder, _) => start_naming(s, tab, Naming::NewFolder),
         (Action::Upload, _) => pick_upload(tab, tx),
         (Action::BookmarkHere, _) => super::toggle_bookmark(s, tab, &dir),
-        (Action::CopyFolderPath, _) => tx.copy(dir),
+        (Action::CopyFolderPath, _) => copied(s, dir, tx),
         (Action::ToggleHidden, _) => {
             if let Some(state) = s.screens.files.get_mut(&tab) {
                 let show = !state.browser.show_hidden();
@@ -951,28 +958,12 @@ pub(super) fn shown(s: &Shell, q: &Confirm) -> Confirm {
     q
 }
 
-pub(super) fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + Clone + 'static) -> El {
-    let mut card = popover(t, 400.0).key("files-question").padding(18.0).gap(8.0).child(text(&q.title).font(theme::TEXT_BOLD).color(t.l1).wrap().w_full());
-    if !q.body.is_empty() {
-        card = card.child(text(&q.body).font(theme::NOTE).color(t.l2on).wrap().w_full());
-    }
-    if !q.lines.is_empty() {
-        let mut names = col().w_full().gap(2.0).padding(8.0).radius(theme::RADIUS_ROW).fill(t.code);
-        for line in &q.lines {
-            names = names.child(text(line).font(theme::NOTE).color(t.l1).single_line().truncate());
-        }
-        card = card.child(names);
-    }
-    let cancel = no.clone();
-    let kind = if q.danger { Push::Caution } else { Push::Quiet };
-    let card = card
-        .child(
-            row().w_full().gap(8.0).mt(8.0).child(spacer()).child(push_button(t, "Cancel", Push::Quiet, true).key("question-no").on_press_tx(cancel)).child(
-                push_button(t, q.confirm_label, kind, true).key("question-yes").default_button().on_press_tx(yes),
-            ),
-        )
-        .modal_tx(false, no);
-    el().key("files-question-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).items_center().justify_center().child(card)
+/// A Files question as the kit's confirmation (`kit::dialog`): Cancel and its answer, keyed
+/// `files-question` with `question-no` and `question-yes`; Return answers, Esc cancels.
+pub(super) fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + 'static) -> El {
+    let look = dialog::Look::yes_no(q.title.clone(), q.body.clone(), q.confirm_label, q.danger, false).lines(q.lines.clone()).keys("question-no", "question-yes");
+    let (yes, no) = (std::rc::Rc::new(yes), std::rc::Rc::new(no));
+    dialog::dialog(t, "files-question", &look, move |s: &mut Shell, tx: &mut Tx, i| if i == 1 { yes(s, tx) } else { no(s, tx) })
 }
 
 /// What a Files tab shows over the window: its menu, its question, its bookmarks.

@@ -221,7 +221,7 @@ fn attention(s: &mut Shell, id: TabId, kind: AttentionKind, said: Option<String>
     let at = standing(s.window_focused, on_screen, st.notify, &look);
     let note = st.agents.ask(&mut s.bench, id, kind, said, now, &at);
     if let (Some(note), Some(tab)) = (note, s.bench.tab(id).cloned()) {
-        s.backend_mut().notify(&tab, &note);
+        s.notify_system(&tab, &note);
     }
 }
 
@@ -590,7 +590,7 @@ pub(crate) fn poll(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
             for (id, note) in quiet {
                 changed = true;
                 if let (Some(note), Some(tab)) = (note, s.bench.tab(id).cloned()) {
-                    s.backend_mut().notify(&tab, &note);
+                    s.notify_system(&tab, &note);
                 }
             }
         } else {

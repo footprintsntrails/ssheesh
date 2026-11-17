@@ -564,3 +564,6 @@ fn the_window_closing_closes_connections_but_ends_no_shell() {
 
 /// What came after the first window: find, links, scrolling, the row of tabs, side by side.
 mod more;
+
+/// Toasts and confirmations.
+mod notes;
