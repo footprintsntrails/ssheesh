@@ -38,6 +38,8 @@ pub struct Streamer {
     names: Arc<Names>,
     /// The list the names were made from, once they were made.
     made_from: Option<Vec<(String, String)>>,
+    /// This computer's hostname, once the backend learned it (`Shell::learn_local_host`).
+    local_host: Option<String>,
 }
 
 /// The host of `deploy@203.0.113.17:2222`, and its user.
@@ -131,13 +133,27 @@ impl Shell {
         self.look_stale = false;
     }
 
+    /// This computer's hostname (a prompt shows it): streamer mode hides it too, as 0.10's
+    /// `useLearnLocalIdentity` did. The names are made again.
+    pub fn learn_local_host(&mut self, host: String) {
+        if host.trim().is_empty() || self.streamer.local_host.as_deref() == Some(host.as_str()) {
+            return;
+        }
+        self.streamer.local_host = Some(host);
+        self.streamer.made_from = None;
+        self.refresh_names();
+        self.look_stale = true;
+    }
+
     /// The names to hide, made again when the server list changed.
     fn refresh_names(&mut self) -> bool {
         let list: Vec<(String, String)> = self.bench.servers().iter().map(|s| (s.name.clone(), s.address.clone())).collect();
         if self.streamer.made_from.as_ref() == Some(&list) {
             return false;
         }
-        self.streamer.names = Arc::new(names_of(self.bench.servers(), &local_names()));
+        let mut local = local_names();
+        local.extend(self.streamer.local_host.clone());
+        self.streamer.names = Arc::new(names_of(self.bench.servers(), &local));
         self.streamer.made_from = Some(list);
         true
     }

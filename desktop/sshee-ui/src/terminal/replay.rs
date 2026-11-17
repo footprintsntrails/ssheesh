@@ -25,6 +25,9 @@
 //!   loses the connection, and `back: { "history": "…", "away_min": 41 }` brings it back: the
 //!   history is what tmux would say it holds (the lines on screen at the drop, then the new
 //!   ones), for "while you were away".
+//! - `status: "…"` puts the session in a state its cards show: `hostkey-new`,
+//!   `hostkey-changed`, `disconnected`, `retrying`, `rejoining`, `asleep`, `failed`, `ended`,
+//!   `connected`. Trusting a key, Reconnect and Try again connect it again at once.
 //! - Anything else in an event (`mark`, notes) is ignored: marks belong in Rune's `--script`.
 //!
 //! `--replay-out` records JSON lines with the pane's clock: `{"t":…,"write":"…"}` (the bytes as
@@ -55,6 +58,29 @@ pub enum Step {
     Drop(String),
     /// It comes back: tmux's history from then on, and how long it was away, in ms.
     Back { history: String, away_ms: Option<u64> },
+    /// The session is in this state (`status` in the fixture).
+    Status(LinkStatus),
+}
+
+/// A fixture's `status` word as the state it names (made-up fingerprints and reasons).
+pub fn status_named(word: &str) -> Option<LinkStatus> {
+    use sshee_app::prompts::{Fingerprint, HostKey};
+    let print = |kind: &str, sha: &str| Fingerprint { kind: kind.into(), sha256: format!("SHA256:{sha}") };
+    Some(match word {
+        "hostkey-new" => LinkStatus::HostKey(HostKey::New { fingerprints: vec![print("ED25519", "q3W8nRk2VtYx7mZpL0cJdF4sHgB9aUeT1oKiN6rQwXy")] }),
+        "hostkey-changed" => LinkStatus::HostKey(HostKey::Changed {
+            old: vec![print("ED25519", "q3W8nRk2VtYx7mZpL0cJdF4sHgB9aUeT1oKiN6rQwXy")],
+            new: vec![print("ED25519", "Zx4Lm9PqR2sT7vW1yA5cE8gJ3kN6oB0dF2hU4iX9wQe")],
+        }),
+        "disconnected" => LinkStatus::Waiting { note: "The server closed the connection".into() },
+        "retrying" => LinkStatus::Retrying { attempt: 2, retry_in_ms: 8000, reason: "The server stopped responding".into() },
+        "rejoining" => LinkStatus::Rejoining { attempt: 2 },
+        "asleep" => LinkStatus::Asleep,
+        "failed" => LinkStatus::Gone { note: "The server didn't accept your login. Check the user name and key, then retry.".into() },
+        "ended" => LinkStatus::Ended { code: Some(0) },
+        "connected" => LinkStatus::Connected { durable: true },
+        _ => return None,
+    })
 }
 
 /// A fixture, read and filled.
@@ -116,6 +142,9 @@ impl Fixture {
                 steps.push((t, Step::Echo(on)));
             } else if let Some(why) = e["drop"].as_str() {
                 steps.push((t, Step::Drop(why.to_owned())));
+            } else if let Some(word) = e["status"].as_str() {
+                let status = status_named(word).ok_or_else(|| format!("event {i}: no status {word:?}"))?;
+                steps.push((t, Step::Status(status)));
             } else if let Some(history) = e["back"]["history"].as_str() {
                 let away_ms = e["back"]["away_min"].as_u64().map(|m| m * 60_000);
                 steps.push((t, Step::Back { history: history.to_owned(), away_ms }));
@@ -275,7 +304,27 @@ impl TermLink for ReplayLink {
         self.record(json!({ "resize": [size.cols, size.rows] }));
     }
 
-    fn reconnect(&self) {}
+    fn reconnect(&self) {
+        if let Some(status) = &self.status {
+            status(LinkStatus::Connected { durable: self.fixture.durable });
+        }
+    }
+
+    fn trust(&self, yes: bool) {
+        if let Some(status) = &self.status {
+            status(if yes { LinkStatus::Connected { durable: self.fixture.durable } } else { LinkStatus::Gone { note: sshee_app::prompts::NOT_CONFIRMED.into() } });
+        }
+    }
+
+    fn restart(&self, _review: bool) {
+        self.reconnect();
+    }
+
+    fn sleep(&self) {
+        if let Some(status) = &self.status {
+            status(LinkStatus::Asleep);
+        }
+    }
 
     fn close(&self) {
         if let Some(out) = &self.out {
@@ -305,6 +354,11 @@ impl TermLink for ReplayLink {
                 Step::Drop(note) => {
                     if let Some(status) = &self.status {
                         status(LinkStatus::Reconnecting { note });
+                    }
+                }
+                Step::Status(state) => {
+                    if let Some(status) = &self.status {
+                        status(state);
                     }
                 }
                 Step::Back { history, away_ms } => {

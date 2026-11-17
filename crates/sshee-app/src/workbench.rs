@@ -804,6 +804,17 @@ impl Workbench {
         layout::Layout::can_pair(self, active, id) && self.layout.split(active, id, dir, false)
     }
 
+    /// `beside` to the right of `at`, whichever tab is on screen ("New terminal here" beside
+    /// the terminal it was asked in, Files beside a clicked path). False for a tab and itself.
+    pub fn pair(&mut self, at: TabId, beside: TabId) -> bool {
+        layout::Layout::can_pair(self, at, beside) && self.layout.split(at, beside, layout::Dir::Row, false)
+    }
+
+    /// Whether `a` and `b` share a page.
+    pub fn together(&self, a: TabId, b: TabId) -> bool {
+        self.layout.group_of(a).is_some_and(|g| g.panes().contains(&b))
+    }
+
     /// The shortcut for side by side (see [`layout::Layout::toggle`]). With no other tab on
     /// the machine, a new terminal opens beside the tab you're on, and you stay where you were.
     pub fn side_by_side(&mut self) -> layout::Toggled {

@@ -35,7 +35,7 @@ use super::{away, find, links, menu, scrollbar};
 use crate::theme::Theme;
 
 /// What a pane asks its session's server for ([`super::TermLink::ask`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ask {
     /// tmux's rows, history first, for a find.
     Rows,
@@ -45,6 +45,28 @@ pub enum Ask {
     /// Scroll tmux so `position` lines of history sit below the screen (`None`: only say where
     /// it is).
     Scroll { position: Option<u32> },
+    /// The shell's folder, as tmux knows it (OSC 7 doesn't come through tmux).
+    Cwd,
+    /// What is at `path` (absolute or from `~`): the folder it's in is listed.
+    Look { path: String },
+    /// A relative path a program printed from its own folder: the server looks for it from
+    /// `cwd`, the folders programs run in, and home (sshee-core's `find_path`).
+    FindPath { path: String, cwd: String },
+    /// Whether the shell waits at its prompt, and its folder (an agent starts here or beside).
+    PaneInfo,
+    /// Which AI agents the server has (`sshee_core::agents::detect`).
+    Agents,
+}
+
+/// What is at a path ([`Ask::Look`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Looked {
+    /// There: its folder (as listed, `~` expanded), its name, and whether it's a folder.
+    Found { dir: String, name: String, is_dir: bool },
+    /// Not in its folder (or its folder is gone).
+    Missing,
+    /// Its folder can't be opened, and why.
+    Failed(String),
 }
 
 /// The server's answer to an [`Ask`].
@@ -55,6 +77,11 @@ pub enum Reply {
     /// pane's clock (a replay, whose clock runs for seconds).
     History { text: String, away_ms: Option<u64> },
     Scroll(TmuxScroll),
+    Cwd(String),
+    Looked(Looked),
+    Found(String),
+    PaneInfo { idle: bool, cwd: String },
+    Agents(Vec<String>),
 }
 
 /// Where a link puts its answer, from any thread. `None`: it couldn't be had.
@@ -70,6 +97,8 @@ pub(crate) enum Note {
     Scrolled(Option<TmuxScroll>),
     /// tmux's history after a reconnect.
     History(Option<(String, Option<u64>)>),
+    /// A step of opening a clicked path, or of starting something here (`session.rs`).
+    Session(super::session::Step),
 }
 
 /// Notes from other threads, waiting for the pane's next poll.
@@ -105,6 +134,9 @@ impl Postbox {
 pub enum Wish {
     /// "New terminal here": another terminal on this pane's machine.
     NewTerminal,
+    /// Another terminal on this pane's machine that types `command` once it's connected
+    /// (`cd -- 'folder'`, an agent): beside this one when `beside`.
+    NewTerminalWith { command: String, beside: bool },
     /// A click on a file's path: open it in Files (`line`: where in the file). The window
     /// copies the path until Files takes this.
     OpenPath { path: String, line: Option<u32> },
@@ -112,6 +144,16 @@ pub enum Wish {
     Folder(String),
     /// The pane was pressed: side by side, it becomes the tab you're on.
     Pressed,
+    /// The session's card's Close: the tab closes.
+    CloseTab,
+    /// "Always reconnect automatically", from the card of a dropped connection.
+    AlwaysReconnect,
+    /// You trusted the server's key: other terminals of the same server that wait on the same
+    /// question start too (0.10's `answerIdentity`).
+    Trusted,
+    /// A clicked path that was found: Files shows `dir` beside the terminal, with `name`
+    /// picked out and opened (`None`: the folder itself), at `lines` (first and last).
+    ShowPath { dir: String, name: Option<String>, lines: Option<(u32, u32)> },
 }
 
 /// A pane's overlays' state.
@@ -123,6 +165,8 @@ pub struct Overlays {
     pub(crate) menu: menu::Menu,
     pub(crate) scroll: scrollbar::Scroll,
     pub(crate) post: Arc<Postbox>,
+    /// The session's cards, idle and waking (`session.rs`).
+    pub(crate) session: super::session::Session,
     wishes: Vec<Wish>,
     /// The program in the foreground, when something tells (the agents' watch will):
     /// who gets Ctrl+F depends on it.
@@ -194,6 +238,8 @@ impl TermPane {
                 self.over.links.cwd = Some(path.clone());
                 self.over.wish(Wish::Folder(path.clone()));
             }
+            // A program's progress (OSC 9;4), for its tab.
+            TermEvent::Osc(OscEvent::Progress(progress)) => self.over.session.progress = *progress,
             TermEvent::Title(Some(title)) => {
                 if let Some(folder) = sshee_app::workbench::titles::folder_in_title(title) {
                     self.over.wish(Wish::Folder(folder.to_owned()));
@@ -213,8 +259,10 @@ impl TermPane {
                 Note::Found { ticket, matches } => self.find_matches_came(ticket, matches, tx),
                 Note::Scrolled(report) => self.tmux_answered(report, tx),
                 Note::History(history) => self.history_came(history),
+                Note::Session(step) => self.session_step(step, tx),
             }
         }
+        changed |= self.poll_session(clock, tx);
         changed |= self.poll_away(clock, tx);
         changed |= self.poll_links(clock, tx);
         changed |= self.poll_scroll();
@@ -229,6 +277,9 @@ pub fn layer<S: 'static>(term: El, pane: &TermPane, cx: &mut Cx<S>, get: impl Fn
     layer = layer.children(scrollbar::bar(pane, t, get));
     layer = layer.children(scrollbar::to_bottom(pane, t, get));
     layer = layer.children(links::hint(pane, t, m));
+    // The session's card or note (`screens/prompts.rs`).
+    layer = layer.children(crate::screens::prompts::card(pane, t, get));
+    layer = layer.children(crate::screens::prompts::agent_buttons(pane, t, get));
     layer = layer.children(find::bar(pane, t, get));
     layer.children(menu::view(pane, t, get))
 }

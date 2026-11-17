@@ -13,6 +13,7 @@ pub mod add_server;
 pub mod files;
 pub mod home;
 pub mod palette;
+pub mod prompts;
 pub mod server_card;
 pub mod server_menu;
 pub mod settings;

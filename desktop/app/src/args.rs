@@ -9,6 +9,9 @@ usage: ssheesh-preview [options]
                       nothing is read from this computer and nothing connects
   --sheet             show the component sheet (every control in its states) instead of the window
   --demo-leftovers    with --demo: offer two made-up copies an earlier run left unsent
+  --demo-card STATE   with --demo: the first terminal on backups shows a session card
+                      (hostkey-new, hostkey-changed, disconnected, retrying, rejoining,
+                      asleep, failed, ended); without it, backups asks to trust its key
   --ssh-config FILE   the ssh config to list servers from and connect with (ssh's -F),
                       instead of ~/.ssh/config
 Rune's own flags (--snap, --script, --tree, --theme, ...) are listed by --help.";
@@ -19,6 +22,7 @@ pub struct Args {
     pub sheet: bool,
     pub demo_leftovers: bool,
     pub ssh_config: Option<PathBuf>,
+    pub demo_card: Option<String>,
 }
 
 impl Args {
@@ -30,6 +34,13 @@ impl Args {
                 "--demo" => &mut args.demo,
                 "--sheet" => &mut args.sheet,
                 "--demo-leftovers" => &mut args.demo_leftovers,
+                "--demo-card" => {
+                    match it.next() {
+                        Some(value) if sshee_ui::terminal::replay::status_named(value).is_some() && args.demo_card.is_none() => args.demo_card = Some(value.clone()),
+                        _ => return Err(format!("{flag} needs a state, once")),
+                    }
+                    continue;
+                }
                 "--ssh-config" => {
                     if args.ssh_config.is_some() {
                         return Err(format!("{flag} is given twice"));
@@ -46,6 +57,9 @@ impl Args {
             if std::mem::replace(switch, true) {
                 return Err(format!("{flag} is given twice"));
             }
+        }
+        if args.demo_card.is_some() && !args.demo {
+            return Err("--demo-card goes with --demo".into());
         }
         if args.demo_leftovers && !args.demo {
             return Err("--demo-leftovers goes with --demo".into());

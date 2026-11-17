@@ -83,6 +83,8 @@ pub fn pane_view_with<S: 'static>(
         pane.model.set_answer_colors(Palette::of(view.palette().scheme, dark).answer_colors());
     }
     let rows = view.rows(m, dark, pane.focused);
+    // Dimmed while there is no connection (`session.rs`).
+    let opacity = pane.text_opacity();
     let palette = view.palette().clone();
     let size = view.size;
     let cursor = view.cursor;
@@ -138,7 +140,7 @@ pub fn pane_view_with<S: 'static>(
                 p.laid_out(w, h, tx);
             }
         })
-        .children(grids);
+        .children(grids.into_iter().map(|g| if opacity < 1.0 { g.opacity(opacity) } else { g }));
     // The input method's anchor: only while the window has the keyboard, and steady (#602).
     // Also while the program hides its cursor (vim, Claude Code): the input method is on only
     // while it's drawn.

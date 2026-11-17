@@ -28,6 +28,7 @@ use rune::tok::{Family, TextStyle};
 use rune::{Color, GridRow, LineCap, Shape, Span};
 use sshee_term::engine::{row_texts, CellFlags, Cursor, Modes, Row, Size};
 use sshee_term::model::{EdgeRows, Frame};
+use sshee_term::links::LinkKind;
 use sshee_term::present::{Edges, FindMarks, Look, PresentedRow, Presenter, Role, RowText, Screen};
 use sshee_term::scroll::ScrollView;
 use sshee_term::select::SelectionSpan;
@@ -43,6 +44,11 @@ pub const DOT: char = '•';
 
 /// How far a hidden secret's pill is tinted with the accent.
 pub const PILL_ALPHA: f32 = 0.16;
+
+/// How strong a link's underline is while the pointer isn't on it (0.10's faint marks): a web
+/// link's line, and a path's dots.
+pub const FAINT_LINE: f32 = 0.32;
+pub const FAINT_DOTS: f32 = 0.5;
 
 /// How far a find match's fill goes from the terminal's background to its text colour. The
 /// match the find bar is on is drawn the other way round (the text's colour behind, the
@@ -147,12 +153,29 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
     let mut hidden = vec![false; cols];
     // Find matches by column: `Some(true)` for the one the find bar is on.
     let mut found: Vec<Option<bool>> = vec![None; cols];
+    // Every link, faintly underlined: `Some(true)` for a path's dots.
+    let mut faint: Vec<Option<bool>> = vec![None; cols];
+    let mut locked = vec![false; cols];
     for span in &shown.spans {
+        if let Role::Link(i) = span.role {
+            let dotted = shown.links.get(i).is_some_and(|l| l.kind == LinkKind::Path);
+            for c in span.cols.clone() {
+                if let Some(f) = faint.get_mut(c as usize) {
+                    *f = Some(dotted);
+                }
+            }
+        }
         if matches!(span.role, Role::Secret { .. } | Role::Masked) {
             for c in span.cols.clone() {
                 if let Some(h) = hidden.get_mut(c as usize) {
                     *h = true;
                 }
+            }
+        }
+        // A secret's first cell carries its lock (a name streamer mode hides doesn't).
+        if matches!(span.role, Role::Secret { .. }) {
+            if let Some(l) = locked.get_mut(span.cols.start as usize) {
+                *l = true;
             }
         }
         if let Role::Found { current } = span.role {
@@ -196,7 +219,9 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
         let key = RunKey {
             // The default colour is written out too: a row has no colour of its own, and text
             // without one would take the window's default instead of the scheme's.
-            color: Some(if secret { p.accent } else { fgc }),
+            // The lock's cell keeps its dot in the line (what a screen reader reads) and draws
+            // it clear, under the lock.
+            color: Some(if locked[c] && secret { p.accent.alpha(0.0) } else if secret { p.accent } else { fgc }),
             bold: flags.contains(CellFlags::BOLD),
             italic: flags.contains(CellFlags::ITALIC),
             underline: (underline && !secret).then_some(fgc),
@@ -213,6 +238,10 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
         } else if flags.contains(CellFlags::HIDDEN) && !secret {
             (0..width).for_each(|_| plan.text.push(' '));
         } else if secret {
+            if locked[c] {
+                // A secret's pill starts with a lock, so it reads as hidden, not as dots.
+                plan.ops.extend(lock_ops(cw, ch).into_iter().map(|op| (x, op, p.accent)));
+            }
             plan.text.push(DOT);
             (1..width).for_each(|_| plan.text.push(' '));
         } else if glyphs::is_custom(first) && text.chars().nth(1).is_none() {
@@ -241,6 +270,18 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
                 plan.ops.push((x, Op::Rect { x: dot, y: ch - 2 * t, w: t, h: t, alpha: 1.0 }, fgc));
             }
         }
+        // Any other link: the same mark, faint.
+        if let (None, Some(dotted), false) = (linked, faint[c], secret) {
+            if dotted {
+                let period = 3 * t;
+                let first = (period - x.rem_euclid(period)) % period;
+                for dot in (first..cw * width as i32).step_by(period as usize) {
+                    plan.ops.push((x, Op::Rect { x: dot, y: ch - 2 * t, w: t, h: t, alpha: FAINT_DOTS }, fgc));
+                }
+            } else {
+                plan.ops.push((x, Op::Rect { x: 0, y: ch - 2 * t, w: cw * width as i32, h: t, alpha: FAINT_LINE }, fgc));
+            }
+        }
         if flags.contains(CellFlags::DOUBLE_UNDERLINE) && !secret {
             let y = ch - 3 * t;
             for yy in [y, y + 2 * t] {
@@ -258,6 +299,27 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
         plan.fills.push((sel.start, sel.end.min(cols as u16), look.selection));
     }
     plan
+}
+
+/// A padlock in a cell `cw` by `ch` device pixels: a body and its shackle, in the cell's
+/// middle (0.10's lock in a secret's first cell).
+fn lock_ops(cw: i32, ch: i32) -> Vec<Op> {
+    let t = glyphs::light_px(cw) as f32;
+    let (cw, ch) = (cw as f32, ch as f32);
+    let w = (cw * 0.66).round().max(4.0);
+    let h = (ch * 0.30).round().max(3.0);
+    let x = ((cw - w) / 2.0).round();
+    let y = (ch * 0.50).round();
+    let (x0, x1) = (x + w * 0.24, x + w * 0.76);
+    let r = (x1 - x0) / 2.0;
+    let top = y - ch * 0.17;
+    let mut shackle = vec![[x0, y]];
+    for k in 0..=8 {
+        let a = std::f32::consts::PI * (1.0 - k as f32 / 8.0);
+        shackle.push([x0 + r + r * a.cos(), top + r - r * a.sin()]);
+    }
+    shackle.push([x1, y]);
+    vec![Op::Rect { x: x as i32, y: y as i32, w: w as i32, h: h as i32, alpha: 1.0 }, Op::Stroke { points: shackle, width: t * 1.3 }]
 }
 
 fn close_run(plan: &mut RowPlan, run: Option<(usize, RunKey)>) {
@@ -427,6 +489,12 @@ impl PaneView {
     }
 
     /// Takes in a frame from the model: its changed rows, and everything around them.
+    /// The rows on screen as the last frame left them (the terminal's own, before the
+    /// presentation pass).
+    pub(crate) fn mirror(&self) -> &[Row] {
+        &self.mirror
+    }
+
     pub fn intake(&mut self, frame: Frame) {
         let rows = frame.size.rows as usize;
         if frame.size != self.size || self.mirror.len() != rows {
@@ -796,11 +864,15 @@ mod tests {
         for k in 0..secret.len() - 4 {
             assert!(!p.text.contains(&secret[k..k + 4]));
         }
+        // The lock over the first cell's (clear) dot, then a dot a character.
         assert!(p.text.starts_with("GH_TOKEN=•••"));
+        assert!(p.ops.iter().any(|(x, op, _)| *x == 9 * metrics().cell_w_px as i32 && matches!(op, Op::Stroke { .. })), "the lock's shackle");
         assert_eq!(p.text.chars().count(), 60);
-        let pill = p.spans.iter().find(|s| s.pill.is_some()).expect("a pill");
-        assert_eq!(p.text[pill.start..pill.end].chars().count(), secret.len());
-        assert!(p.text[pill.start..pill.end].chars().all(|c| c == DOT));
+        // The pill: the lock's cell, then the rest.
+        let pills: Vec<_> = p.spans.iter().filter(|s| s.pill.is_some()).collect();
+        let (start, end) = (pills[0].start, pills.last().expect("a pill").end);
+        assert_eq!(p.text[start..end].chars().count(), secret.len());
+        assert!(p.text[start..end].chars().all(|c| c == DOT));
         assert!(p.cells.iter().all(|c| !secret.contains(&c.text)));
     }
 
@@ -972,7 +1044,18 @@ mod tests {
     fn the_link_under_the_pointer_is_underlined_and_a_paths_underline_is_dotted() {
         let row = Row::from_text("see https://example.com now", 30);
         let web = plan(&row, None);
-        assert!(web.spans.iter().all(|s| s.underline.is_none()) && web.ops.is_empty(), "a link is underlined before the pointer is on it");
+        // Before the pointer is on it, a link is faintly underlined: a light line under its
+        // cells, no underline in the text.
+        assert!(web.spans.iter().all(|s| s.underline.is_none()));
+        let faint: Vec<i32> = web.ops.iter().map(|(x, op, _)| match op {
+            Op::Rect { alpha, .. } => {
+                assert_eq!(*alpha, FAINT_LINE);
+                *x
+            }
+            _ => panic!("a faint underline is a rectangle"),
+        }).collect();
+        let cw = metrics().cell_w_px as i32;
+        assert_eq!(faint, (4..23).map(|c| c * cw).collect::<Vec<_>>());
         let palette = Palette::new(true);
         let m = metrics();
         let look = RowLook { palette: &palette, metrics: &m, selection: palette.selection };
@@ -982,7 +1065,7 @@ mod tests {
         let p = plan_row(&row, &shown[0], None, Some(&(4..23, false)), &look, &mut coverage);
         let lined: Vec<(usize, usize)> = p.spans.iter().filter(|s| s.underline.is_some()).map(|s| (s.start, s.end)).collect();
         assert_eq!(lined, [(4, 23)]);
-        assert!(p.ops.is_empty());
+        assert!(p.ops.is_empty(), "the link under the pointer has its full underline, not the faint one too");
         // A path: dots instead, a pixel on and two off, all within its cells.
         let p = plan_row(&row, &shown[0], None, Some(&(4..23, true)), &look, &mut coverage);
         assert!(p.spans.iter().all(|s| s.underline.is_none()));

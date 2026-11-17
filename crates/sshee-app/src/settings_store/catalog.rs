@@ -765,7 +765,6 @@ fn build() -> Vec<Row> {
                 "Terminals stay connected for as long as they're open.".into()
             }
         })
-        .later("Comes later: terminals stay connected for now.")
         .saves(&["idleSleep"])
         .words("idle afk sleep disconnect unused away tmux timeout"),
         Row::new("term-gpu", Terminal, "Draw with the GPU", Switch { get: |st| st.get().gpu_rendering, set: |st, v| st.set(|s| s.gpu_rendering = v) })
@@ -779,7 +778,6 @@ fn build() -> Vec<Row> {
             Switch { get: |st| st.get().count_typing, set: |st, v| st.set(|s| s.count_typing = v) },
         )
         .hint("A test for a possible feature: letters showing before the server answers. It only keeps counts, not what you type.")
-        .later("Comes later. The counts from 0.10 are kept.")
         .saves(&["countTyping"])
         .words("local echo predict latency lag slow tor delay test measure statistics"),
         Row::new(
@@ -1227,11 +1225,11 @@ mod tests {
     #[test]
     fn reset_puts_back_only_a_sections_working_rows() {
         let terminal = reset_keys(Section::Terminal);
-        for key in ["terminalFontSize", "terminalLineHeight", "cursorStyle", "cursorBlink", "terminalScheme", "copyOnSelect", "highlightErrors", "welcomeMode"] {
+        for key in ["terminalFontSize", "terminalLineHeight", "cursorStyle", "cursorBlink", "terminalScheme", "copyOnSelect", "highlightErrors", "welcomeMode", "idleSleep", "countTyping"] {
             assert!(terminal.contains(&key), "{key}");
         }
         // Disabled rows keep what 0.10 left: nobody could see them change.
-        for key in ["terminalFont", "terminalPadding", "gpuRendering", "idleSleep"] {
+        for key in ["terminalFont", "terminalPadding", "gpuRendering"] {
             assert!(!terminal.contains(&key), "{key}");
         }
         assert_eq!(reset_keys(Section::Keyboard), ["shortcuts"]);
