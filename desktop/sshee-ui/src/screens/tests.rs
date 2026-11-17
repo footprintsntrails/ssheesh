@@ -63,9 +63,11 @@ impl FakeBackend {
     fn show(&self, answer: Option<sshee_app::servers::Answer>) {
         let Some(remote) = &self.remote else { return };
         let (servers, colors, config_new, old_new) = (self.book.servers(), self.book.colors(), self.book.config_new(), self.book.sources.old.len());
+        let faces = self.book.faces(|_| Some(sshee_app::labels::Picture { width: 1, height: 1, rgba: std::sync::Arc::from(&[9u8, 9, 9, 255][..]) }));
         remote.update(move |s| {
             s.bench.set_servers(servers);
             s.set_server_looks(colors, config_new, old_new);
+            s.set_server_faces(faces);
             if let Some(answer) = answer {
                 s.servers_answer(answer);
             }
@@ -104,7 +106,16 @@ fn book() -> Book {
     looks.set_icon("db", "database");
     let offer = |name: &str, address: &str| Candidate { id: address.into(), name: name.into(), address: address.into(), identity_file: None, had_password: false, picked: true };
     let sources = Sources { xpipe: vec![offer("mail-7731", "root@203.0.113.25")], old: vec![offer("metrics", "ops@203.0.113.60")], ..Sources::default() };
-    Book::new(hosts, looks, sources)
+    let mut book = Book::new(hosts, looks, sources);
+    // Keys and a password manager found here, a saved password for web-7731, whose identity
+    // is known (a new server shows a fingerprint first).
+    book.local = sshee_app::servers::LocalAuth {
+        keys: vec![sshee_app::servers::LocalKey { path: "~/.ssh/id_ed25519".into(), name: "id_ed25519".into(), kind: "ED25519".into(), comment: String::new() }],
+        agents: vec![sshee_app::servers::KeyAgent { name: "1Password".into(), socket: Some("/run/op.sock".into()), keys: Some(2) }],
+    };
+    book.passwords.push("web".into());
+    book.trusted.push("203.0.113.17".into());
+    book
 }
 
 type Queue = Arc<Mutex<Vec<Box<dyn FnOnce(&mut Shell, &mut Tx) -> bool + Send>>>>;
@@ -150,7 +161,17 @@ impl Window {
         }
     }
 
+    /// Scrolls "Add a server"'s body to `key`, as a person would before reaching for it.
+    fn reveal(&mut self, key: &str) {
+        if self.rt.state.screens.add_server.open {
+            let key = key.to_owned();
+            self.rt.update(move |_, tx| tx.scroll_into_view_in("add-body", key));
+            self.rt.frame(1.0 / 60.0);
+        }
+    }
+
     fn click(&mut self, key: &str) {
+        self.reveal(key);
         let (x, y) = self.rt.find(key).unwrap_or_else(|| panic!("no element {key}"));
         self.rt.pointer_move(x, y);
         self.rt.pointer_down(x, y);
@@ -464,8 +485,8 @@ fn a_server_typed_by_hand_is_added_and_its_terminal_opens() {
     let mut w = Window::busy();
     w.click("add-server");
     assert!(w.rt.state.screens.add_server.open);
-    // The backend was asked what could be brought in, and the dialog offers it.
-    assert_eq!(w.asks(), [Ask::Sources]);
+    // The backend was asked what could be brought in and which keys are here.
+    assert_eq!(w.asks(), [Ask::Sources, Ask::LocalAuth]);
     let tree = w.tree();
     for said in ["Add a server", "Bring over your servers from 0.10", "From ~/.ssh/config", "Import from XPipe", "Add and connect"] {
         assert!(tree.contains(said), "{said} isn't in the dialog: {tree}");
@@ -527,6 +548,7 @@ fn a_password_goes_to_the_backend_and_nowhere_a_reader_could_see_it() {
     w.click("tile-add");
     w.type_text("deploy@203.0.113.78");
     w.click("add-password");
+    w.reveal("add-secret");
     assert!(w.has("add-secret") && !w.has("add-key-file"));
     w.click("add-secret");
     w.type_text("made-up-password");
@@ -588,7 +610,7 @@ fn a_right_click_on_a_server_opens_its_menu() {
     let mut w = Window::busy();
     w.right_click("server-2");
     let tree = w.tree();
-    for said in ["New terminal", "Files", "Tunnels…", "Rename…", "Icon and colour…", "Production", "Staging", "Development", "Remove server…"] {
+    for said in ["New terminal", "Files", "Terminal and files side by side", "Stats", "Containers", "Tunnels…", "Copy address", "Rename…", "Icon and colour…", "Production", "Staging", "Development", "Remove server…"] {
         assert!(tree.contains(said), "{said} isn't in the menu: {tree}");
     }
     // Arrows and Return: the second row is Files.
@@ -599,15 +621,15 @@ fn a_right_click_on_a_server_opens_its_menu() {
     assert_eq!(w.rt.state.bench.active().map(|t| (t.kind, t.server.as_str())), Some((TabKind::Files, DB)));
     // A label: db-main becomes Production, and a second pick takes it off.
     w.right_click("server-2");
-    w.click("sm-5");
+    w.click("sm-9");
     assert!(w.rt.state.bench.server(DB).unwrap().is_prod());
     assert!(w.asks().contains(&Ask::SetEnv { server: DB.into(), env: Some(EnvLabel::Prod) }));
     w.right_click("server-2");
-    w.click("sm-5");
+    w.click("sm-9");
     assert!(!w.rt.state.bench.server(DB).unwrap().is_prod());
-    // This computer has only the first two rows; Esc closes.
+    // This computer has only the first five rows; Esc closes.
     w.right_click("server-0");
-    assert!(w.has("sm-1") && !w.has("sm-3"));
+    assert!(w.has("sm-4") && !w.has("sm-5"));
     w.key(Key::Escape, "");
     assert!(w.rt.state.screens.server_menu.open.is_none());
     // The tile on the main menu has the same menu.
@@ -621,14 +643,14 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     let mut w = Window::open(false);
     // Rename: the name is selected, so typing replaces it.
     w.right_click("server-2");
-    w.click("sm-3");
+    w.click("sm-7");
     assert!(w.tree().contains("Rename db-main"));
     w.type_text("Main database");
     w.key(Key::Enter, "");
     assert_eq!(w.servers(), ["This computer", "web-7731", "Main database"]);
     // Icon and colour.
     w.right_click("server-2");
-    w.click("sm-4");
+    w.click("sm-8");
     assert!(w.tree().contains("Icon and colour for Main database"));
     w.click("icon-rocket");
     assert_eq!(w.rt.state.bench.server(DB).unwrap().icon, "rocket");
@@ -638,14 +660,14 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     assert!(w.rt.state.screens.server_menu.open.is_none());
     // Remove: asked by name; Return is Cancel.
     w.right_click("server-2");
-    w.click("sm-8");
+    w.click("sm-12");
     let tree = w.tree();
     assert!(tree.contains("Remove Main database?") && tree.contains("Nothing changes on the server."), "{tree}");
     w.key(Key::Enter, "");
     assert!(w.rt.state.screens.server_menu.open.is_none());
     assert_eq!(w.servers().len(), 3);
     w.right_click("server-2");
-    w.click("sm-8");
+    w.click("sm-12");
     w.click("sm-remove");
     assert_eq!(w.servers(), ["This computer", "web-7731"]);
     assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));
@@ -685,3 +707,6 @@ fn a_servers_card_shows_while_the_pointer_rests_on_its_icon() {
     w.settle();
     assert!(!w.has("server-card"));
 }
+
+/// Adding a server as 0.10 did, and its menu and look (`tests/servers.rs`).
+mod servers;

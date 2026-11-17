@@ -139,7 +139,7 @@ pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::s
     out.extend(agent::overlays(s, t, cx));
     // A recipe stepped aside, and a hint.
     out.extend([recipes::aside(s, t), tour::hint(s, t)].into_iter().flatten());
-    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
+    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t, cx), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
     // The security check, recipes, snippets; the welcome, the tour and "What's new".
     out.extend([checkup::view(s, t), recipes::view(s, t), snippets::view(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
     out
