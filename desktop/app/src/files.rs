@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -93,6 +94,20 @@ pub fn clock() -> Clock {
 pub fn downloads_dir() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     dirs::download_dir().filter(|d| *d != home).unwrap_or_else(|| home.join("Downloads"))
+}
+
+/// Settings → Files → "Clean files before uploading" (0.10's `cleanUploads`, on by default):
+/// what every upload from now on does. Set by the backend whenever Settings change.
+static CLEAN_UPLOADS: AtomicBool = AtomicBool::new(true);
+
+/// Follows Settings' "Clean files before uploading".
+pub fn set_clean_uploads(on: bool) {
+    CLEAN_UPLOADS.store(on, Ordering::Relaxed);
+}
+
+/// Whether an upload starting now cleans its files.
+pub fn clean_uploads() -> bool {
+    CLEAN_UPLOADS.load(Ordering::Relaxed)
 }
 
 // ---- the work
@@ -298,9 +313,10 @@ fn answer(want: &Want, target: Option<&Target>, work: &Work, report: &(impl Fn(A
                 }
                 xfer.check()?;
                 xfer.add_total(paths.iter().map(|p| core::upload_size(p)).sum());
+                // Cleaned on the way, as 0.10 does unless it's turned off in Settings.
+                let clean = clean_uploads();
                 for path in paths {
-                    // Cleaned on the way, as 0.10 does unless it's turned off in Settings.
-                    core::upload(t, env, path, dir, *overwrite, true, xfer)?;
+                    core::upload(t, env, path, dir, *overwrite, clean, xfer)?;
                 }
                 Ok(())
             });

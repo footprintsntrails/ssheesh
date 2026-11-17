@@ -29,6 +29,35 @@ pub const ACCENTS: [(&str, &str); 7] = [
 pub const TERMINAL_FONTS: [(&str, &str); 5] =
     [("system", "System"), ("jetbrains", "JetBrains Mono"), ("menlo", "Menlo"), ("cascadia", "Cascadia Mono"), ("consolas", "Consolas")];
 
+/// The bundled terminal font and the bundled Nerd Font icons (oh-my-posh, Starship), which
+/// end every family list below: a font this computer doesn't have falls back to them.
+const BUNDLED_MONO: &str = "JetBrains Mono, Symbols Nerd Font Mono";
+
+/// The terminal's font as a CSS family list for `platform`, by 0.10's font id (its
+/// `fontStack`): the font picked, the ones 0.10 tried next, then the bundled ones. "System"
+/// is SF Mono on a Mac and Cascadia Mono or Consolas on Windows; Linux has no such font of its
+/// own, so it is the bundled JetBrains Mono there. An id nobody knows is "System".
+pub fn terminal_family(id: &str, platform: crate::model::Platform) -> &'static str {
+    use crate::model::Platform;
+    match (id, platform) {
+        ("jetbrains", _) | ("system", Platform::Linux) => "JetBrains Mono, Symbols Nerd Font Mono",
+        ("menlo", _) => "Menlo, SF Mono, JetBrains Mono, Symbols Nerd Font Mono",
+        ("cascadia", _) => "Cascadia Mono, Cascadia Code, Consolas, JetBrains Mono, Symbols Nerd Font Mono",
+        ("consolas", _) => "Consolas, JetBrains Mono, Symbols Nerd Font Mono",
+        (_, Platform::Mac) => "SF Mono, .SF NS Mono, Menlo, JetBrains Mono, Symbols Nerd Font Mono",
+        (_, Platform::Windows) => "Cascadia Mono, Consolas, JetBrains Mono, Symbols Nerd Font Mono",
+        _ => BUNDLED_MONO,
+    }
+}
+
+/// The name a font row shows on `platform`: 0.10 named "System" SF Mono on a Mac.
+pub fn terminal_font_label(id: &str, platform: crate::model::Platform) -> &'static str {
+    match (id, platform) {
+        ("system", crate::model::Platform::Mac) => "SF Mono",
+        _ => TERMINAL_FONTS.iter().find(|(known, _)| *known == id).map_or("System", |(_, name)| name),
+    }
+}
+
 /// `#rrggbb` or `#rrggbbaa` (the `#` may be missing) as `0xRRGGBBAA`; six digits are solid.
 pub fn parse_hex(text: &str) -> Option<u32> {
     let digits = text.trim().trim_start_matches('#');

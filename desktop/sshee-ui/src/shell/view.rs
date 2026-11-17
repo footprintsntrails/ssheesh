@@ -20,10 +20,11 @@
 //! element paths.
 
 use rune::{col, el, row, spacer, Cx, El};
+use sshee_app::model::EnvLabel;
 use sshee_app::workbench::{TabId, TabKind, Tor};
 
 use super::state::Shell;
-use crate::icons::{logo, Icon};
+use crate::icons::Icon;
 use crate::kit::button::toolbar_button;
 use crate::kit::status::{status_item, status_tor};
 use crate::screens;
@@ -33,10 +34,13 @@ use crate::theme::{self, Frame, Theme};
 /// The whole window.
 pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
     // Dark or light as Settings says, else as the system is.
-    let t = Theme::of(s.dark(cx.env().system_dark));
+    // The theme Settings → Appearance picks, dark or light as it says, else as the system is.
+    let t = s.theme(cx.env().system_dark);
     if !s.settings.get().animations {
         cx.reduced_motion(true);
     }
+    // Settings → Appearance → Interface size (the terminal keeps its own: `apply_settings`).
+    cx.zoom(s.ui_zoom());
     // The keyboard's focus ring, for every control that takes focus.
     cx.focus_ring(theme::RING, 0.0, t.ring);
     // Windows' minimize, maximize and close, which Rune draws over the end of the bar.
@@ -66,7 +70,9 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .fill(t.frame)
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(if away_bar { super::compact::top_band(s, t) } else { bar(s, t, cx) })
-        .child(body);
+        .child(body)
+        // Settings → Layout → A line for Production and Staging.
+        .children(env_stripe(s, t));
     if shown && s.sidebar_away() {
         window = window.child(super::compact::side_band(s));
     }
@@ -110,7 +116,7 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
                     .label_static("Main menu")
                     .help("Main menu")
                     .on_press_tx(|s: &mut Shell, tx| s.show_home(tx))
-                    .child(logo(24.0)),
+                    .child(s.app_logo(24.0, t)),
             ),
         ),
     };
@@ -134,7 +140,8 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     let rounded = s.bench.sidebar_shown() && !s.sidebar_away();
     // The page's corner is round where it meets the sidebar, and its edge runs down that side.
     let right = s.sidebar_at_right();
-    let round = if rounded { theme::PAGE_RADIUS } else { 0.0 };
+    // Settings → Layout → Corner roundness (0.10's `paneRadius`).
+    let round = if rounded { s.page_radius() } else { 0.0 };
     let corners = if right { [0.0, round, 0.0, 0.0] } else { [round, 0.0, 0.0, 0.0] };
     let side = if rounded { 1.0 } else { 0.0 };
     let edges = if right { [1.0, side, 0.0, 0.0] } else { [1.0, 0.0, 0.0, side] };
@@ -183,6 +190,35 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         // The line where the page meets the frame, drawn over the page's content: as padding
         // it would push the terminal's grid off whole pixels at 1.25x and 1.75x.
         .child(el().key("page-edge").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).corners(corners).border_sides(edges, t.edge))
+        // A labelled server's page is framed in its colour, as 0.10 framed its panes:
+        // Production red, Staging orange, Development green, faintly.
+        .children(env_frame(s, t, corners))
+}
+
+/// The faint frame round the page of a labelled server (0.10's pane ring), not on the main
+/// menu or Settings.
+fn env_frame(s: &Shell, t: &'static Theme, corners: [f32; 4]) -> Option<El> {
+    if s.screens.settings.open || s.bench.active().is_none() {
+        return None;
+    }
+    let (color, strength) = match s.env_label_on_screen()? {
+        EnvLabel::Prod => (t.red, 0.4),
+        EnvLabel::Staging => (t.orange, 0.35),
+        EnvLabel::Dev => (t.green, 0.3),
+        _ => return None,
+    };
+    Some(el().key("env-frame").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).corners(corners).border(1.0, color.alpha(strength)).a11y_hidden())
+}
+
+/// A thin red line along the top of the window while a Production server is on screen, an
+/// orange one for Staging (0.10's warning colour), when Settings asks for it.
+fn env_stripe(s: &Shell, t: &'static Theme) -> Option<El> {
+    let color = match s.env_on_screen()? {
+        EnvLabel::Prod => t.red,
+        EnvLabel::Staging => t.orange,
+        _ => return None,
+    };
+    Some(el().key("env-stripe").pin(Some(0.0), Some(0.0), Some(0.0), None).h(2.0).fill(color).a11y_hidden())
 }
 
 /// The status bar: the machine on screen's vital signs, and Tor at the right while it's on.

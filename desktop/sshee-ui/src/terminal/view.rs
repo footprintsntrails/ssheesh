@@ -26,7 +26,7 @@ use super::away::Inset;
 use super::ime::Preedit;
 use super::metrics::{advance_em, natural_height_em, CellMetrics};
 use super::palette::{rgb, Palette};
-use super::pane::{TermPane, PADDING};
+use super::pane::TermPane;
 use super::rows::text_style;
 
 /// The bar cursor's width in points (0.10's `cursorWidth: 2`).
@@ -35,14 +35,14 @@ const BAR: f32 = 2.0;
 /// The cell size at this scale, measured as Rune shapes the terminal's font.
 fn metrics_at(pane: &TermPane, scale: f32) -> CellMetrics {
     let o = &pane.options;
-    if let Some(m) = pane.metrics.get().filter(|m| m.scale == scale && m.size == o.font_size) {
+    if let Some(m) = pane.metrics.get().filter(|m| m.scale == scale && m.size == o.font_size && m.family == o.family) {
         return m;
     }
-    let style = TextStyle::new(o.font_size, 400.0).family(Family::Named(crate::fonts::TERMINAL_FAMILY)).features(super::rows::FEATURES);
+    let style = TextStyle::new(o.font_size, 400.0).family(Family::Named(o.family)).features(super::rows::FEATURES);
     let measured = rune::text::advance(&"0".repeat(64), style) / 64.0;
     let advance = if measured > 0.0 { measured } else { advance_em(crate::fonts::TERMINAL_REGULAR) * o.font_size };
     let natural = natural_height_em(crate::fonts::TERMINAL_REGULAR) * o.font_size;
-    let m = CellMetrics::new(o.font_size, advance, natural, o.line_height, scale, o.cell_mode);
+    let m = CellMetrics::new(o.font_size, advance, natural, o.line_height, scale, o.cell_mode).in_family(o.family);
     let refit = pane.metrics.get().is_some_and(|old| old != m);
     pane.metrics.set(Some(m));
     if refit {
@@ -90,7 +90,7 @@ pub fn pane_view_with<S: 'static>(
     let cursor = view.cursor;
     let in_view = cursor.visible && cursor.line < size.rows as usize && cursor.col < size.cols;
     let grids = match inset {
-        Some(inset) => super::away::split(pane, inset, rows, size.cols, &m, in_view.then_some((cursor.col, cursor.line)), crate::theme::Theme::of(env.system_dark), get),
+        Some(inset) => super::away::split(pane, inset, rows, size.cols, &m, in_view.then_some((cursor.col, cursor.line)), pane.theme(env.system_dark), get),
         None => {
             let mut g = grid(size.cols, m.cell_w, m.cell_h, rows).size(f32::from(size.cols) * m.cell_w, f32::from(size.rows) * m.cell_h);
             if in_view {
@@ -104,12 +104,14 @@ pub fn pane_view_with<S: 'static>(
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .padding(PADDING)
+        .padding(pane.options.padding)
         .fill(palette.bg())
         .focusable(true)
         .no_focus_ring()
         .instant_changes()
         .cursor(if pane.hover_secret || pane.over.links.pointing() { Cursor::Pointer } else { Cursor::Text })
+        // 0.10's word for a hidden secret under the pointer.
+        .help(if pane.hover_secret { "Hidden secret. Click to show it" } else { "" })
         .on_key(move |s: &mut S, ev, tx| before_key(s, ev, tx) || get(s).is_some_and(|p| p.key(ev, tx)))
         .on_physical_input(move |s: &mut S, input, tx| get(s).is_some_and(|p| p.physical(input, tx)))
         .on_drag(move |s: &mut S, d, tx| {
@@ -145,7 +147,7 @@ pub fn pane_view_with<S: 'static>(
     // Also while the program hides its cursor (vim, Claude Code): the input method is on only
     // while it's drawn.
     if let (true, Some((line, col))) = (pane.focused, pane.anchor) {
-        let (x, y) = cell_xy(&m, inset, line, col);
+        let (x, y) = cell_xy(&m, inset, pane.options.padding, line, col);
         term = term.child(el().key("ime").absolute(x, y).size(m.cell_w, m.cell_h).ime_cursor().ime_option_as_alt(cfg!(target_os = "macos")));
     }
     let preedit = pane.ime.preedit().zip(pane.anchor);
@@ -153,10 +155,10 @@ pub fn pane_view_with<S: 'static>(
     // element in an `instant_changes` subtree goes and comes back at once.
     if in_view && lit && preedit.is_none() {
         let (text, width, _) = view.shown_char(cursor.line, cursor.col);
-        term = term.child(cursor_el(pane, &palette, &m, cursor.shape, cell_xy(&m, inset, cursor.line, cursor.col), text, width));
+        term = term.child(cursor_el(pane, &palette, &m, cursor.shape, cell_xy(&m, inset, pane.options.padding, cursor.line, cursor.col), text, width));
     }
     if let Some((p, (line, col))) = preedit {
-        term = term.child(preedit_el(p, &palette, &m, cell_xy(&m, inset, line, col)));
+        term = term.child(preedit_el(p, &palette, &m, cell_xy(&m, inset, pane.options.padding, line, col)));
     }
     // The overlays read the view themselves.
     drop(view);
@@ -165,9 +167,9 @@ pub fn pane_view_with<S: 'static>(
 
 /// The top-left of cell (`line`, `col`) in the terminal area's points, the away line's room
 /// counted.
-fn cell_xy(m: &CellMetrics, inset: Option<Inset>, line: usize, col: u16) -> (f32, f32) {
-    let y = inset.map_or(PADDING + line as f32 * m.cell_h, |i| i.line_y(line, m.cell_h));
-    (PADDING + f32::from(col) * m.cell_w, y)
+fn cell_xy(m: &CellMetrics, inset: Option<Inset>, pad: f32, line: usize, col: u16) -> (f32, f32) {
+    let y = inset.map_or(pad + line as f32 * m.cell_h, |i| i.line_y(line, m.cell_h));
+    (pad + f32::from(col) * m.cell_w, y)
 }
 
 /// What the input method is composing, at `(x, y)`: over the terminal's text on its own

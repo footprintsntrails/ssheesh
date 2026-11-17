@@ -27,6 +27,7 @@ use std::sync::Arc;
 use rune::tok::{Family, TextStyle};
 use rune::{Color, GridRow, LineCap, Shape, Span};
 use sshee_term::engine::{row_texts, CellFlags, Cursor, Modes, Row, Size};
+use sshee_term::highlight::{HighlightColor, Paint};
 use sshee_term::model::{EdgeRows, Frame};
 use sshee_term::links::LinkKind;
 use sshee_term::present::{Edges, FindMarks, Look, PresentedRow, Presenter, Role, RowText, Screen};
@@ -71,7 +72,7 @@ pub const FEATURES: &str = "'calt' 0, 'liga' 0, 'clig' 0, 'dlig' 0";
 
 /// The terminal's text style for these cells.
 pub fn text_style(m: &CellMetrics) -> TextStyle {
-    TextStyle::new(m.size, 400.0).family(Family::Named(crate::fonts::TERMINAL_FAMILY)).features(FEATURES).lh(m.cell_h).tracking(m.tracking)
+    TextStyle::new(m.size, 400.0).family(Family::Named(m.family)).features(FEATURES).lh(m.cell_h).tracking(m.tracking)
 }
 
 /// A run of the line with one look, by byte offsets into the line.
@@ -156,7 +157,16 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
     // Every link, faintly underlined: `Some(true)` for a path's dots.
     let mut faint: Vec<Option<bool>> = vec![None; cols];
     let mut locked = vec![false; cols];
+    // Settings' highlighting by column: the first rule that matched wins (yours go first).
+    let mut painted: Vec<Option<Paint>> = vec![None; cols];
     for span in &shown.spans {
+        if let Role::Paint(paint) = span.role {
+            for c in span.cols.clone() {
+                if let Some(slot) = painted.get_mut(c as usize).filter(|s| s.is_none()) {
+                    *slot = Some(paint);
+                }
+            }
+        }
         if let Role::Link(i) = span.role {
             let dotted = shown.links.get(i).is_some_and(|l| l.kind == LinkKind::Path);
             for c in span.cols.clone() {
@@ -197,6 +207,11 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
         if flags.contains(CellFlags::DIM) {
             fgc = mix_srgb(fgc, bgc, 0.5);
         }
+        // A highlight is drawn in its scheme colour, as 0.10's SGR around the match drew it.
+        let paint = painted[c];
+        if let Some(paint) = paint {
+            fgc = p.color(sshee_term::engine::Color::Indexed(paint_index(paint.color)));
+        }
         if let Some(current) = found[c] {
             (bgc, fgc) = found_colors(p, current);
         }
@@ -215,14 +230,15 @@ pub fn plan_row(row: &Row, shown: &PresentedRow, sel: Option<Range<u16>>, under:
         let first = text.chars().next().unwrap_or(' ');
         let linked = under.filter(|(cols, _)| cols.contains(&(c as u16))).map(|(_, dotted)| *dotted);
         let underline = flags.intersects(CellFlags::UNDERLINE | CellFlags::UNDERCURL | CellFlags::DOTTED_UNDERLINE | CellFlags::DASHED_UNDERLINE)
-            || linked == Some(false);
+            || linked == Some(false)
+            || paint.is_some_and(|p| p.underline);
         let key = RunKey {
             // The default colour is written out too: a row has no colour of its own, and text
             // without one would take the window's default instead of the scheme's.
             // The lock's cell keeps its dot in the line (what a screen reader reads) and draws
             // it clear, under the lock.
             color: Some(if locked[c] && secret { p.accent.alpha(0.0) } else if secret { p.accent } else { fgc }),
-            bold: flags.contains(CellFlags::BOLD),
+            bold: flags.contains(CellFlags::BOLD) || paint.is_some_and(|p| p.bold),
             italic: flags.contains(CellFlags::ITALIC),
             underline: (underline && !secret).then_some(fgc),
             secret,
@@ -320,6 +336,18 @@ fn lock_ops(cw: i32, ch: i32) -> Vec<Op> {
     }
     shackle.push([x1, y]);
     vec![Op::Rect { x: x as i32, y: y as i32, w: w as i32, h: h as i32, alpha: 1.0 }, Op::Stroke { points: shackle, width: t * 1.3 }]
+}
+
+/// A highlight colour's place in the terminal's palette (0.10's SGR 31 to 36).
+fn paint_index(color: HighlightColor) -> u8 {
+    match color {
+        HighlightColor::Red => 1,
+        HighlightColor::Green => 2,
+        HighlightColor::Yellow => 3,
+        HighlightColor::Blue => 4,
+        HighlightColor::Magenta => 5,
+        HighlightColor::Cyan => 6,
+    }
 }
 
 fn close_run(plan: &mut RowPlan, run: Option<(usize, RunKey)>) {
@@ -789,6 +817,29 @@ mod tests {
     fn token() -> String {
         let body: String = (0..36).map(|i| (b'a' + (i * 7 % 26) as u8) as char).collect();
         format!("{}{}{}", "gh", "p_", body)
+    }
+
+    #[test]
+    fn settings_highlighting_is_drawn_in_its_colour() {
+        // Errors: red and bold (0.10's 1;31); addresses: cyan and underlined.
+        let row = Row::from_text("ERROR at 203.0.113.17", 24);
+        let texts: Vec<RowText> = row_texts(std::slice::from_ref(&row), false);
+        let highlights = Arc::new(sshee_term::highlight::Highlights::new(true, true, true, &[]));
+        let shown = Presenter::new(Look { highlights, ..Look::default() }).present(&Screen::new(&texts, 24));
+        let palette = Palette::new(true);
+        let m = metrics();
+        let look = RowLook { palette: &palette, metrics: &m, selection: palette.selection };
+        let p = plan_row(&row, &shown[0], None, None, &look, &mut Coverage::new(crate::fonts::TERMINAL_REGULAR));
+        let red = palette.color(TermColor::Indexed(1));
+        let cyan = palette.color(TermColor::Indexed(6));
+        let error = p.spans.iter().find(|s| s.start == 0).unwrap();
+        assert_eq!((error.end, error.color, error.bold), (5, Some(red), true));
+        let address = p.spans.iter().find(|s| s.color == Some(cyan)).expect("the address is cyan");
+        assert_eq!((address.start, address.end, address.underline), (9, 21, Some(cyan)));
+        // Off in Settings: the program's own colours.
+        let plain = Presenter::new(Look::default()).present(&Screen::new(&texts, 24));
+        let p = plan_row(&row, &plain[0], None, None, &look, &mut Coverage::new(crate::fonts::TERMINAL_REGULAR));
+        assert!(p.spans.iter().all(|s| s.color != Some(red) && !s.bold));
     }
 
     #[test]

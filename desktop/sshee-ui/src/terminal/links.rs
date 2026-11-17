@@ -21,7 +21,7 @@ use sshee_term::links::{LinkClick, LinkKind, CLICK_WAIT_MS};
 use sshee_term::present::{Link, Role};
 
 use super::metrics::CellMetrics;
-use super::pane::{TermPane, PADDING};
+use super::pane::TermPane;
 use super::rows::LinkCells;
 use crate::theme::{self, Theme};
 
@@ -288,7 +288,7 @@ pub(crate) fn hint(pane: &TermPane, t: &'static Theme, m: &CellMetrics) -> Optio
     // and never off the pane's sides. A note with no link under the pointer sits at the top.
     let (line, col) = links.hover.as_ref().map_or((0, 0), |h| (h.line, h.col));
     let width = (rune::text::advance(&said, theme::SMALL) + 18.0).min(w - 16.0);
-    let x = (PADDING + f32::from(col) * m.cell_w).min(w - width - 8.0).max(8.0);
+    let x = (pane.options.padding + f32::from(col) * m.cell_w).min(w - width - 8.0).max(8.0);
     let top = pane.line_y(m, line);
     let below = top + m.cell_h + 4.0;
     let y = if below + 24.0 > h - 4.0 { (top - 28.0).max(4.0) } else { below };

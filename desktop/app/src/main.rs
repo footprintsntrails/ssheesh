@@ -165,7 +165,10 @@ fn main() {
             bench.restore(&saved);
         }
         let inner = live::LiveBackend::new(&shown.hosts, args.ssh_config).with_store(std::sync::Arc::new(std::sync::Mutex::new(store)));
-        Launch { bench, backend: Box::new(Live { inner }), options }
+        // Settings' "Use the Windows title bar" is read before the window opens: it decides
+        // the window's frame.
+        let native_title_bar = sshee_core::app_identity::current().dir().is_some_and(sshee_app::settings_store::native_title_bar);
+        Launch { bench, backend: Box::new(Live { inner }), options: Options { native_title_bar, ..options } }
     };
     shell::run(launch);
 }

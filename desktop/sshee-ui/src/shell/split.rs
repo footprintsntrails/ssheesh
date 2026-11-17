@@ -335,6 +335,9 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
         None if tab.kind == TabKind::Files => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::files::view(s, tab, t, cx)),
         None => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::stats::view(s, tab, t, cx)),
     };
+    // Settings → Appearance → "Fade panes you're not using".
+    let faded = s.unused_opacity();
+    let content = if active || faded >= 1.0 { content } else { content.layer_opacity(faded) };
     rune::col()
         .key(format!("side-{n}"))
         .on_layout_tx(move |s: &mut Shell, rect, tx| {

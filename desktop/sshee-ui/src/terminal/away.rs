@@ -26,7 +26,9 @@ use sshee_term::present::RowText;
 
 use super::metrics::CellMetrics;
 use super::overlays::{Ask, Note, Reply};
-use super::pane::{TermPane, PADDING};
+use super::pane::TermPane;
+#[cfg(test)]
+use super::pane::PADDING;
 use super::LinkStatus;
 use crate::icons::{icon, Icon};
 use crate::theme::{self, Theme};
@@ -170,26 +172,28 @@ pub struct Inset {
     /// Rows above it move up by this, rows from it on move down by `down`.
     pub up: f32,
     pub down: f32,
+    /// The pane's padding: where the first row starts.
+    pub pad: f32,
 }
 
 impl Inset {
     /// Room for the line above view line `line`, in a pane `height` points high holding
     /// `rows` rows of `cell_h`: the rows below move down as far as the bottom margin lets
     /// them, the rows above take the rest.
-    pub fn new(line: usize, height: f32, rows: usize, cell_h: f32) -> Inset {
-        let slack = (height - 2.0 * PADDING - rows as f32 * cell_h).max(0.0);
-        let down = LINE.min(slack + PADDING - MARGIN);
-        Inset { line, up: (LINE - down).min(PADDING - MARGIN), down }
+    pub fn new(line: usize, height: f32, rows: usize, cell_h: f32, pad: f32) -> Inset {
+        let slack = (height - 2.0 * pad - rows as f32 * cell_h).max(0.0);
+        let down = LINE.min(slack + pad - MARGIN).max(0.0);
+        Inset { line, up: (LINE - down).min(pad - MARGIN).max(0.0), down, pad }
     }
 
     /// Where the line itself is drawn.
     pub fn y(&self, cell_h: f32) -> f32 {
-        PADDING - self.up + self.line as f32 * cell_h
+        self.pad - self.up + self.line as f32 * cell_h
     }
 
     /// The top of view line `line` as drawn.
     pub fn line_y(&self, line: usize, cell_h: f32) -> f32 {
-        PADDING + line as f32 * cell_h + if line < self.line { -self.up } else { self.down }
+        self.pad + line as f32 * cell_h + if line < self.line { -self.up } else { self.down }
     }
 
     /// A drawn `y` as it would be without the line: for telling the cell under it. A point on
@@ -199,7 +203,7 @@ impl Inset {
         if y < top {
             y + self.up
         } else if y < top + LINE {
-            PADDING + self.line as f32 * cell_h
+            self.pad + self.line as f32 * cell_h
         } else {
             y - self.down
         }
@@ -211,14 +215,14 @@ impl TermPane {
     pub(crate) fn inset(&self, m: &CellMetrics) -> Option<Inset> {
         let shown = self.over.away.shown.as_ref()?;
         let [_, h] = self.area?;
-        Some(Inset::new(shown.above.unwrap_or(0), h, self.size().rows as usize, m.cell_h))
+        Some(Inset::new(shown.above.unwrap_or(0), h, self.size().rows as usize, m.cell_h, self.options.padding))
     }
 
     /// The top of a view line in the pane's points, the away line's room counted.
     pub(crate) fn line_y(&self, m: &CellMetrics, line: usize) -> f32 {
         match self.inset(m) {
             Some(inset) => inset.line_y(line, m.cell_h),
-            None => PADDING + line as f32 * m.cell_h,
+            None => self.options.padding + line as f32 * m.cell_h,
         }
     }
 
@@ -388,7 +392,7 @@ pub(crate) fn split<S: 'static>(
     let width = f32::from(cols) * m.cell_w;
     let at = inset.line.min(rows.len());
     let part = |key: &'static str, from: usize, rows: &[Rc<GridRow>]| {
-        let mut g = grid(cols, m.cell_w, m.cell_h, rows.to_vec()).key(key).absolute(PADDING, inset.line_y(from, m.cell_h)).size(width, rows.len() as f32 * m.cell_h);
+        let mut g = grid(cols, m.cell_w, m.cell_h, rows.to_vec()).key(key).absolute(inset.pad, inset.line_y(from, m.cell_h)).size(width, rows.len() as f32 * m.cell_h);
         if let Some((col, line)) = caret.filter(|(_, line)| (from..from + rows.len()).contains(line)) {
             g = g.grid_caret(col, (line - from) as u16);
         }
@@ -397,7 +401,7 @@ pub(crate) fn split<S: 'static>(
     let (lead, errors, tail) = words(&shown.recap);
     let mut line = rune::row()
         .key("away")
-        .absolute(PADDING, inset.y(m.cell_h))
+        .absolute(inset.pad, inset.y(m.cell_h))
         .size(width, LINE)
         .gap(0.0)
         .items_center()
@@ -472,14 +476,14 @@ mod tests {
     fn the_line_takes_its_room_from_the_margins_not_from_the_program() {
         // 24 rows of 15 points and the two margins fill 384 points exactly: nothing to spare
         // below but the margin, so the rows above give the rest.
-        let tight = Inset::new(10, 384.0, 24, 15.0);
+        let tight = Inset::new(10, 384.0, 24, 15.0, PADDING);
         assert_eq!((tight.down, tight.up), (10.0, 8.0));
         assert_eq!(tight.up + tight.down, LINE);
         // The last row stays inside the pane, the first too.
         assert!(tight.line_y(23, 15.0) + 15.0 <= 384.0 - MARGIN);
         assert!(tight.line_y(0, 15.0) >= MARGIN);
         // Room to spare under the last row: nothing above moves.
-        let loose = Inset::new(10, 394.0, 24, 15.0);
+        let loose = Inset::new(10, 394.0, 24, 15.0, PADDING);
         assert_eq!((loose.down, loose.up), (LINE, 0.0));
         // The line sits between rows 9 and 10, touching both.
         assert_eq!(tight.y(15.0), tight.line_y(9, 15.0) + 15.0);
@@ -488,7 +492,7 @@ mod tests {
 
     #[test]
     fn a_click_lands_on_the_cell_it_is_drawn_over() {
-        let inset = Inset::new(10, 384.0, 24, 15.0);
+        let inset = Inset::new(10, 384.0, 24, 15.0, PADDING);
         for line in 0..24 {
             let drawn = inset.line_y(line, 15.0) + 7.0;
             let plain = inset.undo(drawn, 15.0);

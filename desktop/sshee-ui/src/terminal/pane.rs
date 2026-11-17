@@ -84,6 +84,15 @@ pub struct PaneOptions {
     pub reconnect_card: bool,
     /// Count how much typing could have been drawn at once (`sshee_term::echo`): counts only.
     pub count_typing: bool,
+    /// The space between the pane's edge and its cells, in points (Settings → Terminal →
+    /// Padding, 0.10's `terminalPadding`).
+    pub padding: f32,
+    /// The font, as a family list (Settings → Terminal → Font): the bundled JetBrains Mono
+    /// unless another is picked.
+    pub family: &'static str,
+    /// The window's theme by day and by night (Settings → Appearance), for what is drawn over
+    /// the terminal.
+    pub themes: [&'static crate::theme::Theme; 2],
 }
 
 impl Default for PaneOptions {
@@ -110,6 +119,9 @@ impl PaneOptions {
             idle_sleep: 20.0,
             reconnect_card: true,
             count_typing: false,
+            padding: PADDING,
+            family: crate::fonts::TERMINAL_FAMILY,
+            themes: [crate::theme::Theme::of(false), crate::theme::Theme::of(true)],
         }
     }
 }
@@ -265,7 +277,7 @@ impl TermPane {
         if options == self.options {
             return;
         }
-        if (options.line_height, options.cell_mode) != (self.options.line_height, self.options.cell_mode) {
+        if (options.line_height, options.cell_mode, options.family) != (self.options.line_height, self.options.cell_mode, self.options.family) {
             // The view keeps the cell size by scale and text size: make it measure again.
             self.metrics.set(self.metrics.get().map(|m| CellMetrics { size: f32::NAN, ..m }));
         }
@@ -287,6 +299,11 @@ impl TermPane {
     /// The pane is on screen (`true`), or out of sight: see `HIDDEN_FRAME`.
     pub fn set_shown(&mut self, shown: bool) {
         self.shown = shown;
+    }
+
+    /// The window's theme, for what is drawn over the terminal, on a dark or a light system.
+    pub(crate) fn theme(&self, system_dark: bool) -> &'static crate::theme::Theme {
+        self.options.themes[usize::from(self.dark(system_dark))]
     }
 
     /// Whether the pane draws dark in a window on a dark (`system_dark`) or a light system.
@@ -354,7 +371,8 @@ impl TermPane {
     fn wanted(&self) -> Option<Size> {
         let [w, h] = self.area?;
         let m = self.metrics.get()?;
-        let (cols, rows) = m.fit(w - 2.0 * PADDING, h - 2.0 * PADDING);
+        let pad = self.options.padding;
+        let (cols, rows) = m.fit(w - 2.0 * pad, h - 2.0 * pad);
         Some(Size::new(cols, rows))
     }
 
@@ -844,9 +862,10 @@ impl TermPane {
     pub(crate) fn cell_at(&self, x: f32, y: f32) -> Option<(usize, u16, Side)> {
         let m = self.metrics.get()?;
         let size = self.size();
-        let fx = ((x - PADDING) / m.cell_w).max(0.0);
+        let pad = self.options.padding;
+        let fx = ((x - pad) / m.cell_w).max(0.0);
         // The away line's room between two rows isn't a row.
-        let fy = ((self.plain_y(&m, y) - PADDING) / m.cell_h).max(0.0);
+        let fy = ((self.plain_y(&m, y) - pad) / m.cell_h).max(0.0);
         let col = (fx.floor() as u32).min(u32::from(size.cols.saturating_sub(1))) as u16;
         let line = (fy.floor() as usize).min(size.rows.saturating_sub(1) as usize);
         let side = if fx.fract() < 0.5 || fx >= f32::from(size.cols) { Side::Left } else { Side::Right };

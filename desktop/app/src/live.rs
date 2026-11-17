@@ -360,10 +360,12 @@ impl Backend for LiveBackend {
     }
 
     /// What only sshee-core can act on: whether a dropped connection comes back by itself,
-    /// what a new terminal shows first, and ssh's steady beat through Tor.
+    /// what a new terminal shows first, ssh's steady beat through Tor, and whether uploads
+    /// are cleaned.
     fn settings_changed(&mut self, settings: &Settings) {
         self.manager.set_auto_reconnect(settings.reconnect_mode == ReconnectMode::Auto);
         sshee_core::tor::set_hide_typing(settings.tor_hide_typing);
+        crate::files::set_clean_uploads(settings.clean_uploads);
         self.welcome = welcome_of(settings);
         self.welcome_first = settings.welcome_mode == WelcomeMode::First;
         self.welcomed.clone_from(&settings.welcomed_hosts);
