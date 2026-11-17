@@ -81,6 +81,9 @@ fn glyph(g: &Glyph) -> Icon {
         Glyph::Home => Icon::House,
         Glyph::Reopen => Icon::Reopen,
         Glyph::Gear => Icon::Gear,
+        Glyph::SplitRight => Icon::SideBySide,
+        Glyph::SplitDown => Icon::SplitDown,
+        Glyph::Zoom => Icon::Expand,
     }
 }
 
@@ -199,6 +202,9 @@ impl Shell {
             Action::CloseTab => self.close_active(tx),
             Action::ReopenTab => self.reopen_closed(tx),
             Action::ToggleSidebar => self.toggle_sidebar(tx),
+            Action::SplitRight => self.split_pane(sshee_app::workbench::layout::Dir::Row, tx),
+            Action::SplitDown => self.split_pane(sshee_app::workbench::layout::Dir::Col, tx),
+            Action::Zoom => self.zoom_active(tx),
             Action::MainMenu => self.show_home(tx),
             Action::AddServer => self.open_add_server(tx),
             // At the section named, else where Settings was last.

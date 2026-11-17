@@ -16,7 +16,9 @@
 //!
 //! Tabs are saved and brought back ([`Workbench::saved`], [`Workbench::restore`]) with their
 //! session keys, so a terminal on a server finds its shell in tmux again after a restart, as
-//! in 0.10. Tabs side by side are in [`layout`], kept beside the workbench. The window owns one
+//! in 0.10. Tabs split side by side and one above another are [`layout`]'s groups, kept and
+//! brought back with the tabs; closing a tab shown with others brings up the pane nearest it
+//! and gives its room to the panes around it. The window owns one
 //! `Workbench`; every change goes through its methods, so the rules are tested here, without a
 //! window.
 
@@ -243,6 +245,9 @@ pub struct SavedTabs {
     pub active: Option<usize>,
     /// The sidebar was hidden.
     pub sidebar_hidden: bool,
+    /// Tabs split side by side and one above another, each tab by its place in `tabs`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<layout::SavedSplit>,
 }
 
 /// One saved tab.
@@ -306,6 +311,11 @@ pub struct Workbench {
     sidebar: bool,
     tor: Tor,
     vitals: HashMap<ServerKey, Vitals>,
+    /// Tabs shown together on the page.
+    layout: layout::Layout,
+    /// Settings' "Tabs on screen: Side by side": a new tab joins the page of the tab you were
+    /// on instead of filling it alone.
+    together: bool,
 }
 
 const UNKNOWN_SERVER: &str = "Unknown server";
@@ -325,6 +335,8 @@ impl Workbench {
             sidebar: true,
             tor: Tor::Off,
             vitals: HashMap::new(),
+            layout: layout::Layout::new(),
+            together: false,
         };
         w.set_servers(servers);
         w
@@ -478,6 +490,11 @@ impl Workbench {
         // Next to the tab you were on there; a machine's first tab ends the row.
         let at = self.anchor_on(server).and_then(|a| self.index_of(a)).map_or(self.tabs.len(), |i| i + 1);
         self.tabs.insert(at, tab);
+        // Side by side for all tabs: beside the tab you were on, when it's this machine's.
+        let beside = self.active().filter(|t| self.together && t.server == server).map(|t| t.id);
+        if let Some(beside) = beside {
+            self.layout.split(beside, id, layout::Dir::Row, false);
+        }
         self.land_on(id);
         id
     }
@@ -518,6 +535,7 @@ impl Workbench {
         self.last_on.insert(server, id);
         self.focused = Some(id);
         self.home = false;
+        self.layout.landed(id);
     }
 
     /// Shows the main menu; the tab you were on is the one you'd come back to.
@@ -531,7 +549,12 @@ impl Workbench {
     /// the main menu.
     pub fn close(&mut self, id: TabId) -> Option<Tab> {
         let at = self.index_of(id)?;
-        let next = if self.focused == Some(id) {
+        // Shown with others: the pane nearest it comes up, and has its room.
+        let shown = self.layout.shown_with(id).is_some();
+        let near = self.layout.remove(id).filter(|_| shown);
+        let next = if let (true, Some(near)) = (self.focused == Some(id), near) {
+            Some(near)
+        } else if self.focused == Some(id) {
             let same = |t: &&Tab| t.server == self.tabs[at].server;
             let after = self.tabs[at + 1..].iter().find(same);
             let before = self.tabs[..at].iter().rev().find(same);
@@ -681,6 +704,7 @@ impl Workbench {
                 .collect(),
             active: self.active_id().and_then(|id| self.index_of(id)),
             sidebar_hidden: !self.sidebar,
+            splits: self.layout.saved(&self.tabs.iter().map(|t| t.id).collect::<Vec<_>>()),
         }
     }
 
@@ -693,8 +717,13 @@ impl Workbench {
             return;
         }
         let mut active = None;
+        // Each saved place's tab now, for the splits: a kind this version doesn't know has none.
+        let mut placed = Vec::with_capacity(saved.tabs.len());
         for (i, t) in saved.tabs.iter().enumerate() {
-            let Some(kind) = TabKind::from_pane_kind(&t.kind) else { continue };
+            let Some(kind) = TabKind::from_pane_kind(&t.kind) else {
+                placed.push(None);
+                continue;
+            };
             let id = TabId(self.next_id);
             self.next_id += 1;
             let session_key = match kind {
@@ -716,7 +745,9 @@ impl Workbench {
             if saved.active == Some(i) {
                 active = Some(id);
             }
+            placed.push(Some(id));
         }
+        self.layout = layout::Layout::restore(&saved.splits, |i| placed.get(i).copied().flatten());
         self.sidebar = !saved.sidebar_hidden;
         match active.or(self.tabs.first().map(|t| t.id)) {
             // The main menu was showing: it shows again, with a tab to come back to.
@@ -731,6 +762,143 @@ impl Workbench {
 
     pub fn sidebar_shown(&self) -> bool {
         self.sidebar
+    }
+
+    /// Tabs shown together on the page.
+    pub fn layout(&self) -> &layout::Layout {
+        &self.layout
+    }
+
+    /// The tabs whose pages are on screen: the tab you're on, and the tabs it shares the page
+    /// with (only the one filling the window, while one does). None on the main menu.
+    pub fn on_screen(&self) -> Vec<TabId> {
+        self.active_id().map_or_else(Vec::new, |id| self.layout.on_screen(id))
+    }
+
+    /// The group whose panes share the page now, when more than one shows.
+    pub fn split_on_screen(&self) -> Option<&layout::Group> {
+        let id = self.active_id()?;
+        self.layout.shown_with(id).filter(|g| g.zoomed.is_none())
+    }
+
+    /// Split right (`Dir::Row`) or down (`Dir::Col`): a new terminal on the machine of the tab
+    /// on screen, beside it, and you're in it (0.10's `splitPane`). From the main menu,
+    /// nothing.
+    pub fn split(&mut self, dir: layout::Dir) -> Option<TabId> {
+        let at = self.active_id()?;
+        let server = self.tab(at)?.server.clone();
+        let new = self.open(TabKind::Terminal, &server);
+        self.layout.split(at, new, dir, false);
+        self.land_on(new);
+        Some(new)
+    }
+
+    /// `id` beside the tab on screen (`Dir::Row`, a tab's menu "Show beside this one") or
+    /// under it (`Dir::Col`, "Show below this one"); for the tab on screen itself, the
+    /// shortcut for side by side. You stay on the tab you were on.
+    pub fn show_beside(&mut self, id: TabId, dir: layout::Dir) -> bool {
+        let Some(active) = self.active_id() else { return false };
+        if active == id {
+            return self.side_by_side() != layout::Toggled::Nothing;
+        }
+        layout::Layout::can_pair(self, active, id) && self.layout.split(active, id, dir, false)
+    }
+
+    /// The shortcut for side by side (see [`layout::Layout::toggle`]). With no other tab on
+    /// the machine, a new terminal opens beside the tab you're on, and you stay where you were.
+    pub fn side_by_side(&mut self) -> layout::Toggled {
+        let active = self.active_id();
+        let candidate = active.and_then(|id| layout::Layout::candidate(self, id));
+        let done = self.layout.toggle(active, candidate);
+        if let (layout::Toggled::NeedsTab, Some(id)) = (done, active) {
+            let other = self.new_terminal();
+            self.layout.split(id, other, layout::Dir::Row, false);
+            self.land_on(id);
+        }
+        done
+    }
+
+    /// A pane's ×, "Stop showing side by side": `id` leaves the page it shared; it stays open.
+    /// When it was the tab on screen, the pane nearest it comes up.
+    pub fn leave_split(&mut self, id: TabId) {
+        let near = self.layout.remove(id);
+        if let (true, Some(near)) = (self.active_id() == Some(id), near) {
+            self.land_on(near);
+        }
+    }
+
+    /// "Fill the window": the tab on screen alone on the page, or its group's panes together
+    /// again. False when it shares the page with nobody.
+    pub fn zoom(&mut self) -> bool {
+        self.active_id().is_some_and(|id| self.layout.zoom(id))
+    }
+
+    /// A tab (or a pane's header) dropped on pane `target` (see [`layout::Layout::place`]):
+    /// you're on the tab you dropped.
+    pub fn place(&mut self, target: TabId, dragged: TabId, zone: layout::Zone) -> bool {
+        if !layout::Layout::can_pair(self, target, dragged) || !self.layout.place(target, dragged, zone) {
+            return false;
+        }
+        self.land_on(dragged);
+        true
+    }
+
+    /// Settings' "Arrange open panes": the panes sharing the page with the tab on screen in
+    /// that shape, the tab on screen first; a tab alone, with every tab of its machine.
+    pub fn arrange(&mut self, how: layout::Arrangement) -> bool {
+        let Some(active) = self.active() else { return false };
+        let (id, server) = (active.id, active.server.clone());
+        let mut tabs: Vec<TabId> = match self.layout.group_of(id) {
+            Some(g) => g.panes(),
+            None => self.tabs_on(&server).map(|t| t.id).collect(),
+        };
+        tabs.retain(|t| *t != id);
+        tabs.insert(0, id);
+        self.layout.arrange(&tabs, how);
+        tabs.len() > 1
+    }
+
+    /// Settings' "Tabs on screen": side by side, every machine's tabs share its page (the
+    /// ones in no group become columns of their own group) and new tabs join the page they
+    /// open from; one at a time, every group shows its panes one by one, arrangements kept.
+    pub fn set_side_by_side(&mut self, on: bool) {
+        if on == self.together {
+            return;
+        }
+        self.together = on;
+        self.layout.set_apart(!on);
+        if !on {
+            return;
+        }
+        let mut machines: Vec<ServerKey> = self.tabs.iter().map(|t| t.server.clone()).collect();
+        machines.sort_unstable();
+        machines.dedup();
+        for key in machines {
+            let loose: Vec<TabId> = self.tabs_on(&key).map(|t| t.id).filter(|id| self.layout.group_of(*id).is_none()).collect();
+            let grouped = self.tabs_on(&key).map(|t| t.id).find(|id| self.layout.group_of(*id).is_some());
+            match (loose.as_slice(), grouped) {
+                ([], _) | ([_], None) => {}
+                ([one], Some(at)) => {
+                    let last = self.layout.group_of(at).and_then(|g| g.panes().last().copied()).unwrap_or(at);
+                    self.layout.split(last, *one, layout::Dir::Row, false);
+                }
+                (many, _) => self.layout.arrange(many, layout::Arrangement::Columns),
+            }
+        }
+    }
+
+    /// A divider of the group on screen was dragged (see [`layout::Layout::drag`]).
+    pub fn drag_divider(&mut self, path: &[usize], i: usize, at: f32, room: f32) {
+        if let Some(id) = self.active_id() {
+            self.layout.drag(id, path, i, at, room);
+        }
+    }
+
+    /// A divider of the group on screen, double-clicked: even shares.
+    pub fn even_out(&mut self, path: &[usize]) {
+        if let Some(id) = self.active_id() {
+            self.layout.even_out(id, path);
+        }
     }
 
     pub fn toggle_sidebar(&mut self) {
@@ -1204,6 +1372,95 @@ mod tests {
         let before = again.clone();
         again.restore(&saved);
         assert_eq!(again, before);
+    }
+
+    #[test]
+    fn splits_open_a_terminal_beside_you_and_come_back_after_a_restart() {
+        use layout::{Dir, Node};
+        let mut w = bench();
+        assert_eq!(w.split(Dir::Row), None, "the main menu has nothing to split");
+        let a = w.go_to(WEB);
+        let d = w.go_to(DB);
+        w.focus(a);
+        // Split right: a new terminal on web, next to a in the row, and you're in it.
+        let b = w.split(Dir::Row).unwrap();
+        assert_eq!(row(&w), "Terminal@web-7731 *Terminal 2@web-7731 | Terminal@db-main");
+        assert_eq!(w.on_screen(), [a, b]);
+        // Split down from b, then db's tab shown beside them from its menu.
+        let c = w.split(Dir::Col).unwrap();
+        assert!(w.show_beside(d, Dir::Row));
+        assert_eq!((w.active_id(), w.on_screen()), (Some(c), vec![a, b, c, d]));
+        assert!(w.split_on_screen().is_some());
+        // Fill the window, and the group comes back as it was after a restart.
+        w.drag_divider(&[], 0, 0.4, 1000.0);
+        assert!(w.zoom());
+        assert_eq!((w.on_screen(), w.split_on_screen()), (vec![c], None));
+        let json = serde_json::to_string(&w.saved()).unwrap();
+        let mut again = bench();
+        again.restore(&serde_json::from_str(&json).unwrap());
+        let ids: Vec<TabId> = again.tabs().iter().map(|t| t.id).collect();
+        assert_eq!(again.on_screen(), [ids[2]], "the pane filling the window, as you left it");
+        assert!(again.zoom());
+        assert_eq!(again.on_screen(), [ids[0], ids[1], ids[2], ids[3]]);
+        let Node::Split { parts, .. } = &again.layout().group_of(ids[0]).unwrap().root else { panic!() };
+        assert!((parts[0].1 - 0.4).abs() < 1e-4);
+        // A file from before splits were kept has none.
+        let old: SavedTabs = serde_json::from_str(r#"{"tabs":[{"server":"host:web","kind":"terminal","n":1}],"active":0}"#).unwrap();
+        assert!(old.splits.is_empty());
+    }
+
+    #[test]
+    fn side_by_side_for_all_tabs_puts_each_machines_tabs_on_its_page() {
+        let mut w = bench();
+        let a = w.go_to(WEB);
+        let b = w.new_terminal();
+        let c = w.go_to(DB);
+        w.set_side_by_side(true);
+        assert_eq!(w.on_screen(), [c], "db has one tab");
+        // A new tab joins the page it opens from.
+        let d = w.new_terminal();
+        assert_eq!(w.on_screen(), [c, d]);
+        w.focus(a);
+        assert_eq!(w.on_screen(), [a, b]);
+        // One at a time again: each alone, the arrangement kept for next time.
+        w.set_side_by_side(false);
+        assert_eq!(w.on_screen(), [a]);
+        let e = w.new_terminal();
+        assert_eq!(w.on_screen(), [e]);
+        w.set_side_by_side(true);
+        w.focus(a);
+        assert_eq!(w.on_screen(), [a, b, e]);
+        // Arranged: the tab on screen first.
+        w.focus(b);
+        assert!(w.arrange(layout::Arrangement::Main));
+        assert_eq!(w.on_screen(), [b, a, e]);
+        // A tab dropped on a pane: beside it, and you're on it.
+        assert!(w.place(c, a, layout::Zone::Bottom));
+        assert_eq!((w.active_id(), w.on_screen()), (Some(a), vec![c, a, d]));
+    }
+
+    #[test]
+    fn closing_a_pane_brings_up_the_one_nearest_it_on_the_page() {
+        use layout::Dir;
+        let mut w = bench();
+        let a = w.go_to(WEB);
+        let x = w.new_terminal();
+        w.focus(a);
+        let b = w.split(Dir::Row).unwrap();
+        let c = w.split(Dir::Col).unwrap();
+        assert_eq!(row(&w), "Terminal@web-7731 Terminal 3@web-7731 *Terminal 4@web-7731 Terminal 2@web-7731");
+        // c goes: b, above it, comes up (not x, the next tab of web in the row).
+        w.close(c);
+        assert_eq!((w.active_id(), w.on_screen()), (Some(b), vec![a, b]));
+        // The last two: a alone, as a tab.
+        w.close(b);
+        assert_eq!((w.active_id(), w.on_screen()), (Some(a), vec![a]));
+        assert!(w.layout().groups().is_empty());
+        // A pane's ×: it leaves the page and stays open; the pane nearest it comes up.
+        let e = w.split(Dir::Row).unwrap();
+        w.leave_split(e);
+        assert_eq!((w.active_id(), w.on_screen()), (Some(a), vec![a]));
+        assert!(w.tab(e).is_some() && w.tab(x).is_some());
     }
 
     #[test]

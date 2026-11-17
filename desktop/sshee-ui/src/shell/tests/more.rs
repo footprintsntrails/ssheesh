@@ -505,7 +505,7 @@ fn a_tabs_menu_closes_duplicates_and_shows_side_by_side() {
     };
     menu(&mut w, 1);
     let tree = w.tree();
-    for row in ["Show side by side", "Duplicate tab", "Close tab", "Close other tabs", "Close tabs to the right"] {
+    for row in ["Show beside this one", "Show below this one", "Duplicate tab", "Close tab", "Close other tabs", "Close tabs to the right"] {
         assert!(tree.contains(row), "{row}: {tree}");
     }
     // Duplicate: another terminal of that machine, right after it.
@@ -656,7 +656,7 @@ fn two_tabs_side_by_side_share_the_page_and_come_apart_without_closing() {
     w.typed("b");
     assert_eq!((w.written(0), w.written(1)), ("b".into(), "a".into()));
     // The divider, dragged left: the left side narrows, as far as it may.
-    let [dx, dy, dw, dh] = w.rect("side-divider").unwrap();
+    let [dx, dy, dw, dh] = w.rect("divider-0").unwrap();
     w.rt.pointer_down(dx + dw / 2.0, dy + dh / 2.0);
     w.rt.frame(1.0 / 60.0);
     w.rt.pointer_move(dx - 200.0, dy + dh / 2.0);
@@ -671,9 +671,17 @@ fn two_tabs_side_by_side_share_the_page_and_come_apart_without_closing() {
     w.rt.frame(1.0 / 60.0);
     w.rt.pointer_up(60.0, dy + dh / 2.0);
     w.settle();
-    assert!(w.rect(&pane(1)).unwrap()[2] > 200.0, "a side was squeezed away");
-    // A side's ×: one at a time again, and both tabs are still open and running.
-    w.click(&format!("side-close-{}", ids[1].0));
+    // Not narrower than 0.10's 140 points.
+    assert!(w.rect(&pane(1)).unwrap()[2] >= 139.0, "a side was squeezed away");
+    // A side's ×: one at a time again, and both tabs are still open and running. (On the pane
+    // you're not in, the header's buttons come out under the pointer.)
+    let close = format!("side-close-{}", ids[1].0);
+    let (cx, cy) = w.rt.find(&close).unwrap();
+    w.rt.pointer_move(cx, cy);
+    for _ in 0..20 {
+        w.rt.frame(1.0 / 60.0);
+    }
+    w.click(&close);
     assert!(w.rt.find("side").is_none());
     assert_eq!(w.row(), "*Terminal@web-7731 Terminal 2@web-7731");
     assert!((0..2).all(|n| !w.session(n).lock().unwrap().ended));
@@ -801,4 +809,210 @@ fn a_program_that_copies_its_own_selection_writes_the_clipboard_once_or_not_at_a
     assert_eq!(copies(&tmux), ["picked"]);
     w.key(Key::Command('c'), "cs");
     assert_eq!(copies(&tmux), ["picked", "hello"]);
+}
+
+impl Window {
+    /// A press at the middle of `rect`, as a person clicks into a pane.
+    fn press_in(&mut self, [x, y, w, h]: [f32; 4]) {
+        let (x, y) = (x + w / 2.0, y + h / 2.0);
+        self.rt.pointer_down(x, y);
+        self.rt.frame(1.0 / 60.0);
+        self.rt.pointer_up(x, y);
+        self.settle();
+    }
+
+    fn on_screen(&self) -> Vec<TabId> {
+        self.rt.state.bench.on_screen()
+    }
+}
+
+#[test]
+fn split_right_and_down_open_terminals_beside_you_and_keys_follow_the_pane_you_are_in() {
+    let mut w = linux();
+    w.click("server-1");
+    // 0.10's keys: Ctrl+Shift+D splits right, Ctrl+Shift+E splits down (not Files any more).
+    w.key(Key::Command('d'), "cs");
+    w.key(Key::Command('e'), "cs");
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    assert_eq!(w.row(), "Terminal@web-7731 Terminal 2@web-7731 *Terminal 3@web-7731");
+    assert_eq!(w.on_screen(), ids);
+    assert!(w.rt.find("files-list").is_none());
+    let rects: Vec<[f32; 4]> = ids.iter().map(|id| w.rect(&format!("pane-{}", id.0)).unwrap()).collect();
+    // a at the left; b over c at the right, each half as tall.
+    assert!(rects[0][0] < rects[1][0] && (rects[1][0] - rects[2][0]).abs() < 1.0, "{rects:?}");
+    assert!(rects[1][1] < rects[2][1] && (rects[1][3] - rects[2][3]).abs() < 8.0, "{rects:?}");
+    assert!(w.rect("divider-0").is_some() && w.rect("divider-1-0").is_some());
+    assert_eq!(w.sessions(), 3);
+    // The keyboard is in the pane made last; a click moves it.
+    w.typed("c");
+    w.press_in(rects[0]);
+    assert_eq!(w.rt.state.bench.active_id(), Some(ids[0]));
+    w.typed("a");
+    w.press_in(rects[1]);
+    w.typed("b");
+    assert_eq!((w.written(0), w.written(1), w.written(2)), ("a".into(), "b".into(), "c".into()));
+    // Ctrl+Tab walks the row, the panes among it.
+    w.key(Key::Tab, "c");
+    assert_eq!(w.rt.state.bench.active_id(), Some(ids[2]));
+    assert_eq!(w.on_screen(), ids, "the page stays as it is");
+    // The pane you're in says so to a screen reader too.
+    assert!(w.tree().contains("Pane you're in"));
+}
+
+#[test]
+fn fill_the_window_is_caught_before_the_terminal_and_shows_all_again() {
+    let mut w = linux();
+    w.click("server-1");
+    w.key(Key::Command('d'), "cs");
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    let before = w.written(1);
+    // Ctrl+Shift+Enter: never an Enter in the terminal (it would run the typed line).
+    w.key(Key::Enter, "cs");
+    assert_eq!(w.written(1), before);
+    assert_eq!(w.on_screen(), [ids[1]]);
+    assert!(w.rt.find("divider-0").is_none());
+    assert!(w.tree().contains("Show all 2 panes"));
+    let alone = w.rect(&format!("pane-{}", ids[1].0)).unwrap();
+    assert!(alone[2] > 1100.0, "{alone:?}");
+    // "Show all 2 panes" and back; then the header's own button and a double click on it.
+    w.click(&format!("side-all-{}", ids[1].0));
+    assert_eq!(w.on_screen(), ids);
+    w.click(&format!("side-zoom-{}", ids[0].0));
+    assert_eq!((w.rt.state.bench.active_id(), w.on_screen()), (Some(ids[0]), vec![ids[0]]));
+    w.key(Key::Enter, "cs");
+    assert_eq!(w.on_screen(), ids);
+    // Alone on the page, a tab fills the window already: the key does nothing, and still
+    // never reaches the terminal.
+    w.click(&format!("side-close-{}", ids[1].0));
+    let before = w.written(0);
+    w.key(Key::Enter, "cs");
+    assert_eq!(w.written(0), before);
+    assert_eq!(w.on_screen(), [ids[0]]);
+}
+
+#[test]
+fn closing_a_pane_gives_its_room_to_the_pane_beside_it() {
+    let mut w = linux();
+    w.click("server-1");
+    w.key(Key::Command('d'), "cs");
+    w.key(Key::Command('d'), "cs");
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    let width = |w: &Window, n: usize| w.rect(&format!("pane-{}", ids[n].0)).unwrap()[2];
+    let (first, middle) = (width(&w, 0), width(&w, 1));
+    assert!(first > middle * 1.8, "the second split halves the second pane: {first} {middle}");
+    // The pane you're in (the last) closes: the one before it has its room and the keyboard.
+    w.key(Key::Command('w'), "cs");
+    assert_eq!(w.on_screen(), [ids[0], ids[1]]);
+    assert_eq!(w.rt.state.bench.active_id(), Some(ids[1]));
+    // Its room is shared out as the panes left had theirs: both grew.
+    assert!(width(&w, 0) > first + 100.0 && width(&w, 1) > middle + 50.0, "{} {}", width(&w, 0), width(&w, 1));
+    w.typed("x");
+    assert_eq!(w.written(1), "x");
+    assert!(w.session(2).lock().unwrap().ended);
+}
+
+#[test]
+fn a_tab_dragged_onto_the_page_lands_beside_the_pane_under_it() {
+    let mut w = linux();
+    w.click("server-1");
+    w.click("new-tab");
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    w.click(&format!("tab-{}", ids[0].0));
+    // The second tab, dragged down onto the bottom of the page: under the first.
+    let (tx, ty) = w.rt.find(&format!("tab-{}", ids[1].0)).unwrap();
+    let [px, py, pw, ph] = w.rect("page").unwrap();
+    w.drag((tx, ty), (px + pw / 2.0, py + ph * 0.9));
+    assert_eq!(w.on_screen(), ids);
+    let (top, under) = (w.rect(&format!("pane-{}", ids[0].0)).unwrap(), w.rect(&format!("pane-{}", ids[1].0)).unwrap());
+    assert!(top[1] < under[1] && (top[0] - under[0]).abs() < 1.0, "{top:?} {under:?}");
+    assert_eq!(w.rt.state.bench.active_id(), Some(ids[1]), "you're on the tab you dropped");
+    assert!(w.rt.find("drop-mark").is_none());
+    // A pane's header dragged onto the row of tabs: a tab of its own again.
+    let [hx, hy, hw, hh] = w.rect(&format!("side-head-{}", ids[1].0)).unwrap();
+    w.drag((hx + 40.0, hy + hh / 2.0), (hx + hw / 2.0, 20.0));
+    assert_eq!(w.on_screen(), [ids[0]], "the pane left keeps the page");
+    assert_eq!(w.rt.state.bench.tabs().len(), 2);
+    assert!(w.rt.state.bench.layout().groups().is_empty());
+}
+
+#[test]
+fn panes_of_two_servers_say_whose_they_are() {
+    let mut w = linux();
+    w.click("server-1");
+    w.click("server-2");
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    let (x, y) = w.rt.find(&format!("tab-{}", ids[0].0)).unwrap();
+    w.secondary(x, y);
+    assert!(w.tree().contains("Show below this one"));
+    w.click("tab-beside");
+    assert_eq!(w.on_screen(), [ids[1], ids[0]]);
+    let tree = w.tree();
+    assert!(tree.contains("web-7731") && tree.contains("db-main"));
+    assert!(w.rt.find("side-server").is_some());
+}
+
+#[test]
+fn the_sidebar_shows_names_when_dragged_wide_and_folds_back_into_icons() {
+    let mut w = linux();
+    w.click("server-1");
+    let rail = w.rect("rail").unwrap();
+    assert_eq!(rail[2], 52.0);
+    let [ex, ey, ew, eh] = w.rect("rail-edge").unwrap();
+    let edge = (ex + ew / 2.0, ey + eh / 2.0);
+    w.drag(edge, (edge.0 + 200.0, edge.1));
+    assert!(w.rt.state.sidebar_wide());
+    let wide = w.rect("rail").unwrap()[2];
+    assert!((wide - 252.0).abs() < 4.0, "{wide}");
+    assert_eq!(w.rt.state.settings.get().sidebar_mode, sshee_app::model::SidebarMode::Wide);
+    assert!(w.tree().contains("Servers"));
+    // The terminal took what the sidebar didn't.
+    assert!(w.rect("term").unwrap()[0] >= wide - 1.0);
+    // Narrower than 120 points: icons again, the width kept for next time.
+    let [ex, ey, ew, eh] = w.rect("rail-edge").unwrap();
+    let edge = (ex + ew / 2.0, ey + eh / 2.0);
+    w.drag(edge, (60.0, edge.1));
+    assert_eq!(w.rect("rail").unwrap()[2], 52.0);
+    assert_eq!(w.rt.state.settings.get().sidebar_mode, sshee_app::model::SidebarMode::Narrow);
+    assert!((w.rt.state.settings.get().sidebar_width - 252.0).abs() < 4.0);
+    // Hidden and back with the button and the shortcut, its kind kept.
+    w.click("sidebar");
+    assert!(w.rt.find("rail").is_none() && !w.rt.state.settings.get().sidebar_visible);
+    w.key(Key::Command('b'), "cs");
+    assert_eq!(w.rect("rail").unwrap()[2], 52.0);
+}
+
+#[test]
+fn compact_mode_slides_the_bars_in_at_the_edges() {
+    let mut w = linux();
+    w.click("server-1");
+    // Ctrl+Shift+M: compact, both bars away (0.10's first kind), the status bar too.
+    w.key(Key::Command('m'), "cs");
+    assert!(w.rt.find("rail").is_none() && w.rt.find("bar").is_none() && w.rt.find("status").is_none());
+    assert!(w.rect("term").unwrap()[2] > 1250.0);
+    // The pointer at the left edge brings the sidebar; leaving it, it goes.
+    w.rt.pointer_move(2.0, 400.0);
+    w.settle();
+    assert!(w.rt.find("out-side").is_some() && w.rt.find("rail").is_some());
+    w.rt.pointer_move(700.0, 400.0);
+    w.settle();
+    assert!(w.rt.find("out-side").is_none());
+    // At the top: the row of tabs.
+    w.rt.pointer_move(600.0, 2.0);
+    w.settle();
+    assert!(w.rt.find("out-top").is_some() && w.rt.find("tabs").is_some());
+    // The shortcut again: everything back in place.
+    w.key(Key::Command('m'), "cs");
+    assert!(w.rt.find("rail").is_some() && w.rt.find("bar").is_some() && w.rt.find("status").is_some());
+}
+
+#[test]
+fn splits_are_kept_with_the_tabs() {
+    let mut w = linux();
+    w.click("server-1");
+    w.key(Key::Command('d'), "cs");
+    let saved = w.rt.state.bench.saved();
+    assert_eq!(saved.splits.len(), 1);
+    let mut again = Workbench::new(servers());
+    again.restore(&saved);
+    assert_eq!(again.on_screen().len(), 2);
 }

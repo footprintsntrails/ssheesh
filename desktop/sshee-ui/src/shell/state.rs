@@ -228,9 +228,13 @@ pub struct Shell {
     /// The panes' look changed where no `Tx` was at hand (a setting from another thread): the
     /// next poll hands it to them.
     pub(crate) look_stale: bool,
-    /// Which tabs are shown side by side (`split.rs`), and where the pair is drawn.
-    pub layout: sshee_app::workbench::layout::Layout,
+    /// Where the splits on screen are drawn (`split.rs`); which tabs share the page is the
+    /// workbench's (`Workbench::layout`).
     pub(crate) sides: super::split::Sides,
+    /// A drag of the sidebar's edge (`rail.rs`).
+    pub(crate) rail: super::rail::RailDrag,
+    /// Compact mode's bars that slid out (`compact.rs`).
+    pub(crate) compact: super::compact::Compact,
     /// The row of tabs' own state: its menu, a drag, what is in sight (`tabs.rs`).
     pub(crate) row: super::tabs::Row,
     /// Streamer mode (`streamer.rs`).
@@ -274,8 +278,9 @@ impl Shell {
             watching: None,
             strip_width: None,
             clock_base,
-            layout: Default::default(),
             sides: Default::default(),
+            rail: Default::default(),
+            compact: Default::default(),
             row: Default::default(),
             streamer: Default::default(),
         };
@@ -376,12 +381,11 @@ impl Shell {
         let bench = &self.bench;
         self.screens.retain(|id| bench.tab(id).is_some());
         self.row.retain(|id| bench.tab(id).is_some());
-        self.layout.prune(bench);
         // A Files tab shown for the first time gets its state and lists its folder.
         crate::screens::files::shown(self);
         // A server's last tab closed: its files open elsewhere stop being edited.
         crate::screens::files::edit::hosts_changed(self);
-        // The tab on screen, and the one shown beside it.
+        // The tab on screen, and the ones sharing the page with it.
         for id in self.tabs_on_screen() {
             if let Some(tab) = self.bench.tab(id).filter(|t| t.kind == TabKind::Terminal && !self.panes.contains_key(&t.id)).cloned() {
                 let pane = self.make_pane(&tab);
@@ -601,6 +605,10 @@ impl Shell {
             }
             Shortcut::Streamer => self.toggle_streamer(tx),
             Shortcut::SideBySide => self.toggle_side_by_side(tx),
+            Shortcut::SplitRight => self.split_pane(sshee_app::workbench::layout::Dir::Row, tx),
+            Shortcut::SplitDown => self.split_pane(sshee_app::workbench::layout::Dir::Col, tx),
+            Shortcut::Zoom => self.zoom_active(tx),
+            Shortcut::Compact => self.toggle_compact(tx),
             Shortcut::Palette | Shortcut::PaletteAlt => self.toggle_palette(tx),
             Shortcut::AddServer => self.open_add_server(tx),
             Shortcut::Agents => crate::screens::agent::toggle_list(self, tx),
@@ -687,14 +695,18 @@ impl Shell {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // The screens' own clockwork: who started to wait, a server's card coming up.
         let ticked = crate::screens::home::tick(self, clock, tx);
-        let active = self.bench.active_id();
+        // A setting brought more tabs onto the page ("Tabs on screen"): their terminals start.
+        let unmade = self.tabs_on_screen().into_iter().any(|id| !self.panes.contains_key(&id) && self.bench.tab(id).is_some_and(|t| t.kind == TabKind::Terminal));
+        if unmade {
+            self.settle_in_place(tx);
+        }
         let mut changed = false;
         let mut asked = Vec::new();
         let mut wishes = Vec::new();
-        let beside = active.and_then(|id| self.layout.partner(id));
+        let shown = self.tabs_on_screen();
         for (id, pane) in &mut self.panes {
             let drew = pane.poll(clock, tx);
-            changed |= drew && (Some(*id) == active || Some(*id) == beside);
+            changed |= drew && shown.contains(id);
             if pane.take_wants_you() {
                 asked.push(*id);
             }

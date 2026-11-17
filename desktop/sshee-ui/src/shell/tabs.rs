@@ -105,6 +105,8 @@ pub enum TabPick {
     CloseRight,
     /// Show it beside the tab on screen (or, for the tab on screen, beside its neighbour).
     SideBySide,
+    /// Show it under the tab on screen.
+    Below,
     /// Take it out of its pair.
     Apart,
     Duplicate,
@@ -140,6 +142,12 @@ impl Shell {
                 }
                 drag.moved = true;
                 self.row.drag = Some(drag);
+                // Over the page: it would land on a pane there (`split.rs`), not in the row.
+                let below_row = self.row.rects.get(&id).is_some_and(|r| d.window_point()[1] > r[1] + r[3] + 8.0);
+                self.sides.drop = if below_row { self.drop_target(id, d.window_point()) } else { None };
+                if self.sides.drop.is_some() || below_row {
+                    return tx.instant();
+                }
                 // The other tabs in sight, by their middles.
                 let others: Vec<(TabId, f32)> =
                     self.row.shown.borrow().iter().filter(|t| **t != id).filter_map(|t| self.row.rects.get(t).map(|r| (*t, r[0] + r[2] / 2.0))).collect();
@@ -162,8 +170,12 @@ impl Shell {
             }
             Phase::Up => {
                 let Some(drag) = self.row.drag.take().filter(|g| g.id == id) else { return };
+                let drop = self.sides.drop.take();
                 if d.cancelled() && drag.moved {
                     self.bench.move_tab(id, drag.from);
+                }
+                if let (Some(at), false) = (drop, d.cancelled()) {
+                    return self.drop_on(id, at, tx);
                 }
                 if drag.moved {
                     // The tab you dragged is the one you're on, as in a browser; and the
@@ -198,7 +210,8 @@ impl Shell {
             TabPick::Close => self.close_tab(id, tx),
             TabPick::CloseOthers => self.close_tabs(layout::others(&self.bench, id), tx),
             TabPick::CloseRight => self.close_tabs(layout::to_the_right(&self.bench, id), tx),
-            TabPick::SideBySide => self.show_beside(id, tx),
+            TabPick::SideBySide => self.show_beside(id, layout::Dir::Row, tx),
+            TabPick::Below => self.show_beside(id, layout::Dir::Col, tx),
             TabPick::Apart => self.leave_pair(id, tx),
             TabPick::Duplicate => self.duplicate_tab(id, tx),
         }
@@ -377,7 +390,8 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
     let in_settings = s.screens.settings.open;
     let current = s.bench.current_key();
     let active_at = strip.iter().position(|st| st.active);
-    let partner = s.bench.active_id().and_then(|id| s.layout.partner(id));
+    // The tabs sharing the page with the one you're on.
+    let partners: Vec<TabId> = s.bench.on_screen().into_iter().filter(|id| Some(*id) != s.bench.active_id()).collect();
 
     // The tabs in sight.
     let prod_of = |st: &StripTab| s.bench.server(&st.tab.server).is_some_and(|sv| sv.is_prod());
@@ -454,7 +468,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
                 // Only noted: nothing is drawn from it.
                 tx.live_only();
             });
-        if Some(id) == partner {
+        if partners.contains(&id) {
             // Shown beside the tab you're on: lit a little, as a tab in a window that isn't
             // in front is.
             e = e.fill(t.hov);
@@ -503,28 +517,36 @@ pub(crate) fn overlays(s: &Shell, t: &'static Theme) -> Vec<El> {
 fn tab_menu(s: &Shell, t: &'static Theme, id: TabId) -> El {
     let mac = s.options.mac_keys;
     let active = s.bench.active_id();
-    let paired = s.layout.pair_of(id).is_some();
+    let paired = s.bench.layout().group_of(id).is_some();
     // Beside the tab on screen; for the tab on screen itself, beside its neighbour.
     let beside = match active {
-        Some(a) if a == id => Layout::candidate(&s.bench, id).is_some(),
+        // With no other tab, the shortcut opens a terminal beside it.
+        Some(a) if a == id => true,
         Some(a) => Layout::can_pair(&s.bench, a, id),
         None => false,
     };
-    let row = |key: &'static str, label: &'static str, keys: Option<&'static str>, pick: TabPick, on: bool| {
+    let row = |key: &'static str, label: &'static str, keys: Option<&str>, pick: TabPick, on: bool| {
         let e = menu_row(t, label, keys, if on { RowState::Rest } else { RowState::Off }).key(key);
         if !on {
             return e;
         }
         e.on_press_tx(move |s: &mut Shell, tx| s.tab_pick(id, pick, tx))
     };
-    let side_keys = Some(if mac { "⌘⇧S" } else { "Ctrl+Shift+S" });
+    // The keys as Settings has them now.
+    let side_keys = sshee_app::palette::shortcut_label(sshee_app::workbench::shortcuts::Shortcut::SideBySide, mac, &s.options.shortcuts);
+    let side_keys = side_keys.as_deref();
     let side = if paired {
-        row("tab-apart", "Stop showing side by side", side_keys, TabPick::Apart, true)
+        row("tab-apart", "Back to its own tab", None, TabPick::Apart, true)
+    } else if active == Some(id) {
+        row("tab-beside", "Show side by side", side_keys, TabPick::SideBySide, beside)
     } else {
-        row("tab-beside", "Show side by side", side_keys.filter(|_| active == Some(id)), TabPick::SideBySide, beside)
+        row("tab-beside", "Show beside this one", None, TabPick::SideBySide, beside)
     };
+    // Under the tab on screen, for any other tab (0.10's "Show below this one").
+    let below = row("tab-below", "Show below this one", None, TabPick::Below, beside && active != Some(id));
     let rows = [
         side,
+        below,
         row("tab-duplicate", "Duplicate tab", None, TabPick::Duplicate, true),
         menu_separator(t),
         row("tab-close", "Close tab", Some(if mac { "⌘W" } else { "Ctrl+Shift+W" }), TabPick::Close, true),

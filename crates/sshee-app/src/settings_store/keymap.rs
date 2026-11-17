@@ -50,8 +50,8 @@ pub const SHORTCUTS: [Entry; 16] = [
     // terminal, so the bar has only ⌘L; elsewhere Ctrl+Shift+K opens it too, as it always did.
     Entry { id: "palette", name: "Command bar", mac: k("l"), other: k("l"), does: Some(Shortcut::Palette) },
     Entry { id: "paletteAlt", name: "Command bar", mac: None, other: k("k"), does: Some(Shortcut::PaletteAlt) },
-    Entry { id: "splitRight", name: "Split right", mac: k("d"), other: k("d"), does: None },
-    Entry { id: "splitDown", name: "Split down", mac: ks("d", true), other: k("e"), does: None },
+    Entry { id: "splitRight", name: "Split right", mac: k("d"), other: k("d"), does: Some(Shortcut::SplitRight) },
+    Entry { id: "splitDown", name: "Split down", mac: ks("d", true), other: k("e"), does: Some(Shortcut::SplitDown) },
     Entry { id: "closePane", name: "Close tab", mac: k("w"), other: k("w"), does: Some(Shortcut::CloseTab) },
     Entry { id: "newTerminal", name: "New terminal", mac: k("t"), other: k("t"), does: Some(Shortcut::NewTerminal) },
     // Elsewhere Ctrl+Shift+T is a new tab, as in Windows Terminal; Z undoes a close.
@@ -61,9 +61,9 @@ pub const SHORTCUTS: [Entry; 16] = [
     Entry { id: "settings", name: "Settings", mac: k(","), other: ks(",", false), does: Some(Shortcut::Settings) },
     Entry { id: "sidebar", name: "Show or hide the sidebar", mac: k("b"), other: k("b"), does: Some(Shortcut::ToggleSidebar) },
     Entry { id: "vitals", name: "Show or hide server vitals", mac: k("j"), other: k("j"), does: Some(Shortcut::ToggleVitals) },
-    Entry { id: "zoomPane", name: "Fill the window with a pane", mac: ks("enter", true), other: k("enter"), does: None },
+    Entry { id: "zoomPane", name: "Fill the window with a pane", mac: ks("enter", true), other: k("enter"), does: Some(Shortcut::Zoom) },
     Entry { id: "streamer", name: "Streamer mode", mac: ks("h", true), other: k("h"), does: Some(Shortcut::Streamer) },
-    Entry { id: "compact", name: "Compact mode", mac: ks("m", true), other: k("m"), does: None },
+    Entry { id: "compact", name: "Compact mode", mac: ks("m", true), other: k("m"), does: Some(Shortcut::Compact) },
     // As in a browser. In 0.10, vim and less keep it.
     Entry { id: "find", name: "Find in the terminal", mac: k("f"), other: ks("f", false), does: Some(Shortcut::Find { always: false }) },
 ];
@@ -426,7 +426,8 @@ mod tests {
             }
         }
         assert!(works("newTerminal") && works("settings") && works("streamer") && works("palette") && works("find"));
-        assert!(!works("splitRight") && !works("zoomPane") && !works("compact") && !works("nobody"));
+        assert!(works("splitRight") && works("splitDown") && works("zoomPane"));
+        assert!(works("compact") && !works("nobody"));
     }
 
     #[test]

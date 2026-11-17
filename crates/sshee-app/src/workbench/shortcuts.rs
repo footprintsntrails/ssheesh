@@ -9,6 +9,9 @@
 //! layout without Latin letters, or for digits and punctuation, the key at that place on a US
 //! keyboard. The screen layer turns its key events into that name.
 //!
+//! Files took Ctrl+Shift+E off a Mac in the first 1.0 builds; 0.10's Split down has it back,
+//! and Files is Ctrl+Shift+O there (⇧⌘E on a Mac, where Split down is ⇧⌘D).
+//!
 //! New in 1.0, not in 0.10: jumping to a tab by its number (⌘1 to ⌘9 on a Mac, Ctrl+Shift+1 to
 //! 9 elsewhere; 9 is the last tab, as in a browser).
 
@@ -42,6 +45,13 @@ pub enum Shortcut {
     Streamer,
     /// Two tabs side by side, or one at a time.
     SideBySide,
+    /// A new terminal beside the tab on screen, to its right, or under it.
+    SplitRight,
+    SplitDown,
+    /// One pane of a split fills the window, or all of them show again.
+    Zoom,
+    /// Compact mode: the bars slide in at the window's edge, or stay.
+    Compact,
     /// The command palette; `PaletteAlt` is its second shortcut off a Mac (0.10's `paletteAlt`).
     Palette,
     PaletteAlt,
@@ -52,7 +62,7 @@ pub enum Shortcut {
 }
 
 /// The shortcuts that can be changed in Settings, with 0.10's ids.
-const NAMED: [(Shortcut, &str); 14] = [
+const NAMED: [(Shortcut, &str); 18] = [
     (Shortcut::Agents, "agents"),
     (Shortcut::CloseTab, "closePane"),
     (Shortcut::NewTerminal, "newTerminal"),
@@ -64,6 +74,10 @@ const NAMED: [(Shortcut, &str); 14] = [
     (Shortcut::Find { always: false }, "find"),
     (Shortcut::Streamer, "streamer"),
     (Shortcut::SideBySide, "toggleSplit"),
+    (Shortcut::SplitRight, "splitRight"),
+    (Shortcut::SplitDown, "splitDown"),
+    (Shortcut::Zoom, "zoomPane"),
+    (Shortcut::Compact, "compact"),
     (Shortcut::Palette, "palette"),
     (Shortcut::PaletteAlt, "paletteAlt"),
     (Shortcut::AddServer, "addHost"),
@@ -109,6 +123,11 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         Shortcut::Find { .. } => return Some(if mac { keys("f", false, true, false) } else { keys("f", true, false, false) }),
         Shortcut::Streamer => ("h", true),
         Shortcut::SideBySide => ("s", true),
+        // 0.10's: ⌘D and ⇧⌘D on a Mac, Ctrl+Shift+D and Ctrl+Shift+E elsewhere.
+        Shortcut::SplitRight => ("d", false),
+        Shortcut::SplitDown => (if mac { "d" } else { "e" }, true),
+        Shortcut::Zoom => ("enter", true),
+        Shortcut::Compact => ("m", true),
         // ⌘K clears the terminal on a Mac, so the palette has one shortcut there.
         Shortcut::Palette => ("l", false),
         Shortcut::PaletteAlt if mac => return None,
@@ -116,8 +135,8 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         Shortcut::AddServer => ("n", true),
         // ⌘A selects all on a Mac, so the agents take ⌘⇧A there.
         Shortcut::Agents => ("a", true),
-        // Like a file explorer: ⇧⌘E on a Mac, Ctrl+Shift+E elsewhere (F is Find).
-        Shortcut::OpenFiles => ("e", true),
+        // Like a file explorer: ⇧⌘E on a Mac (F is Find); elsewhere E is 0.10's Split down.
+        Shortcut::OpenFiles => (if mac { "e" } else { "o" }, true),
         Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
     };
     Some(if mac { keys(key, false, true, mac_shift) } else { keys(key, true, false, true) })
@@ -274,6 +293,24 @@ mod tests {
         assert_eq!(Shortcut::Find { always: true }.id(), Some("find"));
         assert_eq!(Shortcut::Streamer.id(), Some("streamer"));
         assert_eq!(Shortcut::SideBySide.id(), Some("toggleSplit"));
+        assert_eq!((Shortcut::SplitRight.id(), Shortcut::SplitDown.id(), Shortcut::Zoom.id()), (Some("splitRight"), Some("splitDown"), Some("zoomPane")));
+    }
+
+    #[test]
+    fn splits_and_filling_the_window_keep_0_10s_keys() {
+        assert_eq!(hit("d", "m", true), Some(Shortcut::SplitRight));
+        assert_eq!(hit("d", "ms", true), Some(Shortcut::SplitDown));
+        assert_eq!(hit("enter", "ms", true), Some(Shortcut::Zoom));
+        assert_eq!(hit("d", "cs", false), Some(Shortcut::SplitRight));
+        assert_eq!(hit("e", "cs", false), Some(Shortcut::SplitDown));
+        assert_eq!(hit("enter", "cs", false), Some(Shortcut::Zoom));
+        // Ctrl+D ends a shell, Ctrl+E goes to the line's end, Enter is Enter: the terminal's.
+        for key in ["d", "e", "enter"] {
+            assert_eq!(hit(key, "c", false), None, "Ctrl+{key}");
+            assert_eq!(hit(key, "c", true), None, "Ctrl+{key} on a Mac");
+        }
+        assert_eq!(hit("enter", "m", true), None, "⌘↩ alone");
+        assert_eq!((hit("m", "ms", true), hit("m", "cs", false), hit("m", "c", false)), (Some(Shortcut::Compact), Some(Shortcut::Compact), None));
     }
 
     #[test]
@@ -307,8 +344,8 @@ mod tests {
         assert_eq!(hit("l", "cs", false), Some(Shortcut::Palette));
         assert_eq!(hit("k", "cs", false), Some(Shortcut::PaletteAlt));
         assert_eq!(hit("n", "cs", false), Some(Shortcut::AddServer));
-        // Files, as a file explorer: Ctrl+Shift+E, ⇧⌘E; F stays Find's.
-        assert_eq!(hit("e", "cs", false), Some(Shortcut::OpenFiles));
+        // Files, as a file explorer: ⇧⌘E; F stays Find's, and elsewhere E is Split down's.
+        assert_eq!(hit("o", "cs", false), Some(Shortcut::OpenFiles));
         assert_eq!(hit("e", "ms", true), Some(Shortcut::OpenFiles));
         assert_eq!(Shortcut::OpenFiles.id(), Some("files"));
         assert_eq!(hit("l", "m", true), Some(Shortcut::Palette));

@@ -568,7 +568,7 @@ fn a_tab_has_a_menu_and_a_crowded_row_has_a_list() {
     in_both("tab-menu", script, |run, _| {
         let (menu, tab) = (run.rect("tab-menu"), run.rect("tab-2"));
         assert!(menu[1] >= tab[1] && menu[0] >= tab[0] && menu[0] <= tab[0] + tab[2], "{menu:?} isn't at {tab:?}");
-        for label in ["Show side by side", "Duplicate tab", "Close tab", "Close other tabs", "Close tabs to the right"] {
+        for label in ["Show beside this one", "Show below this one", "Duplicate tab", "Close tab", "Close other tabs", "Close tabs to the right"] {
             assert!(run.tree_text.contains(&format!("\"{label}\"")), "{label}");
         }
     });
@@ -598,7 +598,7 @@ fn two_tabs_side_by_side_share_the_page() {
     // web-staging has one tab: the shortcut opens a terminal beside it.
     let script = || json!([tap(0.3, STAGING), chord(0.9, Shortcut::SideBySide), end(1.6)]);
     in_both("side", script, |run, dark| {
-        let (left, right, divider) = (run.rect("side-4"), run.rect("side-5"), run.rect("side-divider"));
+        let (left, right, divider) = (run.rect("side-4"), run.rect("side-5"), run.rect("divider-0"));
         assert!((left[2] - right[2]).abs() < 8.0, "{left:?} {right:?}");
         assert_eq!(left[0] + left[2], divider[0]);
         assert_eq!(divider[0] + divider[2], right[0]);
@@ -612,6 +612,100 @@ fn two_tabs_side_by_side_share_the_page() {
         // The divider's line is drawn between them.
         let x = (divider[0] + divider[2] / 2.0) as u32;
         assert_eq!(at(&run.pixels(), x, 400), if dark { "#111113" } else { "#d2d2d7" });
+    });
+}
+
+#[test]
+fn split_right_and_down_with_the_pointer_and_the_keys_in_both_appearances() {
+    // web-staging (one tab, 4): Split right (5), then Split down from it (6); the keyboard in
+    // each in turn, by a click, and typing there. The demo's new terminals echo what's typed.
+    // At 1280 x 800 the page is right of the 52-point sidebar and under the 44-point bar: the
+    // left pane's middle is near (370, 420), the right column's lower pane near (990, 600).
+    let script = || {
+        json!([
+            tap(0.3, STAGING),
+            chord(0.8, Shortcut::SplitRight),
+            chord(1.3, Shortcut::SplitDown),
+            { "t": 1.8, "type": "type", "text": "lower" },
+            { "t": 2.4, "type": "tap", "x": 990.0, "y": 300.0 },
+            { "t": 2.7, "type": "type", "text": "upper" },
+            end(3.4)
+        ])
+    };
+    in_both("split", script, |run, dark| {
+        let (a, b, c) = (run.rect("side-4"), run.rect("side-5"), run.rect("side-6"));
+        // a at the left, half the page; b over c at the right.
+        assert!(a[0] < b[0] && (b[0] - c[0]).abs() < 1.0 && b[1] < c[1], "{a:?} {b:?} {c:?}");
+        assert!((a[2] - b[2]).abs() < 10.0 && (b[3] - c[3]).abs() < 10.0, "{a:?} {b:?} {c:?}");
+        for key in ["pane-4", "pane-5", "pane-6", "divider-0", "divider-1-0", "side-head-5"] {
+            assert!(run.element(key).is_some(), "{key}");
+        }
+        // The pane you're in (b, clicked last) is the tab lit in the row.
+        assert_eq!(run.fill("tab-5"), if dark { "#3a3a3cff" } else { "#ffffffff" });
+        assert!(run.tree_text.contains("Pane you're in"));
+        // Its header's buttons are out; the others' wait for the pointer.
+        for key in ["side-right-5", "side-down-5", "side-zoom-5", "side-close-5"] {
+            assert!(run.element(key).is_some(), "{key}");
+        }
+        // Each pane drew its own typing, after its prompt ("deploy@web-staging:~$ ", 22 cells
+        // of about 7.8 points from the pane's padding): something other than the background.
+        let px = run.pixels();
+        let typed = |r: [f64; 4]| {
+            let bg = at(&px, (r[0] + r[2]) as u32 - 20, (r[1] + r[3]) as u32 - 20);
+            let bg = [1, 3, 5].map(|i| u8::from_str_radix(&bg[i..i + 2], 16).unwrap());
+            let (x, y) = (r[0] as u32 + 12 + 172, r[1] as u32 + 28 + 12);
+            let area = [x, y, x + 40, y + 18];
+            40 * 18 - near(&px, area, bg)
+        };
+        assert!(typed(b) > 40, "nothing typed in the upper pane");
+        assert!(typed(c) > 40, "nothing typed in the lower pane");
+    });
+}
+
+#[test]
+fn a_pane_fills_the_window_and_shows_all_again() {
+    // Rune's scripts name the key "Enter"; the chord is ⇧⌘↩ on a Mac, Ctrl+Shift+Enter elsewhere.
+    let script = || json!([tap(0.3, STAGING), chord(0.8, Shortcut::SplitRight), press(1.3, "Enter", !MAC, MAC, true), end(2.0)]);
+    in_both("zoom", script, |run, _| {
+        let alone = run.rect("side-5");
+        assert!(alone[2] > 1150.0, "{alone:?}");
+        assert!(run.element("side-4").is_none() && run.element("divider-0").is_none());
+        assert!(run.tree_text.contains("Show all 2 panes"));
+    });
+}
+
+#[test]
+fn the_sidebar_drags_wide_with_names_in_both_appearances() {
+    // The edge of the sidebar, dragged 200 points toward the page.
+    let script = || {
+        json!([
+            tap(0.3, STAGING),
+            { "t": 0.8, "type": "drag", "key": "rail-edge", "dx": 200.0, "dy": 0.0, "dur": 0.4 },
+            end(1.8)
+        ])
+    };
+    in_both("rail-wide", script, |run, _| {
+        let rail = run.rect("rail");
+        assert!((rail[2] - 252.0).abs() < 6.0, "{rail:?}");
+        assert!(run.tree_text.contains("Servers") && run.tree_text.contains("web-staging"));
+        assert!(run.rect("page")[0] >= rail[0] + rail[2] - 1.0);
+    });
+}
+
+#[test]
+fn compact_mode_hides_the_bars_until_the_pointer_comes() {
+    let script = || {
+        json!([
+            tap(0.3, STAGING),
+            chord(0.8, Shortcut::Compact),
+            { "t": 1.3, "type": "move", "x": 2.0, "y": 400.0 },
+            end(2.0)
+        ])
+    };
+    in_both("compact", script, |run, _| {
+        assert!(run.element("bar").is_none() && run.element("status").is_none());
+        assert!(run.element("out-side").is_some(), "the sidebar didn't come at the edge");
+        assert!(run.rect("page")[2] > 1250.0);
     });
 }
 
