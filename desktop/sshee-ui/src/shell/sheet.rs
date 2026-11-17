@@ -43,7 +43,7 @@ fn sample_tab(t: &Theme, key: &'static str, spec: Tab) -> El {
 }
 
 pub fn view(t: &'static Theme) -> El {
-    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, active: false, window_active: true, compact: false };
+    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, connecting: false, went_quiet: false, active: false, window_active: true, compact: false };
     let term = Tab { icon: Icon::Terminal, name: "~/shop", server: Some("web-staging"), ..base.clone() };
     let tabs = vec![
         sample_tab(t, "t-rest", base.clone()),

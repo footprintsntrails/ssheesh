@@ -28,6 +28,10 @@ pub struct Tab<'a> {
     pub badge: Option<Badge>,
     /// An agent is at work in it: a quiet ring after its name, when it has nothing else to say.
     pub working: bool,
+    /// Its connection is being made: the same ring, named "Connecting".
+    pub connecting: bool,
+    /// What ran in it went quiet while you weren't looking: a green check (0.10's).
+    pub went_quiet: bool,
     /// The tab you're on.
     pub active: bool,
     /// The window is in front.
@@ -105,6 +109,8 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
         .role("tab")
         .label(match (spec.server, spec.badge) {
             (Some(server), Some(b)) => format!("{}, {server}, {}", spec.name, b.label()),
+            (Some(server), None) if spec.connecting => format!("{}, {server}, connecting", spec.name),
+            (Some(server), None) if spec.went_quiet => format!("{}, {server}, went quiet", spec.name),
             (Some(server), None) if spec.working => format!("{}, {server}, working", spec.name),
             (Some(server), None) => format!("{}, {server}", spec.name),
             (None, Some(b)) => format!("{}, {}", spec.name, b.label()),
@@ -144,6 +150,10 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     }
     if let Some(b) = spec.badge {
         e = e.child(badge(t, b, compact));
+    } else if spec.connecting {
+        e = e.child(rune::row().key("connecting").items_center().label_static("Connecting").child(progress_ring(10.0, 1.5, t.l2)));
+    } else if spec.went_quiet {
+        e = e.child(rune::row().key("quiet").items_center().label_static("Went quiet").child(icon(Icon::Check, 12.0, t.green)));
     } else if spec.working {
         e = e.child(rune::row().key("working").items_center().label_static("Working").child(progress_ring(10.0, 1.5, t.l2)));
     }

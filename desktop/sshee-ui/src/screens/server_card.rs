@@ -106,6 +106,12 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
     let state = &s.screens.server_card;
     let index = state.over.filter(|_| state.shown && !s.screens.any_open())?;
     let server = s.bench.servers().get(index)?;
-    let c = Card::of(&s.bench, &server.key(), &s.screens.home.waits, s.screens.home.now)?;
+    let mut c = Card::of(&s.bench, &server.key(), &s.screens.home.waits, s.screens.home.now)?;
+    if s.streaming() {
+        // "Server 2", no address, and names dotted in what its tabs say.
+        c.name = s.server_shown(&server.key(), &c.name).into_owned();
+        c.address = None;
+        c.waiting = c.waiting.iter().map(|w| s.text_shown(w).into_owned()).collect();
+    }
     Some(card(t, &c).key("server-card").inert().anchored(format!("server-{index}"), Side::Right, Align::Start, 10.0))
 }

@@ -458,7 +458,7 @@ fn streamer_mode_hides_names_everywhere_at_once_and_shows_them_again() {
     assert!(w.tree().contains("No results"), "{}", w.tree());
     w.key(Key::Escape, "");
     // A terminal opened while streaming is hidden from its first frame.
-    w.click("new-tab");
+    w.plus_terminal();
     w.feed(2, b"deploy@web-7731:~$ ");
     assert!(!w.tree().contains("deploy@web-7731"));
     // The eye again: everything is back.
@@ -493,8 +493,8 @@ fn a_terminal_tab_is_named_after_the_shells_folder() {
 fn a_tabs_menu_closes_duplicates_and_shows_side_by_side() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
-    w.click("new-tab");
+    w.plus_terminal();
+    w.plus_terminal();
     w.click("server-2");
     assert_eq!(w.row(), "Terminal@web-7731 Terminal 2@web-7731 Terminal 3@web-7731 *Terminal@db-main");
     let ids: Vec<u64> = w.rt.state.bench.tabs().iter().map(|t| t.id.0).collect();
@@ -534,7 +534,7 @@ fn a_tabs_menu_closes_duplicates_and_shows_side_by_side() {
 fn a_tab_is_dragged_to_another_place_in_the_row() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
+    w.plus_terminal();
     w.click("server-2");
     assert_eq!(w.row(), "Terminal@web-7731 Terminal 2@web-7731 *Terminal@db-main");
     let ids: Vec<u64> = w.rt.state.bench.tabs().iter().map(|t| t.id.0).collect();
@@ -575,8 +575,8 @@ fn a_tab_is_dragged_to_another_place_in_the_row() {
 fn the_row_keeps_still_under_the_pointer() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
-    w.click("new-tab");
+    w.plus_terminal();
+    w.plus_terminal();
     let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
     let x_of = |w: &Window, n: usize| w.rect(&format!("tab-{}", ids[n].0)).unwrap();
     let before = (x_of(&w, 1), x_of(&w, 2));
@@ -632,7 +632,7 @@ fn tabs_that_do_not_fit_are_in_the_list_and_one_that_waits_shows_there() {
 fn two_tabs_side_by_side_share_the_page_and_come_apart_without_closing() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
+    w.plus_terminal();
     let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
     let pane = |n: usize| format!("pane-{}", ids[n].0);
     assert!(w.rt.find("side").is_none());
@@ -752,7 +752,7 @@ fn with_copy_on_select_off_only_the_copy_key_and_the_menu_copy() {
     // Nothing of this was typed into the shell.
     assert_eq!(w.written(0), "");
     // A terminal opened later has the setting too.
-    w.click("new-tab");
+    w.plus_terminal();
     assert!(!w.pane().options.copy_on_select && w.pane().options.program_clipboard);
 }
 
@@ -809,6 +809,126 @@ fn a_program_that_copies_its_own_selection_writes_the_clipboard_once_or_not_at_a
     assert_eq!(copies(&tmux), ["picked"]);
     w.key(Key::Command('c'), "cs");
     assert_eq!(copies(&tmux), ["picked", "hello"]);
+}
+
+/// Every place a server's name or address is drawn outside a terminal, with streamer mode on:
+/// the main menu's tiles and what runs there, the title and its menu, "+", a server's card and
+/// menu, the palette (and its `srv:` list), Add a server. None shows a name, a user or an
+/// address. Its shortcut works over the palette and a menu too.
+#[test]
+fn streamer_mode_leaves_no_name_or_address_anywhere_in_the_window() {
+    const HIDDEN: [&str; 5] = ["web-7731", "db-main", "deploy", "postgres", "203.0.113"];
+    let mut w = linux();
+    w.click("server-1");
+    w.click("server-2");
+    w.rt.update(|s, tx| s.show_home(tx));
+    w.settle();
+    assert!(w.tree().contains("db-main"));
+    w.click("streamer");
+    let check = |w: &Window, place: &str| {
+        let tree = w.tree();
+        for name in HIDDEN {
+            assert!(!tree.contains(name), "{name} shows in {place}: {tree}");
+        }
+    };
+    check(&w, "the main menu");
+    // A server's card, under the pointer.
+    w.rt.update(|s, tx| s.hover_server(1, true, tx));
+    for _ in 0..90 {
+        w.rt.frame(1.0 / 60.0);
+    }
+    assert!(w.rt.find("server-card").is_some(), "the card came up");
+    check(&w, "a server's card");
+    w.rt.update(|s, tx| s.hover_server(1, false, tx));
+    // A server's menu, and its Rename page.
+    w.rt.update(|s, tx| s.open_server_menu("host:db", (300.0, 200.0), tx));
+    w.settle();
+    check(&w, "a server's menu");
+    w.key(Key::Escape, "");
+    // On a server: the title, its menu, "+" and one machine's page in it.
+    w.click("server-1");
+    check(&w, "the title");
+    w.click("title");
+    assert!(w.rt.find("title-menu").is_some());
+    assert!(w.rt.find("tm-copy").is_none(), "no address to copy while streaming");
+    check(&w, "the title's menu");
+    w.key(Key::Escape, "");
+    w.click("new-tab");
+    w.click("nt-server-2");
+    check(&w, "the + menu");
+    w.key(Key::Escape, "");
+    w.key(Key::Escape, "");
+    // The palette, everything and the servers alone.
+    for query in ["", "srv:"] {
+        w.rt.update(|s, tx| s.open_palette(query, tx));
+        w.settle();
+        check(&w, &format!("the palette ({query:?})"));
+        w.key(Key::Escape, "");
+    }
+    // The shortcut over the palette: names come back at once, and hide again.
+    w.rt.update(|s, tx| s.open_palette("", tx));
+    w.settle();
+    w.key(Key::Command('h'), "cs");
+    assert!(!w.rt.state.streaming() && w.rt.find("palette").is_some(), "toggled, the palette still open");
+    w.key(Key::Command('h'), "cs");
+    assert!(w.rt.state.streaming());
+    w.key(Key::Escape, "");
+    // And over the "+" menu.
+    w.click("new-tab");
+    w.key(Key::Command('h'), "cs");
+    assert!(!w.rt.state.streaming());
+}
+
+/// The title names the machine and its address; a click opens its tools.
+#[test]
+fn the_title_shows_the_address_and_opens_the_machines_tools() {
+    let mut w = linux();
+    w.click("server-1");
+    assert!(w.tree().contains("deploy@203.0.113.17"), "{}", w.tree());
+    w.click("title");
+    w.click("tm-files");
+    assert_eq!(w.row(), "Terminal@web-7731 *Files@web-7731");
+    w.click("title");
+    w.key(Key::Down, "");
+    w.key(Key::Enter, "");
+    assert_eq!(w.row(), "Terminal@web-7731 Files@web-7731 *Terminal 2@web-7731");
+    // On the main menu it is the app's name, and the palette.
+    w.rt.update(|s, tx| s.show_home(tx));
+    w.settle();
+    w.click("title");
+    assert!(w.rt.find("palette").is_some());
+}
+
+/// A tab's menu: New terminal and Files on its machine, and key caps as Settings has them.
+#[test]
+fn a_tabs_menu_opens_a_terminal_or_files_on_its_machine() {
+    let mut w = linux();
+    w.click("server-1");
+    w.click("server-2");
+    let first = w.rt.state.bench.tabs()[0].id;
+    let (x, y) = w.rt.find(&format!("tab-{}", first.0)).unwrap();
+    w.rt.update(|s, tx| s.open_tab_menu(first, [x, y], tx));
+    w.settle();
+    assert!(w.tree().contains("New terminal") && w.tree().contains("Files"), "{}", w.tree());
+    w.click("tab-files");
+    assert_eq!(w.row(), "Terminal@web-7731 *Files@web-7731 Terminal@db-main");
+    w.rt.update(|s, tx| s.open_tab_menu(first, [x, y], tx));
+    w.settle();
+    w.click("tab-new-terminal");
+    assert!(w.row().contains("*Terminal 2@web-7731"), "{}", w.row());
+}
+
+/// While the sidebar is hidden, its foot is in the top row.
+#[test]
+fn with_the_sidebar_hidden_its_foot_is_in_the_top_row() {
+    let mut w = linux();
+    assert!(w.rt.find("bar-tools").is_none());
+    w.click("sidebar");
+    for key in ["bar-check", "bar-tor", "bar-settings"] {
+        assert!(w.rt.find(key).is_some(), "{key}");
+    }
+    w.click("bar-settings");
+    assert!(w.rt.state.screens.settings.open);
 }
 
 impl Window {
@@ -915,7 +1035,7 @@ fn closing_a_pane_gives_its_room_to_the_pane_beside_it() {
 fn a_tab_dragged_onto_the_page_lands_beside_the_pane_under_it() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
+    w.plus_terminal();
     let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
     w.click(&format!("tab-{}", ids[0].0));
     // The second tab, dragged down onto the bottom of the page: under the first.

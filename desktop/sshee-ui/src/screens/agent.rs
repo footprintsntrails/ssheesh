@@ -910,7 +910,7 @@ pub fn sheet(t: &'static Theme) -> Vec<(&'static str, &'static str, Vec<El>)> {
     let unsure = Reading::Unsure(Unsure::Cut);
     let unread = Card::open(tab, "Codex", false, &unsure, 0);
     let tab_of = |key: &'static str, name: &str, badge, working| {
-        let spec = crate::kit::tab::Tab { icon: Icon::Agent, name, server: Some("web-staging"), prod: false, badge, working, active: false, window_active: true, compact: false };
+        let spec = crate::kit::tab::Tab { icon: Icon::Agent, name, server: Some("web-staging"), prod: false, badge, working, connecting: false, went_quiet: false, active: false, window_active: true, compact: false };
         crate::kit::tab::tab(t, &spec, |_: &mut Shell, _| {}).key(key).on_press_tx(|_: &mut Shell, _| {})
     };
     vec![

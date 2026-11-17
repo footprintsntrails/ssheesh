@@ -143,14 +143,16 @@ impl Shell {
                 self.show_tab(TabKind::Files, &key, None, tx);
             }
             Item::Rename => {
+                // Streamer mode: the field starts empty rather than show the name.
+                let start = if self.streaming() { String::new() } else { server.name.clone() };
                 let menu = &mut self.screens.server_menu;
                 if let Some(open) = &mut menu.open {
                     open.page = Page::Rename;
                 }
-                menu.name = TextEdit::new(server.name.clone());
+                menu.name = TextEdit::new(start);
                 // The whole name is selected: typing replaces it.
                 menu.name.anchor = 0;
-                menu.name.focus = server.name.len();
+                menu.name.focus = menu.name.text.len();
                 menu.name.focused = true;
                 tx.instant();
             }
@@ -172,8 +174,12 @@ impl Shell {
     /// The Rename page's Return and its button.
     fn server_menu_rename(&mut self, tx: &mut Tx) {
         let Some(open) = &self.screens.server_menu.open else { return };
-        let ask = Ask::Rename { server: open.server.clone(), name: self.screens.server_menu.name.text.trim().to_owned() };
-        self.backend_mut().servers(ask);
+        let name = self.screens.server_menu.name.text.trim().to_owned();
+        // In streamer mode the field started empty: empty there changes nothing.
+        if !(name.is_empty() && self.streaming()) {
+            let ask = Ask::Rename { server: open.server.clone(), name };
+            self.backend_mut().servers(ask);
+        }
         self.close_server_menu(tx);
     }
 
@@ -235,8 +241,8 @@ fn title(t: &Theme, words: &str) -> El {
     text(words).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate()
 }
 
-fn rename_page(t: &Theme, server: &Server, name: &TextEdit) -> El {
-    let name = input(t, name, &server.name)
+fn rename_page(t: &Theme, shown: &str, streaming: bool, name: &TextEdit) -> El {
+    let name = input(t, name, if streaming { "New name" } else { shown })
         .key("sm-name")
         .on_edit(|s: &mut Shell| &mut s.screens.server_menu.name)
         .on_submit(|s: &mut Shell, tx| s.server_menu_rename(tx));
@@ -244,9 +250,9 @@ fn rename_page(t: &Theme, server: &Server, name: &TextEdit) -> El {
         .w_full()
         .padding(14.0)
         .gap(10.0)
-        .child(title(t, &format!("Rename {}", server.name)))
+        .child(title(t, &format!("Rename {shown}")))
         .child(field(t, name, false))
-        .child(text("Only its name in SSHeesh changes. Leave it empty for the name it came with.").font(theme::SMALL).color(t.l2).w_full().wrap())
+        .child(text(if streaming { "Only its name in SSHeesh changes." } else { "Only its name in SSHeesh changes. Leave it empty for the name it came with." }).font(theme::SMALL).color(t.l2).w_full().wrap())
         .child(
             row()
                 .w_full()
@@ -257,7 +263,7 @@ fn rename_page(t: &Theme, server: &Server, name: &TextEdit) -> El {
         )
 }
 
-fn look_page(s: &Shell, t: &Theme, server: &Server) -> El {
+fn look_page(s: &Shell, t: &Theme, server: &Server, shown: &str) -> El {
     let mut icons = row().w_full().flex_wrap().gap(4.0).role("radiogroup").label_static("Icon");
     for (id, name) in HOST_ICONS {
         let chosen = server.icon == id;
@@ -303,15 +309,15 @@ fn look_page(s: &Shell, t: &Theme, server: &Server) -> El {
         .w_full()
         .padding(14.0)
         .gap(10.0)
-        .child(title(t, &format!("Icon and colour for {}", server.name)))
+        .child(title(t, &format!("Icon and colour for {shown}")))
         .child(icons)
         .child(colors)
         .child(row().w_full().justify_end().child(push_button(t, "Done", Push::Primary, true).key("sm-done").default_button().on_press_tx(|s: &mut Shell, tx| s.close_server_menu(tx))))
 }
 
-fn remove_page(t: &Theme, server: &Server) -> El {
+fn remove_page(t: &Theme, server: &Server, shown: &str) -> El {
     let hide = from_config(server);
-    let (question, meaning, button) = removal(&server.name, hide);
+    let (question, meaning, button) = removal(shown, hide);
     let confirm = push_button(t, button, if hide { Push::Primary } else { Push::Destructive }, true).key("sm-remove").on_press_tx(|s: &mut Shell, tx| s.server_menu_remove(tx));
     col()
         .w_full()
@@ -335,14 +341,16 @@ fn remove_page(t: &Theme, server: &Server) -> El {
 pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let open = s.screens.server_menu.open.as_ref()?;
     let server = s.bench.server(&open.server)?;
+    // Its name in titles and questions: "Server 2" in streamer mode.
+    let shown = s.server_shown(&open.server, &server.name).into_owned();
     let (page, width, height) = match open.page {
         Page::Menu => {
             let (page, height) = menu_page(t, server, open.hot);
             (page, 232.0, height)
         }
-        Page::Rename => (rename_page(t, server, &s.screens.server_menu.name), 300.0, 170.0),
-        Page::Look => (look_page(s, t, server), 252.0, 330.0),
-        Page::Remove => (remove_page(t, server), 320.0, 140.0),
+        Page::Rename => (rename_page(t, &shown, s.streaming(), &s.screens.server_menu.name), 300.0, 170.0),
+        Page::Look => (look_page(s, t, server, &shown), 252.0, 330.0),
+        Page::Remove => (remove_page(t, server, &shown), 320.0, 140.0),
     };
     // At the pointer, pulled in from the window's far edges.
     let [w, h] = cx.layout_size("window").unwrap_or([crate::shell::SIZE.0, crate::shell::SIZE.1]);
@@ -350,7 +358,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let y = open.at.1.min(h - height - 8.0).max(8.0);
     let mut surface = popover(t, width)
         .key("server-menu")
-        .label(format!("{} menu", server.name))
+        .label(format!("{shown} menu"))
         .absolute(x, y)
         .modal_tx(true, |s: &mut Shell, tx| s.close_server_menu(tx))
         .child(page);

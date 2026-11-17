@@ -634,9 +634,10 @@ impl Shell {
     /// A key with nothing focused (`AppSpec::on_key`): a shortcut, else the terminal on
     /// screen's.
     pub fn key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
-        // Behind the palette, a dialog or a menu, keys are theirs alone.
+        // Behind the palette, a dialog or a menu, keys are theirs alone; streamer mode's
+        // shortcut works over all of them (names must hide at once).
         if self.screens.any_open() {
-            return false;
+            return self.streamer_key(ev, tx);
         }
         // Settings, while it is over the page, takes what is left: nothing reaches a terminal
         // nobody sees.
@@ -685,6 +686,8 @@ impl Shell {
         }
         // Its server is back: files open elsewhere waiting to upload try at once.
         crate::screens::files::edit::reconnected(self, id);
+        // Signed in: Files there that asked you to sign in try again.
+        crate::screens::files::signed_in(self, id);
         self.sync_watch();
         crate::screens::agent::linked(self);
     }

@@ -3,7 +3,8 @@
 //! ```text
 //! root   column, the frame's colour
 //! ├── bar      44 pt, moves the window: [window buttons' room | logo] [sidebar toggle]
-//! │            [title, Prod] [tabs … +] [streamer mode] [room for Windows' buttons]
+//! │            [title: name, address, Prod] [tabs … +] [streamer mode] [the sidebar's foot,
+//! │            while it is hidden] [room for Windows' buttons]
 //! └── body     row
 //!     ├── rail     52 pt of icons: [logo] search ─ this computer, servers, + … check, Tor, settings
 //!     └── main     column
@@ -18,13 +19,12 @@
 //! Element keys are fixed words and tab numbers, never a server's name: Rune's traces carry
 //! element paths.
 
-use rune::{col, el, row, spacer, text, Cx, El};
+use rune::{col, el, row, spacer, Cx, El};
 use sshee_app::workbench::{TabId, TabKind, Tor};
 
 use super::state::Shell;
 use crate::icons::{logo, Icon};
 use crate::kit::button::toolbar_button;
-use crate::kit::chip::prod_chip;
 use crate::kit::status::{status_item, status_tor};
 use crate::screens;
 use crate::terminal::view::pane_view_with;
@@ -118,34 +118,15 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         toolbar_button(t, "sidebar", Icon::Sidebar, if s.bench.sidebar_shown() { "Hide sidebar" } else { "Show sidebar" })
             .on_press_tx(|s: &mut Shell, tx| s.toggle_sidebar(tx)),
     );
-    // The machine on screen is the window's title (its alias in streamer mode).
-    let (title, prod) = s.bench.window_title();
-    let title = s.server_shown(s.bench.current_key().unwrap_or("local"), title);
-    // A click on it opens the command palette under it, as a browser's address bar.
-    let mut name = row()
-        .key("title")
-        .h(theme::CONTROL)
-        .items_center()
-        .gap(8.0)
-        .ml(2.0)
-        .mr(10.0)
-        .px(6.0)
-        .radius(theme::RADIUS)
-        .hover(t.hov2)
-        .press(t.down)
-        .role("button")
-        .help(s.text_shown(&sshee_app::palette::placeholder(&s.bench)).into_owned())
-        .on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
-        .child(text(title).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line());
-    if prod {
-        name = name.child(prod_chip(t, false));
-    }
-    bar = bar.child(name);
+    // The machine on screen is the window's title, with its address (`title.rs`); a click
+    // opens its tools.
+    bar = bar.child(super::title::title(s, t, active));
 
-    // The tabs: every machine's, in one row (`tabs.rs`); then streamer mode's switch.
+    // The tabs: every machine's, in one row (`tabs.rs`); then streamer mode's switch, and
+    // while the sidebar is hidden, its foot.
     let tabs = super::tabs::strip(s, t, active);
     // What's left of the row moves the window, and Windows' buttons take its end.
-    bar.child(tabs).child(super::streamer::eye(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
+    bar.child(tabs).child(super::streamer::eye(s, t)).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }
 
 /// The page: darker than the frame, its top-left corner rounded where it meets the sidebar.

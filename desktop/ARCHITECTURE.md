@@ -174,6 +174,13 @@ wraps it (`term-box`) with what sits over the text, each in its own file with it
   (menu, question, bookmarks, transfer cards) is drawn from `shell/view.rs`'s root.
 - **Backends**: `desktop/app/src/files.rs` runs every `Ask` on its own thread on sshee-core;
   `demo/files.rs` is a made-up disk in memory with a fixed clock.
+- **Signed in once, signed in everywhere** (`desktop/app/src/signin.rs`): macOS and Linux
+  share the terminal's ssh connection; Windows' OpenSSH can't, so the password that got a
+  terminal in (typed at ssh's own prompt while connecting, or the saved one) is kept in
+  memory for the run and handed to every other ssh for that server through askpass (Files,
+  the edit bridge, the status bar, new terminals). A session that fails to sign in forgets
+  it. A Files tab that said "Sign in first" lists again once a terminal there is in
+  (`screens::files::signed_in`).
 
 ## Running it and taking pictures
 
@@ -198,8 +205,11 @@ never writes 0.10's. `--demo` reads and writes nothing.
   borderless window can't be resized by its edges (Rune doesn't expose winit's
   `drag_resize_window`). macOS and Windows get the design's bar (`App::titlebar`); neither has
   been run yet, nor have their system fonts (`fonts::SYSTEM_FAMILIES`).
-- The row of tabs (`shell/tabs.rs`) has its menu, drag to reorder and a list for tabs out of
-  sight; a tab can't be dragged out into a window of its own.
+- The row of tabs (`shell/tabs.rs`) has its menu, "+" with its menu (a terminal or Files
+  here or on another machine), drag to reorder and a list for tabs out of sight; a tab can't
+  be dragged out into a window of its own. The title (`shell/title.rs`) names the machine and
+  its address and opens its tools (Tunnels and Recipes join that menu when their screens
+  land).
 - Settings' "Tabs under each server" (tabs in the wide sidebar instead of the row) isn't built.
 - A terminal tab is named after its shell's folder when the shell says it (OSC 7, or a
   `user@host: ~/dir` title). In tmux on a server neither reaches the window (tmux keeps both):

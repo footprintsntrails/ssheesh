@@ -7,7 +7,22 @@
 //! │                            once before its tabs
 //! ├── tab-list                 only when some tabs are out of sight: all of them, in a menu;
 //! │                            an orange dot when one of those out of sight waits for you
-//! └── new-tab                  "+"
+//! └── new-tab                  "+": its menu (below)
+//! ```
+//!
+//! "+" opens a menu, as 0.10's did (`newTabItems` in `Tabs.tsx`); the new-terminal shortcut
+//! still opens a terminal at once. The arrows move one highlight, Return picks, → goes into a
+//! machine and ← or Esc comes back out:
+//!
+//! ```text
+//! new-tab-menu
+//! ├── nt-terminal  New terminal   ⌃⇧T     on the machine on screen
+//! ├── nt-files     Files
+//! ├── ──────
+//! └── nt-server-N  db-main  ›             every other machine, in the sidebar's order
+//!     ├── nt-back      ‹ Back
+//!     ├── nt-terminal  New terminal on db-main
+//!     └── nt-files     Files on db-main
 //! ```
 //!
 //! Three rules keep the row still under the pointer, as a browser's is:
@@ -23,14 +38,17 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use rune::{Align, Drag, El, Phase, Side, Tx};
+use rune::{Align, Drag, El, Key, KeyEvent, Phase, Side, Tx};
+use sshee_app::palette::shortcut_label;
+use sshee_app::workbench::shortcuts::Shortcut;
 use sshee_app::workbench::layout::{self, Layout};
 use sshee_app::workbench::titles::{self, Home};
-use sshee_app::workbench::{Open, StripTab, TabId, TabKind};
+use sshee_app::workbench::{Open, ServerKey, StripTab, TabId, TabKind};
 
 use super::state::Shell;
 use crate::icons::{icon, Icon};
 use crate::kit::button::toolbar_button;
+use crate::kit::list::{list_row, list_rule, ListRow};
 use crate::kit::menu::{menu, menu_row, menu_separator, RowState};
 use crate::kit::popover::popover;
 use crate::kit::tab::{group_name, tab, Tab};
@@ -44,9 +62,10 @@ pub const MIN_TAB: f32 = 76.0;
 /// How far the pointer travels before a press on a tab is a drag.
 const DRAG_START: f32 = 4.0;
 
-/// The tab menu's and the tab list's widths.
+/// The tab menu's, the tab list's and the "+" menu's widths.
 const MENU_WIDTH: f32 = 248.0;
 const LIST_WIDTH: f32 = 300.0;
+const NEW_WIDTH: f32 = 260.0;
 
 /// How the row was when the pointer came over it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -74,6 +93,10 @@ pub struct Row {
     pub(crate) menu: Option<(TabId, [f32; 2])>,
     /// The list of all tabs is open.
     pub(crate) list: bool,
+    /// The "+" menu is open.
+    pub(crate) new_tab: Option<NewTabMenu>,
+    /// The title's menu is open (`title.rs`).
+    pub(crate) title_menu: Option<super::title::TitleMenu>,
     /// What the view last drew: whether the row was crowded, the tabs in sight, and the first
     /// of them. (The view only reads the window's state; these are its own notes.)
     compact: Cell<bool>,
@@ -86,6 +109,13 @@ impl Row {
     pub(crate) fn close_overlays(&mut self) {
         self.menu = None;
         self.list = false;
+        self.new_tab = None;
+        self.title_menu = None;
+    }
+
+    /// The row was crowded when it was last drawn.
+    pub(crate) fn crowded(&self) -> bool {
+        self.compact.get()
     }
 
     /// Forgets tabs that are gone.
@@ -95,6 +125,24 @@ impl Row {
             self.menu = None;
         }
     }
+}
+
+/// The "+" menu, open: on its first page, or on one machine's (`on`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NewTabMenu {
+    pub(crate) on: Option<ServerKey>,
+    /// The highlighted row, among the rows that can be picked.
+    pub(crate) hot: Option<usize>,
+}
+
+/// A row of the "+" menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NewPick {
+    Terminal(ServerKey),
+    Files(ServerKey),
+    /// Another machine: its own page, with these two for it.
+    Machine(ServerKey),
+    Back,
 }
 
 /// What a row of a tab's menu does.
@@ -110,6 +158,10 @@ pub enum TabPick {
     /// Take it out of its pair.
     Apart,
     Duplicate,
+    /// A new terminal on the tab's machine.
+    NewTerminal,
+    /// Files on the tab's machine.
+    Files,
 }
 
 impl Shell {
@@ -194,8 +246,104 @@ impl Shell {
 
     pub(crate) fn toggle_tab_list(&mut self, tx: &mut Tx) {
         self.row.menu = None;
+        self.row.new_tab = None;
         self.row.list = !self.row.list;
         tx.instant();
+    }
+
+    /// "+": its menu opens, or closes when it is open.
+    pub fn toggle_new_tab_menu(&mut self, tx: &mut Tx) {
+        let open = self.row.new_tab.is_some();
+        self.row.close_overlays();
+        if open {
+            return self.settle(tx);
+        }
+        self.row.new_tab = Some(NewTabMenu::default());
+        // The menu itself takes the keys: nothing typed reaches the terminal behind it.
+        tx.focus("new-tab-menu", false);
+        tx.instant();
+    }
+
+    /// The machine "+" is for: the one on screen, this computer on the main menu.
+    fn new_tab_here(&self) -> ServerKey {
+        self.bench.current_key().unwrap_or("local").to_owned()
+    }
+
+    /// The "+" menu's rows as it is now, in groups (a rule between two).
+    fn new_tab_groups(&self) -> Vec<Vec<NewPick>> {
+        let Some(menu) = &self.row.new_tab else { return Vec::new() };
+        if let Some(on) = menu.on.clone().filter(|on| self.bench.server(on).is_some()) {
+            return vec![vec![NewPick::Back], vec![NewPick::Terminal(on.clone()), NewPick::Files(on)]];
+        }
+        let here = self.new_tab_here();
+        let others: Vec<NewPick> = self.bench.servers().iter().map(|sv| sv.key()).filter(|k| *k != here).map(NewPick::Machine).collect();
+        let mut groups = vec![vec![NewPick::Terminal(here.clone()), NewPick::Files(here)]];
+        if !others.is_empty() {
+            groups.push(others);
+        }
+        groups
+    }
+
+    /// A key while the "+" menu is open. Every key is the menu's: none reaches a terminal.
+    fn new_tab_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if self.streamer_key(ev, tx) {
+            return true;
+        }
+        let items = self.new_tab_groups().concat();
+        let Some(menu) = self.row.new_tab.as_mut() else { return false };
+        let hot = menu.hot.and_then(|h| items.get(h)).cloned();
+        let inside = menu.on.is_some();
+        match ev.key {
+            Key::Down | Key::Up => {
+                menu.hot = sshee_app::palette::step(items.len(), menu.hot, if ev.key == Key::Down { 1 } else { -1 });
+                tx.instant();
+            }
+            Key::Enter => {
+                if let Some(pick) = hot {
+                    self.new_tab_pick(pick, true, tx);
+                }
+            }
+            Key::Right => {
+                if let Some(pick @ NewPick::Machine(_)) = hot {
+                    self.new_tab_pick(pick, true, tx);
+                }
+            }
+            Key::Left | Key::Backspace | Key::Escape if inside => self.new_tab_pick(NewPick::Back, true, tx),
+            Key::Escape => self.close_tab_overlays(tx),
+            _ => {}
+        }
+        true
+    }
+
+    /// A row of the "+" menu, picked. `by_key`: from the keyboard, so the page it turns to
+    /// starts with a row highlighted (by the pointer, none is until it moves).
+    fn new_tab_pick(&mut self, pick: NewPick, by_key: bool, tx: &mut Tx) {
+        let came_from = self.row.new_tab.as_ref().and_then(|m| m.on.clone());
+        match pick {
+            NewPick::Terminal(server) => {
+                self.row.close_overlays();
+                self.bench.open(TabKind::Terminal, &server);
+                self.settle(tx);
+            }
+            NewPick::Files(server) => {
+                self.row.close_overlays();
+                self.open_files_on(&server, None, tx);
+            }
+            NewPick::Machine(server) => {
+                // By key, "New terminal on …" is the one Return picks next.
+                self.row.new_tab = Some(NewTabMenu { on: Some(server), hot: by_key.then_some(1) });
+                tx.instant();
+            }
+            NewPick::Back => {
+                self.row.new_tab = Some(NewTabMenu::default());
+                // By key, back on the machine it came from.
+                let at = self.new_tab_groups().concat().iter().position(|p| matches!(p, NewPick::Machine(k) if Some(k) == came_from.as_ref()));
+                if let Some(menu) = self.row.new_tab.as_mut() {
+                    menu.hot = at.filter(|_| by_key);
+                }
+                tx.instant();
+            }
+        }
     }
 
     pub(crate) fn close_tab_overlays(&mut self, tx: &mut Tx) {
@@ -214,6 +362,17 @@ impl Shell {
             TabPick::Below => self.show_beside(id, layout::Dir::Col, tx),
             TabPick::Apart => self.leave_pair(id, tx),
             TabPick::Duplicate => self.duplicate_tab(id, tx),
+            TabPick::NewTerminal | TabPick::Files => {
+                let Some(server) = self.bench.tab(id).map(|t| t.server.clone()) else { return };
+                if pick == TabPick::Files {
+                    self.open_files_on(&server, None, tx);
+                } else {
+                    // Next to the tab the menu was opened on.
+                    self.bench.focus(id);
+                    self.bench.open(TabKind::Terminal, &server);
+                    self.settle(tx);
+                }
+            }
         }
     }
 
@@ -366,6 +525,10 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         .map(|st| (s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned()))
         .collect();
     let working = |st: &StripTab| s.screens.agent.working(st.tab.id);
+    let connecting = |st: &StripTab| st.tab.link == sshee_app::workbench::Link::Connecting;
+    let went_quiet = |st: &StripTab| s.screens.agent.agents.attention(st.tab.id).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done);
+    // A mark after the name (working, connecting, went quiet): the room one takes.
+    let marked = |st: &StripTab| working(st) || connecting(st) || went_quiet(st);
     // Settings: every tab names its server (the default), or a server is named once, before
     // its group, as in a crowded row.
     let named = s.settings.more().tabs_name_server;
@@ -376,7 +539,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         .map(|(i, (st, (label, server)))| {
             // A group's name before its first tab, where tabs don't name their server.
             let lead = if !named && (i == 0 || st.starts_group) { 12.0 + rune::text::advance(server, theme::GROUP) } else { 0.0 };
-            natural_width(st, label, server, named, working(st)) + lead
+            natural_width(st, label, server, named, marked(st)) + lead
         })
         .sum::<f32>()
         + theme::CONTROL
@@ -403,7 +566,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
                 .zip(&names)
                 .enumerate()
                 .map(|(i, (st, (label, server)))| {
-                    let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st), working(st));
+                    let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st), marked(st));
                     own + lead
                 })
                 .collect()
@@ -451,14 +614,19 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             prod: st.prod && !grouped,
             badge: st.tab.badge(),
             working: working(st),
+            connecting: connecting(st),
+            went_quiet: went_quiet(st),
             active: st.active && !in_settings,
             window_active,
             compact,
         };
+        // The whole name, which a crowded tab cuts, and what else a tab can be asked to do.
+        let tip = format!("{label} on {server}. Right-click for more, middle-click to close");
         let mut e = tab(t, &spec, move |s: &mut Shell, tx| s.close_tab(id, tx))
             .key(format!("tab-{}", id.0))
             .on_press_tx(move |s: &mut Shell, tx| s.focus_tab(id, tx))
             .on_middle_press(move |s: &mut Shell, tx| s.close_tab(id, tx))
+            .help(tip)
             // Resting on a waiting agent's tab brings up its question (`screens::agent`).
             .on_hover_change(move |s: &mut Shell, over, tx| crate::screens::agent::tab_hover(s, id, over, tx))
             .on_secondary_press(move |s: &mut Shell, press, tx| s.open_tab_menu(id, [press.x, press.y], tx))
@@ -474,7 +642,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             e = e.fill(t.hov);
         }
         if compact {
-            let (own, _) = crowded_width(st, label, server, false, false, working(st));
+            let (own, _) = crowded_width(st, label, server, false, false, marked(st));
             e = e.min_w(own - 2.0);
         }
         if let Some(width) = row.held.as_ref().and_then(|h| h.widths.get(&id)) {
@@ -492,12 +660,15 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         }
         tabs = tabs.child(list);
     }
-    // A click: a new terminal. The other button: Files on that machine, until "+" has its menu.
-    tabs.child(
-        toolbar_button(t, "new-tab", Icon::Plus, "New terminal")
-            .on_press_tx(|s: &mut Shell, tx| s.new_terminal(tx))
-            .on_secondary_press(|s: &mut Shell, _, tx| s.open_files(tx)),
-    )
+    // "+": a terminal or Files, here or on another machine. Its shortcut opens a terminal.
+    let keys = shortcut_label(Shortcut::NewTerminal, s.options.mac_keys, &s.options.shortcuts);
+    let tip = keys.map_or_else(|| "New tab".to_owned(), |k| format!("New tab ({k} for a terminal)"));
+    let mut plus = toolbar_button(t, "new-tab", Icon::Plus, "New tab").help(tip).on_press_tx(|s: &mut Shell, tx| s.toggle_new_tab_menu(tx));
+    if s.row.new_tab.is_some() {
+        // Held down while its menu is open, as a menu's button is.
+        plus = plus.fill(t.hov);
+    }
+    tabs.child(plus)
 }
 
 /// What is drawn over the window for the row: a tab's menu, or the list of all tabs.
@@ -510,12 +681,78 @@ pub(crate) fn overlays(s: &Shell, t: &'static Theme) -> Vec<El> {
     if s.row.list {
         out.push(tab_list(s, t));
     }
+    if let Some(menu) = &s.row.new_tab {
+        out.push(new_tab_menu(s, t, menu));
+    }
+    out.extend(super::title::title_menu(s, t));
     out
 }
 
-/// A tab's menu: side by side, duplicate, and the three ways to close.
+/// The "+" menu, under "+".
+fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
+    let named = |key: &str| s.bench.server(key).map(|sv| s.server_shown(key, &sv.name).into_owned()).unwrap_or_default();
+    let keys = shortcut_label(Shortcut::NewTerminal, s.options.mac_keys, &s.options.shortcuts);
+    let on = menu.on.as_deref().map(named);
+    let mut rows = rune::col().w_full().padding(crate::kit::menu::PAD).role("menu");
+    let mut n = 0;
+    for (g, group) in s.new_tab_groups().into_iter().enumerate() {
+        if g > 0 {
+            rows = rows.child(list_rule(t).key(format!("nt-rule-{g}")));
+        }
+        for pick in group {
+            let state = if menu.hot == Some(n) { RowState::Hot } else { RowState::Rest };
+            let (key, label, glyph, tail, caps) = match &pick {
+                NewPick::Terminal(_) => match &on {
+                    Some(name) => ("nt-terminal".to_owned(), format!("New terminal on {name}"), Icon::Terminal, "", None),
+                    None => ("nt-terminal".to_owned(), "New terminal".to_owned(), Icon::Terminal, "", keys.clone()),
+                },
+                NewPick::Files(_) => ("nt-files".to_owned(), on.as_ref().map_or_else(|| "Files".to_owned(), |name| format!("Files on {name}")), Icon::Folder, "", None),
+                NewPick::Machine(server) => {
+                    let at = s.bench.servers().iter().position(|sv| sv.key() == *server).unwrap_or_default();
+                    let glyph = s.bench.server(server).map_or(Icon::Server, |sv| Icon::for_server(&sv.icon));
+                    (format!("nt-server-{at}"), named(server), glyph, "›", None)
+                }
+                NewPick::Back => ("nt-back".to_owned(), "Back".to_owned(), Icon::Back, "", None),
+            };
+            let spec = ListRow { icon: Some(glyph), label: &label, tail, keys: caps.as_deref(), state, ..ListRow::default() };
+            let i = n;
+            let mut row = list_row(t, &spec)
+                .key(key)
+                .role("menuitem")
+                .on_pointer_move(move |s: &mut Shell, _| {
+                    if let Some(menu) = s.row.new_tab.as_mut() {
+                        menu.hot = Some(i);
+                    }
+                })
+                .on_press_tx(move |s: &mut Shell, tx| s.new_tab_pick(pick.clone(), false, tx));
+            if state == RowState::Rest {
+                row = row.hover(t.hov2);
+            }
+            rows = rows.child(row);
+            n += 1;
+        }
+    }
+    let label = match &on {
+        Some(name) => format!("New tab on {name}"),
+        None => "New tab".to_owned(),
+    };
+    popover(t, NEW_WIDTH)
+        .key("new-tab-menu")
+        .label(label)
+        .anchored_fit("new-tab", Side::Bottom, Align::Start, 6.0)
+        .role("menu")
+        .focusable(true)
+        .no_focus_ring()
+        .on_key(|s: &mut Shell, ev, tx| s.new_tab_key(ev, tx))
+        // A long list of servers scrolls inside the room the window leaves it.
+        .child(rune::col().key("new-tab-rows").w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(rows))
+        .modal_tx(true, |s: &mut Shell, tx| s.close_tab_overlays(tx))
+}
+
+/// A tab's menu: side by side, a new terminal or Files on its machine, duplicate, and the
+/// three ways to close. The key caps are the shortcuts as Settings has them.
 fn tab_menu(s: &Shell, t: &'static Theme, id: TabId) -> El {
-    let mac = s.options.mac_keys;
+    let keys = |shortcut: Shortcut| shortcut_label(shortcut, s.options.mac_keys, &s.options.shortcuts);
     let active = s.bench.active_id();
     let paired = s.bench.layout().group_of(id).is_some();
     // Beside the tab on screen; for the tab on screen itself, beside its neighbour.
@@ -525,16 +762,14 @@ fn tab_menu(s: &Shell, t: &'static Theme, id: TabId) -> El {
         Some(a) => Layout::can_pair(&s.bench, a, id),
         None => false,
     };
-    let row = |key: &'static str, label: &'static str, keys: Option<&str>, pick: TabPick, on: bool| {
-        let e = menu_row(t, label, keys, if on { RowState::Rest } else { RowState::Off }).key(key);
+    let row = |key: &'static str, label: &'static str, keys: Option<String>, pick: TabPick, on: bool| {
+        let e = menu_row(t, label, keys.as_deref(), if on { RowState::Rest } else { RowState::Off }).key(key);
         if !on {
             return e;
         }
         e.on_press_tx(move |s: &mut Shell, tx| s.tab_pick(id, pick, tx))
     };
-    // The keys as Settings has them now.
-    let side_keys = sshee_app::palette::shortcut_label(sshee_app::workbench::shortcuts::Shortcut::SideBySide, mac, &s.options.shortcuts);
-    let side_keys = side_keys.as_deref();
+    let side_keys = keys(Shortcut::SideBySide);
     let side = if paired {
         row("tab-apart", "Back to its own tab", None, TabPick::Apart, true)
     } else if active == Some(id) {
@@ -547,9 +782,12 @@ fn tab_menu(s: &Shell, t: &'static Theme, id: TabId) -> El {
     let rows = [
         side,
         below,
+        menu_separator(t),
+        row("tab-new-terminal", "New terminal", keys(Shortcut::NewTerminal), TabPick::NewTerminal, true),
+        row("tab-files", "Files", None, TabPick::Files, true),
         row("tab-duplicate", "Duplicate tab", None, TabPick::Duplicate, true),
         menu_separator(t),
-        row("tab-close", "Close tab", Some(if mac { "⌘W" } else { "Ctrl+Shift+W" }), TabPick::Close, true),
+        row("tab-close", "Close tab", keys(Shortcut::CloseTab), TabPick::Close, true),
         row("tab-close-others", "Close other tabs", None, TabPick::CloseOthers, !layout::others(&s.bench, id).is_empty()),
         row("tab-close-right", "Close tabs to the right", None, TabPick::CloseRight, !layout::to_the_right(&s.bench, id).is_empty()),
     ];

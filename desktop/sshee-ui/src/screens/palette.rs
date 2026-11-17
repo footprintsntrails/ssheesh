@@ -179,6 +179,13 @@ impl Shell {
                         self.close_palette(tx);
                         true
                     }
+                    // Streamer mode, though, works over anything: names must hide at once.
+                    Some(Shortcut::Streamer) => {
+                        if !tx.key_repeat() {
+                            self.toggle_streamer(tx);
+                        }
+                        true
+                    }
                     Some(_) => true,
                     None => false,
                 }
@@ -269,14 +276,16 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> Option<El> {
     }
     let query = palette::parse(&state.query.text);
     let rows = s.palette_rows();
-    let server = s.bench.current_server().map(|sv| sv.name.as_str());
+    // Streamer mode: servers are "Server 2", and names in any other words are dotted.
+    let server_name = s.bench.current_server().map(|sv| s.server_shown(&sv.key(), &sv.name).into_owned());
+    let server = server_name.as_deref();
     let on_prod = s.bench.current_server().is_some_and(|sv| sv.is_prod());
 
     let mut field = row().key("palette-in").w_full().h(44.0).px(14.0).gap(10.0).items_center().border_sides([0.0, 0.0, 1.0, 0.0], t.hair).child(icon(Icon::Search, theme::ICON, t.l2));
     if let Some(scope) = query.scope {
         field = field.child(chip(t, scope.name(), t.l2on).key("palette-scope"));
     }
-    let hint = palette::placeholder(&s.bench);
+    let hint = s.text_shown(&palette::placeholder(&s.bench)).into_owned();
     let mut input = text_input(&state.query, theme::INPUT)
         .single_line()
         .key("palette-field")
@@ -307,11 +316,15 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> Option<El> {
             list = list.child(heading);
         }
         let hot = state.hot == Some(i);
+        let (label, note) = match &r.action {
+            Action::Server(key) if s.streaming() => (s.server_shown(key, &r.label), std::borrow::Cow::Borrowed("")),
+            _ => (s.text_shown(&r.label), s.text_shown(&r.note)),
+        };
         let spec = ListRow {
             icon: Some(glyph(&r.glyph)),
-            label: &r.label,
+            label: &label,
             mono: r.mono,
-            note: &r.note,
+            note: &note,
             // A command says "Prod" when it's the one Return would run; its group's heading
             // says it for the rest.
             prod: r.prod && (hot || !r.runs()),

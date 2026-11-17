@@ -30,9 +30,11 @@ pub const RADIUS_CHIP: f32 = 4.0;
 /// Popovers, and the page's top-left corner is `PAGE_RADIUS`.
 pub const RADIUS_POPOVER: f32 = 12.0;
 pub const PAGE_RADIUS: f32 = 10.0;
-/// An icon in the top row and in tabs; the sidebar's are `ICON_RAIL`.
-pub const ICON: f32 = 16.0;
-pub const ICON_RAIL: f32 = 18.0;
+/// An icon in the top row, in tabs, toolbars and menus; the sidebar's are `ICON_RAIL`. Two
+/// points over the design's 16 and 18: at those the owner found them too small to read at a
+/// glance (0.10's Lucide icons drew their shapes about as large, with a thinner line).
+pub const ICON: f32 = 18.0;
+pub const ICON_RAIL: f32 = 20.0;
 /// Every icon's line, at any size (the design's `non-scaling-stroke`).
 pub const ICON_LINE: f32 = 1.4;
 /// The keyboard focus ring's width.

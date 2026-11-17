@@ -593,6 +593,25 @@ fn a_tab_has_a_menu_and_a_crowded_row_has_a_list() {
     });
 }
 
+/// "+" and its menu: a terminal or Files here, then the other machines; one of them opened.
+#[test]
+fn plus_opens_its_menu_under_it_and_a_machines_page() {
+    let first = || json!([tap(0.3, STAGING), tap(0.8, "new-tab"), end(1.4)]);
+    in_both("plus", first, |run, _| {
+        let (menu, plus, window) = (run.rect("new-tab-menu"), run.rect("new-tab"), run.rect("window"));
+        assert!(menu[1] >= plus[1] + plus[3] && menu[0] + menu[2] <= window[2], "under +, inside the window: {menu:?} {plus:?}");
+        for key in ["nt-terminal", "nt-files", "nt-server-0"] {
+            assert!(run.element(key).is_some(), "{key}");
+        }
+        assert!(run.tree_text.contains("New terminal") && run.tree_text.contains("This computer"));
+    });
+    let inside = || json!([tap(0.3, STAGING), tap(0.8, "new-tab"), tap(1.3, "nt-server-0"), end(1.8)]);
+    in_both("plus-machine", inside, |run, _| {
+        assert!(run.element("nt-back").is_some());
+        assert!(run.tree_text.contains("Files on This computer"));
+    });
+}
+
 #[test]
 fn two_tabs_side_by_side_share_the_page() {
     // web-staging has one tab: the shortcut opens a terminal beside it.
