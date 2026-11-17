@@ -350,6 +350,29 @@ pub fn set_on(on: bool, ports: Vec<u16>) -> Result<(), String> {
     })
 }
 
+/// How long a round trip through Tor takes, in milliseconds: on the route
+/// picked last, through Tor and on to that server and back (what a keystroke
+/// waits). `None` until a server has been reached through Tor since it
+/// started, or when Tor is off. Nothing is sent to measure it: the routes
+/// are timed as they're picked (see `pick`).
+pub fn latency_ms() -> Option<u32> {
+    if !matches!(status(), TorStatus::On) {
+        return None;
+    }
+    let routes = ENGINE.get()?.routes.lock().unwrap();
+    latest_round_trip(&routes)
+}
+
+/// The round trip of the newest route still kept, other than an onion
+/// service's (whose time is a stand-in, not a measure).
+fn latest_round_trip(routes: &HashMap<String, Route>) -> Option<u32> {
+    routes
+        .iter()
+        .filter(|(key, r)| !key.rsplit_once(':').is_some_and(|(host, _)| host.ends_with(".onion")) && r.since.elapsed() < KEEP_ROUTE)
+        .max_by_key(|(_, r)| r.since)
+        .map(|(_, r)| u32::try_from(r.ms).unwrap_or(u32::MAX))
+}
+
 /// Forgets the routes servers picked, so their next connections pick
 /// again: for a route that turned slow.
 pub fn new_routes() {
@@ -2221,6 +2244,22 @@ mod tests {
         assert!(route.turned_slow(5000));
         let mut route = Route::new(IsolationToken::new(), 50);
         assert!(!route.turned_slow(300) && !route.turned_slow(300) && !route.turned_slow(300), "under 300 ms is never slow");
+    }
+
+    #[test]
+    fn the_round_trip_shown_is_the_newest_routes() {
+        let mut routes = HashMap::new();
+        assert_eq!(latest_round_trip(&routes), None, "nothing reached yet: no number");
+        routes.insert(route_key("203.0.113.17", 22), Route::new(IsolationToken::new(), 84));
+        std::thread::sleep(Duration::from_millis(5));
+        routes.insert(route_key("203.0.113.18", 22), Route::new(IsolationToken::new(), 212));
+        assert_eq!(latest_round_trip(&routes), Some(212));
+        // An onion service's route has a stand-in time, never shown as a measure.
+        std::thread::sleep(Duration::from_millis(5));
+        routes.insert(route_key("abcdefghijklmnop.onion", 22), Route::new(IsolationToken::new(), 1000));
+        assert_eq!(latest_round_trip(&routes), Some(212));
+        // Off, there's nothing to show whatever was measured.
+        assert_eq!(latency_ms(), None);
     }
 
     #[test]

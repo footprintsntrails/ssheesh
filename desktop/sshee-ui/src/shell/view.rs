@@ -209,7 +209,7 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
     }
     bar = bar.child(spacer());
     if let Tor::On { latency_ms } = s.bench.tor() {
-        bar = bar.child(status_tor(t, latency_ms));
+        bar = bar.child(status_tor(t, latency_ms).cursor(rune::Cursor::Pointer).on_press_tx(|s: &mut Shell, tx| s.toggle_tor(tx)));
     }
     bar
 }

@@ -28,3 +28,5 @@ pub mod palette;
 pub mod servers;
 pub mod agents;
 pub mod editors;
+pub mod tor;
+pub mod tunnels;

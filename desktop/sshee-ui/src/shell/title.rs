@@ -13,7 +13,6 @@
 
 use rune::{row, text, Align, El, Key, KeyEvent, Side, Tx};
 use sshee_app::palette::shortcut_label;
-use sshee_app::settings_store::catalog::Section;
 use sshee_app::workbench::shortcuts::Shortcut;
 use sshee_app::workbench::{ServerKey, TabKind, Tor};
 
@@ -121,15 +120,15 @@ impl Shell {
         }
     }
 
-    /// A button of the sidebar's foot, from the top row. Settings opens or closes; Tor opens
-    /// its page in Settings until it has a screen of its own. The security check has no
+    /// A button of the sidebar's foot, from the top row. Settings opens or closes; Tor goes on
+    /// or off as the sidebar's onion does (`Shell::tor_button`). The security check has no
     /// screen yet: the button is drawn, as the sidebar's is, and does what the sidebar's does
     /// once that lands.
     pub fn foot_tool(&mut self, tool: FootTool, tx: &mut Tx) {
         match tool {
             FootTool::Home => self.show_home(tx),
             FootTool::Settings => self.toggle_settings(tx),
-            FootTool::Tor => self.open_settings_at(Section::Tor, tx),
+            FootTool::Tor => self.tor_button(tx),
             FootTool::Check => {}
         }
     }
@@ -270,7 +269,7 @@ pub(crate) fn bar_tools(s: &Shell, t: &'static Theme) -> Option<El> {
     Some(
         tools
             .child(button("bar-check", Icon::Shield, "Security check", FootTool::Check, false, t.l2))
-            .child(button("bar-tor", Icon::Tor, "Tor", FootTool::Tor, false, tor_ink))
+            .child(button("bar-tor", Icon::Tor, "Tor", FootTool::Tor, false, tor_ink).help(crate::screens::tor::button_help(s)).on_secondary_press(|s: &mut Shell, _, tx| s.toggle_tor(tx)))
             .child(button("bar-settings", Icon::Gear, "Settings", FootTool::Settings, s.screens.settings.open, t.l2)),
     )
 }

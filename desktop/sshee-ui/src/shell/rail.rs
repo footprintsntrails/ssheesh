@@ -220,7 +220,10 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
     };
     let foot = [
         rail_button(t, Icon::Shield, "Security check", RailState::Plain, false).key("check"),
-        rail_button(t, Icon::Tor, "Tor", tor, false).key("tor"),
+        rail_button(t, Icon::Tor, &crate::screens::tor::button_help(s), tor, false)
+            .key("tor")
+            .on_press_tx(|s: &mut Shell, tx| s.tor_button(tx))
+            .on_secondary_press(|s: &mut Shell, _, tx| s.toggle_tor(tx)),
         rail_button(t, Icon::Gear, "Settings", if s.screens.settings.open { RailState::Selected } else { RailState::Plain }, false)
             .key("settings-gear")
             .on_press_tx(|s: &mut Shell, tx| s.toggle_settings(tx)),

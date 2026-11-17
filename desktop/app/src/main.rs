@@ -20,6 +20,8 @@ mod servers;
 mod settings;
 mod signin;
 mod tabs;
+mod tor_check;
+mod tunnels;
 mod vitals;
 
 use sshee_app::workbench::{SavedTabs, Server, Workbench};
@@ -75,6 +77,14 @@ impl Backend for Live {
         self.inner.tor(command);
     }
 
+    fn tor_ask(&mut self, ask: sshee_app::tor::Ask) {
+        self.inner.tor_ask(ask);
+    }
+
+    fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
+        self.inner.tunnels(ask);
+    }
+
     fn terminal(&mut self, server: Option<&Server>, tab: &sshee_app::workbench::Tab) -> Box<dyn TermLink> {
         self.inner.terminal(server, tab)
     }
@@ -123,6 +133,10 @@ fn main() {
     // ssh starts this executable to ask for a saved password: answer and exit.
     if let Some(code) = sshee_core::secrets::askpass_main() {
         std::process::exit(code);
+    }
+    // `--tor-check`: this copy's Tor started without a window, each step said (`tor_check.rs`).
+    if std::env::args().nth(1).as_deref() == Some("--tor-check") {
+        std::process::exit(tor_check::run());
     }
     // While this is still the only thread: Rune must not see its trace and log switches.
     let scrubbed = sshee_ui::hygiene::scrub_env();

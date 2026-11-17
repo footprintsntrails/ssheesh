@@ -11,6 +11,8 @@ usage: ssheesh-preview [options]
   --demo-leftovers    with --demo: offer two made-up copies an earlier run left unsent
   --ssh-config FILE   the ssh config to list servers from and connect with (ssh's -F),
                       instead of ~/.ssh/config
+  --tor-check         start this copy's Tor without a window and say each step
+                      (first on its own; exits 0 once Tor is on)
 Rune's own flags (--snap, --script, --tree, --theme, ...) are listed by --help.";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
