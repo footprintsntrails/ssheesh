@@ -86,6 +86,9 @@ pub enum Over {
 /// How far the pointer travels before a press on a row is a drag.
 const DRAG_FROM: f32 = 6.0;
 
+/// How big an SVG is drawn, in points, at twice the pixels: Rune caps it at 4096 px.
+const SVG_DRAWN: f32 = 1024.0;
+
 /// What a yes to the question on screen does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
@@ -115,6 +118,10 @@ pub struct Ui {
     /// Rows being dragged to a folder of this list, and the row under the pointer when they
     /// may be dropped there (`None`: nowhere they could go).
     dragging: Option<(Vec<String>, Option<Over>)>,
+    /// Those rows are past the window's edge: letting go downloads them (0.10.13).
+    out: bool,
+    /// The folder row files from another app are dragged over (`super::dropped` into it).
+    drop_row: Option<usize>,
     /// The bookmarks are open.
     places: bool,
     /// Where the last context menu opened: "Open in…" lists the editors there.
@@ -151,6 +158,8 @@ impl Default for Ui {
             menu: None,
             confirm: None,
             dragging: None,
+            out: false,
+            drop_row: None,
             places: false,
             last_menu_at: [0.0, 0.0],
             picture: None,
@@ -215,6 +224,12 @@ pub fn sync(s: &mut Shell) {
                 }
             }
             _ => ui.draft = TextEdit::new(""),
+        }
+        // An SVG is text, and drawn too: as it's saved, on Rune's image thread (its `svg`
+        // feature; vendor/rune.patch keeps it from reading this computer's files).
+        if let (Body::Text { saved, .. }, true, Some(waker)) = (editor.body(), kinds::is_svg(editor.name()), &waker) {
+            let cache = ui.pictures.get_or_insert_with(|| rune::ImageCache::new(waker.clone()));
+            ui.picture = Some((rev, cache.svg(saved.as_bytes().to_vec(), SVG_DRAWN, 2.0)));
         }
     }
 }
@@ -320,9 +335,10 @@ fn finish_naming(s: &mut Shell, tab: TabId, tx: &mut Tx) {
 
 fn pick_upload(tab: TabId, tx: &mut Tx) {
     let options = FileDialogOptions { title: "Upload files".into(), ..Default::default() };
-    tx.open_file(options, move |s: &mut Shell, result, _| match result {
-        Ok(Some(path)) => super::upload(s, tab, vec![path]),
-        Ok(None) => {}
+    // Several at once, as 0.10's picker took them.
+    tx.open_files(options, move |s: &mut Shell, result, _| match result {
+        Ok(paths) if !paths.is_empty() => super::upload(s, tab, paths),
+        Ok(_) => {}
         Err(e) => super::note(s, Notice::new(Tone::Error, "Couldn't open the file picker").body(e.to_string())),
     });
 }
@@ -441,6 +457,13 @@ fn drag(s: &mut Shell, tab: TabId, name: &str, d: &mut Drag, tx: &mut Tx) {
                 return;
             }
             let names = targets(s, tab, name);
+            // Nothing of the window under the pointer: it's outside.
+            tx.element_at(x, y, move |s: &mut Shell, picked, tx| {
+                if let Some(ui) = ui(s, tab) {
+                    ui.out = picked.is_none();
+                }
+                tx.instant();
+            });
             tx.element_at_in("files-list", x, y, move |s: &mut Shell, picked, tx| {
                 let to = over(picked.as_ref()).filter(|o| drop_target(s, tab, &names, *o).is_some());
                 if let Some(ui) = ui(s, tab) {
@@ -450,10 +473,24 @@ fn drag(s: &mut Shell, tab: TabId, name: &str, d: &mut Drag, tx: &mut Tx) {
             });
         }
         Phase::Up => {
-            let Some((names, _)) = ui(s, tab).and_then(|ui| ui.dragging.take()) else { return };
+            let Some((names, _)) = ui(s, tab).and_then(|ui| {
+                ui.out = false;
+                ui.dragging.take()
+            }) else {
+                return;
+            };
             if d.cancelled() {
                 return;
             }
+            // Let go outside the window: a server's files download there (0.10.13). The
+            // pointer is the window's while the button is held, so its place is known.
+            let out = names.clone();
+            tx.element_at(x, y, move |s: &mut Shell, picked, tx| {
+                if picked.is_none() {
+                    super::download_here(s, tab, &out);
+                }
+                tx.instant();
+            });
             tx.element_at_in("files-list", x, y, move |s: &mut Shell, picked, tx| {
                 if let Some(to) = over(picked.as_ref()).and_then(|o| drop_target(s, tab, &names, o)) {
                     super::move_into(s, tab, &names, &to);
@@ -969,6 +1006,30 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
         line = line.child(el().w(DATE_W).child(text(modified_text(e.modified, clock.now, clock.utc_offset)).font(theme::LIST_NUMBER).color(quiet).single_line().truncate()));
     }
     if e.is_dir() {
+        // Files from another app let go on a folder go into it (`super::dropped`).
+        let into = name.clone();
+        line = line
+            .on_drop_files(move |s: &mut Shell, files, tx| {
+                let folder = s.screens.files.get(&id).map(|st| st.browser.path_of(&into));
+                if let Some(ui) = ui(s, id) {
+                    ui.drop_row = None;
+                }
+                super::dropped(s, id, files.to_vec(), folder);
+                tx.instant();
+            })
+            .on_drop_hover(move |s: &mut Shell, over, tx| {
+                if let Some(ui) = ui(s, id) {
+                    if over {
+                        ui.drop_row = Some(i);
+                    } else if ui.drop_row == Some(i) {
+                        ui.drop_row = None;
+                    }
+                }
+                tx.instant();
+            });
+        if state.ui.drop_row == Some(i) {
+            line = line.border(1.5, t.ring);
+        }
         // Resting on a folder lists it ahead, so opening it is instant.
         let n = name;
         line = line.on_hover_change(move |s: &mut Shell, inside, tx| {
@@ -1207,7 +1268,9 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
     foot = foot.child(spacer());
     let moving = state.ui.dragging.as_ref().map(|(names, to)| {
         let what = if let [one] = names.as_slice() { one.clone() } else { format!("{} items", names.len()) };
-        if to.is_some() {
+        if state.ui.out && super::on_server(s, id) {
+            format!("Let go to download {what}")
+        } else if to.is_some() {
             format!("Let go to move {what} here")
         } else {
             format!("Drag {what} onto a folder to move it there, or out of the window to download it")
@@ -1269,6 +1332,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
     let name = editor.name().to_owned();
     let dirty = dirty(s, id).is_some();
     let markdown = kinds::is_markdown(&name) && editor.text().is_some();
+    let svg = kinds::is_svg(&name) && editor.text().is_some();
     let mut head = row().key("preview-head").w_full().h(TOOLBAR).items_center().gap(8.0).pl(14.0).pr(8.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(
         text(s.text_shown(&name).into_owned()).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate().shrink().min_w(0.0),
     );
@@ -1279,8 +1343,8 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         head = head.child(text(bytes(size)).key("preview-size").font(theme::LIST_NUMBER).color(t.l2).single_line());
     }
     head = head.child(spacer());
-    if markdown {
-        // Formatted, or as text to edit.
+    if markdown || svg {
+        // Formatted (drawn), or as text to edit.
         let picked = usize::from(state.ui.source);
         head = head.child(crate::kit::segmented::segmented(t, "Show the file", &["Preview", "Source"], Some(picked), true, move |s: &mut Shell, i, tx| {
             if let Some(ui) = ui(s, id) {
@@ -1342,8 +1406,21 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         }
         pane = pane.child(line);
     }
+    // A picture, or an SVG drawn.
+    let picture = || match &state.ui.picture {
+        Some((_, picture)) => {
+            // Never bigger than it is: a small icon stays sharp instead of filling the pane.
+            let [w, h] = picture.size().map_or([f32::MAX, f32::MAX], |[w, h]| [w as f32, h as f32]);
+            el().key("preview-picture").w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(
+                el().w_full().h_full().max_w(w).max_h(h).pixels_fit(picture.pixels(), SurfaceFit::Fit).label(format!("Picture {}", s.text_shown(&name))),
+            )
+        }
+        None => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
+    };
     let body = match editor.body() {
         Body::Loading => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
+        // An SVG, drawn as it's saved; Source edits it.
+        Body::Text { .. } if svg && !state.ui.source => picture(),
         // Markdown, formatted: from what's typed, so an edit in Source shows here.
         Body::Text { .. } if markdown && !state.ui.source => {
             let source = if editor.can_edit() { state.ui.draft.text.as_str() } else { editor.text().unwrap_or_default() };
@@ -1385,16 +1462,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                 }),
             )
         }
-        Body::Image(_) => match &state.ui.picture {
-            Some((_, picture)) => {
-                // Never bigger than it is: a small icon stays sharp instead of filling the pane.
-                let [w, h] = picture.size().map_or([f32::MAX, f32::MAX], |[w, h]| [w as f32, h as f32]);
-                el().key("preview-picture").w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(
-                    el().w_full().h_full().max_w(w).max_h(h).pixels_fit(picture.pixels(), SurfaceFit::Fit).label(format!("Picture {}", s.text_shown(&name))),
-                )
-            }
-            None => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
-        },
+        Body::Image(_) => picture(),
         _ => {
             let (title, line) = editor.message(on_server).unwrap_or_default();
             let mut said = vec![text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(line).font(theme::NOTE).color(t.l2).max_w(340.0).align(Align::Center)];

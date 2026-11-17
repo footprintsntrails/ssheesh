@@ -145,7 +145,7 @@ fn thread_name(want: &Want) -> &'static str {
         Want::CopyTo { .. } => "files-copy",
         Want::Delete { .. } => "files-delete",
         Want::Extract { .. } => "files-unpack",
-        Want::Download { .. } => "files-download",
+        Want::Download { .. } | Want::DownloadHere { .. } => "files-download",
         Want::Upload { .. } => "files-upload",
         Want::CancelTransfer { .. } => "files-stop",
     }
@@ -331,13 +331,16 @@ fn answer(want: &Want, target: Option<&Target>, work: &Work, report: &(impl Fn(A
             }
             Answer::Moved { from: from.clone(), to: to.clone(), moved, taken, failure: stopped }
         }
-        Want::Download { id, items } => {
+        Want::Download { id, items } | Want::DownloadHere { id, items } => {
+            // Dragged out of the window: where it was let go, when the system says (0.10.14).
+            let here = matches!(want, Want::DownloadHere { .. }).then(sshee_core::drop_folder::folder_under_pointer).flatten().filter(|d| d.is_dir());
+            let into = here.as_ref().unwrap_or(&work.downloads);
             let result = transfer(*id, work, report, |xfer| {
                 let t = on()?;
-                std::fs::create_dir_all(&work.downloads)?;
+                std::fs::create_dir_all(into)?;
                 let mut saved = Vec::new();
                 for Item { path, is_dir } in items {
-                    saved.push(core::download(t, env, path, *is_dir, &work.downloads, xfer)?);
+                    saved.push(core::download(t, env, path, *is_dir, into, xfer)?);
                 }
                 Ok(saved)
             });

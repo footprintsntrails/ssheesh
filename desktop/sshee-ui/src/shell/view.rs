@@ -157,12 +157,14 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             // first layout is told to it (and opens its session).
             Some(pane) => {
                 let id: TabId = tab.id;
-                col().key(format!("pane-{}", id.0)).w_full().grow(1.0).min_h(0.0).child(pane_view_with(
+                let pane = col().key(format!("pane-{}", id.0)).w_full().grow(1.0).min_h(0.0).child(pane_view_with(
                     pane,
                     cx,
                     move |s: &mut Shell| s.panes.get_mut(&id),
                     |s: &mut Shell, ev, tx| s.shortcut(ev, tx),
-                ))
+                ));
+                // Files dropped on it from another app.
+                super::file_drop::terminal(s, t, id, pane)
             }
             // A terminal whose pane isn't made yet draws next frame.
             None if tab.kind == TabKind::Terminal => el().key("pane-pending").w_full().h_full(),

@@ -325,12 +325,17 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
         }
     }
     let content = match s.pane(id) {
-        Some(pane) => rune::col().key(format!("pane-{n}")).w_full().grow(1.0).min_h(0.0).child(pane_view_with(
-            pane,
-            cx,
-            move |s: &mut Shell| s.panes.get_mut(&id),
-            |s: &mut Shell, ev, tx| s.shortcut(ev, tx),
-        )),
+        Some(pane) => super::file_drop::terminal(
+            s,
+            t,
+            id,
+            rune::col().key(format!("pane-{n}")).w_full().grow(1.0).min_h(0.0).child(pane_view_with(
+                pane,
+                cx,
+                move |s: &mut Shell| s.panes.get_mut(&id),
+                |s: &mut Shell, ev, tx| s.shortcut(ev, tx),
+            )),
+        ),
         None if tab.kind == TabKind::Terminal => rune::el().key("pane-pending").w_full().grow(1.0),
         None if tab.kind == TabKind::Files => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::files::view(s, tab, t, cx)),
         None if tab.kind == TabKind::Containers => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::containers::view(s, tab, t, cx)),

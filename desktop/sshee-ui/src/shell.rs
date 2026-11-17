@@ -5,8 +5,10 @@
 
 pub mod compact;
 pub mod desktop;
+pub mod file_drop;
 pub mod keys;
 pub mod notes;
+mod place;
 pub mod rail;
 pub mod sheet;
 pub mod split;
@@ -104,13 +106,21 @@ pub fn run(launch: Launch) {
     // Sessions' threads and background work reach the state through this, in order.
     let remote = Remote::new(Arc::new(move |f| handle.update_if(move |s: &mut Shell, tx| f(s, tx)))).with_window(window);
     let Launch { bench, backend, options } = launch;
-    app.on_focus(|s, focused, tx| s.window_focus(focused, tx))
+    let place = options.place;
+    // The native window, for where it is when it closes (`place.rs`).
+    let told = app.handle();
+    let app = app.on_window(move |w| {
+        let w = w.clone();
+        told.update(move |s: &mut Shell, _| s.window = Some(w));
+    });
+    let app = app
+        .on_focus(|s, focused, tx| s.window_focus(focused, tx))
         .on_ime(|s, ev, tx| s.ime(ev, tx))
         .on_close(|s, _| s.close())
         // The tray's Quit ends the app without closing the window first.
         .on_quit(|s, _| s.close())
         // A Windows toast's click, handed over by the program Windows started for it.
         .on_open_url(|s, link, tx| s.open_link(link, tx))
-        .init(move || Shell::new(bench, backend, options, Some(remote)))
-        .run();
+        .init(move || Shell::new(bench, backend, options, Some(remote)));
+    place::run(app, place);
 }

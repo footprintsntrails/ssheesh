@@ -190,6 +190,15 @@ impl Backend for Live {
             }
         }
     }
+
+    /// Where the window was, in the copy's own folder (`window.json`), for the next start.
+    fn window_placed(&mut self, place: &sshee_app::windows::Placement) {
+        if let Some(dir) = sshee_core::app_identity::current().dir() {
+            if let Err(e) = sshee_app::settings_store::write_atomic(&dir.join(sshee_app::windows::FILE), place.to_text().as_bytes()) {
+                eprintln!("ssheesh-preview: where the window was wasn't saved: {e}");
+            }
+        }
+    }
 }
 
 fn main() {
@@ -260,7 +269,9 @@ fn main() {
         // Settings' "Use the Windows title bar" is read before the window opens: it decides
         // the window's frame.
         let native_title_bar = sshee_core::app_identity::current().dir().is_some_and(sshee_app::settings_store::native_title_bar);
-        Launch { bench, backend: Box::new(Live { inner, update: update::Updater::new(arrival) }), options: Options { native_title_bar, ..options } }
+        // Where the window was when it last closed: it opens there.
+        let place = sshee_core::app_identity::current().dir().and_then(|d| std::fs::read_to_string(d.join(sshee_app::windows::FILE)).ok()).and_then(|t| sshee_app::windows::Placement::from_text(&t));
+        Launch { bench, backend: Box::new(Live { inner, update: update::Updater::new(arrival) }), options: Options { native_title_bar, place, ..options } }
     };
     shell::run(launch);
 }

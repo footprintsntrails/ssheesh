@@ -459,7 +459,7 @@ impl DemoFiles {
                 Want::Delete { dir, names } => Answer::Deleted { dir, deleted: Vec::new(), failed: names.into_iter().map(|n| (n, gone())).collect() },
                 Want::Extract { dir, name } => Answer::Extracted { dir, name, result: Err(gone()) },
                 Want::Move { from, to, .. } => Answer::Moved { from, to, moved: Vec::new(), taken: Vec::new(), failure: Some(gone()) },
-                Want::Download { id, .. } => Answer::Downloaded { id, result: Err(gone()) },
+                Want::Download { id, .. } | Want::DownloadHere { id, .. } => Answer::Downloaded { id, result: Err(gone()) },
                 Want::Upload { id, paths, dir, overwrite } => Answer::Uploaded { id, paths, dir, overwrite, result: Err(gone()) },
                 Want::Peek { path } => Answer::Peeked { asked: path, result: Err(gone()) },
                 Want::MakeFile { path } => Answer::MadeFile { path, result: Err(gone()) },
@@ -526,7 +526,7 @@ impl DemoFiles {
                 }
                 answers.push(Answer::Moved { from, to, moved, taken, failure: stopped });
             }
-            Want::Download { id, items } => {
+            Want::Download { id, items } | Want::DownloadHere { id, items } => {
                 let total: u64 = items.iter().filter_map(|i| disk.nodes.get(&i.path)).map(|n| n.size.unwrap_or(n.bytes.len() as u64)).sum();
                 if items.iter().any(|i| i.path == ENDLESS) {
                     // 38% and 1.2 MB/s, for as long as anyone looks: two measures a second
