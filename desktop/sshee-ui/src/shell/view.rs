@@ -7,8 +7,8 @@
 //! └── body     row
 //!     ├── rail     52 pt of icons: [logo] search ─ this computer, servers, + … check, Tor, settings
 //!     └── main     column
-//!         ├── page     the tab on screen: a terminal pane, or a placeholder; two side by
-//!         │            side (`split.rs`)
+//!         ├── page     the tab on screen: a terminal pane, or a placeholder; tabs split
+//!         │            right and down (`split.rs`)
 //!         └── status   24 pt: CPU, Memory, Disk, Uptime, Down, Up … Tor
 //! ```
 //!
@@ -25,7 +25,6 @@ use super::state::Shell;
 use crate::icons::{logo, Icon};
 use crate::kit::button::toolbar_button;
 use crate::kit::chip::prod_chip;
-use crate::kit::rail::{rail_button, RailState};
 use crate::kit::status::{status_item, status_tor};
 use crate::screens;
 use crate::terminal::view::pane_view_with;
@@ -46,21 +45,35 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         return super::sheet::view(t);
     }
     let mut body = row().key("body").w_full().grow(1.0).min_h(0.0);
-    let main = col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx)).child(status_bar(s, t));
-    // The sidebar at the side Settings puts it.
-    body = match (s.bench.sidebar_shown(), s.sidebar_at_right()) {
-        (true, false) => body.child(rail(s, t)).child(main),
-        (true, true) => body.child(main).child(rail(s, t)),
+    let mut main = col().key("main").grow(1.0).min_w(0.0).h_full().child(page(s, t, cx));
+    // Compact mode "Both" hides the status bar too.
+    if !(s.bar_away() && s.sidebar_away()) {
+        main = main.child(status_bar(s, t));
+    }
+    // The sidebar at the side Settings puts it; in compact mode it waits at the edge.
+    let shown = s.bench.sidebar_shown();
+    let docked = shown && !s.sidebar_away();
+    body = match (docked, s.sidebar_at_right()) {
+        (true, false) => body.child(super::rail::rail(s, t)).child(main),
+        (true, true) => body.child(main).child(super::rail::rail(s, t)),
         (false, _) => body.child(main),
     };
-    col()
+    let away_bar = s.bar_away();
+    let mut window = col()
         .key("window")
         .w_full()
         .h_full()
         .fill(t.frame)
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
-        .child(bar(s, t, cx))
-        .child(body)
+        .child(if away_bar { super::compact::top_band(s, t) } else { bar(s, t, cx) })
+        .child(body);
+    if shown && s.sidebar_away() {
+        window = window.child(super::compact::side_band(s));
+    }
+    let out_bar = (away_bar && s.compact.top).then(|| bar(s, t, cx));
+    let out_rail = (shown && s.sidebar_away() && s.compact.side).then(|| super::rail::rail(s, t));
+    window
+        .children(super::compact::out(s, t, out_bar, out_rail))
         // Over the window: uploads and downloads in progress, then a Files tab's menu or question.
         .children(screens::transfers::view(s, t))
         .children(screens::files::overlay(s, t, cx))
@@ -70,6 +83,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .children(super::tabs::overlays(s, t))
         // Over everything: the palette, a server's card and menu, "Add a server".
         .children(screens::overlays(s, t, cx))
+        // A tab being dragged over the page: where it would land.
+        .children(super::split::drop_mark(s, t))
 }
 
 /// The top row.
@@ -133,70 +148,9 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     bar.child(tabs).child(super::streamer::eye(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }
 
-/// The sidebar: icons only.
-fn rail(s: &Shell, t: &'static Theme) -> El {
-    let mut rail = col().key("rail").w(theme::RAIL_WIDTH).h_full().items_center().gap(3.0).pt(2.0).pb(8.0);
-    if s.options.frame == Frame::Mac {
-        // Elsewhere the logo is in the bar, above this column.
-        rail = rail.child(
-            el().key("home")
-                .size(theme::RAIL_BUTTON, theme::RAIL_BUTTON)
-                .radius(theme::RADIUS)
-                .items_center()
-                .justify_center()
-                .hover(t.hov2)
-                .press(t.down)
-                .focusable(true)
-                .role("button")
-                .label_static("Main menu")
-                .help("Main menu")
-                .on_press_tx(|s: &mut Shell, tx| s.show_home(tx))
-                .child(logo(24.0)),
-        );
-    }
-    rail = rail
-        .child(rail_button(t, Icon::Search, "Search", RailState::Plain, false).key("search").on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx)))
-        .child(el().key("rule").size(20.0, 1.0).mt(5.0).mb(5.0).fill(t.hair));
-    let current = s.bench.current_key();
-    for (i, server) in s.bench.servers().iter().enumerate() {
-        let key = server.key();
-        let state = if current == Some(key.as_str()) { RailState::Selected } else { RailState::Plain };
-        let waiting = s.bench.server_needs_you(&key);
-        let menu = key.clone();
-        rail = rail.child(
-            rail_button(t, Icon::for_server(&server.icon), &s.server_shown(&key, &server.name), state, waiting)
-                .key(format!("server-{i}"))
-                .on_press_tx(move |s: &mut Shell, tx| {
-                    s.screens.server_card.hide();
-                    s.go_to(&key, tx)
-                })
-                // Its card (`screens::server_card`) says more than a tooltip; a right click
-                // opens its menu (`screens::server_menu`).
-                .help("")
-                .on_hover_change(move |s: &mut Shell, inside, tx| s.hover_server(i, inside, tx))
-                .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx)),
-        );
-    }
-    let tor = match s.bench.tor() {
-        Tor::Off => RailState::Plain,
-        Tor::Starting => RailState::TorStarting,
-        Tor::On { .. } => RailState::TorOn,
-        Tor::Failed => RailState::TorFailed,
-    };
-    rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)))
-        .child(spacer())
-        .child(rail_button(t, Icon::Shield, "Security check", RailState::Plain, false).key("check"))
-        .child(rail_button(t, Icon::Tor, "Tor", tor, false).key("tor"))
-        .child(
-            rail_button(t, Icon::Gear, "Settings", if s.screens.settings.open { RailState::Selected } else { RailState::Plain }, false)
-                .key("settings-gear")
-                .on_press_tx(|s: &mut Shell, tx| s.toggle_settings(tx)),
-        )
-}
-
 /// The page: darker than the frame, its top-left corner rounded where it meets the sidebar.
 fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
-    let rounded = s.bench.sidebar_shown();
+    let rounded = s.bench.sidebar_shown() && !s.sidebar_away();
     // The page's corner is round where it meets the sidebar, and its edge runs down that side.
     let right = s.sidebar_at_right();
     let round = if rounded { theme::PAGE_RADIUS } else { 0.0 };
@@ -206,8 +160,8 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     let content = match s.bench.active() {
         // Settings takes the page while it is open.
         _ if s.screens.settings.open => screens::settings::view(s, t, cx),
-        // Shown beside another tab: both, with a divider (`split.rs`).
-        Some(_) if s.pair_on_screen().is_some() => super::split::page(s, t, cx).unwrap_or_else(el),
+        // Sharing the page with other tabs: all of them, with dividers (`split.rs`).
+        Some(tab) if s.bench.layout().shown_with(tab.id).is_some() => super::split::page(s, t, cx).unwrap_or_else(el),
         Some(tab) => match s.pane(tab.id) {
             // Each tab's pane under its own key: a tab switched to is a new element, so its
             // first layout is told to it (and opens its session).
@@ -236,6 +190,11 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .w_full()
         .grow(1.0)
         .min_h(0.0)
+        // A dragged tab lands on the page by where it is (`split.rs`).
+        .on_layout_tx(|s: &mut Shell, rect, tx| {
+            s.sides.page = Some(rect);
+            tx.live_only();
+        })
         .fill(t.page)
         .corners(corners)
         .clip_corners(corners)
@@ -256,7 +215,7 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         .px(18.0)
         .fill(t.page)
         .border_sides([1.0, 0.0, 0.0, 0.0], t.hair2);
-    if s.bench.sidebar_shown() {
+    if s.bench.sidebar_shown() && !s.sidebar_away() {
         // The page's edge against the sidebar runs on down the status bar.
         let edge = el().key("status-edge").w(1.0).fill(t.edge);
         bar = bar.child(if s.sidebar_at_right() { edge.pin(None, Some(0.0), Some(0.0), Some(0.0)) } else { edge.pin(Some(0.0), Some(0.0), None, Some(0.0)) });

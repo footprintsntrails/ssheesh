@@ -418,10 +418,8 @@ fn a_row_that_comes_later_is_shown_and_cannot_be_changed() {
     let mut w = Window::defaults();
     w.go(Section::Layout);
     let before = w.settings().clone();
-    // Tabs under each server, compact mode, the server list: there, dimmed, with why.
-    for control in ["layout-tabs-control/seg-0", "layout-compact-control/seg-3", "layout-server-list-control/seg-0"] {
-        w.click(control);
-    }
+    // Tabs under each server: there, dimmed, with why. (Compact mode and the server list work.)
+    w.click("layout-tabs-control/seg-0");
     assert_eq!(*w.settings(), before);
     assert!(w.says("Tabs run along the top for now."));
     w.go(Section::Updates);
@@ -530,9 +528,10 @@ fn a_shortcut_is_recorded_by_pressing_keys_and_refused_with_the_reason() {
     w.click("keys-closePane");
     w.key(Key::Escape, "");
     assert!(w.rt.state.screens.settings.keys.id.is_none() && w.rt.state.screens.settings.open);
-    // A shortcut 1.0 doesn't act on yet (filling the window with a pane) can't be recorded.
+    // Filling the window with a pane works now, so it can be recorded too.
     w.click("keys-zoomPane");
-    assert!(w.rt.state.screens.settings.keys.id.is_none());
+    assert!(w.rt.state.screens.settings.keys.id.is_some());
+    w.key(Key::Escape, "");
 }
 
 #[test]

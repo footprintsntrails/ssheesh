@@ -106,6 +106,11 @@ pub enum Action {
     CloseTab,
     ReopenTab,
     ToggleSidebar,
+    /// A new terminal beside the tab on screen: to its right, or under it.
+    SplitRight,
+    SplitDown,
+    /// One pane of a split fills the window, or all show again.
+    Zoom,
     MainMenu,
     AddServer,
     /// Settings, at a section when one is named.
@@ -127,6 +132,9 @@ pub enum Glyph {
     Home,
     Reopen,
     Gear,
+    SplitRight,
+    SplitDown,
+    Zoom,
 }
 
 /// The headings the list is cut into, in order.
@@ -390,6 +398,14 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
     }
     if !bench.closed().is_empty() {
         rows.push(row(Group::Window, Glyph::Reopen, "Reopen closed tab", Action::ReopenTab).keys(label(Shortcut::ReopenTab)).words("undo close"));
+    }
+    if bench.active().is_some() {
+        rows.push(row(Group::Window, Glyph::SplitRight, "Split right", Action::SplitRight).keys(label(Shortcut::SplitRight)).words("pane side by side columns"));
+        rows.push(row(Group::Window, Glyph::SplitDown, "Split down", Action::SplitDown).keys(label(Shortcut::SplitDown)).words("pane rows below"));
+    }
+    if bench.active_id().is_some_and(|id| bench.layout().shown_with(id).is_some()) {
+        let words = if bench.split_on_screen().is_some() { "Fill the window with this pane" } else { "Show all the panes" };
+        rows.push(row(Group::Window, Glyph::Zoom, words, Action::Zoom).keys(label(Shortcut::Zoom)).words("zoom maximize pane"));
     }
     rows.push(row(Group::Window, Glyph::Sidebar, "Toggle sidebar", Action::ToggleSidebar).keys(label(Shortcut::ToggleSidebar)).words("show hide"));
     if bench.active().is_some() {

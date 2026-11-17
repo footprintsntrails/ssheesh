@@ -199,9 +199,8 @@ never writes 0.10's. `--demo` reads and writes nothing.
   `drag_resize_window`). macOS and Windows get the design's bar (`App::titlebar`); neither has
   been run yet, nor have their system fonts (`fonts::SYSTEM_FAMILIES`).
 - The row of tabs (`shell/tabs.rs`) has its menu, drag to reorder and a list for tabs out of
-  sight; a tab can't be dragged out into a window of its own, and side by side
-  (`shell/split.rs`, `workbench::layout`) is one pair of one machine's tabs, not 0.10's tree of
-  splits. Pairs aren't kept between runs.
+  sight; a tab can't be dragged out into a window of its own.
+- Settings' "Tabs under each server" (tabs in the wide sidebar instead of the row) isn't built.
 - A terminal tab is named after its shell's folder when the shell says it (OSC 7, or a
   `user@host: ~/dir` title). In tmux on a server neither reaches the window (tmux keeps both):
   the agents' watch reads `pane_current_path` and should call `Shell::set_folder`, and
@@ -220,6 +219,26 @@ never writes 0.10's. `--demo` reads and writes nothing.
 - Tor's round-trip time isn't measured; the status bar shows "Tor" without it.
 - Every hidden pane still takes its frames in `poll` (so a switch shows it at once); with
   dozens of busy tabs that wants a "drain replies only" mode in `TermPane`.
+
+## Splits, the sidebar and compact mode
+
+- **Splits** are 0.10's tree (`layout.ts`): `sshee_app::workbench::layout` holds groups of tabs,
+  each a tree of rows and columns with shares, kept in `Workbench` (so closing a tab gives its
+  room to the panes around it and brings up the pane nearest it) and saved in `tabs.json` with
+  the tabs (`SavedTabs::splits`, by place in the row). Every pane stays a tab of its own;
+  `Workbench::on_screen` is what the page draws. Split right and down (⌘D, ⇧⌘D; Ctrl+Shift+D,
+  Ctrl+Shift+E), "Fill the window" (⇧⌘↩, Ctrl+Shift+Enter: never an Enter in the terminal) and
+  "Show all N panes", side by side and one at a time (the group is kept), Settings' "Tabs on
+  screen" and "Arrange open panes", a tab or a pane's header dropped on a side or the middle of a
+  pane (`layout::zone`, `Layout::place`), and two servers on one page with each pane naming its
+  own. `shell/split.rs` draws it: `side-N` (header `side-head-N`, page `pane-N`), `split-…` and
+  `divider-…` by their path in the tree; "Space between panes" is the dividers' room.
+- **The sidebar** (`shell/rail.rs`) is the rail of icons or 0.10's list of names; its edge drags
+  (`layout::sidebar`: under 120 points it folds into icons) and Settings keeps `sidebarMode` and
+  `sidebarWidth`. Hidden or shown by its button, ⌘B / Ctrl+Shift+B and the palette.
+- **Compact mode** (`shell/compact.rs`, ⇧⌘M / Ctrl+Shift+M): the sidebar, the top row or both
+  stand aside, and slide in over the page while the pointer is at that edge.
+- Files' own shortcut is Ctrl+Shift+O off a Mac (⇧⌘E on one): 0.10's Split down has Ctrl+Shift+E.
 
 ## Screens that are built
 
@@ -249,9 +268,8 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
 | Settings: built but for the theme editor and the colour picker (`ThemeEditor.tsx`, `ColorPicker.tsx`); the rows marked `.later` in the catalogue wait for their features | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
-| The wide sidebar and tabs under each server (`Sidebar.tsx`) | `shell/rail.rs` (split out of `view.rs`) | `workbench.rs` |
-| Zoom, a tab dragged out to its own window, more than two side by side (`Workspace.tsx`, `Pane.tsx`); the tab menu, drag and the pair are built | `shell/tabs.rs`, `shell/split.rs` | `workbench/layout.rs` |
-| Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
+| Tabs under each server in the sidebar (`Sidebar.tsx`); the wide sidebar is built | `shell/rail.rs` | `workbench.rs` |
+| A tab dragged out to its own window (`windows.ts`) | `shell/tabs.rs` | `workbench/layout.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key and password questions, reconnect and sleep notices (`TerminalPane.tsx` overlays) | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |

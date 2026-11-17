@@ -86,6 +86,9 @@ impl Shell {
             pane.set_options(options.clone());
         }
         self.follow_streamer(streamer);
+        // "Tabs on screen": side by side, or one at a time.
+        let together = self.settings.get().view_mode == sshee_app::model::ViewMode::Split;
+        self.bench.set_side_by_side(together);
         // The copy is the settings' own, so the backend can't hold a borrow of the window.
         let settings = self.settings.get().clone();
         self.backend_mut().settings_changed(&settings);

@@ -3,7 +3,9 @@
 //! names keys for the shortcut table, `sheet` is the kit's component sheet. How the pieces fit
 //! and how to add a screen: desktop/ARCHITECTURE.md.
 
+pub mod compact;
 pub mod keys;
+pub mod rail;
 pub mod sheet;
 pub mod split;
 pub mod state;

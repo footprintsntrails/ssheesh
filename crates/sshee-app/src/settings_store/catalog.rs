@@ -178,6 +178,8 @@ pub enum Action {
     Open(&'static str),
     /// Opens "Add a server", where the ssh config's hosts and 0.10's servers are offered.
     AddServer,
+    /// Rearranges the panes on screen ("Arrange open panes").
+    Arrange(crate::workbench::layout::Arrangement),
 }
 
 /// A row's one line of help.
@@ -437,17 +439,21 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.view_mode = ViewMode::from(v)),
             },
         )
-        .later("One at a time for now. Two tabs go side by side from a tab's menu or its shortcut; a mode for all of them comes later.")
+        .hint("Side by side, a machine's tabs share its page and new ones open beside you. Split, drag a tab onto the page, or arrange them below.")
         .saves(&["viewMode"])
         .words("split panes side by side"),
         Row::new(
             "layout-arrange",
             Layout,
             "Arrange open panes",
-            Buttons(&[("Main + stack", Action::Later), ("Columns", Action::Later), ("Rows", Action::Later), ("Grid", Action::Later)]),
+            Buttons(&[
+                ("Main + stack", Action::Arrange(crate::workbench::layout::Arrangement::Main)),
+                ("Columns", Action::Arrange(crate::workbench::layout::Arrangement::Columns)),
+                ("Rows", Action::Arrange(crate::workbench::layout::Arrangement::Rows)),
+                ("Grid", Action::Arrange(crate::workbench::layout::Arrangement::Grid)),
+            ]),
         )
-        .hint("Rearranges what's open. Nothing gets closed.")
-        .later("Comes later.")
+        .hint("Rearranges the panes on screen (a tab alone: every tab of its server), the one you're in first. Nothing gets closed.")
         .words("layout grid columns rows split"),
         Row::new(
             "layout-sidebar-side",
@@ -478,7 +484,6 @@ fn build() -> Vec<Row> {
             },
         )
         .hint("What slides away until you point at the window's edge. Both also hides the vitals.")
-        .later("Comes later.")
         .saves(&["compactMode"])
         .words("zen focus hide toolbar tab bar sidebar minimal"),
         Row::new(
@@ -492,8 +497,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.sidebar_mode = SidebarMode::from(v)),
             },
         )
-        .hint("Names, or just icons to save room.")
-        .later("Icons for now. The wide sidebar with names comes later.")
+        .hint("Names, or just icons to save room. Drag the sidebar's edge to make it wider or fold it.")
         .saves(&["sidebarMode"])
         .words("sidebar narrow icons names rail"),
         Row::new(
@@ -559,7 +563,6 @@ fn build() -> Vec<Row> {
             "Space between panes",
             Slider { min: 0.0, max: 16.0, step: 1.0, get: |st| st.get().pane_gap, set: |st, v| st.set(|s| s.pane_gap = v), show: px },
         )
-        .later("Comes later.")
         .saves(&["paneGap"])
         .words("gap spacing"),
         Row::new(

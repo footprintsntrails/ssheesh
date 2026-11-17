@@ -123,6 +123,10 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
                         });
                     }
                     (true, Action::AddServer) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_add_server(tx)),
+                    (true, Action::Arrange(how)) => {
+                        let how = *how;
+                        button = button.on_press_tx(move |s: &mut Shell, tx: &mut Tx| s.arrange(how, tx));
+                    }
                     _ => {}
                 }
                 all = all.child(button);
