@@ -517,7 +517,7 @@ fn the_machine_on_screen_is_watched_once_its_terminal_is_connected() {
 }
 
 #[test]
-fn a_tab_that_is_not_a_terminal_shows_its_placeholder_and_starts_no_session() {
+fn a_tab_that_is_not_a_terminal_shows_its_page_and_starts_no_session() {
     let mut w = linux();
     w.rt.update(|s, tx| {
         s.bench.open(TabKind::Stats, WEB);
@@ -526,7 +526,8 @@ fn a_tab_that_is_not_a_terminal_shows_its_placeholder_and_starts_no_session() {
     w.settle();
     assert_eq!(w.row(), "*Stats@web-7731");
     assert_eq!(w.sessions(), 0);
-    assert!(w.tree().contains("This page isn't in the preview yet."));
+    // Stats come over a terminal's connection: it says so, and connects nothing by itself.
+    assert!(w.tree().contains("Connect first"), "{}", w.tree());
     assert!(w.rt.find("term").is_none());
 }
 

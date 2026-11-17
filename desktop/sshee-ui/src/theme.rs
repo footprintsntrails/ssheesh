@@ -99,6 +99,9 @@ pub const INPUT: TextStyle = TextStyle::new(15.0, 400.0);
 pub const CODE: TextStyle = TextStyle::new(12.0, 400.0).mono();
 /// A dialog's title.
 pub const TITLE: TextStyle = TextStyle::new(15.0, 600.0);
+/// A number that leads a line of the Stats page ("38%"), and one past its threshold.
+pub const STAT_VALUE: TextStyle = TextStyle::new(15.0, 600.0).features("'tnum' 1");
+pub const STAT_WARN: TextStyle = TextStyle::new(15.0, 700.0).features("'tnum' 1");
 /// A text field's and a push button's height; a list row is `ROW`.
 pub const FIELD: f32 = 28.0;
 pub const ROW: f32 = 30.0;

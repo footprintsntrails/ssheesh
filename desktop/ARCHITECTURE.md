@@ -272,6 +272,8 @@ never writes 0.10's. `--demo` reads and writes nothing.
 | Recipes: eight step-by-step guides (0.10's, word for word), the server's system guessed from its kernel, fields, the key from `~/.ssh`, Paste into terminal without Return, the bar it steps aside into | `screens/recipes.rs` | `recipes.rs`, `recipes/book.rs` |
 | Snippets: the list, the editor (one server or every server), the blanks asked before it goes into the terminal; Production asks before Return | `screens/snippets.rs` | `snippets.rs` |
 | Welcome (first start: bring 0.10's servers over, pick from `~/.ssh/config`, add one), the tour (the simple one, Р7), hints, What's new (CHANGELOG.md built in) | `screens/welcome.rs`, `screens/tour.rs`, `screens/whats_new.rs` | `tour.rs`, `changelog.rs` |
+| Containers (a tab kind): grouped by Compose project, state, ports, image, uptime, health; Start, Stop, Restart; logs (followed) and a shell, each in a new terminal tab (`Tab::container`, kept between runs); trouble said with the command that fixes it | `screens/containers.rs` | `containers.rs` (`Board`, `Ask`, `Reply`) |
+| Stats (a tab kind): CPU, load, memory, network and each disk with graphs over five minutes or meters, the machine's name and kernel, the busiest programs; the load on a server's card in the sidebar | `screens/stats.rs`, `kit/graph.rs` | `stats.rs`, `workbench/vitals.rs` (`History`) |
 | Tor: the popover over the sidebar's onion and the status bar's "Tor 84 ms" (the switch, a start's progress and what holds it up, the round trip, the log's last lines, new routes, start fresh) | `screens/tor.rs` | `tor.rs` |
 | Tunnels, from a server's menu: saved per server with their switches and states; a server's port here, a SOCKS proxy, and a port here on the server (1.0's own). Not built: 0.10's list of the server's web apps to open with one click | `screens/tunnels.rs` | `tunnels.rs` |
 
@@ -299,7 +301,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 |---|---|---|
 | Files, what is left (the list, the editor with its guarded save, menus, transfers, drag onto a folder and bookmarks are built: see "Files" below): a filter box, typing a path, new file, archive, paste copied files, copy to another server, open a terminal here, a folder's peek, Markdown and video, drag in from and out to the desktop (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
-| Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
+| The load drawn on each server's sidebar icon (`RailLoad` in `ServerLoad.tsx`: Settings' `railStatus`) | `kit/rail.rs` | `stats.rs` (`Load`) |
 | Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, pixel icons, server load, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
 | Tabs under each server in the sidebar (`Sidebar.tsx`); the wide sidebar is built | `shell/rail.rs` | `workbench.rs` |
 | A tab dragged out to its own window (`windows.ts`) | `shell/tabs.rs` | `workbench/layout.rs` |
@@ -307,7 +309,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Host-key question, reconnect and sleep notices, the agents' buttons: built (`terminal/session.rs` holds their state). Not built: a password question of its own | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Security check and recipes, what is left: the disk window (`ServerTools.tsx`'s `DiskDialog`), and `{{container}}` in a snippet as a list of the server's containers (it's a text field until Docker's screen can list them) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |
-| Docker and containers (`ServerTools.tsx`) | `screens/containers.rs` | `containers.rs` |
+| Docker, what 0.11 adds (README's roadmap): per-container stats, updates you can roll back, systemd services; sshee-core has none of it yet | `screens/containers.rs` | `containers.rs` |
 | Toasts and confirmations (`Overlays.tsx`) | `kit/toast.rs`, `kit/dialog.rs` | none |
 | Welcome, what is left: 0.10's "Make it yours" page (look, layout, privacy with a live preview), the "what changed" screen for 0.10 users, the tour's animated scenes (`TourScenes.tsx`) | `screens/welcome.rs`, `screens/tour.rs` | `tour.rs` |
 | Second window, the mini window (`windows.ts`, `MiniApp.tsx`) | `shell/windows.rs` | `windows.rs` |
@@ -340,6 +342,22 @@ brought over from 0.10 at the first start with the settings (`Shell::seed_snippe
   (`Action::Checkup`, `Recipes`, `Snippets`, `NewSnippet`, `WhatsNew`, `Tour`), a finding's
   "Open the recipe". Settings → About's "Take the tour" and "What's new" can call
   `Shell::open_tour(0, tx)` and `Shell::open_whats_new(tx)`.
+
+## Containers and Stats, and how their looks are timed
+
+- **Containers**: `Backend::containers(Ask)` (`app/src/containers.rs` on sshee-core's
+  `containers`, each request on its own thread), answered through `Remote::containers`, which
+  hands `screens::containers::deliver` a `Tx` to time the next look (`Tx::wake_at`, 10 s,
+  longer while looks fail). `screens::containers::tick` (from `Shell::poll`) asks when a tab on
+  screen is due; a tab out of sight doesn't look. A terminal into a container is a Terminal tab
+  with `Tab::container`: the live backend runs sshee-core's `containers::argv` (only for an id
+  that reads as one), the demo plays a prompt or a log.
+- **Stats**: the vitals thread (`app/src/vitals.rs`) looks at the machine on screen every 2 s
+  and at the others with a connected terminal (`Backend::agents_on`) every 10 s; each look gives
+  `Remote::set_vitals` (the status bar, `Workbench::history`) and `Remote::set_facts` (name,
+  kernel, load, every disk: `States::machines`). The busiest programs (`sshee_core::metrics::processes`,
+  one `ps`) are asked through `Backend::stats` every 5 s while a Stats tab is on screen. A
+  server's card shows its load only while it is being looked at, never old numbers.
 
 ## Open in your own editor (for the Files screen)
 

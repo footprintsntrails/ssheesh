@@ -60,6 +60,8 @@ pub struct LiveBackend {
     edit: crate::edit::Edit,
     /// The tunnels' ssh processes, and the list kept for next time.
     tunnels: crate::tunnels::Tunnels,
+    /// Containers tabs' looks and buttons, and the Stats page's programs.
+    containers: crate::containers::Containers,
     /// What a new terminal on a server shows first, as Settings has it now.
     welcome: Welcome,
     /// Settings' "SSHeesh's the first time, then the server's", and the servers that have had
@@ -105,7 +107,9 @@ impl LiveBackend {
         let files = crate::files::Files::new(env.clone());
         let edit = crate::edit::Edit::new(env.clone());
         let tunnels = crate::tunnels::Tunnels::new(env.clone(), sshee_core::app_identity::current().dir().map(std::path::Path::to_path_buf));
+        let containers = crate::containers::Containers::new(env.clone());
         LiveBackend {
+            containers,
             manager: Arc::new(SessionManager::new()),
             env,
             hosts: Arc::new(Mutex::new(by_key(hosts))),
@@ -266,6 +270,7 @@ impl Backend for LiveBackend {
         self.agents = Some(crate::agents::Watcher::start(self.env.clone(), remote.clone()));
         self.files.start(remote.clone());
         self.edit.start(remote.clone());
+        self.containers.start(remote.clone());
         self.remote = Some(remote.clone());
         // This computer's hostname, for streamer mode to hide (`hostname` may take a moment).
         let learn = remote.clone();
@@ -316,7 +321,12 @@ impl Backend for LiveBackend {
                 }
             }
         }
+        // A terminal into a container runs `docker exec` or `docker logs` there; one whose
+        // saved container doesn't read as one (an edited file) opens nothing.
+        let run = tab.container.as_ref().map(crate::containers::argv);
         Box::new(LiveLink(Arc::new(Inner {
+            refused: matches!(run, Some(None)),
+            run: run.flatten(),
             server: server.map(Server::key).unwrap_or_default(),
             keys: self.keys.clone(),
             verified: self.verified.clone(),
@@ -424,6 +434,20 @@ impl Backend for LiveBackend {
         if let Some(agents) = &self.agents {
             agents.watch(servers.iter().filter_map(|s| Some((s.key(), self.target(Some(s))?))).collect());
         }
+        // The same servers' load, for their cards and graphs.
+        if let Some(watcher) = &self.watcher {
+            watcher.also(servers.iter().filter_map(|s| Some((s.key(), self.target(Some(s))?))).collect());
+        }
+    }
+
+    fn containers(&mut self, ask: sshee_app::containers::Ask) {
+        let (target, prepare) = self.reach(&ask.server);
+        self.containers.ask(ask, target, prepare);
+    }
+
+    fn stats(&mut self, ask: sshee_app::stats::Ask) {
+        let (target, prepare) = self.reach(&ask.server);
+        self.containers.programs(ask, target, prepare);
     }
 
     fn files(&mut self, ask: sshee_app::files::Ask) {
@@ -519,6 +543,10 @@ struct Inner {
     /// What `open` was given, for starting again.
     started: Mutex<Option<(Arc<Model>, StatusSink)>>,
     size: Mutex<Size>,
+    /// Inside a container: what runs there instead of a login shell.
+    run: Option<Vec<String>>,
+    /// A container that doesn't read as one: nothing is started.
+    refused: bool,
 }
 
 /// What a terminal's sign-in leaves for the rest of the run: once it's in, the password that
@@ -631,8 +659,12 @@ impl Inner {
             status(LinkStatus::Gone { note: "That server isn't in your list anymore.".into() });
             return;
         };
+        if self.refused {
+            status(LinkStatus::Gone { note: "This container can't be opened: its saved id isn't one.".into() });
+            return;
+        }
         let saved = self.saved.clone();
-        let mut spec = SessionSpec { target, key: self.key.clone(), env: self.env.clone(), run: None, welcome: self.welcome.clone() };
+        let mut spec = SessionSpec { target, key: self.key.clone(), env: self.env.clone(), run: self.run.clone(), welcome: self.welcome.clone() };
         // On the reader thread (output, a server's Connected) or the session's (the rest): the
         // model locks what it shares.
         let bytes = self.bytes.clone();

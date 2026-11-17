@@ -96,6 +96,8 @@ pub enum Action {
     /// A server's files, at `path` when one is known.
     Files { server: ServerKey, path: Option<String> },
     Stats { server: ServerKey },
+    /// A machine's Docker and Podman containers.
+    Containers { server: ServerKey },
     /// Go to a tab.
     Tab(TabId),
     /// Go to a machine: the tab you were last on there, or a new terminal.
@@ -133,6 +135,7 @@ pub enum Glyph {
     Terminal,
     Agent,
     Stats,
+    Containers,
     /// A server's own icon, by its id (`globe`, `database`, ...).
     Server(String),
     Plus,
@@ -355,6 +358,7 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
             rows.push(row(Group::OnServer, Glyph::Shield, "Security check", Action::Checkup { server: key.clone() }).words("security checkup audit firewall ports login updates safe"));
             rows.push(row(Group::OnServer, Glyph::Recipe, "Recipes", Action::Recipes { server: key.clone() }).words("recipes guide how to firewall fail2ban docker swap https caddy key sudo"));
         }
+        rows.push(row(Group::OnServer, Glyph::Containers, "Containers", Action::Containers { server: key.clone() }).words("docker podman containers compose logs"));
         for snippet in ctx.snippets {
             let blanks = has_blanks(&snippet.command);
             let mut r = row(Group::OnServer, Glyph::Terminal, &snippet.command, Action::Run { server: key.clone(), command: snippet.command.clone(), enter: !blanks })
@@ -384,9 +388,11 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         let server = bench.server(&tab.server);
         let glyph = match tab.kind {
             TabKind::Terminal if tab.agent.is_some() => Glyph::Agent,
+            TabKind::Terminal if tab.container.is_some() => Glyph::Containers,
             TabKind::Terminal => Glyph::Terminal,
             TabKind::Files => Glyph::Folder,
             TabKind::Stats => Glyph::Stats,
+            TabKind::Containers => Glyph::Containers,
         };
         let mut r = row(Group::GoTo, glyph, crate::agents::tab_label(tab), Action::Tab(tab.id))
             .note(server.map_or("Unknown server", |s| s.name.as_str()))

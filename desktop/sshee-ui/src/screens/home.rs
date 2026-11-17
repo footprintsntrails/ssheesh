@@ -327,6 +327,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
                 TabKind::Terminal => Icon::Terminal,
                 TabKind::Files => Icon::Folder,
                 TabKind::Stats => Icon::Stats,
+                TabKind::Containers => Icon::Cube,
             };
             let spec = ListRow { icon: Some(glyph), label: &label, note: &note, tail: "Reopen", state: if on(Spot::Closed(i)) { RowState::Hot } else { RowState::Rest }, ..ListRow::default() };
             let index = c.index;

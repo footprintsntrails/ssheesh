@@ -12,6 +12,7 @@
 
 mod agents;
 mod args;
+mod containers;
 mod demo;
 mod edit;
 mod files;

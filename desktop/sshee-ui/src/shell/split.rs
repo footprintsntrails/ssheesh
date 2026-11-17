@@ -333,6 +333,7 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
         )),
         None if tab.kind == TabKind::Terminal => rune::el().key("pane-pending").w_full().grow(1.0),
         None if tab.kind == TabKind::Files => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::files::view(s, tab, t, cx)),
+        None if tab.kind == TabKind::Containers => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::containers::view(s, tab, t, cx)),
         None => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::stats::view(s, tab, t, cx)),
     };
     // Settings → Appearance → "Fade panes you're not using".

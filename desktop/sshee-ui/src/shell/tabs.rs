@@ -481,9 +481,11 @@ impl Shell {
 pub(crate) fn tab_icon(tab: &sshee_app::workbench::Tab) -> Icon {
     match tab.kind {
         TabKind::Terminal if tab.agent.is_some() => Icon::Agent,
+        TabKind::Terminal if tab.container.is_some() => Icon::Cube,
         TabKind::Terminal => Icon::Terminal,
         TabKind::Files => Icon::Folder,
         TabKind::Stats => Icon::Stats,
+        TabKind::Containers => Icon::Cube,
     }
 }
 

@@ -67,6 +67,7 @@ fn glyph(g: &Glyph) -> Icon {
         Glyph::Terminal => Icon::Terminal,
         Glyph::Agent => Icon::Agent,
         Glyph::Stats => Icon::Stats,
+        Glyph::Containers => Icon::Cube,
         Glyph::Server(id) => Icon::for_server(id),
         Glyph::Plus => Icon::Plus,
         Glyph::Close => Icon::Close,
@@ -201,6 +202,7 @@ impl Shell {
                 self.open_files_on(&server, path.as_deref(), tx);
             }
             Action::Stats { server } => self.show_tab(TabKind::Stats, &server, None, tx),
+            Action::Containers { server } => self.open_containers(&server, tx),
             Action::Tab(id) => self.focus_tab(id, tx),
             Action::Server(server) => self.go_to(&server, tx),
             Action::Run { server, command, enter } => self.run_on(&server, &command, enter, tx),
