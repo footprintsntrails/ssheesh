@@ -142,6 +142,21 @@ impl Shell {
         true
     }
 
+    /// Streamer mode's shortcut, over whatever is open (the palette, a dialog, a menu). True
+    /// when it was that key.
+    pub(crate) fn streamer_key(&mut self, ev: &rune::KeyEvent, tx: &mut Tx) -> bool {
+        use sshee_app::workbench::shortcuts::{match_shortcut, Pressed, Shortcut};
+        let Some(name) = super::keys::key_name(ev, tx.physical_key(), tx.key_base()) else { return false };
+        let pressed = Pressed { key: &name, ctrl: ev.mods.ctrl, meta: ev.mods.logo, alt: ev.mods.alt, shift: ev.mods.shift };
+        if match_shortcut(&pressed, self.options.mac_keys, &self.options.shortcuts) != Some(Shortcut::Streamer) {
+            return false;
+        }
+        if !tx.key_repeat() {
+            self.toggle_streamer(tx);
+        }
+        true
+    }
+
     /// The eye, and its shortcut: everything hidden, or shown again, saved in Settings.
     /// Applies to what is already on screen; Settings, when it is open, stays open.
     pub fn toggle_streamer(&mut self, tx: &mut Tx) {
@@ -164,8 +179,8 @@ impl Shell {
 /// The eye in the top row. Struck through and lit while streamer mode is on.
 pub(crate) fn eye(s: &Shell, t: &'static Theme) -> El {
     let on = s.streamer.on;
-    let keys = if s.options.mac_keys { "⌘⇧H" } else { "Ctrl+Shift+H" };
-    let name = if on { format!("Streamer mode is on: names and secrets are hidden ({keys})") } else { format!("Streamer mode: hide names and secrets ({keys})") };
+    let keys = sshee_app::palette::shortcut_label(sshee_app::workbench::shortcuts::Shortcut::Streamer, s.options.mac_keys, &s.options.shortcuts).map(|k| format!(" ({k})")).unwrap_or_default();
+    let name = if on { format!("Streamer mode is on: names and secrets are hidden{keys}") } else { format!("Streamer mode: hide names and secrets{keys}") };
     let mut e = rune::el()
         .key("streamer")
         .size(theme::CONTROL, theme::CONTROL)

@@ -36,3 +36,5 @@ pub use error::{ErrorCode, OpError};
 pub use hosts::{Host, HostSource, HostStore, NewHost};
 pub use session::{Delivery, SessionEvent, SessionManager, SessionSpec, SessionState};
 pub use ssh::{SshEnv, SshTarget, Target};
+/// Escapes out of a terminal's text: what ssh printed, as words.
+pub use text::strip_ansi;

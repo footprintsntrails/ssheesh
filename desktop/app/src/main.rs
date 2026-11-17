@@ -18,6 +18,7 @@ mod files;
 mod live;
 mod servers;
 mod settings;
+mod signin;
 mod tabs;
 mod vitals;
 

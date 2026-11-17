@@ -320,8 +320,10 @@ fn the_palette_opens_by_its_shortcuts_and_by_the_servers_name() {
         w.key(Key::Command(key), held);
         assert!(!w.rt.state.screens.palette.open, "Ctrl+Shift+{key} again");
     }
+    // The title on a server opens its tools now (`shell/title.rs`); the palette is the
+    // sidebar's search.
     w.click("title");
-    assert!(w.rt.state.screens.palette.open);
+    assert!(w.rt.find("title-menu").is_some());
     w.key(Key::Escape, "");
     w.click("search");
     assert!(w.rt.state.screens.palette.open);

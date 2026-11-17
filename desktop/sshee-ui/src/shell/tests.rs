@@ -150,6 +150,12 @@ impl Window {
         self.settle();
     }
 
+    /// "+", then its first row: a new terminal on the machine on screen.
+    fn plus_terminal(&mut self) {
+        self.click("new-tab");
+        self.click("nt-terminal");
+    }
+
     fn session(&self, n: usize) -> Arc<Mutex<Seen>> {
         self.world.lock().unwrap().sessions[n].1.clone()
     }
@@ -212,7 +218,7 @@ fn it_starts_on_the_main_menu_with_the_servers_in_the_sidebar() {
     assert!(w.rt.state.bench.showing_home());
     assert_eq!(w.sessions(), 0);
     let tree = w.tree();
-    for name in ["This computer", "web-7731", "db-main", "Search", "Settings", "Tor", "Security check", "New terminal", "Main menu"] {
+    for name in ["This computer", "web-7731", "db-main", "Search", "Settings", "Tor", "Security check", "New tab", "Main menu"] {
         assert!(tree.contains(name), "{name} isn't named in: {tree}");
     }
     // The main menu is the page: its search field and its tiles.
@@ -288,8 +294,9 @@ fn a_hidden_tab_keeps_its_session_and_its_output() {
 fn plus_and_its_shortcut_open_a_terminal_on_the_machine_on_screen() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
+    w.plus_terminal();
     assert_eq!(w.row(), "Terminal@web-7731 *Terminal 2@web-7731");
+    assert!(w.rt.find("new-tab-menu").is_none(), "the menu closed with the pick");
     w.key(Key::Command('t'), "cs");
     assert_eq!(w.row(), "Terminal@web-7731 Terminal 2@web-7731 *Terminal 3@web-7731");
     assert_eq!(w.sessions(), 3);
@@ -313,12 +320,75 @@ fn on_a_mac_the_shortcuts_are_commands() {
     assert!(w.rt.find("bar-logo").is_none() && w.rt.find("home").is_some());
 }
 
+/// "+" is a menu, as 0.10's: a terminal or Files here, then every other machine, each with
+/// the same two. By the pointer and by the keys alone; no key reaches the terminal behind it.
+#[test]
+fn plus_opens_terminals_and_files_here_or_on_another_machine() {
+    let mut w = linux();
+    w.click("server-1");
+    w.click("new-tab");
+    let tree = w.tree();
+    for name in ["New terminal", "Files", "This computer", "db-main"] {
+        assert!(tree.contains(name), "{name} isn't in the menu: {tree}");
+    }
+    // The machine on screen isn't offered again among the others.
+    assert!(w.rt.find("nt-server-1").is_none() && w.rt.find("nt-server-0").is_some() && w.rt.find("nt-server-2").is_some());
+    w.click("nt-files");
+    assert_eq!(w.row(), "Terminal@web-7731 *Files@web-7731");
+
+    // Another machine: its page, then its Files.
+    w.click("new-tab");
+    w.click("nt-server-2");
+    let tree = w.tree();
+    assert!(tree.contains("Files on db-main") && tree.contains("New terminal on db-main"), "{tree}");
+    w.click("nt-back");
+    assert!(w.rt.find("nt-server-2").is_some(), "back on the first page");
+    w.click("nt-server-2");
+    w.click("nt-files");
+    assert_eq!(w.row(), "Terminal@web-7731 Files@web-7731 *Files@db-main");
+
+    // By keys alone, from db-main's Files: down to the first other machine (This computer),
+    // into it, and back out with Esc onto the same row; in again, and a terminal there.
+    w.click("new-tab");
+    for _ in 0..3 {
+        w.key(Key::Down, "");
+    }
+    w.key(Key::Right, "");
+    assert!(w.tree().contains("New terminal on This computer"), "{}", w.tree());
+    w.key(Key::Escape, "");
+    assert!(w.rt.find("nt-server-0").is_some(), "back on the first page");
+    assert_eq!(w.rt.state.row.new_tab.as_ref().and_then(|m| m.hot), Some(2), "on the machine it came from");
+    w.key(Key::Enter, "");
+    w.key(Key::Enter, "");
+    let active = w.rt.state.bench.active().cloned().unwrap();
+    assert_eq!((active.kind, active.server.as_str()), (TabKind::Terminal, "local"));
+    assert!(w.rt.find("new-tab-menu").is_none());
+    // Typed while it is open, nothing reaches a shell; Esc closes it.
+    w.click("new-tab");
+    w.key(Key::Text("x".into()), "");
+    w.key(Key::Escape, "");
+    assert!(w.rt.find("new-tab-menu").is_none());
+    assert!((0..w.sessions()).all(|n| w.written(n).is_empty()));
+}
+
+/// Streamer mode hides a server's name in the "+" menu too.
+#[test]
+fn plus_names_machines_as_streamer_mode_shows_them() {
+    let mut w = linux();
+    w.click("server-1");
+    w.click("streamer");
+    w.click("new-tab");
+    assert!(!w.tree().contains("db-main"), "{}", w.tree());
+    w.click("nt-server-2");
+    assert!(!w.tree().contains("db-main"), "{}", w.tree());
+}
+
 #[test]
 fn tabs_close_by_cross_middle_click_and_shortcut_and_their_sessions_end() {
     let mut w = linux();
     w.click("server-1");
-    w.click("new-tab");
-    w.click("new-tab");
+    w.plus_terminal();
+    w.plus_terminal();
     let ids: Vec<u64> = w.rt.state.bench.tabs().iter().map(|t| t.id.0).collect();
     // The shortcut closes the tab on screen (the third); the second comes up.
     w.key(Key::Command('w'), "cs");
@@ -465,7 +535,7 @@ fn a_crowded_row_names_each_server_once() {
     let mut w = linux();
     w.click("server-1");
     for _ in 0..7 {
-        w.click("new-tab");
+        w.plus_terminal();
     }
     w.click("server-2");
     w.settle();

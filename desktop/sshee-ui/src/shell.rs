@@ -11,6 +11,7 @@ pub mod split;
 pub mod state;
 pub mod streamer;
 pub mod tabs;
+pub mod title;
 pub mod view;
 
 #[cfg(test)]

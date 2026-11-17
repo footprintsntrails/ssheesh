@@ -297,7 +297,7 @@ fn form_page(state: &State, t: &Theme) -> El {
     page
 }
 
-fn list_page(state: &State, t: &Theme, source: Source) -> El {
+fn list_page(state: &State, t: &Theme, source: Source, streaming: bool) -> El {
     let Some(sources) = &state.sources else { return col() };
     let offered = sources.of(source);
     let back = rune::el()
@@ -323,8 +323,12 @@ fn list_page(state: &State, t: &Theme, source: Source) -> El {
     let mut list = col().key("add-list").w_full().max_h(300.0).padding(4.0).radius(theme::RADIUS).border(1.0, t.hair).scroll(ScrollSpec { stick_bottom: false });
     for (i, c) in offered.iter().enumerate() {
         let ticked = state.picks.contains(&c.id);
-        let note = if c.address == c.name { "" } else { c.address.as_str() };
-        let spec = ListRow { label: &c.name, note, checked: Some(ticked), ..ListRow::default() };
+        // Streamer mode: neither the name nor the address, only dots where the name is.
+        let (name, note) = match streaming {
+            true => ("•".repeat(c.name.chars().count().clamp(4, 12)), ""),
+            false => (c.name.clone(), if c.address == c.name { "" } else { c.address.as_str() }),
+        };
+        let spec = ListRow { label: &name, note, checked: Some(ticked), ..ListRow::default() };
         let id = c.id.clone();
         list = list.child(list_row(t, &spec).key(format!("pick-{i}")).hover(t.hov2).focusable(true).role("checkbox").on_press_tx(move |s: &mut Shell, _| {
             let picks = &mut s.screens.add_server.picks;
@@ -379,7 +383,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
             if !state.busy {
                 import = import.default_button().on_press_tx(|s: &mut Shell, _| s.add_server_import());
             }
-            (list_page(state, t, source), import)
+            (list_page(state, t, source, s.streaming()), import)
         }
     };
     let foot = row().w_full().h(54.0).px(20.0).mt(14.0).gap(8.0).items_center().border_sides([1.0, 0.0, 0.0, 0.0], t.hair).child(rune::spacer()).child(cancel).child(done);

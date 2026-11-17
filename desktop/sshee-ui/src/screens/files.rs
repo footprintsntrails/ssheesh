@@ -219,6 +219,16 @@ pub fn refresh(s: &mut Shell, tab: TabId) {
     load(s, tab, |b, cache, now| b.refresh(cache, now));
 }
 
+/// Terminal `tab` signed in to its server (`Shell::link_status`): every Files tab there that
+/// said "Sign in first" tries again by itself, as the connection is there to use now.
+pub(crate) fn signed_in(s: &mut Shell, tab: TabId) {
+    let Some(server) = s.bench.tab(tab).filter(|t| matches!(t.link, sshee_app::workbench::Link::Connected { .. })).map(|t| t.server.clone()) else { return };
+    let waiting: Vec<TabId> = s.screens.files.iter().filter(|(_, st)| st.browser.server() == server && st.browser.error().is_some_and(|e| e.needs_terminal())).map(|(id, _)| *id).collect();
+    for id in waiting {
+        refresh(s, id);
+    }
+}
+
 /// A double click or Enter on a row: into a folder, or the file opens beside the list.
 pub fn open(s: &mut Shell, tab: TabId, name: &str) {
     let Some(state) = s.screens.files.get_mut(&tab) else { return };
@@ -710,6 +720,28 @@ mod tests {
         assert!(w.state().browser.problem().is_some() && w.state().browser.listing().is_none());
         // An answer for a tab that closed is dropped.
         deliver(&mut w.s, Reply { tab: TabId(99), server: WEB.into(), answer: Answer::Listed { ticket: 1, asked: "~".into(), result: Ok((home(), Clock::default())) } });
+    }
+
+    /// "Sign in first": once a terminal there is in, the folder is asked for again by itself.
+    #[test]
+    fn a_folder_that_waited_for_a_sign_in_lists_once_a_terminal_there_is_in() {
+        let mut w = Window::open();
+        let Some(Want::List { ticket, path }) = w.wants().pop() else { panic!() };
+        w.answer(Answer::Listed { ticket, asked: path, result: Err(Failure::new(FailureKind::Auth, "This server needs you to sign in.")) });
+        assert!(matches!(w.state().browser.problem(), Some(sshee_app::files::browser::Problem::Page { open_terminal: true, .. })));
+        let term = w.s.bench.open(TabKind::Terminal, WEB);
+        // Connecting is not in yet.
+        w.s.bench.set_link(term, sshee_app::workbench::Link::Connecting);
+        signed_in(&mut w.s, term);
+        assert!(w.wants().is_empty());
+        w.s.bench.set_link(term, sshee_app::workbench::Link::Connected { durable: true });
+        signed_in(&mut w.s, term);
+        let wants = w.wants();
+        let [Want::List { ticket, ref path }] = wants[..] else { panic!("{wants:?}") };
+        // A folder that failed for another reason isn't asked again.
+        w.answer(Answer::Listed { ticket, asked: path.clone(), result: Err(Failure::new(FailureKind::NotFound, "Gone.")) });
+        signed_in(&mut w.s, term);
+        assert!(w.wants().is_empty());
     }
 
     fn stamp(n: u64) -> Stamp {

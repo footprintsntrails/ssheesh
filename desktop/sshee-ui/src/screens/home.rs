@@ -216,7 +216,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         .label_static("Search servers, files, commands and settings")
         .on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
         .child(icon(Icon::Search, theme::ICON, t.l2))
-        .child(text(sshee_app::palette::placeholder(&s.bench)).font(theme::INPUT).color(t.l2).single_line().truncate().grow(1.0).shrink().a11y_hidden());
+        .child(text(s.text_shown(&sshee_app::palette::placeholder(&s.bench)).into_owned()).font(theme::INPUT).color(t.l2).single_line().truncate().grow(1.0).shrink().a11y_hidden());
     if let Some(keys) = keys(Shortcut::Palette) {
         search = search.child(key_cap(t, &keys, false));
     }
@@ -234,11 +234,13 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         .on_layout(|s: &mut Shell, [_, _, w, _]| s.screens.home.columns = (((w + TILE_GAP) / (TILE_WIDTH + TILE_GAP)).floor() as usize).max(1));
     for (i, server) in home.tiles.iter().enumerate() {
         let key = server.key.map(String::from);
+        // Streamer mode: "Server 2", as everywhere else.
+        let name = s.server_shown(&server.server, &server.name);
         let color = state.colors.get(&server.server).and_then(|c| rune::color::hex(c));
         let label = server.env.as_ref().map(|env| (env_short(env), *env == EnvLabel::Prod));
         let spec = Tile {
             icon: Some(Icon::for_server(&server.icon)),
-            name: &server.name,
+            name: &name,
             label,
             tint: color,
             key: key.as_deref(),
@@ -291,10 +293,13 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     if !home.running.is_empty() {
         let mut section = col().key("home-running").w_full().mt(32.0).child(heading(t, "Running now", ""));
         for (i, r) in home.running.iter().enumerate() {
-            let note = format!("on {}", r.server);
+            // Streamer mode: the server as "Server 2", the tab's name with names dotted.
+            let server = s.bench.tab(r.tab).map_or_else(|| s.text_shown(&r.server).into_owned(), |tab| s.server_shown(&tab.server, &r.server).into_owned());
+            let note = format!("on {server}");
+            let label = s.text_shown(&r.label);
             let spec = ListRow {
                 icon: Some(if r.agent.is_some() { Icon::Agent } else { Icon::Terminal }),
-                label: &r.label,
+                label: &label,
                 note: &note,
                 prod: r.prod,
                 needs_you: r.waiting,
@@ -312,16 +317,18 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         let note = keys(Shortcut::ReopenTab).map(|k| format!("{k} brings back the last one")).unwrap_or_default();
         let mut section = col().key("home-closed").w_full().mt(24.0).child(heading(t, "Recently closed", &note));
         for (i, c) in home.closed.iter().enumerate() {
+            let server = s.bench.closed().get(c.index).map_or_else(|| s.text_shown(&c.server).into_owned(), |closed| s.server_shown(&closed.server, &c.server).into_owned());
             let note = match &c.path {
-                Some(path) => format!("on {} · {path}", c.server),
-                None => format!("on {}", c.server),
+                Some(path) => format!("on {server} · {}", s.text_shown(path)),
+                None => format!("on {server}"),
             };
+            let label = s.text_shown(&c.label);
             let glyph = match c.kind {
                 TabKind::Terminal => Icon::Terminal,
                 TabKind::Files => Icon::Folder,
                 TabKind::Stats => Icon::Stats,
             };
-            let spec = ListRow { icon: Some(glyph), label: &c.label, note: &note, tail: "Reopen", state: if on(Spot::Closed(i)) { RowState::Hot } else { RowState::Rest }, ..ListRow::default() };
+            let spec = ListRow { icon: Some(glyph), label: &label, note: &note, tail: "Reopen", state: if on(Spot::Closed(i)) { RowState::Hot } else { RowState::Rest }, ..ListRow::default() };
             let index = c.index;
             section = section.child(list_row(t, &spec).key(format!("closed-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.reopen_closed_at(index, tx)));
         }
