@@ -43,6 +43,8 @@ pub struct CellMetrics {
     pub cell_h_px: f32,
     /// Letter spacing that puts each shaped glyph on its cell: `cell_w − advance`.
     pub tracking: f32,
+    /// The font, as a family list (Settings → Terminal → Font): what the cells were measured in.
+    pub family: &'static str,
 }
 
 impl CellMetrics {
@@ -57,7 +59,12 @@ impl CellMetrics {
         };
         let cell_w = cw_px / scale;
         let tracking = if mode == CellMode::Exact { 0.0 } else { cell_w - advance };
-        CellMetrics { size, scale, cell_w, cell_h: ch_px / scale, cell_w_px: cw_px, cell_h_px: ch_px, tracking }
+        CellMetrics { size, scale, cell_w, cell_h: ch_px / scale, cell_w_px: cw_px, cell_h_px: ch_px, tracking, family: crate::fonts::TERMINAL_FAMILY }
+    }
+
+    /// The same cells, measured in `family`.
+    pub fn in_family(self, family: &'static str) -> Self {
+        CellMetrics { family, ..self }
     }
 
     /// The columns and rows that fit `w` × `h` points (the terminal's area without padding).

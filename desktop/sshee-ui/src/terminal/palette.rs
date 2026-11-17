@@ -19,6 +19,10 @@ pub enum Scheme {
     /// Settings' "Your own": the 1.0 design's colours with your background and text
     /// (`0xRRGGBB`).
     Own { background: u32, foreground: u32 },
+    /// "Match app" on a theme that isn't the design's own (Midnight, a theme of yours): the
+    /// 1.0 design's colours on the theme's panes, dark (`night`) or light (`day`), `0xRRGGBB`,
+    /// as 0.10's "auto" scheme took the theme's pane colour.
+    App { night: u32, day: u32 },
 }
 
 /// One scheme's colours, as bytes (what a program asking gets) and as Rune colours.
@@ -146,6 +150,11 @@ impl Palette {
                 });
                 &picked
             }
+            (Scheme::App { night, day }, _) => {
+                let background = if dark { night } else { day };
+                picked = std::array::from_fn(|i| if i == 0 || i == 3 { hex(background) } else { fresh[i] });
+                &picked
+            }
         };
         let mut ansi = [Rgb::default(); 16];
         ansi.copy_from_slice(&src[4..20]);
@@ -153,14 +162,14 @@ impl Palette {
         // The selection is the scheme's blue: 0.10's cursor blue, the 1.0 design's focus blue.
         let blue = match (scheme, dark) {
             (Scheme::Classic | Scheme::Fixed(_), _) => src[2],
-            (Scheme::Fresh | Scheme::Own { .. }, true) => hex(0x0a84ff),
-            (Scheme::Fresh | Scheme::Own { .. }, false) => hex(0x0071e3),
+            (Scheme::Fresh | Scheme::Own { .. } | Scheme::App { .. }, true) => hex(0x0a84ff),
+            (Scheme::Fresh | Scheme::Own { .. } | Scheme::App { .. }, false) => hex(0x0071e3),
         };
         // A named scheme's own background says whether it is a dark one, whatever the window is.
         let on_dark = match scheme {
             Scheme::Fixed(c) => !sshee_app::settings_store::schemes::is_light((c.background << 8) | 0xff),
             Scheme::Own { background, .. } => !sshee_app::settings_store::schemes::is_light((background << 8) | 0xff),
-            Scheme::Classic | Scheme::Fresh => dark,
+            Scheme::Classic | Scheme::Fresh | Scheme::App { .. } => dark,
         };
         let (mut selection, selection_inactive) =
             if on_dark { (rgb(blue).alpha(0.32), Color::WHITE.alpha(0.12)) } else { (rgb(blue).alpha(0.2), Color::BLACK.alpha(0.08)) };
@@ -171,8 +180,8 @@ impl Palette {
         // A hidden secret's dots: 0.10's accent, the 1.0 design's quiet grey.
         let accent = match (scheme, dark) {
             (Scheme::Classic | Scheme::Fixed(_), _) => src[2],
-            (Scheme::Fresh | Scheme::Own { .. }, true) => hex(0xa1a1a6),
-            (Scheme::Fresh | Scheme::Own { .. }, false) => hex(0x636366),
+            (Scheme::Fresh | Scheme::Own { .. } | Scheme::App { .. }, true) => hex(0xa1a1a6),
+            (Scheme::Fresh | Scheme::Own { .. } | Scheme::App { .. }, false) => hex(0x636366),
         };
         Palette {
             scheme,

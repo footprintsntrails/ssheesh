@@ -128,8 +128,10 @@ pub enum Special {
     SidebarShown,
     /// 0.10's theme, by name, and that themes of your own are kept.
     Theme,
-    /// 0.10's accent colours.
+    /// 0.10's accent colours, and one of your own.
     Accent,
+    /// While following the system: the theme for each side.
+    LightDark,
     /// The terminal colour schemes, as small pictures.
     Schemes,
     /// A terminal in the colours, size and cursor chosen.
@@ -353,10 +355,19 @@ pub fn row(key: &str) -> Option<&'static Row> {
     rows().iter().find(|r| r.key == key)
 }
 
-/// The settings a section's Reset puts back: those of its rows that work. A row that is
-/// disabled keeps what 0.10 left, since nobody could see it change.
+/// What a Reset never takes: what you made yourself (themes of your own, your own terminal
+/// colours), as 0.10's Reset kept them.
+pub const KEPT_ON_RESET: [&str; 2] = ["customThemes", "terminalColors"];
+
+/// The settings a section's Reset puts back: every row's, as 0.10's Reset did, but for what
+/// you made yourself ([`KEPT_ON_RESET`]).
 pub fn reset_keys(section: Section) -> Vec<&'static str> {
-    rows().iter().filter(|r| r.section == section && r.works()).flat_map(|r| r.saves.iter().chain(r.adds).copied()).collect()
+    rows()
+        .iter()
+        .filter(|r| r.section == section)
+        .flat_map(|r| r.saves.iter().chain(r.adds).copied())
+        .filter(|k| !KEPT_ON_RESET.contains(k))
+        .collect()
 }
 
 /// Something search found: a row, or one shortcut in the Keyboard section.
@@ -539,8 +550,7 @@ fn build() -> Vec<Row> {
             "A line for Production and Staging",
             Switch { get: |st| st.get().env_stripe, set: |st, v| st.set(|s| s.env_stripe = v) },
         )
-        .hint("Servers you label Production or Staging always show the word. This adds a thin red or yellow line along the top of the window.")
-        .later("Comes later. Production servers show a red Prod label.")
+        .hint("Servers you label Production or Staging always show the word. This adds a thin red or orange line along the top of the window while one is on screen.")
         .saves(&["envStripe"])
         .words("prod staging stripe label red"),
         Row::new(
@@ -571,7 +581,7 @@ fn build() -> Vec<Row> {
             "Corner roundness",
             Slider { min: 0.0, max: 18.0, step: 1.0, get: |st| st.get().pane_radius, set: |st, v| st.set(|s| s.pane_radius = v), show: px },
         )
-        .later("Comes later.")
+        .hint("The page's corner where it meets the sidebar.")
         .saves(&["paneRadius"])
         .words("radius rounded corners"),
         Row::new(
@@ -580,8 +590,7 @@ fn build() -> Vec<Row> {
             "Use the Windows title bar",
             Switch { get: |st| st.get().native_title_bar, set: |st, v| st.set(|s| s.native_title_bar = v) },
         )
-        .hint("SSHeesh draws its own title bar to save room. Switch this on if dragging, snapping or the window buttons misbehave.")
-        .later("Comes later.")
+        .hint("SSHeesh draws its own title bar to save room. Switch this on if dragging, snapping or the window buttons misbehave. Takes effect when SSHeesh starts again.")
         .saves(&["nativeTitleBar"])
         .words("title bar window frame decorations native snap drag minimize maximize close buttons")
         .only(Platform::Windows),
@@ -605,22 +614,46 @@ fn build() -> Vec<Row> {
         .saves(&["themeFollowsSystem", "theme", "lightTheme", "darkTheme"])
         .words("auto dark mode light mode night day schedule theme colors look"),
         Row::new("look-theme", Look, "Theme", Control::Special(Special::Theme))
-            .later("One look for now, in light and dark. Themes and the theme editor come later; the ones you made are kept.")
+            .hint("Use the arrow keys to flip through them. Duplicate one to change any of its colors, transparency included.")
             .saves(&["customThemes"])
             .words("midnight graphite oled daylight custom own edit editor hex palette transparency import export share"),
+        Row::new("look-light-dark", Look, "Light and dark", Control::Special(Special::LightDark))
+            .hint("The theme by day and the one by night.")
+            .words("theme light dark day night system")
+            .when(|st| st.get().theme_follows_system),
         Row::new("look-accent", Look, "Accent color", Control::Special(Special::Accent))
-            .hint("Buttons, selection, focus and the glow behind the sidebar.")
-            .later("Selection and focus are blue for now. Accent colors come later.")
+            .hint("What is picked, the button Return presses, and the keyboard's focus.")
             .saves(&["accent"])
             .words("highlight color blue green"),
         Row::new(
             "look-size",
             Look,
             "Interface size",
-            Slider { min: 85.0, max: 130.0, step: 5.0, get: |st| st.get().ui_zoom, set: |st, v| st.set(|s| s.ui_zoom = v), show: percent },
+            // A choice rather than 0.10's slider: the window zooms with each step, and a knob
+            // being dragged would move under the pointer.
+            Choice {
+                look: POP,
+                options: &[
+                    ("85", "85%"),
+                    ("90", "90%"),
+                    ("95", "95%"),
+                    ("100", "100%"),
+                    ("105", "105%"),
+                    ("110", "110%"),
+                    ("115", "115%"),
+                    ("120", "120%"),
+                    ("125", "125%"),
+                    ("130", "130%"),
+                ],
+                get: |st| format!("{}", (st.get().ui_zoom / 5.0).round() * 5.0),
+                set: |st, v| {
+                    if let Ok(percent) = v.parse::<f64>() {
+                        st.update(|s| s.ui_zoom = percent);
+                    }
+                },
+            },
         )
         .hint("Everything but the terminal text, which has its own size under Terminal.")
-        .later("Comes later.")
         .saves(&["uiZoom"])
         .words("zoom scale bigger smaller ui text"),
         Row::new(
@@ -636,8 +669,7 @@ fn build() -> Vec<Row> {
                 show: |v| if v > 0.0 { percent(v) } else { "Off".into() },
             },
         )
-        .hint("Makes it obvious where you're typing.")
-        .later("Comes later.")
+        .hint("With two tabs side by side, the one you're not typing in fades, so it's obvious where you are.")
         .saves(&["dimInactive"])
         .words("dim inactive focus opacity"),
         Row::new("look-animations", Look, "Animations", Switch { get: |st| st.get().animations, set: |st, v| st.set(|s| s.animations = v) })
@@ -654,8 +686,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.logo = Logo::from(v)),
             },
         )
-        .hint("In the sidebar and on empty pages. Now and then the winking one blinks at you.")
-        .later("Still for now. The wink comes later.")
+        .hint("On the main menu's button. Now and then the winking one blinks at you; hidden, the button shows a house.")
         .saves(&["logo"])
         .words("icon wink animated mascot face"),
         // ------------------------------------------------------------------ Terminal
@@ -669,7 +700,8 @@ fn build() -> Vec<Row> {
             "Font",
             Choice { look: POP, options: &TERMINAL_FONTS, get: |st| st.get().terminal_font.clone(), set: |st, v| st.set(|s| s.terminal_font = v.to_owned()) },
         )
-        .later("JetBrains Mono for now. Other fonts come later.")
+        .hint("A font this computer doesn't have shows as JetBrains Mono, which comes with SSHeesh.")
+        .on_mac(&["SF Mono", "JetBrains Mono", "Menlo", "Cascadia Mono", "Consolas"])
         .saves(&["terminalFont"])
         .words("typeface mono jetbrains menlo cascadia sf"),
         Row::new(
@@ -701,7 +733,7 @@ fn build() -> Vec<Row> {
             "Padding",
             Slider { min: 0.0, max: 28.0, step: 1.0, get: |st| st.get().terminal_padding, set: |st, v| st.set(|s| s.terminal_padding = v), show: px },
         )
-        .later("12 px for now. Comes later.")
+        .hint("The space between the terminal's edge and its text.")
         .saves(&["terminalPadding"])
         .words("margin space terminal edge"),
         Row::new(
@@ -910,18 +942,17 @@ fn build() -> Vec<Row> {
             .hint("Tokens, keys and passwords in the output show as dots: GitHub and API tokens, private keys, PASSWORD=… and the like. Click one to see it. Always on in streamer mode.")
             .saves(&["hideSecrets"])
             .words("tokens keys passwords api redact mask privacy streamer env"),
-        Row::new("privacy-network", Privacy, "What SSHeesh connects to", Control::Special(Special::Network)).words("network telemetry tracking internet"),
-        // ------------------------------------------------------------------ Files
         Row::new(
             "files-clean",
-            Files,
+            Privacy,
             "Clean files before uploading",
             Switch { get: |st| st.get().clean_uploads, set: |st, v| st.set(|s| s.clean_uploads = v) },
         )
-        .hint("Photos lose where and with what they were taken; PDFs and Word, Excel and PowerPoint files lose author, company and the app that made them. A cleaned copy goes to the server, yours stays as it is.")
-        .later("Comes with Files: nothing is uploaded from here yet.")
+        .hint("Photos lose where and with what they were taken; PDFs and Word, Excel and PowerPoint files lose author, company and the app that made them. A cleaned copy goes to the server, yours stays as it is. Other kinds of files, and files inside folders, go as they are.")
         .saves(&["cleanUploads"])
         .words("metadata exif gps location camera author strip remove photos pdf word upload"),
+        Row::new("privacy-network", Privacy, "What SSHeesh connects to", Control::Special(Special::Network)).words("network telemetry tracking internet"),
+        // ------------------------------------------------------------------ Files
         Row::new("files-editor", Files, "Open files in", Control::Special(Special::ExternalEditor))
             .hint("Files' “Open in” starts this editor on a copy of a server's file, and every save goes back to the server.")
             .adds(&["externalEditor"])
@@ -1087,7 +1118,8 @@ mod tests {
     #[test]
     fn a_row_that_comes_later_says_so_in_one_line() {
         let later: Vec<&Row> = rows().iter().filter(|r| !r.works()).collect();
-        assert!(later.len() > 10);
+        // Only what belongs to features still being built, and the GPU switch 1.0 has no use for.
+        assert!(!later.is_empty() && later.len() <= 8, "{}", later.len());
         for row in later {
             let Status::Later(why) = row.status else { unreachable!() };
             assert!(!why.is_empty() && !why.contains('\n') && why.ends_with('.'), "{}: {why:?}", row.key);
@@ -1107,6 +1139,19 @@ mod tests {
             "privacy-streamer",
             "privacy-secrets",
             "keys-shortcuts",
+            "term-padding",
+            "term-idle",
+            "look-size",
+            "look-fade",
+            "layout-radius",
+            "layout-env-line",
+            "files-clean",
+            "agents-notify",
+            "term-font",
+            "look-theme",
+            "look-accent",
+            "look-logo",
+            "layout-title-bar",
         ] {
             assert!(row(key).is_some_and(Row::works), "{key}");
         }
@@ -1208,7 +1253,7 @@ mod tests {
         // Other ways people say it.
         assert_eq!(find("twitch"), [(Section::Privacy, "Streamer mode")]);
         assert!(find("dark mode").contains(&(Section::Appearance, "Appearance")));
-        assert_eq!(find("exif"), [(Section::Files, "Clean files before uploading")]);
+        assert_eq!(find("exif"), [(Section::Privacy, "Clean files before uploading")]);
         assert_eq!(find("onion"), [(Section::Tor, "Connect through Tor")]);
         // Every word must be there.
         assert_eq!(find("font zebra"), []);
@@ -1223,15 +1268,18 @@ mod tests {
     }
 
     #[test]
-    fn reset_puts_back_only_a_sections_working_rows() {
+    fn reset_puts_back_every_row_of_a_section_but_what_you_made() {
         let terminal = reset_keys(Section::Terminal);
         for key in ["terminalFontSize", "terminalLineHeight", "cursorStyle", "cursorBlink", "terminalScheme", "copyOnSelect", "highlightErrors", "welcomeMode", "idleSleep", "countTyping"] {
             assert!(terminal.contains(&key), "{key}");
         }
-        // Disabled rows keep what 0.10 left: nobody could see them change.
-        for key in ["terminalFont", "terminalPadding", "gpuRendering"] {
-            assert!(!terminal.contains(&key), "{key}");
+        // Every row, as 0.10's Reset: the ones another part of the app honours too.
+        for key in ["terminalFont", "gpuRendering", "countTyping", "terminalPadding", "idleSleep"] {
+            assert!(terminal.contains(&key), "{key}");
         }
+        // What you made stays.
+        assert!(!terminal.contains(&"terminalColors") && !reset_keys(Section::Appearance).contains(&"customThemes"));
+        assert!(reset_keys(Section::Appearance).contains(&"theme") && reset_keys(Section::Appearance).contains(&"accent"));
         assert_eq!(reset_keys(Section::Keyboard), ["shortcuts"]);
         assert!(reset_keys(Section::Layout).contains(&"sidebarSide") && !reset_keys(Section::Layout).contains(&"streamerMode"));
         assert!(reset_keys(Section::Layout).contains(&"tabsNameServer") && terminal.contains(&"programClipboard"));
@@ -1239,10 +1287,10 @@ mod tests {
         let mut st = store();
         st.update(|s| {
             s.terminal_font_size = 18.0;
-            s.terminal_padding = 20.0;
+            s.terminal_font = "menlo".into();
             s.streamer_mode = true;
         });
         st.reset(&terminal);
-        assert_eq!((st.get().terminal_font_size, st.get().terminal_padding, st.get().streamer_mode), (13.0, 20.0, true));
+        assert_eq!((st.get().terminal_font_size, st.get().terminal_font.as_str(), st.get().streamer_mode), (13.0, "system", true));
     }
 }

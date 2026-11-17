@@ -11,8 +11,9 @@
 use std::sync::Arc;
 
 use rune::Tx;
-use sshee_app::model::{CursorStyle, HighlightColor, HighlightRule, Side};
+use sshee_app::model::{CursorStyle, EnvLabel, HighlightColor, HighlightRule, Platform, Side};
 use sshee_app::settings_store::catalog::Section;
+use sshee_app::settings_store::looks;
 use sshee_app::settings_store::schemes::{self, Appearance, Resolved};
 use sshee_app::settings_store::{Seed, SettingsStore};
 use sshee_term::engine::CursorShape;
@@ -40,6 +41,24 @@ fn term_color(color: &HighlightColor) -> highlight::HighlightColor {
     }
 }
 
+/// "Match app": the design's terminal colours, on the panes of the theme for each side when
+/// one isn't the design's own (0.10's "auto" scheme took the theme's pane colour).
+fn app_scheme(s: &sshee_app::model::Settings) -> Scheme {
+    let pane = |dark: bool| {
+        let theme = looks::on_screen(s, dark);
+        (theme.design.is_some(), looks::over(theme.colors[1], theme.colors[0] | 0xff) >> 8)
+    };
+    match (pane(true), pane(false)) {
+        ((true, _), (true, _)) => Scheme::Fresh,
+        ((_, night), (_, day)) => Scheme::App { night, day },
+    }
+}
+
+/// Interface size as a zoom, within the row's range.
+fn ui_zoom(store: &SettingsStore) -> f32 {
+    (store.get().ui_zoom as f32 / 100.0).clamp(0.85, 1.3)
+}
+
 impl Shell {
     /// Hands the settings to everything that honours them. Called at the start and after every
     /// change. What terminals show (streamer mode, secrets, highlighting) reaches them with the
@@ -48,7 +67,12 @@ impl Shell {
         let s = self.settings.get();
         self.options.shortcuts = s.shortcuts.clone();
         let mut pane = self.options.pane.clone();
-        pane.font_size = (s.terminal_font_size as f32).clamp(6.0, 40.0);
+        // Interface size zooms everything but the terminal's text and padding, which keep
+        // their own sizes (Terminal → Font size, Padding).
+        let zoom = ui_zoom(&self.settings);
+        pane.font_size = (s.terminal_font_size as f32).clamp(6.0, 40.0) / zoom;
+        pane.padding = (s.terminal_padding as f32).clamp(0.0, 28.0) / zoom;
+        pane.family = schemes::terminal_family(&s.terminal_font, Platform::current());
         pane.line_height = (s.terminal_line_height as f32).clamp(1.0, 2.0);
         pane.cursor_shape = match s.cursor_style {
             CursorStyle::Block => CursorShape::Block,
@@ -62,7 +86,7 @@ impl Shell {
         pane.reconnect_card = s.reconnect_mode == sshee_app::model::ReconnectMode::Ask;
         pane.count_typing = s.count_typing;
         pane.scheme = match schemes::resolve(&s.terminal_scheme, s.terminal_colors.as_ref()) {
-            Resolved::MatchApp => Scheme::Fresh,
+            Resolved::MatchApp => app_scheme(s),
             Resolved::Fixed(scheme) => Scheme::Fixed(scheme.colors),
             Resolved::Own { background, foreground } => Scheme::Own { background, foreground },
         };
@@ -71,6 +95,8 @@ impl Shell {
             Appearance::Light => Some(false),
             Appearance::Dark => Some(true),
         };
+        // What sits over a terminal (find, the menu, the away line) in the theme on screen.
+        pane.themes = [crate::looks::theme_for(s, false), crate::looks::theme_for(s, true)];
         let highlights_for = (s.highlight_errors, s.highlight_warnings, s.highlight_addresses, s.highlight_rules.clone());
         if self.screens.settings.applied.highlights.as_ref() != Some(&highlights_for) {
             let rules: Vec<highlight::HighlightRule> = s
@@ -82,6 +108,8 @@ impl Shell {
             self.screens.settings.applied.highlights = Some(highlights_for);
         }
         let streamer = s.streamer_mode;
+        // Agents and notifications: whether a terminal that needs you says so at all.
+        self.screens.agent.notify = s.notify_attention;
         // Settings → Terminal → Copying, for every terminal open now and opened later.
         let (copy_on_select, program_clipboard) = (self.settings.copy_on_select(), self.settings.program_clipboard());
         self.options.pane = pane;
@@ -124,6 +152,36 @@ impl Shell {
     /// Whether the window draws dark, on a system that is (`system_dark`) or isn't.
     pub fn dark(&self, system_dark: bool) -> bool {
         Appearance::of(self.settings.get()).dark(system_dark)
+    }
+
+    /// Settings → Appearance → Interface size, as a zoom (1 is 100%).
+    pub fn ui_zoom(&self) -> f32 {
+        ui_zoom(&self.settings)
+    }
+
+    /// Settings → Layout → Corner roundness: the page's corner where it meets the sidebar.
+    pub fn page_radius(&self) -> f32 {
+        (self.settings.get().pane_radius as f32).clamp(0.0, 18.0)
+    }
+
+    /// Settings → Appearance → Fade panes you're not using: how opaque the side you're not
+    /// on is drawn, side by side (1: not faded).
+    pub fn unused_opacity(&self) -> f32 {
+        1.0 - (self.settings.get().dim_inactive as f32).clamp(0.0, 50.0) / 100.0
+    }
+
+    /// The label of the server on screen, when Settings → Layout → "A line for Production and
+    /// Staging" is on and it has one.
+    pub fn env_on_screen(&self) -> Option<EnvLabel> {
+        if !self.settings.get().env_stripe {
+            return None;
+        }
+        self.env_label_on_screen()
+    }
+
+    /// The label (Production, Staging, Development) of the server on screen, if it has one.
+    pub fn env_label_on_screen(&self) -> Option<EnvLabel> {
+        self.bench.current_key().and_then(|key| self.bench.server(key)).and_then(|server| server.env.clone())
     }
 
     /// The sidebar is at the window's right.

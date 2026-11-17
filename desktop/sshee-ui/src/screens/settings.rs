@@ -16,6 +16,7 @@
 //! takes effect at once and is saved by the store on its own thread.
 
 pub mod apply;
+mod looks;
 mod rows;
 mod shortcuts;
 
@@ -73,6 +74,13 @@ pub struct State {
     /// The row a search led to, pointed out until Settings goes elsewhere.
     pub found: Option<String>,
     pub(crate) applied: apply::Applied,
+    /// Appearance's themes: the one being edited, importing one, the colour being picked.
+    pub(crate) looks: looks::Looks,
+    /// The winking logo's clock (`crate::looks`).
+    pub(crate) wink: crate::looks::Wink,
+    /// Whether the system was dark when Settings last drew (which theme is on screen while
+    /// following it).
+    pub(crate) system_dark: std::cell::Cell<bool>,
 }
 
 impl Default for State {
@@ -89,6 +97,9 @@ impl Default for State {
             keys: shortcuts::Recording::default(),
             found: None,
             applied: apply::Applied::default(),
+            looks: looks::Looks::default(),
+            wink: crate::looks::Wink::default(),
+            system_dark: std::cell::Cell::new(true),
         }
     }
 }
@@ -113,6 +124,7 @@ impl State {
         self.menu = None;
         self.found = None;
         self.keys = shortcuts::Recording::default();
+        self.looks = looks::Looks::default();
     }
 
     /// Settings goes off screen: what was half done in it is dropped.
@@ -122,6 +134,7 @@ impl State {
         self.found = None;
         self.keys = shortcuts::Recording::default();
         self.search.clear();
+        self.looks = looks::Looks::default();
     }
 
     /// What the search field found.
@@ -148,8 +161,15 @@ pub fn key(s: &mut Shell, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if !s.screens.settings.open {
         return false;
     }
+    // Esc closes the colour picker first, then the theme editor, then Settings (0.10's).
     if ev.key == Key::Escape {
-        s.close_settings(tx);
+        if s.screens.settings.looks.picking.take().is_some() {
+            tx.instant();
+        } else if s.screens.settings.looks.editing.is_some() {
+            looks::close_editor(s, tx);
+        } else {
+            s.close_settings(tx);
+        }
     }
     true
 }
@@ -296,10 +316,12 @@ fn head(s: &Shell, t: &'static Theme) -> El {
 }
 
 /// The page.
-pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
+pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     let state = &s.screens.settings;
+    state.system_dark.set(cx.env().system_dark);
     let body = match state.section {
         Section::Keyboard => shortcuts::view(s, t),
+        Section::Appearance if state.looks.editing.is_some() => looks::editor(s, t),
         section => rows::section(s, t, section),
     };
     // Each section under its own key: a section switched to starts at its top.
@@ -325,6 +347,9 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
 pub fn overlay(s: &Shell, t: &'static Theme) -> Option<El> {
     let state = &s.screens.settings;
     let key = state.menu.filter(|_| state.open)?;
+    if let Some(menu) = looks::menu(s, t, key) {
+        return Some(menu);
+    }
     let row = catalog::row(key)?;
     if let Control::Special(catalog::Special::ExternalEditor) = row.control {
         return Some(editor_menu(s, t, key));

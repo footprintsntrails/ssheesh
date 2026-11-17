@@ -79,7 +79,14 @@ pub fn run(launch: Launch) {
     };
     // The top row is the title bar: macOS keeps its traffic lights over its start, Windows
     // gets Rune's minimize, maximize and close at its end, Linux keeps the system's frame.
-    let app = App::new(spec).titlebar(Titlebar::new(theme::BAR_HEIGHT).traffic_lights(theme::LIGHTS_AT.0, theme::LIGHTS_AT.1));
+    // Windows with Settings' "Use the Windows title bar": the system's frame, as on Linux.
+    let mut launch = launch;
+    let app = if launch.options.frame == crate::theme::Frame::Windows && launch.options.native_title_bar {
+        launch.options.frame = crate::theme::Frame::Linux;
+        App::new(spec)
+    } else {
+        App::new(spec).titlebar(Titlebar::new(theme::BAR_HEIGHT).traffic_lights(theme::LIGHTS_AT.0, theme::LIGHTS_AT.1))
+    };
     let handle = app.handle();
     // Sessions' threads and background work reach the state through this, in order.
     let remote = Remote::new(Arc::new(move |f| handle.update_if(move |s: &mut Shell, tx| f(s, tx))));

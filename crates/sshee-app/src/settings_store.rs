@@ -25,6 +25,7 @@
 
 pub mod catalog;
 pub mod keymap;
+pub mod looks;
 pub mod schemes;
 
 use std::io::Write;
@@ -328,6 +329,90 @@ impl SettingsStore {
         self.more.program_clipboard
     }
 
+    // ---- What features read. One accessor per setting a feature built outside Settings
+    // honours, so it hooks in without knowing 0.10's field names or defaults. Settings →
+    // the row that changes it, in brackets.
+
+    /// A terminal that needs you says so: its tab, its server's dot, and a system
+    /// notification while SSHeesh is in the background (Agents → "Tell me when a terminal
+    /// needs me"). Notifications, the tray and toasts read this.
+    pub fn notify_attention(&self) -> bool {
+        self.settings.notify_attention
+    }
+
+    /// Through Tor, ssh sends keys on a steady beat (Tor → "Hide my typing rhythm"), for
+    /// terminals opened from now on.
+    pub fn tor_hide_typing(&self) -> bool {
+        self.settings.tor_hide_typing
+    }
+
+    /// The status bar's CPU, memory, network and disk readout (Layout → "Server vitals").
+    pub fn show_vitals(&self) -> bool {
+        self.settings.show_vitals
+    }
+
+    /// How each open server's load shows on its icon in the sidebar (Layout → "Server load").
+    /// Stats read it; until the sidebar draws it the row is marked later.
+    pub fn server_load(&self) -> crate::model::RailStatus {
+        self.settings.rail_status.clone()
+    }
+
+    /// What a new server terminal shows first, the parts of SSHeesh's own welcome, and your
+    /// line under it (Terminal → Welcome).
+    pub fn welcome(&self) -> (crate::model::WelcomeMode, &[crate::model::WelcomePart], &str) {
+        (self.settings.welcome_mode.clone(), &self.settings.welcome_parts, self.settings.welcome_note.trim())
+    }
+
+    /// Small notes the first time you meet a feature (About → Tips): off when 0.10's `*` is
+    /// among the hints seen.
+    pub fn tips_on(&self) -> bool {
+        !self.settings.hints_seen.iter().any(|h| h == "*")
+    }
+
+    /// Whether the tip `id` was already shown (About → Tips).
+    pub fn tip_seen(&self, id: &str) -> bool {
+        !self.tips_on() || self.settings.hints_seen.iter().any(|h| h == id)
+    }
+
+    /// The first-launch hello was seen or skipped, and which one (About → "Show the welcome
+    /// again" starts it over).
+    pub fn onboarded(&self) -> (bool, u32) {
+        (self.settings.onboarded, self.settings.onboarding_version)
+    }
+
+    /// The version whose "What's new" was seen (About → "What's new").
+    pub fn last_seen_version(&self) -> &str {
+        &self.settings.last_seen_version
+    }
+
+    /// Install updates automatically, ask, or never check (Updates → "Install updates").
+    pub fn update_mode(&self) -> crate::model::UpdateMode {
+        self.settings.update_mode.clone()
+    }
+
+    /// Minutes an unused server terminal keeps its connection; `None` for as long as it's
+    /// open (Terminal → "Disconnect unused terminals").
+    pub fn idle_sleep_minutes(&self) -> Option<f64> {
+        (self.settings.idle_sleep > 0.0).then_some(self.settings.idle_sleep)
+    }
+
+    /// Files lose their metadata before they're uploaded (Files → "Clean files before
+    /// uploading").
+    pub fn clean_uploads(&self) -> bool {
+        self.settings.clean_uploads
+    }
+
+    /// Names, addresses and users hidden everywhere (Privacy → "Streamer mode"). Screens
+    /// draw through `Shell::server_shown` and `Shell::text_shown`, which read this.
+    pub fn streamer_mode(&self) -> bool {
+        self.settings.streamer_mode
+    }
+
+    /// Tokens, keys and passwords dotted (Privacy → "Hide secrets"); always so in streamer mode.
+    pub fn hide_secrets(&self) -> bool {
+        self.settings.hide_secrets || self.settings.streamer_mode
+    }
+
     pub fn origin(&self) -> Origin {
         self.origin
     }
@@ -477,6 +562,19 @@ impl SettingsStore {
     pub fn save_error(&self) -> Option<String> {
         self.saver.as_ref().and_then(Saver::error)
     }
+}
+
+/// Settings' "Use the Windows title bar" as saved in `dir`'s file, read without opening the
+/// store (the window's frame is decided before the window, and so the store, exists). Off when
+/// there is no file or it doesn't say.
+pub fn native_title_bar(dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(dir.join(FILE)) else { return false };
+    let Ok(Json::Object(file)) = Json::parse(&text) else { return false };
+    let state = match file.get("settings") {
+        Some(Json::Object(saved)) => saved.get("state"),
+        _ => None,
+    };
+    matches!(state, Some(Json::Object(state)) if state.get("nativeTitleBar") == Some(&Json::Bool(true)))
 }
 
 /// What a settings file held.

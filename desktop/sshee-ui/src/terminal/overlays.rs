@@ -32,7 +32,6 @@ use super::metrics::CellMetrics;
 use super::pane::TermPane;
 use super::wake::Coalesce;
 use super::{away, find, links, menu, scrollbar};
-use crate::theme::Theme;
 
 /// What a pane asks its session's server for ([`super::TermLink::ask`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,7 +271,8 @@ impl TermPane {
 
 /// The pane's area with its overlays: `term` (from `view.rs`) and everything over it.
 pub fn layer<S: 'static>(term: El, pane: &TermPane, cx: &mut Cx<S>, get: impl Fn(&mut S) -> Option<&mut TermPane> + Copy + 'static, m: &CellMetrics) -> El {
-    let t = Theme::of(cx.env().system_dark);
+    // Dark or light as Settings says (the pane's own), else as the system is.
+    let t = pane.theme(cx.env().system_dark);
     let mut layer = rune::col().key("term-box").w_full().grow(1.0).min_h(0.0).child(term);
     layer = layer.children(scrollbar::bar(pane, t, get));
     layer = layer.children(scrollbar::to_bottom(pane, t, get));

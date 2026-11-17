@@ -151,16 +151,8 @@ fn special_control(s: &Shell, t: &'static Theme, r: &'static Row, special: Speci
     let key = control_key(r.key);
     match special {
         Special::SidebarShown => switch(t, r.label, s.bench.sidebar_shown(), true).key(key).on_press_tx(|s: &mut Shell, tx| s.toggle_sidebar(tx)),
-        Special::Theme => popup_button(t, r.label, schemes::theme_name(&st.theme, &st.custom_themes), false).key(key),
-        Special::Accent => {
-            let mut swatches = row().key(key).gap(8.0).items_center().role("group").label(r.label).layer_opacity(Theme::DISABLED);
-            for (name, value) in schemes::ACCENTS {
-                if let Some(color) = rune::color::hex(value) {
-                    swatches = swatches.child(swatch(t, color, 16.0, st.accent.eq_ignore_ascii_case(value)).label(name));
-                }
-            }
-            swatches
-        }
+        Special::Accent => super::looks::accent(s, t),
+        Special::LightDark => super::looks::light_dark(s, t),
         Special::Tips => {
             let off = st.hints_seen.iter().any(|h| h == "*");
             switch(t, r.label, !off, false).key(key)
@@ -253,7 +245,7 @@ fn terminal_preview(s: &Shell, t: &'static Theme) -> El {
     let p = palette(s, t);
     let size = s.options.pane.font_size;
     let line = (size * s.options.pane.line_height * 1.2).round();
-    let font = TextStyle::new(size, 400.0).mono().lh(line);
+    let font = TextStyle::new(size, 400.0).family(rune::tok::Family::Named(s.options.pane.family)).lh(line);
     let ink = |index: u8| p.color(TermColor::Indexed(index));
     let piece = |words: &str, color: Color| text(words).font(font).color(color).single_line();
     let prompt = || row().child(piece("deploy@web-7731", ink(2))).child(piece(":", p.fg())).child(piece("~", ink(4))).child(piece("$ ", p.fg()));
@@ -448,6 +440,7 @@ fn wide(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
     let Control::Special(special) = r.control else { return None };
     Some(match special {
         Special::Schemes => schemes_grid(s, t),
+        Special::Theme => super::looks::theme_grid(s, t),
         Special::HighlightRules => highlight_rules(s, t),
         _ => return None,
     })
@@ -532,6 +525,8 @@ pub(super) fn section(s: &Shell, t: &'static Theme, section: Section) -> Vec<El>
                 "Names are hidden as well as SSHeesh can spot them. Glance over your screen before you go live: a name inside a file or a log line it has never seen can still slip through.",
             )),
             "tor-switch" => tor_state(s, t),
+            // Your own accent's picker, under its row.
+            "look-accent" => super::looks::picker(s, t, "accent"),
             _ => None,
         };
         if let Some(under) = under {

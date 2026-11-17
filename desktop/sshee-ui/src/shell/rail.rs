@@ -21,7 +21,7 @@ use sshee_app::workbench::layout::sidebar;
 use sshee_app::workbench::Tor;
 
 use super::state::Shell;
-use crate::icons::{icon, logo, Icon};
+use crate::icons::{icon, Icon};
 use crate::kit::chip::prod_chip;
 use crate::kit::rail::{rail_button, RailState};
 use crate::kit::ringed_dot;
@@ -100,7 +100,7 @@ impl Shell {
 }
 
 /// The logo: the main menu.
-fn home(t: &Theme) -> El {
+fn home(s: &Shell, t: &Theme) -> El {
     el().key("home")
         .size(theme::RAIL_BUTTON, theme::RAIL_BUTTON)
         .radius(theme::RADIUS)
@@ -113,7 +113,7 @@ fn home(t: &Theme) -> El {
         .label_static("Main menu")
         .help("Main menu")
         .on_press_tx(|s: &mut Shell, tx| s.show_home(tx))
-        .child(logo(24.0))
+        .child(s.app_logo(24.0, t))
 }
 
 /// A row of the list: an icon and words. `selected`: the server on screen.
@@ -148,7 +148,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
     let mac = s.options.frame == Frame::Mac;
     if mac {
         // Elsewhere the logo is in the bar, above this column.
-        rail = rail.child(if wide { row().w_full().child(home(t)) } else { home(t) });
+        rail = rail.child(if wide { row().w_full().child(home(s, t)) } else { home(s, t) });
     }
     rail = rail.child(if wide {
         list_row(t, Icon::Search, "Search", false).key("search").help("Search servers, tabs, files and commands").on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))

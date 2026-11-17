@@ -194,6 +194,8 @@ pub struct Options {
     pub shortcuts: IndexMap<String, Option<Keys>>,
     /// Show the component sheet instead of the window (`--sheet`).
     pub sheet: bool,
+    /// Windows: Settings' "Use the Windows title bar", as saved when the program started.
+    pub native_title_bar: bool,
 }
 
 impl Default for Options {
@@ -204,6 +206,7 @@ impl Default for Options {
             mac_keys: cfg!(target_os = "macos"),
             shortcuts: IndexMap::new(),
             sheet: false,
+            native_title_bar: false,
         }
     }
 }
@@ -727,6 +730,7 @@ impl Shell {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // The screens' own clockwork: who started to wait, a server's card coming up.
         let ticked = crate::screens::home::tick(self, clock, tx);
+        let winked = crate::looks::tick_logo(self, clock, tx);
         // A setting brought more tabs onto the page ("Tabs on screen"): their terminals start.
         let unmade = self.tabs_on_screen().into_iter().any(|id| !self.panes.contains_key(&id) && self.bench.tab(id).is_some_and(|t| t.kind == TabKind::Terminal));
         if unmade {
@@ -758,7 +762,7 @@ impl Shell {
         }
         // Agents: who works, who went quiet, and the card of the one being answered.
         let agents = crate::screens::agent::poll(self, clock, tx);
-        changed || ticked || agents
+        changed || ticked || agents || winked
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

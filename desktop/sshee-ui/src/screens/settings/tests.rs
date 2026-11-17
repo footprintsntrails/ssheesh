@@ -425,9 +425,10 @@ fn a_row_that_comes_later_is_shown_and_cannot_be_changed() {
     w.go(Section::Updates);
     w.click("updates-mode-control/seg-2");
     assert_eq!(w.settings().update_mode.as_str(), "auto");
-    w.go(Section::Files);
+    // Clean files before uploading works, in Privacy as in 0.10.
+    w.go(Section::Privacy);
     w.click("files-clean-control");
-    assert!(w.settings().clean_uploads);
+    assert!(!w.settings().clean_uploads);
 }
 
 #[test]
@@ -709,4 +710,95 @@ fn copying_reaches_every_terminal_through_the_windows_copy_modes() {
     w.click("server-2");
     let fresh = w.rt.state.panes.values().filter(|p| !p.options.copy_on_select && !p.options.program_clipboard).count();
     assert_eq!(fresh, 2);
+}
+
+#[test]
+fn appearance_and_terminal_rows_reach_the_window_at_once() {
+    let mut w = Window::defaults();
+    w.click("server-1");
+    let before = w.told.lock().unwrap().sizes[0].unwrap();
+    let set = |w: &mut Window, change: fn(&mut Settings)| {
+        w.rt.update(move |s, tx| s.change_settings(tx, |st| st.set(change)));
+        w.settle();
+    };
+    // Terminal → Padding: the grid takes the room.
+    set(&mut w, |v| v.terminal_padding = 0.0);
+    let pane = |w: &Window| w.rt.state.panes.values().next().unwrap().options.clone();
+    assert_eq!(pane(&w).padding, 0.0);
+    assert!(w.told.lock().unwrap().sizes[0].unwrap().cols > before.cols);
+    // Terminal → Font: the family the cells are measured in.
+    set(&mut w, |v| v.terminal_font = "menlo".into());
+    assert!(pane(&w).family.starts_with("Menlo"));
+    // Appearance → Interface size: everything zooms but the terminal's text.
+    set(&mut w, |v| v.ui_zoom = 120.0);
+    assert!((w.rt.zoom() - 1.2).abs() < 1e-6);
+    assert!((pane(&w).font_size * 1.2 - 13.0).abs() < 1e-4);
+    // Layout → Corner roundness: the page's corner.
+    set(&mut w, |v| v.pane_radius = 3.0);
+    assert_eq!(w.rt.elements().into_iter().find(|e| e.key.as_deref() == Some("page")).unwrap().radius, 3.0);
+    // A Production server's page is framed in red; the line along the top comes with the setting.
+    assert!(w.has("env-frame") && !w.has("env-stripe"));
+    set(&mut w, |v| v.env_stripe = true);
+    assert!(w.has("env-stripe"));
+    // Agents → "Tell me when a terminal needs me".
+    set(&mut w, |v| v.notify_attention = false);
+    assert!(!w.rt.state.screens.agent.notify);
+    // Appearance → Theme and Accent color: the window's colours.
+    set(&mut w, |v| v.theme = "midnight".into());
+    assert_eq!(w.fill("window"), "#0f1013ff");
+    set(&mut w, |v| v.accent = "#7c83ff".into());
+    assert_eq!(w.rt.state.theme(true).blue.hex(), "#7c83ffff");
+    // Logo → Hidden: the main menu's button shows a house instead.
+    set(&mut w, |v| v.logo = sshee_app::model::Logo::Hidden);
+    assert!(w.has("home"));
+}
+
+#[test]
+fn a_theme_of_your_own_is_made_edited_and_deleted_in_settings() {
+    let mut w = Window::defaults();
+    w.go(Section::Appearance);
+    for i in 0..5 {
+        assert!(w.has(&format!("theme-{i}")), "theme-{i}");
+    }
+    // Midnight, by its picture.
+    w.click("theme-1");
+    assert_eq!(w.settings().theme, "midnight");
+    // Duplicate and edit: a copy in use at once, its editor open.
+    w.click("theme-duplicate");
+    assert_eq!(w.settings().custom_themes.len(), 1);
+    let id = w.settings().custom_themes[0].id.clone();
+    assert_eq!(w.settings().theme, id);
+    assert!(w.has("editor-name") && w.has("color-window"));
+    // A colour picked from the ready ones is the theme's at once; its reset puts it back.
+    w.click("color-window");
+    assert!(w.has("picker-window") && w.has("pick-square") && w.has("pick-hue"));
+    w.click("pick-ready-14");
+    assert!(w.settings().custom_themes[0].colors.contains_key("window"), "{:?}", w.settings().custom_themes[0].colors);
+    w.click("color-reset-window");
+    assert!(w.settings().custom_themes[0].colors.is_empty());
+    // See-through colours have the opacity slider; solid ones don't.
+    w.click("color-glass");
+    assert!(w.has("pick-alpha"));
+    // Esc closes the picker, then the editor, then Settings.
+    w.key(Key::Escape, "");
+    assert!(!w.has("picker-glass") && w.has("editor-name"));
+    w.key(Key::Escape, "");
+    assert!(!w.has("editor-name") && w.rt.state.screens.settings.open);
+    // Import: text that isn't a theme says why.
+    w.click("theme-import");
+    w.click("theme-import-text");
+    w.typed("nope");
+    w.click("theme-import-add");
+    assert!(w.has("theme-import-error"));
+    // Delete: asked first, then gone, and the window back on Midnight.
+    w.click("theme-edit");
+    w.click("editor-delete");
+    w.click("editor-delete-yes");
+    assert!(w.settings().custom_themes.is_empty());
+    assert_eq!(w.settings().theme, "midnight");
+    // The accent: a preset, and one of your own from the picker.
+    w.click("accent-3");
+    assert_eq!(w.settings().accent, "#b07cff");
+    w.click("accent-own");
+    assert!(w.has("picker-accent"));
 }

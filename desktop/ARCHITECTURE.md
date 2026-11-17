@@ -134,6 +134,12 @@ wraps it (`term-box`) with what sits over the text, each in its own file with it
   if a 0.10 setting has no row. A feature that isn't built yet gets `.later("…")`: its row is
   drawn disabled with that one line. When the feature lands, drop the `.later` and make
   `apply_settings` (or your screen) read the value.
+- **Themes.** `settings_store::looks` holds 0.10's themes as fourteen colours each (SSHeesh
+  Default and Daylight are the design's dark and light), yours over a base, sharing as text and
+  the accent; `sshee-ui/src/looks.rs` turns them into a `&'static Theme` (`Shell::theme`), the
+  design's own when nothing differs. The editor and the colour picker are
+  `screens/settings/looks.rs`. Features built elsewhere read their settings through the
+  accessors on `SettingsStore` (`notify_attention`, `server_load`, `update_mode`, `tips_on`…).
 - **When in doubt, private.** If the settings from before can't be read with certainty,
   streamer mode and secret hiding start on and `SettingsStore::notice` says why; the shell
   draws it across the top of the page (`screens::settings::notice_bar`) until "OK".
@@ -290,7 +296,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Files, what is left (the list, the editor with its guarded save, menus, transfers, drag onto a folder and bookmarks are built: see "Files" below): a filter box, typing a path, new file, archive, paste copied files, copy to another server, open a terminal here, a folder's peek, Markdown and video, drag in from and out to the desktop (`FilesPane.tsx`, `FolderPeek`, `MediaPreview`, `MarkdownView`, `UploadDialog`, `CopyToServer`) | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
 | Stats page and the sidebar's load card (`StatsPane.tsx`, `ServerLoad.tsx`) | `screens/stats.rs` | `workbench/vitals.rs` grows history |
-| Settings: built but for the theme editor and the colour picker (`ThemeEditor.tsx`, `ColorPicker.tsx`); the rows marked `.later` in the catalogue wait for their features | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
+| Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, pixel icons, server load, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
 | Tabs under each server in the sidebar (`Sidebar.tsx`); the wide sidebar is built | `shell/rail.rs` | `workbench.rs` |
 | A tab dragged out to its own window (`windows.ts`) | `shell/tabs.rs` | `workbench/layout.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |

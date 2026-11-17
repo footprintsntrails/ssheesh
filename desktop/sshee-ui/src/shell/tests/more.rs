@@ -1138,3 +1138,31 @@ fn splits_are_kept_with_the_tabs() {
     again.restore(&saved);
     assert_eq!(again.on_screen().len(), 2);
 }
+
+#[test]
+fn a_click_shows_a_hidden_secret_but_never_while_streaming_nor_outside_the_window() {
+    let mut w = linux();
+    w.click("server-1");
+    let secret = made_up_secret(5, 0);
+    w.feed(0, format!("export TOKEN={secret}\r\nweb-7731:~$ ").as_bytes());
+    assert!(!w.tree().contains(&secret[4..12]));
+    let line = w.line_of("export TOKEN=");
+    let (x, y) = w.cell(line, 20);
+    let click = |w: &mut Window| {
+        w.rt.pointer_down(x, y);
+        w.rt.frame(1.0 / 60.0);
+        w.rt.pointer_up(x, y);
+        w.settle();
+    };
+    // 0.10's: a click on the dots shows it, and it stays shown in this terminal.
+    click(&mut w);
+    assert!(w.tree().contains(&secret), "{}", w.tree());
+    // A notification never carries it: what leaves the window is made safe again.
+    let note = sshee_term::attention::for_outside(&format!("push with TOKEN={secret}?"), &w.rt.state.look(), 500);
+    assert!(!note.contains(&secret[4..12]) && note.contains('•'), "{note}");
+    // Streaming hides it again, and a click can't show it then.
+    w.key(Key::Command('h'), "cs");
+    assert!(!w.tree().contains(&secret[4..12]));
+    click(&mut w);
+    assert!(!w.tree().contains(&secret[4..12]));
+}

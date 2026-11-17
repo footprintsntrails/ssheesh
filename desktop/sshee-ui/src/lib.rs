@@ -5,6 +5,7 @@ pub mod fonts;
 pub mod hygiene;
 pub mod icons;
 pub mod kit;
+pub mod looks;
 pub mod meter;
 pub mod proto;
 pub mod screens;

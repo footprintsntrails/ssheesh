@@ -515,9 +515,24 @@ fn chevron(points: [[f32; 2]; 3], width: f32) -> Vec<[f32; 2]> {
     ]
 }
 
+/// The logo's face: its eyes open, both shut a moment (a blink), or the right one (a wink), as
+/// 0.10's winking logo does now and then (Settings → Appearance → Logo).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LogoFace {
+    #[default]
+    Open,
+    Blink,
+    Wink,
+}
+
 /// The app's mark, `size` points square: 0.10's logo, shape for shape and colour for colour
 /// (its drawing is on a 184-unit square from (8, 8)). The same in both appearances.
 pub fn logo(size: f32) -> El {
+    logo_face(size, LogoFace::Open)
+}
+
+/// [`logo`] with its eyes as `eyes` has them: a shut eye is a flat line (0.10's `Logo`).
+pub fn logo_face(size: f32, eyes: LogoFace) -> El {
     let fit = Fit::square(8.0, 8.0, 184.0, size);
     let at = |p: [f32; 2]| [p[0] * fit.scale + fit.dx, p[1] * fit.scale + fit.dy];
     let hex = |h: &str| rune::color::hex(h).expect("a colour written here");
@@ -529,10 +544,17 @@ pub fn logo(size: f32) -> El {
     for cx in [35.0, 52.0, 69.0] {
         face = face.fill_path(&svg::path(&data(Oval(cx, 27.0, 5.5, 5.5)), fit), dot);
     }
-    face = face
-        .fill(chevron([[32.0, 86.0], [61.0, 112.0], [32.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye)
-        .fill(chevron([[168.0, 86.0], [139.0, 112.0], [168.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye)
-        .fill(rect(76.0, 140.0, 48.0, 20.0), mouth);
+    // A shut eye: 0.10's `M32 112 L61 112`, a 20-unit line with square ends.
+    let shut = |x0: f32, x1: f32| rect(x0 - 10.0, 102.0, x1 - x0 + 20.0, 20.0);
+    face = match eyes {
+        LogoFace::Blink => face.fill(shut(32.0, 61.0), eye),
+        _ => face.fill(chevron([[32.0, 86.0], [61.0, 112.0], [32.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye),
+    };
+    face = match eyes {
+        LogoFace::Open => face.fill(chevron([[168.0, 86.0], [139.0, 112.0], [168.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye),
+        _ => face.fill(shut(139.0, 168.0), eye),
+    };
+    face = face.fill(rect(76.0, 140.0, 48.0, 20.0), mouth);
     let radius = 44.0 * fit.scale;
     el().size(size, size)
         .radius(radius)
