@@ -826,6 +826,11 @@ fn streamer_mode_leaves_no_name_or_address_anywhere_in_the_window() {
     w.rt.update(|s, tx| s.show_home(tx));
     w.settle();
     assert!(w.tree().contains("db-main"));
+    // The palette's rows that name a server are there to hide.
+    w.rt.update(|s, tx| s.open_palette("workspace", tx));
+    w.settle();
+    assert!(w.tree().contains("Workspace for db-main"), "{}", w.tree());
+    w.key(Key::Escape, "");
     w.click("streamer");
     let check = |w: &Window, place: &str| {
         let tree = w.tree();
@@ -861,7 +866,7 @@ fn streamer_mode_leaves_no_name_or_address_anywhere_in_the_window() {
     w.key(Key::Escape, "");
     w.key(Key::Escape, "");
     // The palette, everything and the servers alone.
-    for query in ["", "srv:"] {
+    for query in ["", "srv:", "file:", "stats", "workspace"] {
         w.rt.update(|s, tx| s.open_palette(query, tx));
         w.settle();
         check(&w, &format!("the palette ({query:?})"));
@@ -1165,4 +1170,28 @@ fn a_click_shows_a_hidden_secret_but_never_while_streaming_nor_outside_the_windo
     assert!(!w.tree().contains(&secret[4..12]));
     click(&mut w);
     assert!(!w.tree().contains(&secret[4..12]));
+}
+
+#[test]
+fn a_tabs_menu_takes_the_keyboard_and_return_on_it_just_opened_does_nothing() {
+    let mut w = linux();
+    w.click("server-1");
+    w.plus_terminal();
+    let row = w.row();
+    let id = w.rt.state.bench.tabs()[0].id.0;
+    let (x, y) = w.rt.find(&format!("tab-{id}")).unwrap();
+    w.secondary(x, y);
+    assert!(w.rt.find("tab-menu").is_some());
+    // Return on a menu just opened picks nothing, and typing reaches no terminal behind it.
+    w.key(Key::Enter, "");
+    w.typed("x");
+    assert!(w.rt.find("tab-menu").is_some(), "Return on a fresh menu closed it");
+    assert_eq!(w.row(), row);
+    assert!(!w.written(0).contains('x') && !w.written(1).contains('x'), "{:?} {:?}", w.written(0), w.written(1));
+    // Down lights the first row ("Show beside this one"); Return picks it.
+    w.key(Key::Down, "");
+    w.key(Key::Enter, "");
+    assert!(w.rt.find("tab-menu").is_none());
+    let tabs: Vec<_> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    assert!(w.rt.state.bench.together(tabs[0], tabs[1]));
 }

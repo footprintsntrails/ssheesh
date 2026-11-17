@@ -383,7 +383,7 @@ fn the_palettes_first_row_is_files_and_arrows_and_return_go_places() {
     assert_eq!(w.row(), "Terminal@web-7731 Files@web-7731 *Migration 0042@db-main");
     // The arrows go around the ends; a click picks a row too.
     w.key(Key::Command('l'), "cs");
-    w.type_text("srv:");
+    w.type_text("srv: db");
     w.key(Key::Up, "");
     let last = w.rt.state.screens.palette.hot.unwrap();
     assert!(last > 0);
@@ -706,6 +706,58 @@ fn a_servers_card_shows_while_the_pointer_rests_on_its_icon() {
     w.rt.pointer_move(640.0, 400.0);
     w.settle();
     assert!(!w.has("server-card"));
+}
+
+#[test]
+fn in_the_palettes_field_ctrl_shift_z_redoes_and_reopens_no_tab() {
+    let mut w = Window::busy();
+    let closed = w.rt.state.bench.closed().len();
+    w.key(Key::Command('l'), "cs");
+    w.type_text("uptime");
+    w.key(Key::Command('z'), "c");
+    let undone = w.rt.state.screens.palette.query.text.clone();
+    assert_ne!(undone, "uptime", "Ctrl+Z undid nothing");
+    w.key(Key::Command('z'), "cs");
+    assert_eq!(w.rt.state.screens.palette.query.text, "uptime");
+    assert!(w.rt.state.screens.palette.open);
+    assert_eq!(w.rt.state.bench.closed().len(), closed);
+}
+
+#[test]
+fn a_setting_found_in_the_palette_opens_settings_at_its_row() {
+    let mut w = Window::busy();
+    w.key(Key::Command('l'), "cs");
+    w.type_text("set: blinking cursor");
+    assert_eq!(w.rt.state.screens.palette.hot, Some(0));
+    w.key(Key::Enter, "");
+    assert!(w.rt.state.screens.settings.open);
+    assert_eq!(w.rt.state.screens.settings.section, sshee_app::settings_store::catalog::Section::Terminal);
+    assert_eq!(w.rt.state.screens.settings.found.as_deref(), Some("term-blink"));
+}
+
+#[test]
+fn the_palettes_window_commands_do_what_they_say() {
+    let mut w = Window::busy();
+    let pick = |w: &mut Window, typed: &str| {
+        w.key(Key::Command('l'), "cs");
+        w.type_text(typed);
+        assert!(w.rt.state.screens.palette.hot.is_some(), "nothing chosen for {typed}");
+        w.key(Key::Enter, "");
+    };
+    pick(&mut w, "cmd: turn on streamer");
+    assert!(w.rt.state.streaming());
+    pick(&mut w, "cmd: turn off streamer");
+    assert!(!w.rt.state.streaming());
+    pick(&mut w, "cmd: turn on compact");
+    assert_ne!(w.rt.state.settings.get().compact_mode, sshee_app::model::CompactMode::Off);
+    pick(&mut w, "cmd: find in the terminal");
+    assert!(w.rt.state.active_pane().is_some_and(|p| p.find_is_open()));
+    w.key(Key::Escape, "");
+    pick(&mut w, "srv: workspace for web");
+    let active = w.rt.state.bench.active_id().unwrap();
+    assert_eq!(w.rt.state.bench.active().unwrap().kind, TabKind::Terminal);
+    let files = w.rt.state.bench.tabs().iter().find(|t| t.kind == TabKind::Files && t.server == WEB).map(|t| t.id).unwrap();
+    assert!(w.rt.state.bench.together(active, files));
 }
 
 /// Adding a server as 0.10 did, and its menu and look (`tests/servers.rs`).

@@ -5,9 +5,11 @@
 //! 1.0 design's rules on top:
 //!
 //! - it lists what you can do on the server on screen first ("On web-7731": Files first, then
-//!   your snippets), then where you can go (tabs waiting for you first, other tabs, servers),
-//!   then the window's own commands and Settings;
-//! - `srv:`, `cmd:`, `file:` or `set:` in front narrows it to one kind of thing;
+//!   your snippets), then where you can go (tabs waiting for you first, other tabs, servers,
+//!   each server's workspace, files and stats, your bookmarks and recent folders), then the
+//!   window's own commands and Settings;
+//! - `srv:`, `cmd:`, `file:` or `set:` in front narrows it to one kind of thing; `set:`, or any
+//!   word typed, also finds every row of Settings and every shortcut, and opens Settings there;
 //! - every word typed must be in a row (its name, its note, or the extra words it's known
 //!   by), in any order, whatever the case; within a group, a row whose name starts with what
 //!   was typed comes before one that only holds it;
@@ -18,9 +20,12 @@
 //! The window keeps the typed text and the highlighted row; everything else is made here from
 //! the [`Workbench`] each time, so the rules are tested without a window.
 
-use crate::model::{Keys, Snippet};
-use crate::workbench::shortcuts::{default_keys, Shortcut};
-use crate::workbench::{ServerKey, TabId, TabKind, Workbench};
+use crate::files::bookmarks;
+use crate::model::{Bookmarks, Keys, Platform, Snippet};
+use crate::settings_store::{catalog, keymap};
+use crate::workbench::layout::Arrangement;
+use crate::workbench::shortcuts::Shortcut;
+use crate::workbench::{ServerKey, TabId, TabKind, Tor, Workbench};
 use indexmap::IndexMap;
 
 /// One kind of thing, asked for by its prefix.
@@ -126,6 +131,34 @@ pub enum Action {
     NewSnippet(String),
     WhatsNew,
     Tour,
+    /// Settings at one of its rows (`key`, the row's element key) in `section`.
+    SettingsRow { section: &'static str, key: String },
+    /// The tab on screen beside another, or one tab at a time again.
+    SideBySide,
+    /// The panes on screen in one of 0.10's shapes.
+    Arrange(Arrangement),
+    Compact,
+    /// The find bar of the terminal on screen.
+    Find,
+    Streamer,
+    /// Tor on or off.
+    Tor,
+    /// The list of agents on every server.
+    Agents,
+    /// A machine's terminal and its files, side by side.
+    Workspace(ServerKey),
+    /// Settings → Updates, where updates are looked for.
+    CheckUpdates,
+}
+
+/// The palette's words for each of 0.10's shapes.
+fn arrangement(how: Arrangement) -> (&'static str, &'static str) {
+    match how {
+        Arrangement::Main => ("Arrange: main + stack", "main stack"),
+        Arrangement::Columns => ("Arrange: columns", "columns"),
+        Arrangement::Rows => ("Arrange: rows", "rows"),
+        Arrangement::Grid => ("Arrange: grid", "grid"),
+    }
 }
 
 /// The picture at a row's start; the screen layer has the drawings.
@@ -151,6 +184,14 @@ pub enum Glyph {
     SplitRight,
     SplitDown,
     Zoom,
+    Compact,
+    Find,
+    /// Streamer mode, by what picking the row does: `true` hides.
+    Eye(bool),
+    Tor,
+    /// A bookmarked folder.
+    Star,
+    Refresh,
 }
 
 /// The headings the list is cut into, in order.
@@ -224,6 +265,25 @@ pub struct Context<'a> {
     pub mac: bool,
     /// Shortcuts changed in Settings, by 0.10's ids.
     pub shortcuts: &'a IndexMap<String, Option<Keys>>,
+    /// Every machine's pinned and recent folders.
+    pub bookmarks: &'a Bookmarks,
+    /// What is on now, for the commands that turn it off.
+    pub now: Now,
+}
+
+/// What the window has on now: a command that turns something on or off says which it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Now {
+    pub streaming: bool,
+    pub compact: bool,
+    /// The system whose Settings rows are listed.
+    pub platform: Platform,
+}
+
+impl Default for Now {
+    fn default() -> Self {
+        Now { streaming: false, compact: false, platform: Platform::current() }
+    }
 }
 
 /// Settings' sections, with words people might search for (0.10's `SETTINGS_SECTIONS`). The ids
@@ -241,49 +301,12 @@ const SETTINGS_SECTIONS: [(&str, &str, &str); 10] = [
     ("about", "About", "version license licence credits tour"),
 ];
 
-/// A key's name on a key cap.
-fn key_name(key: &str) -> String {
-    match key {
-        "enter" => "↩".into(),
-        "tab" => "Tab".into(),
-        "space" => "Space".into(),
-        other => other.to_uppercase(),
-    }
-}
-
-/// Keys as a key cap shows them: "⇧⌘T" on a Mac, "Ctrl+Shift+T" elsewhere (0.10's
-/// `shortcutLabel`).
-pub fn keys_label(keys: &Keys, mac: bool) -> String {
-    let on = |b: Option<bool>| b.unwrap_or(false);
-    if mac {
-        let mut out = String::new();
-        for (held, sign) in [(on(keys.ctrl), "⌃"), (on(keys.alt), "⌥"), (on(keys.shift), "⇧"), (on(keys.meta), "⌘")] {
-            if held {
-                out.push_str(sign);
-            }
-        }
-        out + &key_name(&keys.key)
-    } else {
-        let mut parts: Vec<String> = Vec::new();
-        for (held, word) in [(on(keys.ctrl), "Ctrl"), (on(keys.meta), "Win"), (on(keys.alt), "Alt"), (on(keys.shift), "Shift")] {
-            if held {
-                parts.push(word.into());
-            }
-        }
-        parts.push(key_name(&keys.key));
-        parts.join("+")
-    }
-}
-
-/// A shortcut's keys as a key cap shows them: yours from Settings, else the ones it comes
-/// with. `None` for one that is turned off or has none.
+/// A shortcut's keys as a key cap shows them, as Settings → Keyboard does
+/// (`keymap::shortcut_label`): "⇧⌘T" on a Mac, "Ctrl+Shift+T" elsewhere; yours from Settings,
+/// else the ones it comes with. `None` for one that is turned off or has none.
 pub fn shortcut_label(shortcut: Shortcut, mac: bool, changed: &IndexMap<String, Option<Keys>>) -> Option<String> {
-    let keys = match shortcut.id().and_then(|id| changed.get(id)) {
-        Some(Some(keys)) if !keys.key.is_empty() => Some(keys.clone()),
-        Some(_) => None,
-        None => default_keys(shortcut, mac),
-    };
-    keys.map(|k| keys_label(&k, mac))
+    let id = shortcut.id()?;
+    Some(keymap::shortcut_label(id, keymap::Keyboard::of(mac), changed)).filter(|label| !label.is_empty())
 }
 
 /// Whether a snippet has blanks to fill in (`{{name}}`, `{{name:fallback}}`).
@@ -407,11 +430,39 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         r.prod = server.is_prod();
         rows.push(r);
     }
+    // Each machine's terminal and files side by side, its files and its stats (the machine on
+    // screen has its own Files and Stats above).
+    for server in bench.servers() {
+        rows.push(
+            row(Group::GoTo, Glyph::SplitRight, format!("Workspace for {}", server.name), Action::Workspace(server.key()))
+                .note("terminal · files")
+                .words("workspace layout side by side"),
+        );
+    }
     for server in bench.servers() {
         let key = server.key();
         if bench.current_key() != Some(key.as_str()) {
             rows.push(row(Group::GoTo, Glyph::Folder, format!("Browse files on {}", server.name), Action::Files { server: key, path: None }).words("files folders"));
         }
+    }
+    for server in bench.servers() {
+        let key = server.key();
+        if bench.current_key() != Some(key.as_str()) {
+            rows.push(row(Group::GoTo, Glyph::Stats, format!("Stats for {}", server.name), Action::Stats { server: key }).words("stats metrics cpu memory traffic"));
+        }
+    }
+    // Every machine's bookmarks, then up to five of its recent folders that aren't bookmarks.
+    for server in bench.servers() {
+        let key = server.key();
+        let pins = bookmarks::pins(ctx.bookmarks, &key);
+        let folder = |path: &String, glyph: Glyph, kind: &str| {
+            row(Group::GoTo, glyph, format!("{} on {}", crate::paths::name(path), server.name), Action::Files { server: key.clone(), path: Some(path.clone()) })
+                .note(path.as_str())
+                .words(&format!("{kind} folder files"))
+        };
+        rows.extend(pins.iter().map(|path| folder(path, Glyph::Star, "bookmark")));
+        let recent = bookmarks::recent(ctx.bookmarks, &key).iter().filter(|path| !pins.contains(path)).take(5);
+        rows.extend(recent.map(|path| folder(path, Glyph::Folder, "recent")));
     }
 
     // The window's own commands.
@@ -430,20 +481,74 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         let words = if bench.split_on_screen().is_some() { "Fill the window with this pane" } else { "Show all the panes" };
         rows.push(row(Group::Window, Glyph::Zoom, words, Action::Zoom).keys(label(Shortcut::Zoom)).words("zoom maximize pane"));
     }
+    if bench.active().is_some() {
+        let side = if bench.split_on_screen().is_some() { "One tab at a time" } else { "Tabs side by side" };
+        rows.push(row(Group::Window, Glyph::SplitRight, side, Action::SideBySide).keys(label(Shortcut::SideBySide)).words("tabs side by side split one at a time toggle"));
+    }
+    for how in [Arrangement::Main, Arrangement::Columns, Arrangement::Rows, Arrangement::Grid] {
+        let (name, words) = arrangement(how);
+        rows.push(row(Group::Window, Glyph::SplitRight, name, Action::Arrange(how)).words(&format!("arrange layout panes {words}")));
+    }
+    if bench.active().is_some_and(|t| t.kind == TabKind::Terminal) {
+        rows.push(
+            row(Group::Window, Glyph::Find, "Find in the terminal", Action::Find)
+                .keys(label(Shortcut::Find { always: false }))
+                .words("find search text in terminal output scrollback history"),
+        );
+    }
     rows.push(row(Group::Window, Glyph::Sidebar, "Toggle sidebar", Action::ToggleSidebar).keys(label(Shortcut::ToggleSidebar)).words("show hide"));
     if bench.active().is_some() {
         rows.push(row(Group::Window, Glyph::Home, "Main menu", Action::MainMenu).words("home start page new tab"));
     }
+    let compact = if ctx.now.compact { "Turn off compact mode" } else { "Turn on compact mode" };
+    rows.push(row(Group::Window, Glyph::Compact, compact, Action::Compact).keys(label(Shortcut::Compact)).words("compact mode focus hide sidebar toolbar zen"));
+    let streamer = if ctx.now.streaming { "Turn off streamer mode" } else { "Turn on streamer mode" };
+    rows.push(
+        row(Group::Window, Glyph::Eye(!ctx.now.streaming), streamer, Action::Streamer)
+            .keys(label(Shortcut::Streamer))
+            .words("streamer mode hide names addresses privacy screen share recording"),
+    );
+    let tor = if bench.tor() == Tor::Off { "Connect through Tor" } else { "Turn off Tor" };
+    rows.push(row(Group::Window, Glyph::Tor, tor, Action::Tor).words("tor onion anonymous hide ip address vpn proxy privacy"));
+    rows.push(row(Group::Window, Glyph::Agent, "Agents at work", Action::Agents).keys(label(Shortcut::Agents)).words("agents claude codex opencode waiting needs you"));
     rows.push(row(Group::Window, Glyph::Plus, "Add server…", Action::AddServer).keys(label(Shortcut::AddServer)).words("new host import xpipe ssh config"));
     rows.push(row(Group::Window, Glyph::Terminal, "Snippets", Action::Snippets).words("snippets saved commands"));
     rows.push(row(Group::Window, Glyph::Plus, "New snippet…", Action::NewSnippet(String::new())).words("save command snippet add"));
-    rows.push(row(Group::Window, Glyph::News, "What's new", Action::WhatsNew).words("changelog release notes version update"));
-    rows.push(row(Group::Window, Glyph::Help, "Take the tour", Action::Tour).words("tour help introduction welcome"));
 
-    // Settings and its sections.
-    rows.push(row(Group::Settings, Glyph::Gear, "Settings", Action::Settings(None)).words("preferences options"));
+    // Settings and its sections, then what 0.10 listed with them; and as soon as there's
+    // something to look for, every row of Settings.
+    rows.push(row(Group::Settings, Glyph::Gear, "Settings", Action::Settings(None)).keys(label(Shortcut::Settings)).words("preferences options"));
+    rows.push(row(Group::Settings, Glyph::Gear, "Change theme and colors", Action::Settings(Some("appearance"))).words("theme appearance colors colours accent dark light"));
+    rows.push(row(Group::Settings, Glyph::Terminal, "Terminal look", Action::Settings(Some("terminal"))).words("terminal theme font size cursor scheme"));
+    rows.push(row(Group::Settings, Glyph::News, "What's new", Action::WhatsNew).words("changelog release notes version update"));
+    rows.push(row(Group::Settings, Glyph::Help, "Take the tour", Action::Tour).words("tour help introduction welcome tips learn"));
+    rows.push(row(Group::Settings, Glyph::Refresh, "Check for updates", Action::CheckUpdates).words("updates version download upgrade"));
     for (id, name, words) in SETTINGS_SECTIONS {
         rows.push(row(Group::Settings, Glyph::Gear, format!("Settings: {name}"), Action::Settings(Some(id))).words(words));
+    }
+    if !query.is_empty() || query.scope == Some(Scope::Settings) {
+        rows.extend(settings_rows(ctx.now.platform));
+    }
+    rows
+}
+
+/// Every row of Settings shown on `platform`, then every shortcut, each opening Settings at
+/// itself (0.10's `Settings: {label}`, one row deeper).
+fn settings_rows(platform: Platform) -> Vec<Row> {
+    let mut rows: Vec<Row> = catalog::rows()
+        .iter()
+        .filter(|r| !r.label.is_empty() && r.only.is_none_or(|only| only == platform))
+        .map(|r| {
+            let words = format!("setting {} {} {}", r.words, r.group.unwrap_or(""), r.section.label());
+            row(Group::Settings, Glyph::Gear, r.label, Action::SettingsRow { section: r.section.id(), key: r.key.to_owned() }).note(r.section.label()).words(&words)
+        })
+        .collect();
+    let mut named = Vec::new();
+    for id in keymap::GROUPS.iter().flat_map(|(_, ids)| ids.iter()) {
+        let Some(entry) = keymap::entry(id).filter(|e| !named.contains(&e.name)) else { continue };
+        named.push(entry.name);
+        let key = format!("shortcut-{id}");
+        rows.push(row(Group::Settings, Glyph::Gear, entry.name, Action::SettingsRow { section: catalog::Section::Keyboard.id(), key }).note("Keyboard shortcut").words("shortcut keys hotkey keybinding"));
     }
     rows
 }
@@ -451,7 +556,10 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
 /// Whether a group belongs to a scope (0.10's `shows`).
 fn in_scope(row: &Row, scope: Scope) -> bool {
     match scope {
-        Scope::Servers => matches!(row.action, Action::Tab(_) | Action::Server(_)),
+        // Places: tabs, machines, each one's workspace and stats.
+        Scope::Servers => {
+            matches!(row.action, Action::Tab(_) | Action::Server(_) | Action::Workspace(_)) || (row.group == Group::GoTo && matches!(row.action, Action::Stats { .. }))
+        }
         Scope::Commands => row.runs() || row.group == Group::Window,
         Scope::Folders => matches!(row.action, Action::Files { .. }),
         Scope::Settings => row.group == Group::Settings,
@@ -516,8 +624,13 @@ mod tests {
     }
 
     fn list(bench: &Workbench, snippets: &[Snippet], typed: &str) -> Vec<Row> {
+        list_with(bench, snippets, &Bookmarks::default(), typed)
+    }
+
+    fn list_with(bench: &Workbench, snippets: &[Snippet], bookmarks: &Bookmarks, typed: &str) -> Vec<Row> {
         let shortcuts = IndexMap::new();
-        rows(&Context { bench, snippets, mac: false, shortcuts: &shortcuts }, &parse(typed))
+        let now = Now { platform: Platform::Linux, ..Now::default() };
+        rows(&Context { bench, snippets, mac: false, shortcuts: &shortcuts, bookmarks, now }, &parse(typed))
     }
 
     fn labels(rows: &[Row]) -> Vec<&str> {
@@ -634,11 +747,12 @@ mod tests {
         let mut w = bench();
         w.go_to(WEB);
         let found = list(&w, &[], "srv: MAIN db");
-        assert_eq!(labels(&found), ["db-main"]);
+        // The machine, then its workspace and its stats.
+        assert_eq!(labels(&found), ["db-main", "Workspace for db-main", "Stats for db-main"]);
         assert!(list(&w, &[], "srv: db nowhere").is_empty());
         // By address, and by the extra words a row is known by.
         assert_eq!(labels(&list(&w, &[], "srv: 203.0.113.18")), ["web-staging"]);
-        assert_eq!(labels(&list(&w, &[], "set: onion")), ["Settings: Tor"]);
+        assert_eq!(list(&w, &[], "set: onion")[0].label, "Settings: Tor");
         // Nothing is closed yet: "undo" finds only itself, as a command to run.
         assert!(list(&w, &[], "undo").iter().all(Row::runs));
         let closed = w.new_terminal();
@@ -655,12 +769,13 @@ mod tests {
         w.go_to(DB);
         // "web" is the start of web-7731 and web-staging; db-main's tab is only on screen.
         let found = list(&w, &[], "srv: web");
-        assert_eq!(labels(&found), ["web-7731", "web-staging"]);
+        assert_eq!(labels(&found)[..2], ["web-7731", "web-staging"]);
         // "s": Settings rows start with it; "Close tab" and others only hold it.
         let found = list(&w, &[], "set: s");
         assert_eq!(found[0].label, "Settings");
         // In "Go to", "st" starts a word of web-staging; This computer only holds it in its words.
-        let found = list(&w, &[], "srv: st");
+        // (The "Stats for …" rows start with it.)
+        let found: Vec<Row> = list(&w, &[], "srv: st").into_iter().filter(|r| matches!(r.action, Action::Server(_))).collect();
         assert_eq!(found[0].label, "web-staging");
     }
 
@@ -672,13 +787,17 @@ mod tests {
         w.go_to(WEB);
         let snippets = snippets();
         let of = |typed: &str| list(&w, &snippets, typed);
-        assert!(of("srv:").iter().all(|r| matches!(r.action, Action::Tab(_) | Action::Server(_))));
-        assert_eq!(of("srv:").len(), 1 + 4);
+        // A tab, each machine, each one's workspace, and the stats of those not on screen.
+        assert!(of("srv:").iter().all(|r| matches!(r.action, Action::Tab(_) | Action::Server(_) | Action::Workspace(_) | Action::Stats { .. })));
+        assert_eq!(of("srv:").len(), 1 + 4 + 4 + 3);
         assert!(of("file:").iter().all(|r| matches!(r.action, Action::Files { .. })));
         assert_eq!(of("file:")[0].label, "Files");
-        assert!(of("set:").iter().all(|r| matches!(r.action, Action::Settings(_))));
-        // "Settings", then its ten sections.
-        assert_eq!(of("set:").len(), 11);
+        assert!(of("set:").iter().all(|r| r.group == Group::Settings));
+        // "Settings", what 0.10 listed with it, its ten sections, then every row and shortcut.
+        let set = of("set:");
+        assert_eq!(set.iter().filter(|r| matches!(r.action, Action::Settings(Some(_)))).count(), 12);
+        assert!(set.iter().filter(|r| matches!(r.action, Action::SettingsRow { .. })).count() > 60);
+        assert!(!of("").iter().any(|r| matches!(r.action, Action::SettingsRow { .. })), "the empty list keeps to the sections");
         let commands = of("cmd:");
         assert_eq!(commands.iter().filter(|r| r.runs()).count(), snippets.len());
         assert!(commands.iter().any(|r| r.action == Action::NewTerminal));
@@ -704,7 +823,8 @@ mod tests {
         assert_eq!(shortcut_label(Shortcut::CloseTab, false, &changed), None);
         let mut w = bench();
         w.go_to(WEB);
-        let rows = rows(&Context { bench: &w, snippets: &[], mac: false, shortcuts: &changed }, &parse("cmd:"));
+        let none = Bookmarks::default();
+        let rows = rows(&Context { bench: &w, snippets: &[], mac: false, shortcuts: &changed, bookmarks: &none, now: Now::default() }, &parse("cmd:"));
         assert_eq!(rows.iter().find(|r| r.action == Action::NewTerminal).unwrap().keys.as_deref(), Some("Ctrl+Alt+N"));
         assert_eq!(rows.iter().find(|r| r.action == Action::CloseTab).unwrap().keys, None);
     }
@@ -744,5 +864,82 @@ mod tests {
         // No tab is on screen: nothing to close, and the menu is where you are.
         assert!(!rows.iter().any(|r| matches!(r.action, Action::CloseTab | Action::MainMenu | Action::NewTerminal)));
         assert!(rows.iter().any(|r| r.action == Action::AddServer));
+    }
+
+    #[test]
+    fn every_window_command_of_0_10_is_here_and_says_what_it_will_do() {
+        let mut w = bench();
+        w.go_to(WEB);
+        let cmd = list(&w, &[], "cmd:");
+        for label in [
+            "Split right",
+            "Split down",
+            "Tabs side by side",
+            "Arrange: main + stack",
+            "Arrange: columns",
+            "Arrange: rows",
+            "Arrange: grid",
+            "Find in the terminal",
+            "Turn on compact mode",
+            "Turn on streamer mode",
+            "Connect through Tor",
+            "Agents at work",
+        ] {
+            assert!(labels(&cmd).contains(&label), "{label}: {:?}", labels(&cmd));
+        }
+        let keys = |label: &str| cmd.iter().find(|r| r.label == label).and_then(|r| r.keys.clone());
+        assert_eq!(keys("Split down").as_deref(), Some("Ctrl+Shift+E"));
+        assert_eq!(keys("Turn on compact mode").as_deref(), Some("Ctrl+Shift+M"));
+        assert_eq!(keys("Agents at work").as_deref(), Some("Ctrl+Shift+A"));
+        // On now: the row turns it off.
+        let shortcuts = IndexMap::new();
+        let none = Bookmarks::default();
+        let now = Now { streaming: true, compact: true, platform: Platform::Linux };
+        w.set_tor(Tor::Starting);
+        let on = rows(&Context { bench: &w, snippets: &[], mac: false, shortcuts: &shortcuts, bookmarks: &none, now }, &parse("cmd:"));
+        for label in ["Turn off compact mode", "Turn off streamer mode", "Turn off Tor"] {
+            assert!(labels(&on).contains(&label), "{label}");
+        }
+        // 0.10's App group, under set:.
+        let set = list(&w, &[], "set:");
+        for label in ["Change theme and colors", "Terminal look", "What's new", "Take the tour", "Check for updates"] {
+            assert!(labels(&set).contains(&label), "{label}");
+        }
+        // Each machine's workspace and stats.
+        let srv = list(&w, &[], "srv: db");
+        assert!(srv.iter().any(|r| r.action == Action::Workspace(DB.into()) && r.label == "Workspace for db-main"));
+        assert!(srv.iter().any(|r| r.action == Action::Stats { server: DB.into() } && r.label == "Stats for db-main"));
+        // No terminal on screen, nothing to find in.
+        w.show_home();
+        assert!(!labels(&list(&w, &[], "cmd:")).contains(&"Find in the terminal"));
+    }
+
+    #[test]
+    fn every_setting_and_shortcut_can_be_found_and_opens_at_its_row() {
+        let w = bench();
+        let found = list(&w, &[], "set: cursor blink");
+        let blink = found.iter().find(|r| matches!(&r.action, Action::SettingsRow { section: "terminal", .. })).expect("the blinking cursor row");
+        assert_eq!(blink.note, "Terminal");
+        // Found without the prefix too, once something is typed; and shortcuts by their names.
+        assert!(list(&w, &[], "split down").iter().any(|r| r.action == Action::SettingsRow { section: "keyboard", key: "shortcut-splitDown".into() }));
+        assert!(list(&w, &[], "agents at work").iter().any(|r| r.action == Action::SettingsRow { section: "keyboard", key: "shortcut-agents".into() }));
+    }
+
+    #[test]
+    fn folders_lists_every_machines_bookmarks_and_recent_folders() {
+        let mut w = bench();
+        w.go_to(WEB);
+        let mut b = Bookmarks::default();
+        bookmarks::toggle_pin(&mut b, DB, "/var/lib/postgresql");
+        for path in ["/etc", "/var/lib/postgresql", "/srv/a", "/srv/b", "/srv/c", "/srv/d", "/srv/e"] {
+            bookmarks::visit(&mut b, DB, path);
+        }
+        let found = list_with(&w, &[], &b, "file:");
+        let on_db: Vec<&Row> = found.iter().filter(|r| matches!(&r.action, Action::Files { server, path: Some(_) } if server == DB)).collect();
+        // The bookmark first, then five recent folders that aren't it.
+        assert_eq!((on_db[0].label.as_str(), &on_db[0].glyph, on_db[0].note.as_str()), ("postgresql on db-main", &Glyph::Star, "/var/lib/postgresql"));
+        assert_eq!(on_db.len(), 1 + 5);
+        assert!(on_db[1..].iter().all(|r| r.glyph == Glyph::Folder && r.note != "/var/lib/postgresql"));
+        assert!(list_with(&w, &[], &b, "file: postgres").iter().any(|r| r.label == "postgresql on db-main"));
     }
 }

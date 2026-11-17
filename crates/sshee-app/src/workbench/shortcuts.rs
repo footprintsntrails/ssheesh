@@ -13,7 +13,13 @@
 //! and Files is Ctrl+Shift+O there (⇧⌘E on a Mac, where Split down is ⇧⌘D).
 //!
 //! New in 1.0, not in 0.10: jumping to a tab by its number (⌘1 to ⌘9 on a Mac, Ctrl+Shift+1 to
-//! 9 elsewhere; 9 is the last tab, as in a browser).
+//! 9 elsewhere; 9 is the last tab, as in a browser), the list of agents, and Files. Files took
+//! Ctrl+Shift+E off a Mac in the first 1.0 builds; 0.10's Split down has it back, and Files is
+//! Ctrl+Shift+O there (⇧⌘E on a Mac, where Split down is ⇧⌘D).
+//!
+//! **Keys you gave a shortcut win over a shortcut's own.** A shortcut 1.0 added comes with keys
+//! a shortcut changed in 0.10 may already have (your own Ctrl+Shift+A, before the agents had
+//! it): those stay yours, and the new one has no keys until you give it some.
 
 use crate::model::Keys;
 use indexmap::IndexMap;
@@ -83,13 +89,26 @@ const NAMED: [(Shortcut, &str); 18] = [
     (Shortcut::AddServer, "addHost"),
 ];
 
+/// The id of "a tab by its number": one shortcut in Settings, whose keys are those held with
+/// a digit (stored with the digit 1).
+pub const JUMP_TO_TAB: &str = "jumpToTab";
+
 impl Shortcut {
     /// Its id in 0.10's settings (`shortcuts`), for the ones Settings can change.
     pub fn id(self) -> Option<&'static str> {
-        // However find was pressed, it's one shortcut in Settings.
-        let this = if let Shortcut::Find { .. } = self { Shortcut::Find { always: false } } else { self };
+        // However find was pressed, it's one shortcut in Settings; so are the nine tabs.
+        let this = match self {
+            Shortcut::Find { .. } => Shortcut::Find { always: false },
+            Shortcut::JumpToTab(_) => return Some(JUMP_TO_TAB),
+            other => other,
+        };
         NAMED.iter().find(|(s, _)| *s == this).map(|(_, id)| *id)
     }
+}
+
+/// A digit key that picks a tab: "1" to "9".
+pub fn tab_digit(key: &str) -> Option<usize> {
+    key.parse::<usize>().ok().filter(|n| (1..=9).contains(n) && key.len() == 1)
 }
 
 /// A key press: the key as 0.10's `keyOf` names it (see the module's docs) and what was held.
@@ -137,14 +156,39 @@ pub fn default_keys(shortcut: Shortcut, mac: bool) -> Option<Keys> {
         Shortcut::Agents => ("a", true),
         // Like a file explorer: ⇧⌘E on a Mac (F is Find); elsewhere E is 0.10's Split down.
         Shortcut::OpenFiles => (if mac { "e" } else { "o" }, true),
-        Shortcut::StepTab(_) | Shortcut::JumpToTab(_) => return None,
+        // ⌘1 on a Mac, Ctrl+Shift+1 elsewhere: the digit stands for all nine.
+        Shortcut::JumpToTab(_) => ("1", false),
+        Shortcut::StepTab(_) => return None,
     };
     Some(if mac { keys(key, false, true, mac_shift) } else { keys(key, true, false, true) })
 }
 
-fn same(k: &Keys, p: &Pressed) -> bool {
+/// Whether two chords are the same keys. With `digits`, a digit stands for all nine.
+fn clash(a: &Keys, b: &Keys, digits: bool) -> bool {
     let on = |b: Option<bool>| b.unwrap_or(false);
-    k.key == p.key && on(k.ctrl) == p.ctrl && on(k.meta) == p.meta && on(k.alt) == p.alt && on(k.shift) == p.shift
+    let mods = |k: &Keys| (on(k.ctrl), on(k.meta), on(k.alt), on(k.shift));
+    let keys = if digits { tab_digit(&a.key).is_some() && tab_digit(&b.key).is_some() } else { a.key == b.key };
+    keys && mods(a) == mods(b)
+}
+
+/// Whether `keys`, a shortcut's own, are already yours for another one: a shortcut changed in
+/// Settings to these keys, or to one of the digits when `keys` are "a tab by its number".
+/// `id` is the shortcut's own id (its own entry doesn't count).
+pub fn taken_by_yours(id: &str, keys: &Keys, changed: &IndexMap<String, Option<Keys>>) -> bool {
+    changed.iter().any(|(other, mine)| {
+        other != id && mine.as_ref().is_some_and(|mine| !mine.key.is_empty() && clash(keys, mine, id == JUMP_TO_TAB || other == JUMP_TO_TAB))
+    })
+}
+
+/// The keys a shortcut has now: yours from Settings, else the ones it comes with unless you
+/// gave those to another shortcut. `None` for one turned off, or with no keys.
+pub fn keys_now(shortcut: Shortcut, mac: bool, changed: &IndexMap<String, Option<Keys>>) -> Option<Keys> {
+    let id = shortcut.id();
+    match id.and_then(|id| changed.get(id)) {
+        Some(Some(k)) if !k.key.is_empty() => Some(k.clone()),
+        Some(_) => None,
+        None => default_keys(shortcut, mac).filter(|own| !id.is_some_and(|id| taken_by_yours(id, own, changed))),
+    }
 }
 
 /// The shortcut a key press is, if any. `changed` is Settings' `shortcuts`: by id, the keys
@@ -158,28 +202,29 @@ pub fn match_shortcut(p: &Pressed, mac: bool, changed: &IndexMap<String, Option<
     if !p.ctrl && !p.meta {
         return None;
     }
-    for (shortcut, id) in NAMED {
-        let keys = match changed.get(id) {
-            Some(Some(k)) if !k.key.is_empty() => Some(k.clone()),
-            Some(_) => None,
-            None => default_keys(shortcut, mac),
-        };
-        if keys.is_some_and(|k| same(&k, p)) {
-            return Some(match shortcut {
-                // ⌘F is nobody else's; a bare Ctrl+letter is also a program's key.
-                Shortcut::Find { .. } => Shortcut::Find { always: p.meta || p.shift || p.alt },
-                other => other,
-            });
-        }
+    let pressed = Keys {
+        key: p.key.to_owned(),
+        ctrl: p.ctrl.then_some(true),
+        meta: p.meta.then_some(true),
+        alt: p.alt.then_some(true),
+        shift: p.shift.then_some(true),
+        ..Keys::default()
+    };
+    let tab = tab_digit(p.key).map(Shortcut::JumpToTab);
+    let mut candidates = NAMED.iter().map(|(shortcut, _)| *shortcut).chain(tab);
+    let found = candidates.find(|s| keys_now(*s, mac, changed).is_some_and(|k| clash(&k, &pressed, matches!(s, Shortcut::JumpToTab(_)))));
+    if let Some(shortcut) = found {
+        return Some(match shortcut {
+            // ⌘F is nobody else's; a bare Ctrl+letter is also a program's key.
+            Shortcut::Find { .. } => Shortcut::Find { always: p.meta || p.shift || p.alt },
+            other => other,
+        });
     }
     // Find with Shift, off a Mac: the chord no program reads, so it always opens the bar.
     if !mac && p.key == "f" && p.ctrl && p.shift && !p.alt && !p.meta && !matches!(changed.get("find"), Some(None)) {
         return Some(Shortcut::Find { always: true });
     }
-    // A tab by its number: the digit key at its place, whatever the layout types there.
-    let digit = p.key.parse::<usize>().ok().filter(|n| (1..=9).contains(n) && p.key.len() == 1)?;
-    let held = if mac { p.meta && !p.ctrl && !p.shift } else { p.ctrl && p.shift && !p.meta };
-    (held && !p.alt).then_some(Shortcut::JumpToTab(digit))
+    None
 }
 
 #[cfg(test)]
@@ -289,7 +334,9 @@ mod tests {
         assert_eq!(Shortcut::StepTab(1).id(), None);
         assert_eq!(default_keys(Shortcut::ReopenTab, true), Some(keys("t", false, true, true)));
         assert_eq!(default_keys(Shortcut::ReopenTab, false), Some(keys("z", true, false, true)));
-        assert_eq!(default_keys(Shortcut::JumpToTab(1), true), None);
+        assert_eq!(default_keys(Shortcut::JumpToTab(1), true), Some(keys("1", false, true, false)));
+        assert_eq!(default_keys(Shortcut::JumpToTab(7), false), Some(keys("1", true, false, true)));
+        assert_eq!((Shortcut::JumpToTab(3).id(), Shortcut::Agents.id()), (Some(JUMP_TO_TAB), Some("agents")));
         assert_eq!(Shortcut::Find { always: true }.id(), Some("find"));
         assert_eq!(Shortcut::Streamer.id(), Some("streamer"));
         assert_eq!(Shortcut::SideBySide.id(), Some("toggleSplit"));
@@ -355,5 +402,44 @@ mod tests {
         assert_eq!(hit("l", "c", false), None);
         assert_eq!(hit("k", "c", true), None);
         assert_eq!((Shortcut::Palette.id(), Shortcut::PaletteAlt.id(), Shortcut::AddServer.id()), (Some("palette"), Some("paletteAlt"), Some("addHost")));
+    }
+
+    #[test]
+    fn keys_you_gave_a_shortcut_win_over_a_new_shortcuts_own() {
+        // Your own Ctrl+Shift+A, from before the agents had it: it stays yours.
+        let mut changed = IndexMap::new();
+        changed.insert("sidebar".to_owned(), Some(keys("a", true, false, true)));
+        assert_eq!(match_shortcut(&press("a", "cs"), false, &changed), Some(Shortcut::ToggleSidebar));
+        assert_eq!(keys_now(Shortcut::Agents, false, &changed), None);
+        // Its own keys for the sidebar are free, and nothing else changes.
+        assert_eq!(match_shortcut(&press("b", "cs"), false, &changed), None);
+        assert_eq!(match_shortcut(&press("t", "cs"), false, &changed), Some(Shortcut::NewTerminal));
+        // Give the agents keys of their own and they have them.
+        changed.insert("agents".to_owned(), Some(keys("g", true, false, true)));
+        assert_eq!(match_shortcut(&press("g", "cs"), false, &changed), Some(Shortcut::Agents));
+        // A digit you took is yours; then the tabs by number have no keys until you give them some.
+        let mut changed = IndexMap::new();
+        changed.insert("vitals".to_owned(), Some(keys("3", true, false, true)));
+        assert_eq!(match_shortcut(&press("3", "cs"), false, &changed), Some(Shortcut::ToggleVitals));
+        assert_eq!(match_shortcut(&press("4", "cs"), false, &changed), None);
+        changed.insert(JUMP_TO_TAB.to_owned(), Some(keys("1", false, true, false)));
+        assert_eq!(match_shortcut(&press("4", "m"), false, &changed), Some(Shortcut::JumpToTab(4)));
+    }
+
+    #[test]
+    fn tabs_by_number_take_the_keys_held_with_any_digit() {
+        let mut changed = IndexMap::new();
+        // Settings keeps them with the digit the keys were recorded with.
+        changed.insert(JUMP_TO_TAB.to_owned(), Some(keys("5", false, true, true)));
+        let m = |key: &str, held: &str, changed: &IndexMap<String, Option<Keys>>| match_shortcut(&press(key, held), true, changed);
+        assert_eq!(m("2", "ms", &changed), Some(Shortcut::JumpToTab(2)));
+        assert_eq!(m("9", "ms", &changed), Some(Shortcut::JumpToTab(9)));
+        assert_eq!(m("2", "m", &changed), None);
+        // Not 0, and not a letter.
+        assert_eq!(m("0", "ms", &changed), None);
+        assert_eq!(m("q", "ms", &changed), None);
+        // Turned off.
+        changed.insert(JUMP_TO_TAB.to_owned(), None);
+        assert_eq!(m("2", "m", &changed), None);
     }
 }

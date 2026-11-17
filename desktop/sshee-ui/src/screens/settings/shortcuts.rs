@@ -110,7 +110,7 @@ fn physical(s: &mut Shell, id: &'static str, input: &PhysicalInput, tx: &mut Tx)
 /// A shortcut's key cap, as a recorder when it can be changed.
 fn cap(s: &Shell, t: &'static Theme, id: &'static str, name: &str, on: Keyboard) -> El {
     let state = &s.screens.settings.keys;
-    let now = keymap::current_keys(id, on.mac(), &s.settings.get().shortcuts).map(|k| keymap::keys_label(&k, on));
+    let now = keymap::current_keys(id, on.mac(), &s.settings.get().shortcuts).map(|k| keymap::label_of(id, &k, on));
     if !keymap::works(id) {
         return key_cap_button(t, name, now.as_deref().unwrap_or("None"), CapState::Disabled).key(cap_key(id));
     }
@@ -148,7 +148,7 @@ fn shortcut_row(s: &Shell, t: &'static Theme, id: &'static str, on: Keyboard) ->
     }
     // Back to its own keys: there only when they were changed, and keeping its room otherwise
     // so the caps stay in one column.
-    let own: Vec<String> = ids.iter().filter_map(|i| keymap::default_keys(i, on.mac())).map(|k| keymap::keys_label(&k, on)).collect();
+    let own: Vec<String> = ids.iter().filter_map(|i| keymap::default_keys(i, on.mac()).map(|k| keymap::label_of(i, &k, on))).collect();
     let reset = if is_changed && works {
         icon_button(t, Icon::Reopen, &format!("Back to {}", own.join(" or ")), true).key(format!("reset-{id}")).on_press_tx(move |s: &mut Shell, tx| {
             let mut next = s.settings.get().shortcuts.clone();

@@ -91,6 +91,9 @@ pub struct Row {
     drag: Option<Dragging>,
     /// The tab whose menu is open, and where.
     pub(crate) menu: Option<(TabId, [f32; 2])>,
+    /// The highlighted row of the tab's menu, among the rows that can be picked: none until an
+    /// arrow lights one, so Return on a menu just opened picks nothing (0.10.5).
+    pub(crate) menu_hot: Option<usize>,
     /// The list of all tabs is open.
     pub(crate) list: bool,
     /// The "+" menu is open.
@@ -241,7 +244,34 @@ impl Shell {
     pub(crate) fn open_tab_menu(&mut self, id: TabId, at: [f32; 2], tx: &mut Tx) {
         self.row.list = false;
         self.row.menu = Some((id, at));
+        self.row.menu_hot = None;
+        // The menu takes the keys: arrows, Return, Esc; none reaches the terminal behind it.
+        tx.focus("tab-menu", false);
         tx.instant();
+    }
+
+    /// A key while a tab's menu is open: arrows move one highlight, Return picks it, Esc
+    /// closes; everything else stops here, but streamer mode's shortcut.
+    fn tab_menu_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if self.streamer_key(ev, tx) {
+            return true;
+        }
+        let Some((id, _)) = self.row.menu else { return false };
+        let picks: Vec<TabPick> = tab_menu_items(self, id).into_iter().flatten().filter(|i| i.on).map(|i| i.pick).collect();
+        match ev.key {
+            Key::Down | Key::Up => {
+                self.row.menu_hot = sshee_app::palette::step(picks.len(), self.row.menu_hot, if ev.key == Key::Down { 1 } else { -1 });
+                tx.instant();
+            }
+            Key::Enter => {
+                if let Some(pick) = self.row.menu_hot.and_then(|h| picks.get(h)).copied() {
+                    self.tab_pick(id, pick, tx);
+                }
+            }
+            Key::Escape => self.close_tab_overlays(tx),
+            _ => {}
+        }
+        true
     }
 
     pub(crate) fn toggle_tab_list(&mut self, tx: &mut Tx) {
@@ -771,6 +801,50 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
 /// A tab's menu: side by side, a new terminal or Files on its machine, duplicate, and the
 /// three ways to close. The key caps are the shortcuts as Settings has them.
 fn tab_menu(s: &Shell, t: &'static Theme, id: TabId) -> El {
+    let mut rows = Vec::new();
+    let mut n = 0;
+    for item in tab_menu_items(s, id) {
+        let Some(item) = item else {
+            rows.push(menu_separator(t));
+            continue;
+        };
+        let state = match (item.on, s.row.menu_hot == Some(n)) {
+            (false, _) => RowState::Off,
+            (true, true) => RowState::Hot,
+            (true, false) => RowState::Rest,
+        };
+        let mut e = menu_row(t, item.label, item.keys.as_deref(), state).key(item.key);
+        if item.on {
+            let (pick, at) = (item.pick, n);
+            e = e.on_pointer_move(move |s: &mut Shell, _| s.row.menu_hot = Some(at)).on_press_tx(move |s: &mut Shell, tx| s.tab_pick(id, pick, tx));
+            n += 1;
+        }
+        rows.push(e);
+    }
+    popover(t, MENU_WIDTH)
+        .key("tab-menu")
+        .anchored("tab-menu-at", Side::Bottom, Align::Start, 0.0)
+        .role("menu")
+        .focusable(true)
+        .no_focus_ring()
+        .on_key(|s: &mut Shell, ev, tx| s.tab_menu_key(ev, tx))
+        .child(menu(rows))
+        .modal_tx(true, |s: &mut Shell, tx| s.close_tab_overlays(tx))
+}
+
+/// A row of a tab's menu.
+struct MenuItem {
+    key: &'static str,
+    label: &'static str,
+    keys: Option<String>,
+    pick: TabPick,
+    on: bool,
+}
+
+/// A tab's menu: side by side, a new terminal or Files on its machine, duplicate, and the
+/// three ways to close; `None` is a separator. The key caps are the shortcuts as Settings has
+/// them.
+fn tab_menu_items(s: &Shell, id: TabId) -> Vec<Option<MenuItem>> {
     let keys = |shortcut: Shortcut| shortcut_label(shortcut, s.options.mac_keys, &s.options.shortcuts);
     let active = s.bench.active_id();
     let paired = s.bench.layout().group_of(id).is_some();
@@ -781,40 +855,27 @@ fn tab_menu(s: &Shell, t: &'static Theme, id: TabId) -> El {
         Some(a) => Layout::can_pair(&s.bench, a, id),
         None => false,
     };
-    let row = |key: &'static str, label: &'static str, keys: Option<String>, pick: TabPick, on: bool| {
-        let e = menu_row(t, label, keys.as_deref(), if on { RowState::Rest } else { RowState::Off }).key(key);
-        if !on {
-            return e;
-        }
-        e.on_press_tx(move |s: &mut Shell, tx| s.tab_pick(id, pick, tx))
-    };
-    let side_keys = keys(Shortcut::SideBySide);
+    let row = |key: &'static str, label: &'static str, keys: Option<String>, pick: TabPick, on: bool| Some(MenuItem { key, label, keys, pick, on });
     let side = if paired {
         row("tab-apart", "Back to its own tab", None, TabPick::Apart, true)
     } else if active == Some(id) {
-        row("tab-beside", "Show side by side", side_keys, TabPick::SideBySide, beside)
+        row("tab-beside", "Show side by side", keys(Shortcut::SideBySide), TabPick::SideBySide, beside)
     } else {
         row("tab-beside", "Show beside this one", None, TabPick::SideBySide, beside)
     };
-    // Under the tab on screen, for any other tab (0.10's "Show below this one").
-    let below = row("tab-below", "Show below this one", None, TabPick::Below, beside && active != Some(id));
-    let rows = [
+    vec![
         side,
-        below,
-        menu_separator(t),
+        // Under the tab on screen, for any other tab (0.10's "Show below this one").
+        row("tab-below", "Show below this one", None, TabPick::Below, beside && active != Some(id)),
+        None,
         row("tab-new-terminal", "New terminal", keys(Shortcut::NewTerminal), TabPick::NewTerminal, true),
-        row("tab-files", "Files", None, TabPick::Files, true),
+        row("tab-files", "Files", keys(Shortcut::OpenFiles), TabPick::Files, true),
         row("tab-duplicate", "Duplicate tab", None, TabPick::Duplicate, true),
-        menu_separator(t),
+        None,
         row("tab-close", "Close tab", keys(Shortcut::CloseTab), TabPick::Close, true),
         row("tab-close-others", "Close other tabs", None, TabPick::CloseOthers, !layout::others(&s.bench, id).is_empty()),
         row("tab-close-right", "Close tabs to the right", None, TabPick::CloseRight, !layout::to_the_right(&s.bench, id).is_empty()),
-    ];
-    popover(t, MENU_WIDTH)
-        .key("tab-menu")
-        .anchored("tab-menu-at", Side::Bottom, Align::Start, 0.0)
-        .child(menu(rows))
-        .modal_tx(true, |s: &mut Shell, tx| s.close_tab_overlays(tx))
+    ]
 }
 
 /// The list of all tabs, under its button: each by its name and machine, and what it says.

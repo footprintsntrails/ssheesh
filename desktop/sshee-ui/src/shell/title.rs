@@ -166,6 +166,12 @@ pub(crate) fn title(s: &Shell, t: &'static Theme, active: bool) -> El {
         .label(label)
         .help(help)
         .on_press_tx(|s: &mut Shell, tx| s.title_pressed(tx))
+        // A right click opens the same menu (0.10's right-click everywhere); it never closes it.
+        .on_secondary_press(|s: &mut Shell, _, tx| {
+            if s.row.title_menu.is_none() {
+                s.title_pressed(tx);
+            }
+        })
         .child(text(name).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line());
     e = if s.row.title_menu.is_some() { e.fill(t.hov) } else { e.hover(t.hov2) };
     if let Some(address) = address {
@@ -182,6 +188,7 @@ pub(crate) fn title_menu(s: &Shell, t: &'static Theme) -> Option<El> {
     let menu = s.row.title_menu.as_ref()?;
     let server = s.bench.server(&menu.server)?;
     let keys = shortcut_label(Shortcut::NewTerminal, s.options.mac_keys, &s.options.shortcuts);
+    let files_keys = shortcut_label(Shortcut::OpenFiles, s.options.mac_keys, &s.options.shortcuts);
     let mut rows = rune::col().w_full().padding(crate::kit::menu::PAD).role("menu");
     let mut n = 0;
     for (g, group) in s.title_tools(&menu.server).into_iter().enumerate() {
@@ -192,7 +199,7 @@ pub(crate) fn title_menu(s: &Shell, t: &'static Theme) -> Option<El> {
             let state = if menu.hot == Some(n) { RowState::Hot } else { RowState::Rest };
             let (key, label, glyph, caps) = match tool {
                 Tool::NewTerminal => ("tm-terminal", "New terminal", Icon::Terminal, keys.as_deref()),
-                Tool::Files => ("tm-files", "Files", Icon::Folder, None),
+                Tool::Files => ("tm-files", "Files", Icon::Folder, files_keys.as_deref()),
                 Tool::CopyAddress => ("tm-copy", "Copy address", Icon::Copy, None),
             };
             let spec = ListRow { icon: Some(glyph), label, keys: caps, state, ..ListRow::default() };

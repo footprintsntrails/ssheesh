@@ -82,6 +82,13 @@ fn glyph(g: &Glyph) -> Icon {
         Glyph::SplitRight => Icon::SideBySide,
         Glyph::SplitDown => Icon::SplitDown,
         Glyph::Zoom => Icon::Expand,
+        Glyph::Compact => Icon::Sidebar,
+        Glyph::Find => Icon::Search,
+        Glyph::Eye(true) => Icon::EyeOff,
+        Glyph::Eye(false) => Icon::Eye,
+        Glyph::Tor => Icon::Tor,
+        Glyph::Star => Icon::Star,
+        Glyph::Refresh => Icon::Refresh,
     }
 }
 
@@ -103,7 +110,8 @@ impl Shell {
     fn palette_rows(&self) -> Vec<Row> {
         // Yours, as the snippets screen keeps them: those for every server and this one's own.
         let snippets = crate::screens::snippets::offered(self);
-        let ctx = Context { bench: &self.bench, snippets: &snippets, mac: self.options.mac_keys, shortcuts: &self.options.shortcuts };
+        let now = palette::Now { streaming: self.streaming(), compact: self.settings.get().compact_mode != sshee_app::model::CompactMode::Off, ..palette::Now::default() };
+        let ctx = Context { bench: &self.bench, snippets: &snippets, mac: self.options.mac_keys, shortcuts: &self.options.shortcuts, bookmarks: &self.screens.bookmarks, now };
         palette::rows(&ctx, &palette::parse(&self.screens.palette.query.text))
     }
 
@@ -186,6 +194,8 @@ impl Shell {
                         }
                         true
                     }
+                    // In a text field Ctrl+Shift+Z is redo, as in 0.10, not "Reopen closed tab".
+                    Some(Shortcut::ReopenTab) => false,
                     Some(_) => true,
                     None => false,
                 }
@@ -227,7 +237,40 @@ impl Shell {
             Action::NewSnippet(command) => self.new_snippet(&command, tx),
             Action::WhatsNew => self.open_whats_new(tx),
             Action::Tour => self.open_tour(0, tx),
+            Action::SettingsRow { section, key } => {
+                if let Some(section) = sshee_app::settings_store::catalog::Section::from_id(section) {
+                    self.open_settings_at(section, tx);
+                    self.screens.settings.found = Some(key.clone());
+                    tx.scroll_into_view(key);
+                }
+            }
+            Action::SideBySide => self.toggle_side_by_side(tx),
+            Action::Arrange(how) => self.arrange(how, tx),
+            Action::Compact => self.toggle_compact(tx),
+            Action::Find => {
+                if let Some(pane) = self.active_pane() {
+                    pane.open_find(tx);
+                }
+            }
+            Action::Streamer => self.toggle_streamer(tx),
+            Action::Tor => self.switch_tor(tx),
+            Action::Agents => crate::screens::agent::toggle_list(self, tx),
+            Action::Workspace(server) => self.open_workspace(&server, tx),
+            Action::CheckUpdates => self.open_settings_at(sshee_app::settings_store::catalog::Section::Updates, tx),
         }
+    }
+
+    /// "Workspace for web-7731" (0.10's `openWorkspace`): the machine's terminal with its files
+    /// beside it, each the one it has or a new one; the keyboard in the terminal.
+    pub fn open_workspace(&mut self, server: &str, tx: &mut Tx) {
+        let term = self.bench.tabs_on(server).find(|t| t.kind == TabKind::Terminal).map(|t| t.id);
+        let term = term.unwrap_or_else(|| self.bench.open(TabKind::Terminal, server));
+        let files = self.bench.open_files(server);
+        if !self.bench.together(term, files) {
+            self.bench.pair(term, files);
+        }
+        self.bench.focus(term);
+        self.settle(tx);
     }
 
     /// Goes to a machine's Files or Stats tab (at `path`, when given), or opens one.

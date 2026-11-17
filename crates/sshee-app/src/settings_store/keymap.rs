@@ -8,7 +8,7 @@
 //! to whoever tries to take one.
 
 use crate::model::Keys;
-use crate::workbench::shortcuts::Shortcut;
+use crate::workbench::shortcuts::{self as rules, Shortcut, JUMP_TO_TAB};
 use indexmap::IndexMap;
 
 /// Shortcuts changed in Settings: by id, the keys given, or `None` for one turned off.
@@ -43,9 +43,8 @@ pub struct Entry {
     pub does: Option<Shortcut>,
 }
 
-/// Every shortcut that can be changed, in 0.10's order (which is also the order a key press
-/// is matched in).
-pub const SHORTCUTS: [Entry; 16] = [
+/// Every shortcut that can be changed: 0.10's, in its order, then the three 1.0 added.
+pub const SHORTCUTS: [Entry; 19] = [
     // The command bar sits on L, like a browser's address bar. On a Mac ⌘K clears the
     // terminal, so the bar has only ⌘L; elsewhere Ctrl+Shift+K opens it too, as it always did.
     Entry { id: "palette", name: "Command bar", mac: k("l"), other: k("l"), does: Some(Shortcut::Palette) },
@@ -66,12 +65,18 @@ pub const SHORTCUTS: [Entry; 16] = [
     Entry { id: "compact", name: "Compact mode", mac: ks("m", true), other: k("m"), does: Some(Shortcut::Compact) },
     // As in a browser. In 0.10, vim and less keep it.
     Entry { id: "find", name: "Find in the terminal", mac: k("f"), other: ks("f", false), does: Some(Shortcut::Find { always: false }) },
+    // New in 1.0. ⌘A selects all on a Mac, so the agents take ⇧⌘A there.
+    Entry { id: "agents", name: "Agents at work", mac: ks("a", true), other: k("a"), does: Some(Shortcut::Agents) },
+    // Like a file explorer: ⇧⌘E on a Mac; elsewhere Ctrl+Shift+E is 0.10's Split down, so O.
+    Entry { id: "files", name: "Files on this server", mac: ks("e", true), other: k("o"), does: Some(Shortcut::OpenFiles) },
+    // The digit stands for all nine: ⌘1 to ⌘9, Ctrl+Shift+1 to 9; 9 is the last tab.
+    Entry { id: JUMP_TO_TAB, name: "Go to a tab by its number", mac: k("1"), other: k("1"), does: Some(Shortcut::JumpToTab(1)) },
 ];
 
 /// How Settings groups them. The command bar's second key shows on its row.
 pub const GROUPS: [(&str, &[&str]); 3] = [
-    ("Find and open", &["palette", "find", "addHost", "settings"]),
-    ("Tabs and panes", &["newTerminal", "closePane", "reopenTab", "splitRight", "splitDown", "zoomPane", "toggleSplit"]),
+    ("Find and open", &["palette", "find", "addHost", "settings", "files", "agents"]),
+    ("Tabs and panes", &["newTerminal", "closePane", "reopenTab", JUMP_TO_TAB, "splitRight", "splitDown", "zoomPane", "toggleSplit"]),
     ("Show and hide", &["sidebar", "vitals", "compact", "streamer"]),
 ];
 
@@ -103,8 +108,9 @@ pub fn default_keys(id: &str, mac: bool) -> Option<Keys> {
     Some(if mac { keys(c.key, false, true, false, c.shift.unwrap_or(false)) } else { keys(c.key, true, false, false, c.shift.unwrap_or(true)) })
 }
 
-/// The keys a shortcut has now: yours if you changed them, else its own; `None` when it has
-/// none (turned off, or saved without a key).
+/// The keys a shortcut has now: yours if you changed them, else its own unless you gave those
+/// to another shortcut (one 1.0 added, whose keys you had taken before it came); `None` when
+/// it has none (turned off, or saved without a key).
 pub fn current_keys(id: &str, mac: bool, changed: &Changed) -> Option<Keys> {
     match changed.get(id) {
         Some(Some(mine)) if !mine.key.is_empty() => {
@@ -112,7 +118,7 @@ pub fn current_keys(id: &str, mac: bool, changed: &Changed) -> Option<Keys> {
             Some(keys(&mine.key, ctrl, meta, alt, shift))
         }
         Some(_) => None,
-        None => default_keys(id, mac),
+        None => default_keys(id, mac).filter(|own| !rules::taken_by_yours(id, own, changed)),
     }
 }
 
@@ -145,6 +151,16 @@ pub enum Keyboard {
 }
 
 impl Keyboard {
+    /// A Mac's keys, or this computer's when they aren't (a window can be told to use a Mac's
+    /// keys elsewhere, as tests and demos do).
+    pub fn of(mac: bool) -> Keyboard {
+        match Keyboard::current() {
+            _ if mac => Keyboard::Mac,
+            Keyboard::Mac => Keyboard::Other,
+            other => other,
+        }
+    }
+
     /// This computer's.
     pub fn current() -> Keyboard {
         if cfg!(target_os = "macos") {
@@ -189,9 +205,28 @@ pub fn keys_label(k: &Keys, on: Keyboard) -> String {
     parts.join("+")
 }
 
-/// A shortcut's keys as the app shows them; empty when it has none.
+/// A shortcut's keys as the app shows them; empty when it has none. A tab by its number
+/// reads "⌘1…9".
 pub fn shortcut_label(id: &str, on: Keyboard, changed: &Changed) -> String {
-    current_keys(id, on.mac(), changed).map(|k| keys_label(&k, on)).unwrap_or_default()
+    current_keys(id, on.mac(), changed).map(|k| label_of(id, &k, on)).unwrap_or_default()
+}
+
+/// `keys` as `id`'s: "Ctrl+Shift+1…9" for a tab by its number, else as [`keys_label`] says.
+pub fn label_of(id: &str, k: &Keys, on: Keyboard) -> String {
+    if id == JUMP_TO_TAB && rules::tab_digit(&k.key).is_some() {
+        let (ctrl, meta, alt, shift) = held(k);
+        return format!("{}…9", keys_label(&keys("1", ctrl, meta, alt, shift), on));
+    }
+    keys_label(k, on)
+}
+
+/// Whether `a` (keys for `a_id`) and `b` (for `b_id`) are the same keys: a tab by its number
+/// has all nine digits.
+fn clash(a_id: &str, a: &Keys, b_id: &str, b: &Keys) -> bool {
+    if a_id == JUMP_TO_TAB || b_id == JUMP_TO_TAB {
+        return held(a) == held(b) && rules::tab_digit(&a.key).is_some() && rules::tab_digit(&b.key).is_some();
+    }
+    same_keys(a, b)
 }
 
 /// Plain Ctrl without Shift is safe with these: terminal programs don't read them.
@@ -263,20 +298,32 @@ pub fn reserved_reason(k: &Keys, on: Keyboard) -> Option<String> {
 /// Why `id` can't have these keys, or `None` if it can: the terminal or the system keeps
 /// them, or another shortcut already has them.
 pub fn problem(id: &str, k: &Keys, on: Keyboard, changed: &Changed) -> Option<String> {
+    // A tab by its number is keys held with a digit, and every digit must be free to take.
+    if id == JUMP_TO_TAB {
+        if rules::tab_digit(&k.key).is_none() {
+            return Some("Hold the keys with a digit: 1 goes to the first tab, 9 to the last.".into());
+        }
+        let (ctrl, meta, alt, shift) = held(k);
+        if let Some(reserved) = (1..=9).find_map(|d| reserved_reason(&keys(&d.to_string(), ctrl, meta, alt, shift), on)) {
+            return Some(reserved);
+        }
+    }
     // Ctrl+F is a terminal program's key, but finding hands it back to the programs that read
     // it, which no other shortcut can do.
     let hands_back = id == "find" && same_keys(k, &keys("f", true, false, false, false));
-    if !hands_back {
+    if !hands_back && id != JUMP_TO_TAB {
         if let Some(reserved) = reserved_reason(k, on) {
             return Some(reserved);
         }
     }
     let name = entry(id).map(|e| e.name);
     for other in &SHORTCUTS {
-        if other.id == id || !current_keys(other.id, on.mac(), changed).is_some_and(|has| same_keys(&has, k)) {
+        let Some(has) = current_keys(other.id, on.mac(), changed).filter(|_| other.id != id) else { continue };
+        if !clash(id, k, other.id, &has) {
             continue;
         }
-        let label = keys_label(k, on);
+        // For the nine tabs, the one key of theirs another shortcut has.
+        let label = keys_label(if id == JUMP_TO_TAB { &has } else { k }, on);
         return Some(if Some(other.name) == name {
             format!("{label} already opens the command bar.")
         } else {
@@ -289,6 +336,14 @@ pub fn problem(id: &str, k: &Keys, on: Keyboard, changed: &Changed) -> Option<St
 /// Gives `id` new keys in `changed`: `Some(Some(keys))` those, `Some(None)` none at all,
 /// `None` its own again. Its own keys need no entry, so Reset shows as done.
 pub fn set_keys(changed: &mut Changed, id: &str, to: Option<Option<Keys>>, mac: bool) {
+    // A tab by its number keeps the keys held, with the digit 1 for all nine.
+    let to = match to {
+        Some(Some(k)) if id == JUMP_TO_TAB => {
+            let (ctrl, meta, alt, shift) = held(&k);
+            Some(Some(keys("1", ctrl, meta, alt, shift)))
+        }
+        other => other,
+    };
     let own = default_keys(id, mac);
     let is_own = match &to {
         None => true,
@@ -374,11 +429,11 @@ mod tests {
     #[test]
     fn every_0_10_shortcut_is_listed_once_with_its_keys() {
         let ids: Vec<&str> = SHORTCUTS.iter().map(|e| e.id).collect();
-        assert_eq!(ids.len(), 16);
+        assert_eq!(ids.len(), 19);
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), 16, "an id is listed twice");
+        assert_eq!(sorted.len(), 19, "an id is listed twice");
         // The table of the inventory (section 6), Mac then elsewhere.
         for (id, mac, other) in [
             ("palette", "⌘L", "Ctrl+Shift+L"),
@@ -397,13 +452,17 @@ mod tests {
             ("vitals", "⌘J", "Ctrl+Shift+J"),
             ("compact", "⇧⌘M", "Ctrl+Shift+M"),
             ("streamer", "⇧⌘H", "Ctrl+Shift+H"),
+            // New in 1.0.
+            ("agents", "⇧⌘A", "Ctrl+Shift+A"),
+            ("files", "⇧⌘E", "Ctrl+Shift+O"),
+            ("jumpToTab", "⌘1…9", "Ctrl+Shift+1…9"),
         ] {
             assert_eq!(shortcut_label(id, MAC, &none()), mac, "{id} on a Mac");
             assert_eq!(shortcut_label(id, LINUX, &none()), other, "{id} elsewhere");
         }
         // Every one is in a group, but the command bar's second key, which shows on its row.
         let grouped: Vec<&str> = GROUPS.iter().flat_map(|(_, ids)| ids.iter().copied()).collect();
-        assert_eq!(grouped.len(), 15);
+        assert_eq!(grouped.len(), 18);
         for id in ids {
             assert!(grouped.contains(&id) || id == "paletteAlt", "{id} is in no group");
         }
@@ -553,5 +612,77 @@ mod tests {
         assert_eq!(names(LINUX), ["Next tab", "Previous tab", "Copy in a terminal", "Paste in a terminal", "New line in AI coding agents"]);
         let paste = |on: Keyboard| fixed(on).into_iter().find(|f| f.name == "Paste in a terminal").unwrap().keys.len();
         assert_eq!((paste(WIN), paste(LINUX)), (2, 1));
+    }
+
+    #[test]
+    fn the_shortcuts_1_0_added_are_listed_changed_and_checked_like_the_others() {
+        // Each is in Settings, and does what the window does on it.
+        for id in ["agents", "files", JUMP_TO_TAB] {
+            assert!(works(id), "{id}");
+            assert!(GROUPS.iter().any(|(_, ids)| ids.contains(&id)), "{id} is in no group");
+        }
+        // Files no longer has 0.10's Split down keys, and nothing shares keys with another.
+        assert_eq!(problem("splitDown", &keys("e", true, false, false, true), LINUX, &none()), None);
+        assert_eq!(
+            problem("files", &keys("e", true, false, false, true), LINUX, &none()).as_deref(),
+            Some("Ctrl+Shift+E already does “Split down”, so change that one first.")
+        );
+        // The agents' keys are taken like any shortcut's.
+        assert_eq!(
+            problem("sidebar", &keys("a", true, false, false, true), LINUX, &none()).as_deref(),
+            Some("Ctrl+Shift+A already does “Agents at work”, so change that one first.")
+        );
+        let mut changed = none();
+        set_keys(&mut changed, "agents", Some(Some(keys("g", true, false, false, true))), false);
+        assert_eq!(shortcut_label("agents", LINUX, &changed), "Ctrl+Shift+G");
+        assert_eq!(problem("sidebar", &keys("a", true, false, false, true), LINUX, &changed), None);
+    }
+
+    #[test]
+    fn keys_you_had_before_a_new_shortcut_came_stay_yours() {
+        // 0.10 let you put the sidebar on Ctrl+Shift+A; the agents came with it later.
+        let mut changed = none();
+        changed.insert("sidebar".into(), Some(keys("a", true, false, false, true)));
+        assert_eq!(shortcut_label("sidebar", LINUX, &changed), "Ctrl+Shift+A");
+        assert_eq!(shortcut_label("agents", LINUX, &changed), "");
+        // The agents can take other keys; their own come back only once the sidebar lets go.
+        assert_eq!(problem("agents", &keys("g", true, false, false, true), LINUX, &changed), None);
+        assert_eq!(
+            reset(&mut changed, &["agents"], LINUX),
+            Err("Ctrl+Shift+A already does “Show or hide the sidebar”, so change that one first.".into())
+        );
+        assert_eq!(reset(&mut changed, &["sidebar"], LINUX), Ok(()));
+        assert_eq!(shortcut_label("agents", LINUX, &changed), "Ctrl+Shift+A");
+    }
+
+    #[test]
+    fn a_tab_by_its_number_is_the_keys_held_with_any_digit() {
+        let mut changed = none();
+        // Recorded with any digit, kept with 1.
+        assert_eq!(problem(JUMP_TO_TAB, &keys("4", false, true, false, false), MAC, &changed), None);
+        set_keys(&mut changed, JUMP_TO_TAB, Some(Some(keys("4", false, true, true, false))), true);
+        assert_eq!(changed.get(JUMP_TO_TAB), Some(&Some(keys("1", false, true, true, false))));
+        assert_eq!(shortcut_label(JUMP_TO_TAB, MAC, &changed), "⌥⌘1…9");
+        // A letter isn't a number, and a digit the system keeps refuses all nine.
+        assert_eq!(
+            problem(JUMP_TO_TAB, &keys("t", false, true, false, false), MAC, &none()).as_deref(),
+            Some("Hold the keys with a digit: 1 goes to the first tab, 9 to the last.")
+        );
+        assert_eq!(problem(JUMP_TO_TAB, &keys("2", false, true, false, true), MAC, &none()).as_deref(), Some("macOS uses ⇧⌘3 itself."));
+        assert_eq!(
+            problem(JUMP_TO_TAB, &keys("2", true, false, false, false), LINUX, &none()).as_deref(),
+            Some("Terminal programs use Ctrl+1 themselves, so add Shift.")
+        );
+        // Another shortcut can't take one of the nine, nor the nine one another has.
+        assert_eq!(
+            problem("vitals", &keys("7", true, false, false, true), LINUX, &none()).as_deref(),
+            Some("Ctrl+Shift+7 already does “Go to a tab by its number”, so change that one first.")
+        );
+        let mut changed = none();
+        set_keys(&mut changed, "vitals", Some(Some(keys("7", false, true, false, false))), true);
+        assert_eq!(
+            problem(JUMP_TO_TAB, &keys("1", false, true, false, false), MAC, &changed).as_deref(),
+            Some("⌘7 already does “Show or hide server vitals”, so change that one first.")
+        );
     }
 }
