@@ -135,7 +135,7 @@ fn main() {
     };
     let options = Options { sheet: args.sheet, ..Options::default() };
     let launch = if args.demo {
-        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers)), options }
+        Launch { bench: demo::bench(), backend: Box::new(demo::DemoBackend::new().with_leftovers(args.demo_leftovers).with_card(args.demo_card.clone())), options }
     } else {
         // This copy's own list (`~/.sshee-preview/hosts.json`, `looks.json`) and the ssh
         // config: a couple of small files, read before the window opens, so the sidebar is

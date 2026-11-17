@@ -164,8 +164,8 @@ fn a_link_is_underlined_under_the_pointer_and_opens_with_ctrl_click() {
     assert!(w.rt.find("link-hint").is_none());
     w.wait(0.6);
     assert!(w.rt.find("link-hint").is_some());
-    assert!(w.tree().contains("Ctrl+click to open"), "{}", w.tree());
-    // A plain click selects as ever and opens nothing; off the link nothing is underlined.
+    assert!(w.tree().contains("Click to open"), "{}", w.tree());
+    // Off the link nothing is underlined.
     let (x, y) = w.cell(0, 1);
     w.rt.pointer_move(x, y);
     w.settle();
@@ -265,11 +265,12 @@ impl TermLink for TmuxLink {
     }
     fn ask(&self, ask: Ask, done: Answer) -> bool {
         let mut tmux = self.tmux.lock().unwrap();
-        tmux.asks.push(ask);
+        tmux.asks.push(ask.clone());
         done(match ask {
             Ask::Rows => Some(Reply::Rows(tmux.rows.clone())),
             Ask::History { .. } => tmux.history.clone().map(|text| Reply::History { text, away_ms: Some(41 * 60_000) }),
             Ask::Scroll { position } => Some(Reply::Scroll(TmuxScroll { in_mode: position.is_some_and(|p| p > 0), position: position.unwrap_or(0), history: 480, height: 33, limit: 2000 })),
+            _ => None,
         });
         true
     }
@@ -325,7 +326,8 @@ fn in_tmux_the_history_found_and_scrolled_is_tmuxs() {
     w.key(Key::Command('f'), "cs");
     w.typed("needle");
     assert!(w.tree().contains("2 of 2"), "{}", w.tree());
-    assert_eq!(tmux.lock().unwrap().asks, [Ask::Rows]);
+    // (Which agents the server has is asked once it connects.)
+    assert_eq!(tmux.lock().unwrap().asks.iter().filter(|a| **a != Ask::Agents).collect::<Vec<_>>(), [&Ask::Rows]);
     // The older match is 502 rows up from the bottom: tmux is asked to scroll there.
     w.key(Key::Enter, "");
     assert!(w.tree().contains("1 of 2"));

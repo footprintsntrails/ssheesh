@@ -211,15 +211,17 @@ never writes 0.10's. `--demo` reads and writes nothing.
 - A system notification's text is made and handed to `Backend::notify`, which shows nothing
   yet: the notification itself, and its click bringing the tab forward, are the desktop
   crate's step.
-- A click on a file's path copies it: `Shell::open_path` waits for the Files screen. A web
-  link whose text hides where it goes opens on a second Ctrl+click, not from a dialog.
-- Streamer mode doesn't know this computer's hostname (only its user, from the environment):
-  `Backend` has nothing to ask yet.
+- A click on a file's path finds it on its machine (`terminal/session.rs`: tmux's folder for a
+  relative one, then the server's `find_path`) and shows it in Files beside the terminal;
+  `path:line` says its lines in a note, the editor doesn't mark them yet. A web link whose
+  text hides where it goes opens on a second click, not from a dialog.
 - Saved passwords aren't read (0.10's keychain needs the owner's yes); a server that asks for
-  one asks in the terminal. Host-key questions have no screen.
+  one asks in the terminal. A server's key is checked before signing in
+  (`LiveLink::begin`, `hostkeys::check`) and asked about on the pane's card
+  (`screens/prompts.rs`), so ssh never asks it, in the terminal or of askpass.
 - Tor's round-trip time isn't measured; the status bar shows "Tor" without it.
-- Every hidden pane still takes its frames in `poll` (so a switch shows it at once); with
-  dozens of busy tabs that wants a "drain replies only" mode in `TermPane`.
+- A pane out of sight answers its program at once but takes a frame only every half second
+  (`TermPane::set_shown`, `HIDDEN_FRAME`): enough for an agent's question and "went quiet".
 
 ## Screens that are built
 
@@ -253,7 +255,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 | Zoom, a tab dragged out to its own window, more than two side by side (`Workspace.tsx`, `Pane.tsx`); the tab menu, drag and the pair are built | `shell/tabs.rs`, `shell/split.rs` | `workbench/layout.rs` |
 | Compact modes and sliding edges (`EdgeReveal.tsx`) | `shell/compact.rs` | `workbench.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
-| Host-key and password questions, reconnect and sleep notices (`TerminalPane.tsx` overlays) | `screens/prompts.rs` | `prompts.rs` |
+| Host-key question, reconnect and sleep notices, the agents' buttons: built (`terminal/session.rs` holds their state). Not built: a password question of its own | `screens/prompts.rs` | `prompts.rs` |
 | In the terminal, still to do: highlights (`Look::highlights`, drawn as `Role::Paint`), the recap's full list of lines, drop files to upload (find, links, away, the scroll bar, the menu and streamer mode are built) | `terminal/` | none (sshee-term has them) |
 | Tor: the switch, progress, log (`TorButton.tsx`) | `screens/tor.rs` | `tor.rs` |
 | Security check and fixes (`ServerTools.tsx`, `Recipes.tsx`) | `screens/checkup.rs`, `screens/recipes.rs` | `recipes.rs` |

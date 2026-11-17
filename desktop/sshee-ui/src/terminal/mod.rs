@@ -10,6 +10,7 @@
 
 pub mod away;
 pub mod coverage;
+pub mod echo;
 pub mod find;
 pub mod glyphs;
 pub mod ime;
@@ -23,6 +24,7 @@ pub mod pane;
 pub mod replay;
 pub mod rows;
 pub mod scrollbar;
+pub mod session;
 pub mod view;
 pub mod wake;
 
@@ -47,8 +49,21 @@ pub enum LinkStatus {
     Reconnecting { note: String },
     /// Disconnected or asleep: a key or a click brings it back.
     Waiting { note: String },
-    /// Failed or ended: it doesn't.
+    /// Failed or ended: it doesn't. `note` says why (sshee-core's words for a failure).
     Gone { note: String },
+    /// The connection dropped and comes back by itself: try `attempt` in `retry_in_ms`,
+    /// because of `reason` (a live session's [`LinkStatus::Reconnecting`], with its countdown).
+    Retrying { attempt: u32, retry_in_ms: u64, reason: String },
+    /// Let go of while unused (Settings' "Disconnect unused terminals"): the shell keeps
+    /// running in tmux on the server, and any key brings it back.
+    Asleep,
+    /// Connecting again after a drop or a sleep, try `attempt`.
+    Rejoining { attempt: u32 },
+    /// The shell exited (`code`): a key doesn't bring it back, "Start again" does.
+    Ended { code: Option<u32> },
+    /// The server's key isn't the one remembered: nothing signs in until you answer
+    /// (`TermLink::trust`). Askpass is never asked this.
+    HostKey(sshee_app::prompts::HostKey),
 }
 
 impl LinkStatus {
@@ -59,12 +74,26 @@ impl LinkStatus {
             LinkStatus::Connecting => "connecting",
             LinkStatus::Connected { .. } => "",
             LinkStatus::Reconnecting { note } | LinkStatus::Waiting { note } | LinkStatus::Gone { note } => note,
+            LinkStatus::Retrying { .. } | LinkStatus::Rejoining { .. } => "reconnecting",
+            LinkStatus::Asleep => "asleep",
+            LinkStatus::Ended { .. } => "ended",
+            LinkStatus::HostKey(_) => "waiting for your answer",
         }
     }
 
     /// The session waits to come back: a key should bring it back now.
     pub fn wants_reconnect(&self) -> bool {
-        matches!(self, LinkStatus::Reconnecting { .. } | LinkStatus::Waiting { .. })
+        matches!(self, LinkStatus::Reconnecting { .. } | LinkStatus::Waiting { .. } | LinkStatus::Retrying { .. } | LinkStatus::Asleep)
+    }
+
+    /// No connection now, after there was one: the text dims (0.10's `offline`).
+    pub fn offline(&self) -> bool {
+        matches!(self, LinkStatus::Reconnecting { .. } | LinkStatus::Waiting { .. } | LinkStatus::Retrying { .. } | LinkStatus::Rejoining { .. })
+    }
+
+    /// It stopped, and only a press starts it again.
+    pub fn stopped(&self) -> bool {
+        matches!(self, LinkStatus::Gone { .. } | LinkStatus::Ended { .. })
     }
 }
 
@@ -116,6 +145,21 @@ pub trait TermLink {
         let _ = (ask, done);
         false
     }
+    /// Your answer to the server's key question ([`LinkStatus::HostKey`]): `true` saves the
+    /// key you were shown and signs in, `false` doesn't connect.
+    fn trust(&self, yes: bool) {
+        let _ = yes;
+    }
+    /// Starts the session again after it stopped ("Try again", "Start again"); `review`:
+    /// look at the server's key again first, as when ssh said it changed.
+    fn restart(&self, review: bool) {
+        let _ = review;
+        self.reconnect();
+    }
+    /// Lets go of the connection of a terminal nobody used for a while: the shell keeps
+    /// running in tmux on the server, and the session waits, [`LinkStatus::Asleep`], for
+    /// [`TermLink::reconnect`]. A link with nothing on a server does nothing.
+    fn sleep(&self) {}
 }
 
 /// A link to nothing: what a pane has before the program gives it one.

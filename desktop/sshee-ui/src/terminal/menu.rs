@@ -13,7 +13,6 @@ use rune::{El, Mods, Tx};
 use sshee_term::engine::{Engine, Modes};
 use sshee_term::input::{mouse_goes_to_program, Platform};
 
-use super::overlays::Wish;
 use super::pane::TermPane;
 use crate::kit::menu::{context_menu, menu_row, menu_separator, RowState, ROW, SEPARATOR};
 use crate::theme::Theme;
@@ -99,7 +98,7 @@ impl TermPane {
                 self.model.clear_history();
                 self.pull(tx);
             }
-            Pick::NewTerminal => self.over.wish(Wish::NewTerminal),
+            Pick::NewTerminal => self.new_terminal_here(tx),
         }
     }
 }

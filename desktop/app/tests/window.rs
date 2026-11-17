@@ -522,9 +522,9 @@ fn the_link_under_the_pointer_says_where_it_goes() {
     // The log's "payments runbook" is a link a program marked (OSC 8) over other words.
     let script = || json!([tap(0.3, STAGING), { "t": 0.9, "type": "move", "x": 260.0, "y": 507.0 }, end(1.9)]);
     in_both("link", script, |run, _| {
-        let key = if MAC { "Cmd" } else { "Ctrl" };
-        let hint = format!("Goes to https://docs.shop.example/runbooks/payments. {key}+click to open");
-        assert!(run.tree_text.contains(&hint), "no hint says {hint:?}");
+        // A plain click opens a link (Ctrl+click or ⌘-click at once).
+        let hint = "Goes to https://docs.shop.example/runbooks/payments. Click to open";
+        assert!(run.tree_text.contains(hint), "no hint says {hint:?}");
         // Under the link, inside the page.
         let (hint, term) = (run.rect("link-hint"), run.rect("term"));
         assert!(hint[1] > 507.0 && hint[1] < 540.0 && hint[0] + hint[2] <= term[0] + term[2], "{hint:?}");
@@ -945,4 +945,39 @@ fn copies_an_earlier_run_left_unsent_are_offered_once_at_start() {
     // Without the flag the demo has none, and nothing is over the window.
     let Some(run) = self::run("edit-no-leftovers", &["--demo"], None) else { return };
     assert!(run.element("edit-leftovers").is_none());
+}
+
+#[test]
+fn a_new_server_asks_about_its_key_and_the_session_cards_show_in_both_appearances() {
+    // backups is seen for the first time: its terminal asks about its key, and nothing else.
+    for theme in ["dark", "light"] {
+        let script = json!([tap(0.3, "server-3"), { "t": 1.2, "type": "mark", "name": "end" }]);
+        let Some(run) = run(&format!("hostkey-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        for said in ["New server. Is this really backups?", "Server fingerprint", "Trust and connect", "Cancel"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said}");
+        }
+        let card = run.rect("hostkey-card");
+        let term = run.rect("term");
+        // In the middle of the terminal.
+        assert!((card[0] + card[2] / 2.0 - (term[0] + term[2] / 2.0)).abs() < 2.0, "{theme}: {card:?} in {term:?}");
+    }
+    // Trusting it signs in: the card goes.
+    let script = json!([tap(0.3, "server-3"), tap(1.0, "hostkey-yes"), { "t": 1.6, "type": "mark", "name": "end" }]);
+    let Some(run) = run("hostkey-trusted", &["--demo"], Some(script)) else { return };
+    assert!(run.element("hostkey-card").is_none());
+    // Every other card, as `--demo-card` plays it.
+    for (state, said) in [
+        ("hostkey-changed", "backups's key changed"),
+        ("disconnected", "Always reconnect automatically"),
+        ("retrying", "The server stopped responding"),
+        ("asleep", "Disconnected after 20 min unused"),
+        ("failed", "Couldn't connect"),
+        ("ended", "Session ended"),
+    ] {
+        for theme in ["dark", "light"] {
+            let script = json!([tap(0.3, "server-3"), { "t": 1.4, "type": "mark", "name": "end" }]);
+            let Some(run) = self::run(&format!("card-{state}-{theme}"), &["--demo", "--demo-card", state, "--theme", theme], Some(script)) else { return };
+            assert!(run.tree_text.contains(said), "{state} {theme}: {said}");
+        }
+    }
 }

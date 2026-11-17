@@ -235,6 +235,8 @@ pub struct Shell {
     pub(crate) row: super::tabs::Row,
     /// Streamer mode (`streamer.rs`).
     pub(crate) streamer: super::streamer::Streamer,
+    /// Terminal tabs restored from the last run whose pane hasn't been made yet.
+    opened_before: Vec<Tab>,
 }
 
 /// A session's status as a tab's.
@@ -245,7 +247,10 @@ fn link_of(status: &LinkStatus) -> Link {
         LinkStatus::Connected { durable } => Link::Connected { durable: *durable },
         LinkStatus::Reconnecting { .. } => Link::Reconnecting,
         LinkStatus::Waiting { .. } => Link::Disconnected,
-        LinkStatus::Gone { .. } => Link::Ended,
+        LinkStatus::Gone { .. } | LinkStatus::Ended { .. } => Link::Ended,
+        LinkStatus::Retrying { .. } | LinkStatus::Rejoining { .. } => Link::Reconnecting,
+        LinkStatus::Asleep => Link::Disconnected,
+        LinkStatus::HostKey(_) => Link::Connecting,
     }
 }
 
@@ -278,7 +283,9 @@ impl Shell {
             sides: Default::default(),
             row: Default::default(),
             streamer: Default::default(),
+            opened_before: Vec::new(),
         };
+        shell.opened_before = shell.bench.tabs().iter().filter(|t| t.kind == TabKind::Terminal && t.session_key.is_some()).cloned().collect();
         shell.apply_settings();
         shell.sync_panes();
         shell.sync_watch();
@@ -337,6 +344,9 @@ impl Shell {
         });
         // Side by side there are two terminals on the page: each takes the keyboard by its own name.
         pane.set_focus_key(format!("pane-{}", id.0));
+        if let Some(server) = self.bench.server(&tab.server) {
+            pane.set_machine(!server.is_local(), &self.server_shown(&tab.server, &server.name));
+        }
         pane.view.borrow_mut().set_look(self.look());
         if let Some(waker) = &self.waker {
             pane.set_waker(waker.clone());
@@ -364,6 +374,12 @@ impl Shell {
 
     /// Ends the panes of tabs that are gone, and makes the pane of the tab on screen.
     fn sync_panes(&mut self) {
+        // A terminal closed before it was ever shown this run still has a shell in tmux on its
+        // server: it ends too, as a shown one's does.
+        for tab in self.opened_before.iter().filter(|t| self.bench.tab(t.id).is_none() && !self.panes.contains_key(&t.id)) {
+            self.backend.terminal(self.bench.server(&tab.server), tab).end();
+        }
+        self.opened_before.retain(|t| self.bench.tab(t.id).is_some() && !self.panes.contains_key(&t.id));
         let gone: Vec<TabId> = self.panes.keys().filter(|id| self.bench.tab(**id).is_none()).copied().collect();
         for id in gone {
             if let Some(mut pane) = self.panes.remove(&id) {
@@ -493,7 +509,7 @@ impl Shell {
 
     /// A click on a tab. A tab whose connection is gone tries again.
     pub fn focus_tab(&mut self, id: TabId, tx: &mut Tx) {
-        let again = self.bench.tab(id).is_some_and(|t| t.link == Link::Disconnected);
+        let again = self.bench.tab(id).is_some_and(|t| matches!(t.link, Link::Disconnected | Link::Ended));
         self.bench.focus(id);
         self.settle(tx);
         if again {
@@ -673,7 +689,8 @@ impl Shell {
     pub fn link_status(&mut self, id: TabId, status: LinkStatus) {
         self.bench.set_link(id, link_of(&status));
         if let Some(pane) = self.panes.get_mut(&id) {
-            pane.status = status;
+            pane.set_status(status);
+            pane.ask_agents();
         }
         // Its server is back: files open elsewhere waiting to upload try at once.
         crate::screens::files::edit::reconnected(self, id);
@@ -693,6 +710,7 @@ impl Shell {
         let mut wishes = Vec::new();
         let beside = active.and_then(|id| self.layout.partner(id));
         for (id, pane) in &mut self.panes {
+            pane.set_shown(Some(*id) == active || Some(*id) == beside);
             let drew = pane.poll(clock, tx);
             changed |= drew && (Some(*id) == active || Some(*id) == beside);
             if pane.take_wants_you() {

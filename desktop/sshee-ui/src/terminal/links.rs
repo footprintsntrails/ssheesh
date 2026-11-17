@@ -1,8 +1,10 @@
 //! Links in a terminal's output: web links (a program's OSC 8 ones too) and file paths, as the
-//! presentation pass found them (`sshee_term::present::Link`). The one under the pointer is
-//! underlined (a path's underline is dotted) and says how to open it; Ctrl+click (⌘-click on a
-//! Mac) opens it: a web link in the browser, a path through the window (`Wish::OpenPath`, for
-//! the Files screen).
+//! presentation pass found them (`sshee_term::present::Link`). Every link is faintly
+//! underlined; the one under the pointer fully (a path's underline is dotted), and it says how
+//! to open it. A click opens it a beat later (`CLICK_WAIT_MS`, so a double click that selects
+//! part of it, or a drag across it, opens nothing); Ctrl+click (⌘-click on a Mac) opens it at
+//! once. A web link opens in the browser; a path is found on its machine and shown in Files
+//! beside the terminal (`session.rs`).
 //!
 //! Only links the pass handed out exist here, so one that runs over a hidden secret or a name
 //! hidden by streamer mode is no link at all, and a hint never names anything hidden.
@@ -15,11 +17,10 @@ use std::time::Duration;
 
 use rune::{text, El, Mods, Tx};
 use sshee_term::input::Platform;
-use sshee_term::links::{resolve_path, LinkClick, LinkKind};
+use sshee_term::links::{LinkClick, LinkKind, CLICK_WAIT_MS};
 use sshee_term::present::{Link, Role};
 
 use super::metrics::CellMetrics;
-use super::overlays::Wish;
 use super::pane::{TermPane, PADDING};
 use super::rows::LinkCells;
 use crate::theme::{self, Theme};
@@ -62,13 +63,16 @@ pub struct Links {
     /// The web link asked about (see the module's docs): its target.
     asked: Option<String>,
     /// What the last click did, and until when it says so.
-    note: Option<(String, f64)>,
+    pub(crate) note: Option<(String, f64)>,
+    /// A plain click on a link, opened at this clock unless it turns out to be a double click
+    /// or a drag.
+    waiting: Option<(Link, f64)>,
 }
 
 impl Links {
-    /// The pointer is a hand: over a link, with the key that opens it held.
+    /// The pointer is a hand: over a link, which a click opens.
     pub(crate) fn pointing(&self) -> bool {
-        self.hover.is_some() && self.open_key
+        self.hover.is_some()
     }
 }
 
@@ -83,11 +87,11 @@ fn open_key(mods: Mods, platform: Platform) -> bool {
 
 /// What a link says under the pointer: where a disguised one goes, and how to open it.
 pub(crate) fn hint_text(link: &Link, platform: Platform, asked: bool) -> String {
-    let key = if platform == Platform::Mac { "Cmd" } else { "Ctrl" };
+    let _ = platform;
     match (link.disguised, asked) {
-        (true, true) => format!("Goes to {}. {key}+click again to open", link.target),
-        (true, false) => format!("Goes to {}. {key}+click to open", link.target),
-        (false, _) => format!("{key}+click to open"),
+        (true, true) => format!("Goes to {}. Click again to open", link.target),
+        (true, false) => format!("Goes to {}. Click to open", link.target),
+        (false, _) => "Click to open".to_owned(),
     }
 }
 
@@ -166,27 +170,48 @@ impl TermPane {
     }
 
     /// A press on a cell with the open key held: opens the link there. True when there was one
-    /// (the press is then no selection and no report to the program).
+    /// (the press is then no selection and no report to the program). A plain press on a link
+    /// waits (`link_clicked`).
     pub(crate) fn link_pressed(&mut self, line: usize, col: u16, clicks: u32, tx: &mut Tx) -> bool {
         if !open_key(tx.mods(), self.platform) {
             return false;
         }
         let Some((link, ..)) = self.link_at(line, col) else { return false };
+        self.over.links.waiting = None;
         let has_selection = self.view.borrow().selection.is_some();
+        self.clicked(&link, link.click(true, clicks, has_selection), tx);
+        tx.instant();
+        true
+    }
+
+    /// A plain press on a cell, which also starts a selection as any press does: on a link it
+    /// opens the link a beat later, unless a second click or a drag made it a selection by
+    /// then. A second click forgets the first.
+    pub(crate) fn link_clicked(&mut self, line: usize, col: u16, clicks: u32, tx: &mut Tx) {
+        self.over.links.waiting = None;
+        let Some((link, ..)) = self.link_at(line, col) else { return };
+        let has_selection = self.view.borrow().selection.is_some();
+        if matches!(link.click(false, clicks, has_selection), LinkClick::OpenAfterWait | LinkClick::AskAfterWait) {
+            let wait = CLICK_WAIT_MS as f64 / 1000.0;
+            self.over.links.waiting = Some((link, self.clock + wait));
+            tx.wake_after(Duration::from_secs_f64(wait));
+        }
+    }
+
+    /// What a click on `link` does, once it's known to be one.
+    fn clicked(&mut self, link: &Link, click: LinkClick, tx: &mut Tx) {
         let asked = self.over.links.asked.take();
-        match link.click(true, clicks, has_selection) {
-            LinkClick::AskNow if asked.as_deref() != Some(link.target.as_str()) => {
+        match click {
+            LinkClick::AskNow | LinkClick::AskAfterWait if asked.as_deref() != Some(link.target.as_str()) => {
                 // Not opened blind: the hint names the place, and the next click goes there.
                 self.over.links.asked = Some(link.target.clone());
                 if let Some(h) = &mut self.over.links.hover {
                     h.hint_shown = true;
                 }
             }
-            LinkClick::OpenNow | LinkClick::AskNow => self.open_link(&link, tx),
-            _ => {}
+            LinkClick::OpenNow | LinkClick::AskNow | LinkClick::OpenAfterWait | LinkClick::AskAfterWait => self.open_link(link, tx),
+            LinkClick::Nothing => {}
         }
-        tx.instant();
-        true
     }
 
     fn open_link(&mut self, link: &Link, tx: &mut Tx) {
@@ -196,25 +221,40 @@ impl TermPane {
                     self.say("Couldn't open the link", tx);
                 }
             }
-            LinkKind::Path => {
-                let path = resolve_path(&link.target, self.over.links.cwd.as_deref().unwrap_or("~"));
-                self.over.wish(Wish::OpenPath { path, line: link.line });
-            }
+            LinkKind::Path => self.follow_path(link, tx),
         }
     }
 
     /// Says something about the last click where the hint goes, for a moment: "Copied the
     /// path". The window calls it with what it did with a wish.
     pub fn say(&mut self, note: &str, tx: &mut Tx) {
-        self.over.links.note = Some((note.to_owned(), self.clock + NOTE_FOR));
-        tx.wake_after(Duration::from_secs_f64(NOTE_FOR));
+        self.say_for(note, NOTE_FOR, tx);
+    }
+
+    /// [`TermPane::say`], for `seconds`.
+    pub fn say_for(&mut self, note: &str, seconds: f64, tx: &mut Tx) {
+        self.over.links.note = Some((note.to_owned(), self.clock + seconds));
+        tx.wake_after(Duration::from_secs_f64(seconds));
         tx.instant();
     }
 
-    /// The hint shows once the pointer has rested, and a note goes when its time is up.
+    /// The hint shows once the pointer has rested, and a note goes when its time is up. A
+    /// plain click that waited out its beat with nothing selected opens its link.
     pub(crate) fn poll_links(&mut self, clock: f64, tx: &mut Tx) -> bool {
-        let links = &mut self.over.links;
         let mut changed = false;
+        if let Some((link, at)) = self.over.links.waiting.clone() {
+            if clock + 1e-6 >= at {
+                self.over.links.waiting = None;
+                if self.view.borrow().selection.is_none() {
+                    let click = if link.disguised && link.kind == LinkKind::Url { LinkClick::AskAfterWait } else { LinkClick::OpenAfterWait };
+                    self.clicked(&link, click, tx);
+                    changed = true;
+                }
+            } else {
+                tx.wake_after(Duration::from_secs_f64(at - clock));
+            }
+        }
+        let links = &mut self.over.links;
         if let Some(h) = links.hover.as_mut().filter(|h| !h.hint_shown) {
             if clock + 1e-6 >= h.hint_at {
                 h.hint_shown = true;
@@ -278,10 +318,10 @@ mod tests {
 
     #[test]
     fn a_link_says_how_to_open_it_and_a_disguised_one_where_it_goes() {
-        assert_eq!(hint_text(&link(false), Platform::Other, false), "Ctrl+click to open");
-        assert_eq!(hint_text(&link(false), Platform::Mac, false), "Cmd+click to open");
-        assert_eq!(hint_text(&link(true), Platform::Windows, false), "Goes to https://example.com/docs. Ctrl+click to open");
-        assert_eq!(hint_text(&link(true), Platform::Other, true), "Goes to https://example.com/docs. Ctrl+click again to open");
+        assert_eq!(hint_text(&link(false), Platform::Other, false), "Click to open");
+        assert_eq!(hint_text(&link(false), Platform::Mac, false), "Click to open");
+        assert_eq!(hint_text(&link(true), Platform::Windows, false), "Goes to https://example.com/docs. Click to open");
+        assert_eq!(hint_text(&link(true), Platform::Other, true), "Goes to https://example.com/docs. Click again to open");
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! (`Delivery::Direct`), which wakes the window; status goes to the tab through the pane's
 //! status sink. What a Files tab asks for is done in `crate::files`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,7 @@ use sshee_app::model::{ReconnectMode, Settings, WelcomeMode};
 use sshee_app::settings_store::SettingsStore;
 use sshee_app::workbench::{Server, Tab, Tor};
 use sshee_core::session::{Delivery, EventSink, SessionEvent, SessionManager, SessionSpec, SessionState};
+use sshee_core::hostkeys::{HostKeyCheck, PendingKeys};
 use sshee_core::ssh::{SshEnv, Target};
 use sshee_core::tor::TorStatus;
 use sshee_core::welcome::Welcome;
@@ -24,7 +25,8 @@ use sshee_term::engine::Size;
 use sshee_term::model::Model;
 use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
-use sshee_ui::terminal::overlays::{Answer, Ask, Reply};
+use sshee_app::prompts::{Fingerprint, HostKey};
+use sshee_ui::terminal::overlays::{Answer, Ask, Looked, Reply};
 use sshee_ui::terminal::{LinkStatus, StatusSink, TermLink};
 
 use crate::servers::{ServerStore, Shown};
@@ -58,6 +60,10 @@ pub struct LiveBackend {
     /// theirs.
     welcome_first: bool,
     welcomed: Vec<String>,
+    /// Keys fetched for a question about a server's key, so "Trust" saves what was shown.
+    keys: Arc<PendingKeys>,
+    /// Servers whose key was found known, or trusted, this run.
+    verified: Arc<Mutex<HashSet<String>>>,
 }
 
 /// SSHeesh's welcome with everything in it: what a terminal shows before Settings has spoken.
@@ -102,6 +108,8 @@ impl LiveBackend {
             welcome: full_welcome(),
             welcome_first: false,
             welcomed: vec![],
+            keys: Arc::new(PendingKeys::default()),
+            verified: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -179,6 +187,12 @@ impl Backend for LiveBackend {
         self.files.start(remote.clone());
         self.edit.start(remote.clone());
         self.remote = Some(remote.clone());
+        // This computer's hostname, for streamer mode to hide (`hostname` may take a moment).
+        let learn = remote.clone();
+        let _ = std::thread::Builder::new().name("local-host".into()).spawn(move || {
+            let host = sshee_core::identity::local().hostname;
+            learn.update(move |s| s.learn_local_host(host));
+        });
         // The servers' colours, and what 0.10 and the ssh config still offer: files to read,
         // so on a thread, and the main menu says so when it's known.
         if let Some(store) = self.store.clone() {
@@ -214,7 +228,12 @@ impl Backend for LiveBackend {
                 }
             }
         }
-        Box::new(LiveLink {
+        Box::new(LiveLink(Arc::new(Inner {
+            server: server.map(Server::key).unwrap_or_default(),
+            keys: self.keys.clone(),
+            verified: self.verified.clone(),
+            started: Mutex::new(None),
+            size: Mutex::new(Size::new(80, 24)),
             manager: self.manager.clone(),
             id: format!("tab-{}", tab.id.0),
             target: self.target(server),
@@ -224,7 +243,7 @@ impl Backend for LiveBackend {
             welcome,
             durable: Arc::new(AtomicBool::new(false)),
             saved: self.store.clone().zip(server.and_then(|s| sshee_app::servers::host_id(&s.key()).map(str::to_owned))),
-        })
+        })))
     }
 
     /// Adding, importing and changing servers: files and the keychain, so on a thread of its
@@ -308,7 +327,10 @@ impl Backend for LiveBackend {
 }
 
 /// One terminal's session.
-struct LiveLink {
+struct LiveLink(Arc<Inner>);
+
+/// What a link shares with the threads that check a server's key and start its session.
+struct Inner {
     manager: Arc<SessionManager>,
     /// The session's id with the manager.
     id: String,
@@ -325,39 +347,114 @@ struct LiveLink {
     /// A server of this copy's own list, by its host id: its saved password is asked of the
     /// keychain when the session starts, on the session's thread.
     saved: Option<(Arc<Mutex<ServerStore>>, String)>,
+    /// The server's key in the sidebar: the name its key question goes by.
+    server: String,
+    keys: Arc<PendingKeys>,
+    /// Servers whose key was found known, or trusted, this run: not checked again.
+    verified: Arc<Mutex<HashSet<String>>>,
+    /// What `open` was given, for starting again.
+    started: Mutex<Option<(Arc<Model>, StatusSink)>>,
+    size: Mutex<Size>,
 }
 
 /// What a tab says of a session's state. sshee-core's failure texts name no host.
 pub fn link_status(state: &SessionState) -> LinkStatus {
     match state {
+        SessionState::Connecting { attempt } if *attempt > 1 => LinkStatus::Rejoining { attempt: *attempt },
         SessionState::Connecting { .. } => LinkStatus::Connecting,
         SessionState::Connected { durable, .. } => LinkStatus::Connected { durable: *durable },
-        SessionState::Reconnecting { attempt, .. } => LinkStatus::Reconnecting { note: format!("reconnecting (try {attempt})") },
-        SessionState::Disconnected { .. } => LinkStatus::Waiting { note: "disconnected".into() },
-        SessionState::Asleep => LinkStatus::Waiting { note: "asleep".into() },
-        SessionState::Ended { code } => LinkStatus::Gone { note: code.map_or("ended".into(), |c| format!("ended ({c})")) },
+        SessionState::Reconnecting { attempt, retry_in_ms, reason } => LinkStatus::Retrying { attempt: *attempt, retry_in_ms: *retry_in_ms, reason: reason.clone() },
+        SessionState::Disconnected { reason } => LinkStatus::Waiting { note: reason.clone() },
+        SessionState::Asleep => LinkStatus::Asleep,
+        SessionState::Ended { code } => LinkStatus::Ended { code: *code },
         SessionState::Failed { message } => LinkStatus::Gone { note: message.clone() },
     }
 }
 
-impl TermLink for LiveLink {
-    fn open(&mut self, model: Arc<Model>, size: Size, status: StatusSink) {
+/// sshee-core's key question as the window asks it.
+fn host_key_question(check: HostKeyCheck) -> Option<HostKey> {
+    let prints = |list: Vec<sshee_core::hostkeys::Fingerprint>| list.into_iter().map(|f| Fingerprint { kind: f.kind, sha256: f.sha256 }).collect();
+    match check {
+        HostKeyCheck::Unknown { fingerprints } => Some(HostKey::New { fingerprints: prints(fingerprints) }),
+        HostKeyCheck::Changed { old, new } => Some(HostKey::Changed { old: prints(old), new: prints(new) }),
+        HostKeyCheck::Known | HostKeyCheck::Unreachable { .. } => None,
+    }
+}
+
+impl Inner {
+    fn status(&self) -> Option<StatusSink> {
+        self.started.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(_, s)| s.clone())
+    }
+
+    /// Before signing in to a server whose key isn't known yet this run, its key is checked
+    /// (0.10's `checkIdentity`): known, it connects; new or changed, the pane asks you, and
+    /// nothing connects until you answer. So ssh never asks the question itself, in the
+    /// terminal or of askpass (which would answer no, and the sign-in would fail). A server
+    /// that can't be asked connects anyway: ssh says why it can't.
+    fn begin(self: &Arc<Self>, review: bool) {
+        let Some(Target::Ssh(t)) = self.target.clone() else { return self.connect() };
+        if !review && self.verified.lock().unwrap_or_else(|e| e.into_inner()).contains(&self.server) {
+            return self.connect();
+        }
+        if let Some(status) = self.status() {
+            status(LinkStatus::Connecting);
+        }
+        let me = self.clone();
+        let spawned = std::thread::Builder::new().name("host-key".into()).spawn(move || match me.keys.check(&me.server, &t, review) {
+            Ok(HostKeyCheck::Known) => {
+                me.verified.lock().unwrap_or_else(|e| e.into_inner()).insert(me.server.clone());
+                me.connect();
+            }
+            Ok(check) => match host_key_question(check) {
+                Some(question) => {
+                    if let Some(status) = me.status() {
+                        status(LinkStatus::HostKey(question));
+                    }
+                }
+                None => me.connect(),
+            },
+            Err(_) => me.connect(),
+        });
+        if spawned.is_err() {
+            self.connect();
+        }
+    }
+
+    /// Your answer to the key question: trusted, the keys you were shown are saved to
+    /// known_hosts and it signs in.
+    fn answer(self: &Arc<Self>, trust: bool) {
+        let Some(status) = self.status() else { return };
+        let Some(Target::Ssh(t)) = self.target.clone() else { return };
+        if !trust {
+            status(LinkStatus::Gone { note: sshee_app::prompts::NOT_CONFIRMED.into() });
+            return;
+        }
+        status(LinkStatus::Connecting);
+        let me = self.clone();
+        let _ = std::thread::Builder::new().name("host-key".into()).spawn(move || match me.keys.trust(&me.server, &t) {
+            Ok(()) => {
+                me.verified.lock().unwrap_or_else(|e| e.into_inner()).insert(me.server.clone());
+                me.connect();
+            }
+            Err(e) => status(LinkStatus::Gone { note: e.message }),
+        });
+    }
+
+    /// Starts the session (again).
+    fn connect(&self) {
+        let Some((model, status)) = self.started.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+        let size = *self.size.lock().unwrap_or_else(|e| e.into_inner());
         let Some(target) = self.target.clone() else {
             status(LinkStatus::Gone { note: "That server isn't in your list anymore.".into() });
             return;
         };
         let saved = self.saved.clone();
-        let mut spec = SessionSpec {
-            target,
-            key: self.key.clone(),
-            env: self.env.clone(),
-            run: None,
-            welcome: self.welcome.clone(),
-        };
+        let mut spec = SessionSpec { target, key: self.key.clone(), env: self.env.clone(), run: None, welcome: self.welcome.clone() };
         // On the reader thread (output, a server's Connected) or the session's (the rest): the
         // model locks what it shares.
         let bytes = self.bytes.clone();
         let durable = self.durable.clone();
+        let was_down = Arc::new(AtomicBool::new(false));
         let sink: EventSink = Arc::new(move |event| match event {
             SessionEvent::Output { data } => {
                 bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -366,9 +463,18 @@ impl TermLink for LiveLink {
             SessionEvent::Status { state } => {
                 durable.store(matches!(state, SessionState::Connected { durable: true, .. }), Ordering::Relaxed);
                 match &state {
-                    SessionState::Connected { durable, .. } => model.connected(*durable, if *durable { HISTORY_TMUX } else { HISTORY_OWN }),
+                    SessionState::Connected { durable, .. } => {
+                        model.connected(*durable, if *durable { HISTORY_TMUX } else { HISTORY_OWN });
+                        // A shell without tmux that came back is a new one: said on screen.
+                        if was_down.swap(false, Ordering::Relaxed) && !*durable {
+                            model.reconnected_new_shell();
+                        }
+                    }
                     SessionState::Connecting { .. } => {}
-                    _ => model.disconnected(),
+                    _ => {
+                        was_down.store(true, Ordering::Relaxed);
+                        model.disconnected();
+                    }
                 }
                 status(link_status(&state));
             }
@@ -382,47 +488,88 @@ impl TermLink for LiveLink {
         };
         self.manager.open_with(&self.id, size.cols, size.rows, prepare, sink, Delivery::Direct);
     }
+}
+
+/// What is at `path` on `target`: its folder is listed (0.10's `look`).
+fn look(target: &Target, env: &SshEnv, path: &str) -> Looked {
+    let name = sshee_app::paths::name(path).to_owned();
+    let parent = sshee_app::paths::parent(path);
+    match sshee_core::files::list(target, env, &parent) {
+        Ok(listing) => match listing.entries.iter().find(|e| e.name == name) {
+            Some(e) => Looked::Found { dir: listing.path.clone(), name, is_dir: e.kind == sshee_core::files::FileKind::Dir },
+            None => Looked::Missing,
+        },
+        // A folder that's gone means the file is too.
+        Err(e) if e.code == sshee_core::ErrorCode::NotFound => Looked::Missing,
+        Err(e) => Looked::Failed(e.message),
+    }
+}
+
+impl TermLink for LiveLink {
+    fn open(&mut self, model: Arc<Model>, size: Size, status: StatusSink) {
+        *self.0.size.lock().unwrap_or_else(|e| e.into_inner()) = size;
+        *self.0.started.lock().unwrap_or_else(|e| e.into_inner()) = Some((model, status));
+        self.0.begin(false);
+    }
 
     fn write(&self, bytes: &[u8]) {
-        self.manager.write(&self.id, bytes);
+        self.0.manager.write(&self.0.id, bytes);
     }
 
     fn resize(&self, size: Size) {
-        self.manager.resize(&self.id, size.cols, size.rows);
+        *self.0.size.lock().unwrap_or_else(|e| e.into_inner()) = size;
+        self.0.manager.resize(&self.0.id, size.cols, size.rows);
     }
 
     fn reconnect(&self) {
-        self.manager.reconnect_now(&self.id);
+        self.0.manager.reconnect_now(&self.0.id);
     }
 
     fn close(&self) {
-        self.manager.close(&self.id);
+        self.0.manager.close(&self.0.id);
     }
 
     /// The tab was closed on purpose: its tmux session on the server ends too, on a thread of
     /// its own (it's an ssh round trip), as 0.10's `close_session` does.
     fn end(&self) {
-        self.manager.close(&self.id);
-        if let Some(target @ Target::Ssh(_)) = self.target.clone() {
-            let (env, key) = (self.env.clone(), self.key.clone());
+        self.0.manager.close(&self.0.id);
+        if let Some(target @ Target::Ssh(_)) = self.0.target.clone() {
+            let (env, key) = (self.0.env.clone(), self.0.key.clone());
             let _ = std::thread::Builder::new().name("session-end".into()).spawn(move || {
                 let _ = sshee_core::session::end_remote(&target, &env, &key);
             });
         }
     }
 
-    fn bytes_received(&self) -> u64 {
-        self.bytes.load(Ordering::Relaxed)
+    fn trust(&self, yes: bool) {
+        self.0.answer(yes);
     }
 
-    /// tmux's rows, history or scroll position, read over the server's shared connection on a
-    /// thread of its own (each is an ssh round trip). Only for a shell in tmux on a server.
+    fn restart(&self, review: bool) {
+        self.0.begin(review);
+    }
+
+    fn sleep(&self) {
+        self.0.manager.sleep(&self.0.id);
+    }
+
+    fn bytes_received(&self) -> u64 {
+        self.0.bytes.load(Ordering::Relaxed)
+    }
+
+    /// tmux's rows, history, scroll position or folder (only for a shell in tmux), what is at
+    /// a path, where a relative path is, which agents the server has: each an ssh round trip
+    /// (or a folder listing here), on a thread of its own.
     fn ask(&self, ask: Ask, done: Answer) -> bool {
-        let Some(target @ Target::Ssh(_)) = self.target.clone() else { return false };
-        if !self.durable.load(Ordering::Relaxed) {
+        let Some(target) = self.0.target.clone() else { return false };
+        let ssh = matches!(target, Target::Ssh(_));
+        let durable = ssh && self.0.durable.load(Ordering::Relaxed);
+        let needs_tmux = matches!(ask, Ask::Rows | Ask::History { .. } | Ask::Scroll { .. } | Ask::Cwd | Ask::PaneInfo);
+        let needs_server = matches!(ask, Ask::FindPath { .. } | Ask::Agents);
+        if (needs_tmux && !durable) || (needs_server && !ssh) {
             return false;
         }
-        let (env, key) = (self.env.clone(), self.key.clone());
+        let (env, key) = (self.0.env.clone(), self.0.key.clone());
         let work = move || {
             use sshee_core::session;
             let reply = match ask {
@@ -431,6 +578,11 @@ impl TermLink for LiveLink {
                 Ask::Scroll { position } => session::tmux_scroll(&target, &env, &key, position).ok().map(|s| {
                     Reply::Scroll(sshee_term::scroll::TmuxScroll { in_mode: s.in_mode, position: s.position, history: s.history, height: s.height, limit: s.limit })
                 }),
+                Ask::Cwd => sshee_core::files::session_cwd(&target, &env, &key).ok().map(Reply::Cwd),
+                Ask::Look { path } => Some(Reply::Looked(look(&target, &env, &path))),
+                Ask::FindPath { path, cwd } => sshee_core::files::find_path(&target, &env, &path, &cwd).ok().map(Reply::Found),
+                Ask::PaneInfo => sshee_core::agents::pane_info(&target, &env, &key).ok().map(|i| Reply::PaneInfo { idle: i.idle, cwd: i.cwd }),
+                Ask::Agents => sshee_core::agents::detect(&target, &env).ok().map(Reply::Agents),
             };
             done(reply);
         };
@@ -447,7 +599,14 @@ mod tests {
     #[test]
     fn statuses_for_a_tab() {
         assert_eq!(link_status(&SessionState::Connected { durable: true, tor: false }), LinkStatus::Connected { durable: true });
-        assert!(matches!(link_status(&SessionState::Asleep), LinkStatus::Waiting { .. }));
+        assert_eq!(link_status(&SessionState::Asleep), LinkStatus::Asleep);
+        assert_eq!(link_status(&SessionState::Connecting { attempt: 3 }), LinkStatus::Rejoining { attempt: 3 });
+        assert_eq!(
+            link_status(&SessionState::Reconnecting { attempt: 2, retry_in_ms: 4000, reason: "The server stopped responding".into() }),
+            LinkStatus::Retrying { attempt: 2, retry_in_ms: 4000, reason: "The server stopped responding".into() }
+        );
+        assert_eq!(link_status(&SessionState::Disconnected { reason: "The server closed the connection".into() }), LinkStatus::Waiting { note: "The server closed the connection".into() });
+        assert_eq!(link_status(&SessionState::Ended { code: Some(0) }), LinkStatus::Ended { code: Some(0) });
         assert!(link_status(&SessionState::Asleep).wants_reconnect());
         assert!(!link_status(&SessionState::Ended { code: Some(0) }).wants_reconnect());
         assert_eq!(link_status(&SessionState::Failed { message: "refused".into() }), LinkStatus::Gone { note: "refused".into() });

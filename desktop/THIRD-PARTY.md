@@ -31,6 +31,13 @@ licence. Rune's own crate is built from `vendor/rune`: a copy of `crates/rune` a
 
 `crates/sshee-term` (outside this folder) ports xterm.js's key encoders the same way.
 
+## Agents' marks (`sshee-ui/src/screens/prompts.rs`)
+
+The buttons that start an agent carry its mark, as 0.10's `AgentIcons.tsx` drew them:
+Claude's from Simple Icons (CC0 1.0, no notice required); OpenCode's and oh-my-pi's from
+their own repositories (MIT); Codex's after LobeHub Icons (MIT), redrawn in one colour. The
+marks belong to their owners and show only which program a button starts.
+
 ## Icons (`sshee-ui/src/icons.rs`)
 
 The icons are line drawings written for SSHeesh (the 1.0 design's symbols, 0.10's onion and

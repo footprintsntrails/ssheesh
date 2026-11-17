@@ -99,6 +99,9 @@ pub struct DemoBackend {
     files: files::DemoFiles,
     /// "Open in your own editor", without an editor: the status flow only.
     edit: edit::DemoEdit,
+    /// What the first terminal on backups shows (`--demo-card`): by default, its key's
+    /// question, as a server seen for the first time.
+    card: String,
 }
 
 impl Default for DemoBackend {
@@ -115,7 +118,15 @@ impl DemoBackend {
     }
 
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default() }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), card: "hostkey-new".into() }
+    }
+
+    /// The first terminal on backups shows `card` (`--demo-card`), not its key's question.
+    pub fn with_card(mut self, card: Option<String>) -> DemoBackend {
+        if let Some(card) = card {
+            self.card = card;
+        }
+        self
     }
 
     /// Tells the window what the list holds now.
@@ -173,6 +184,15 @@ fn log() -> Fixture {
     let late = format!("\r\n\u{1b}[90m14:04:12\u{1b}[0m \u{1b}[36mINFO \u{1b}[0m Worker restarted\r\n\u{1b}[90m14:04:13\u{1b}[0m \u{1b}[36mINFO \u{1b}[0m Listening on 8080\r\n{prompt}");
     let value = serde_json::json!({ "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true }, { "t": 3.0, "out": late } ] });
     Fixture::from_json(&value, Path::new("."), 1).expect("the log reads")
+}
+
+/// backups' first terminal: a prompt in tmux, then the session in `state` (`replay::status_named`).
+fn card(state: &str) -> Fixture {
+    let out = "\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ls /srv/backups\r\n2026-11-12.tar.zst  2026-11-13.tar.zst  2026-11-14.tar.zst\r\n\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ";
+    // Nothing is on screen before a server's key is trusted: no session has started.
+    let out = if state.starts_with("hostkey") { "" } else { out };
+    let value = serde_json::json!({ "durable": true, "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true }, { "t": 0.0, "status": state } ] });
+    Fixture::from_json(&value, Path::new("."), 1).expect("a card's fixture reads")
 }
 
 impl Backend for DemoBackend {
@@ -233,6 +253,8 @@ impl Backend for DemoBackend {
             (DB, Some("Migration 0042")) => fixture(AGENT),
             // The first terminal there; the ones after it are plain prompts.
             (STAGING, _) if tab.n == 1 => log(),
+            // A server seen for the first time: its key's question (or `--demo-card`'s state).
+            (BACKUPS, _) if tab.n == 1 => card(&self.card),
             _ => match server {
                 Some(s) if s.is_local() => prompt("dev", "laptop-7731"),
                 // The user is the made-up address's.

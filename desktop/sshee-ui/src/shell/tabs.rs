@@ -238,6 +238,23 @@ impl Shell {
                     changed = true;
                 }
                 Wish::OpenPath { path, line } => self.open_path(id, &path, line, tx),
+                Wish::NewTerminalWith { command, beside } => {
+                    crate::screens::prompts::new_terminal_with(self, id, command, beside, tx);
+                    changed = true;
+                }
+                Wish::CloseTab => {
+                    self.close_tab(id, tx);
+                    changed = true;
+                }
+                Wish::AlwaysReconnect => {
+                    self.change_settings(tx, |st| st.set(|s| s.reconnect_mode = sshee_app::model::ReconnectMode::Auto));
+                    changed = true;
+                }
+                Wish::Trusted => changed |= crate::screens::prompts::trusted(self, id),
+                Wish::ShowPath { dir, name, lines } => {
+                    crate::screens::prompts::show_path(self, id, &dir, name.as_deref(), lines, tx);
+                    changed = true;
+                }
                 Wish::Folder(folder) => changed |= self.set_folder(id, &folder),
                 // Side by side: the side you press is the tab you're on.
                 Wish::Pressed => {

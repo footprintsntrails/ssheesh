@@ -56,6 +56,11 @@ impl Shell {
             _ => CursorShape::Bar,
         };
         pane.blink = s.cursor_blink;
+        // A terminal's session: letting go of an unused connection, the card of a dropped one,
+        // and the typing counter (`terminal/session.rs`, `terminal/echo.rs`).
+        pane.idle_sleep = s.idle_sleep;
+        pane.reconnect_card = s.reconnect_mode == sshee_app::model::ReconnectMode::Ask;
+        pane.count_typing = s.count_typing;
         pane.scheme = match schemes::resolve(&s.terminal_scheme, s.terminal_colors.as_ref()) {
             Resolved::MatchApp => Scheme::Fresh,
             Resolved::Fixed(scheme) => Scheme::Fixed(scheme.colors),

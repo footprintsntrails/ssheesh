@@ -76,6 +76,14 @@ pub struct PaneOptions {
     /// Dark or light whatever the system is set to (Settings' appearance); `None` follows the
     /// system.
     pub dark: Option<bool>,
+    /// Minutes a server terminal in tmux may sit unused before it lets go of its connection
+    /// (Settings' "Disconnect unused terminals"; 0: never).
+    pub idle_sleep: f64,
+    /// A dropped connection waits for you with a card ("Ask"); else it comes back by itself or
+    /// waits quietly, as Settings says.
+    pub reconnect_card: bool,
+    /// Count how much typing could have been drawn at once (`sshee_term::echo`): counts only.
+    pub count_typing: bool,
 }
 
 impl Default for PaneOptions {
@@ -99,6 +107,9 @@ impl PaneOptions {
             answer_da1: platform != Platform::Windows,
             scheme: Scheme::Classic,
             dark: None,
+            idle_sleep: 20.0,
+            reconnect_card: true,
+            count_typing: false,
         }
     }
 }
@@ -176,7 +187,18 @@ pub struct TermPane {
     pub(crate) over: super::overlays::Overlays,
     /// What the last notification said (OSC 9, OSC 777), until the window takes it.
     said: Option<String>,
+    /// The pane is on screen. Out of sight it answers the program at once and takes its
+    /// frames slowly (`HIDDEN_FRAME`): enough for an agent's question to be read and output
+    /// to be noticed, not a frame a display beat for nobody.
+    shown: bool,
+    /// When a pane out of sight last took a frame.
+    hidden_pull: f64,
+    /// The typing counter, when Settings asks for it (`echo.rs`).
+    pub(crate) echo: Option<super::echo::Counter>,
 }
+
+/// How often a pane out of sight takes a frame of its output, in seconds.
+pub const HIDDEN_FRAME: f64 = 0.5;
 
 impl TermPane {
     /// A pane with `link` as its session, which tells its status to `status`. Nothing starts
@@ -230,6 +252,9 @@ impl TermPane {
             wants_you: false,
             over: super::overlays::Overlays::default(),
             said: None,
+            shown: true,
+            hidden_pull: f64::NEG_INFINITY,
+            echo: None,
         }
     }
 
@@ -252,8 +277,16 @@ impl TermPane {
             self.model.set_answer_colors(Palette::of(options.scheme, dark).answer_colors());
         }
         self.blink_dark = false;
+        if options.count_typing != self.options.count_typing {
+            self.echo = options.count_typing.then(super::echo::Counter::new);
+        }
         self.options = options;
         self.refit_soon();
+    }
+
+    /// The pane is on screen (`true`), or out of sight: see `HIDDEN_FRAME`.
+    pub fn set_shown(&mut self, shown: bool) {
+        self.shown = shown;
     }
 
     /// Whether the pane draws dark in a window on a dark (`system_dark`) or a light system.
@@ -549,20 +582,35 @@ impl TermPane {
         changed
     }
 
-    /// Takes a frame from the model if one is due. True when one was taken.
+    /// Takes a frame from the model if one is due (out of sight, at most every
+    /// `HIDDEN_FRAME`). True when one was taken.
     pub(super) fn pull(&mut self, tx: &mut Tx) -> bool {
+        if !self.shown && self.clock - self.hidden_pull < HIDDEN_FRAME {
+            if self.model.is_dirty() {
+                tx.wake_after(Duration::from_secs_f64((self.hidden_pull + HIDDEN_FRAME - self.clock).max(0.0)));
+            }
+            return false;
+        }
         let now = self.now();
         match self.model.due(now) {
             Due::Now => {
+                if !self.shown {
+                    self.hidden_pull = self.clock;
+                }
                 let frame = self.model.frame_at(false, now);
+                if frame.last_output.is_some() && frame.last_output != self.last_output {
+                    self.note_output();
+                }
                 if frame.last_output.is_some() {
                     self.last_output = frame.last_output;
                 }
                 if let Some(meter) = &self.meter {
                     meter.borrow_mut().snapshot(frame.last_output, now);
                 }
+                let history = frame.history;
                 self.view.borrow_mut().intake(frame);
                 self.frames += 1;
+                self.count_frame(history);
                 true
             }
             Due::At(at) => {
@@ -577,11 +625,12 @@ impl TermPane {
     /// bottom and lets the echo show at once) to the session. `via`: a typed input the meter
     /// times until its echo is drawn (`None` for reports).
     fn send(&mut self, bytes: &[u8], via: Option<Via>, tx: &mut Tx) {
-        if bytes.is_empty() {
+        if bytes.is_empty() || !self.may_send(bytes) {
             return;
         }
         let now = self.now();
         let out = self.model.user_input_at(bytes, now);
+        self.count_key(bytes);
         self.link.write(&out);
         if input::is_typing(bytes) {
             self.typed_at = Some(tx.clock());
@@ -615,7 +664,13 @@ impl TermPane {
         if self.over.find.has_keyboard() {
             return false;
         }
-        if self.status.wants_reconnect() {
+        // A card that waits for an answer takes Return and Escape (`session.rs`).
+        if self.card_key(ev, tx) {
+            return true;
+        }
+        // A pane that let go of its connection wakes when a key is typed (`may_send`); one
+        // that dropped connects again at once.
+        if self.status.wants_reconnect() && self.status != LinkStatus::Asleep {
             self.link.reconnect();
         }
         if let Some(text) = typed_run(ev) {
@@ -733,10 +788,18 @@ impl TermPane {
     /// A paste (⌘V, Ctrl+Shift+V, Windows' Ctrl+V).
     pub fn paste(&mut self, content: &ClipboardContent, tx: &mut Tx) {
         let modes = self.view.borrow().modes;
-        let text = pasted_text(content.text(), "", content.html().unwrap_or(""));
+        // A link copied as a link (Safari's and Telegram's Copy Link) carries no plain text:
+        // the link it names is pasted (`uri_list`).
+        let html = content.html().unwrap_or("");
+        let text = pasted_text(content.text(), &uri_list(content, html), html);
         if text.is_empty() {
-            // A picture alone: an empty bracketed paste, so an agent reads the clipboard itself.
-            if content.image().is_some() && modes.bracketed_paste {
+            let picture = content.image().is_some() || !content.files().is_empty();
+            if picture && self.over.session.on_server {
+                // The picture is on this computer, not the server: nothing to paste there.
+                self.say_for(sshee_app::prompts::PICTURE_PASTE, 4.0, tx);
+            } else if content.image().is_some() && modes.bracketed_paste {
+                // A picture alone here: an empty bracketed paste, so an agent reads the
+                // clipboard itself.
                 self.send(paste("", true).as_bytes(), Some(Via::Paste), tx);
             }
             return;
@@ -755,6 +818,9 @@ impl TermPane {
     /// which commits it: `ime`.)
     pub fn focus(&mut self, focused: bool, tx: &mut Tx) {
         self.focused = focused;
+        if focused {
+            self.note_active();
+        }
         let modes = self.view.borrow().modes;
         if let Some(report) = focus_report(focused, &modes) {
             let out = self.model.user_input_at(report, self.now());
@@ -840,6 +906,9 @@ impl TermPane {
                     self.mouse_report(line, col, MouseAction::Press(MouseButton::Left), mods, tx);
                     return;
                 }
+                // A plain click on a link opens it a beat later (`links.rs`); it starts a
+                // selection as any press does, which a drag or a second click keeps.
+                self.link_clicked(line, col, d.clicks, tx);
                 let kind = match (d.clicks, mods.alt) {
                     (_, true) => SelectionKind::Block,
                     (2, _) => SelectionKind::Word,
@@ -922,7 +991,16 @@ impl TermPane {
             self.mouse_report(line, col, MouseAction::Move(MouseButton::None), tx.mods(), tx);
         }
         // The link under the pointer is underlined (`links.rs`).
-        let linked = self.links_moved(line, col, tx);
+        let mut linked = self.links_moved(line, col, tx);
+        // Near the top, the agents' buttons show (`screens::prompts::agent_buttons`).
+        let near_top = p.y < 44.0;
+        if near_top != self.over.session.near_top {
+            self.over.session.near_top = near_top;
+            linked |= self.over.session.agents.as_ref().is_some_and(|a| !a.is_empty());
+            if linked {
+                tx.instant();
+            }
+        }
         if over != self.hover_secret {
             self.hover_secret = over;
         } else if !linked {
@@ -1017,11 +1095,6 @@ impl TermPane {
         }
     }
 
-    /// Connect again now: a click on a tab whose connection is gone.
-    pub fn reconnect(&mut self) {
-        self.link.reconnect();
-    }
-
     /// The tab was closed on purpose: its session ends, on the server too.
     pub fn end(&mut self) {
         self.link.end();
@@ -1034,6 +1107,32 @@ impl TermPane {
             meter.borrow_mut().finish();
         }
     }
+}
+
+/// The links a clipboard holds as links, one a line, as a `text/uri-list` has them. Rune hands
+/// over files and HTML, not the list itself: HTML that is one link and nothing else (what a
+/// browser's Copy Link puts there) gives its target.
+fn uri_list(content: &ClipboardContent, html: &str) -> String {
+    let _ = content;
+    lone_link(html).unwrap_or_default()
+}
+
+/// The target of HTML that is a single `<a href="…">` and only that (a link copied as a link).
+fn lone_link(html: &str) -> Option<String> {
+    let body = html.trim();
+    let lower = body.to_ascii_lowercase();
+    let at = lower.find("<a ")?;
+    if lower[at + 3..].contains("<a ") {
+        return None;
+    }
+    let rest = &body[at..];
+    let href = rest.to_ascii_lowercase().find("href=")?;
+    let value = &rest[href + 5..];
+    let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let end = value[1..].find(quote)?;
+    let target = value[1..1 + end].trim();
+    let lowered = target.to_ascii_lowercase();
+    (lowered.starts_with("https://") || lowered.starts_with("http://") || lowered.starts_with("mailto:")).then(|| target.replace("&amp;", "&"))
 }
 
 /// Input a shell echoes at once: text, Return, Backspace, Tab. Only these are timed: an arrow
@@ -1089,6 +1188,18 @@ mod tests {
 
     /// Linux's Ctrl+V goes by the layout's letter: Dvorak's V is QWERTY's period key and its K
     /// is QWERTY's V; Russian's V place types "м".
+    #[test]
+    fn a_link_copied_as_a_link_pastes_as_its_target() {
+        assert_eq!(lone_link(r#"<meta charset="utf-8"><a href="https://docs.shop.example/runbooks?a=1&amp;b=2">runbook</a>"#).as_deref(), Some("https://docs.shop.example/runbooks?a=1&b=2"));
+        assert_eq!(lone_link("<A HREF='http://example.com/x'>x</A>").as_deref(), Some("http://example.com/x"));
+        assert_eq!(lone_link(r#"<a href="javascript:alert(1)">x</a>"#), None, "only web and mail links");
+        assert_eq!(lone_link(r#"<a href="https://a.example">a</a> and <a href="https://b.example">b</a>"#), None, "two links are rich text");
+        assert_eq!(lone_link("<b>words</b>"), None);
+        let copied = ClipboardContent::default().with_html(r#"<a href="https://status.shop.example/incidents/42">incident</a>"#);
+        let html = copied.html().unwrap_or_default();
+        assert_eq!(pasted_text(copied.text(), &uri_list(&copied, html), html), "https://status.shop.example/incidents/42");
+    }
+
     #[test]
     fn ctrl_v_is_the_key_that_types_v() {
         use PhysicalKeyCode::{KeyK, KeyV, Period};
