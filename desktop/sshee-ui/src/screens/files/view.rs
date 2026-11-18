@@ -1752,7 +1752,8 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
             let source = if editor.can_edit() { state.ui.draft.text.as_str() } else { editor.text().unwrap_or_default() };
             super::markdown_view::view(s, source, marked, &format!("md-band-{}", id.0), t).key("preview-markdown")
         }
-        Body::Text { .. } if editor.can_edit() => col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(
+        // Long lines run on to the right and scroll there, with their own bar, as in an editor.
+        Body::Text { .. } if editor.can_edit() => col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_xy().child(
             // The marked lines' band, behind the text.
             col().w_full().children(marked.map(|(first, last)| {
                 band(t)
@@ -1786,8 +1787,12 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         ),
         Body::Text { .. } => {
             let style = code_style();
-            col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).py(10.0).scroll(ScrollSpec { stick_bottom: false }).child(
-                col().key("preview-lines").w_full().growth(GrowthSpec::default()).virtual_rows(state.ui.lines.len(), LINE, |_: &Shell, i| format!("line-{i}").into(), move |s: &Shell, i| {
+            // As wide as the longest line, so a long one scrolls into view sideways (only the
+            // rows on screen are laid out, so their own widths can't say it).
+            let longest = state.ui.lines.iter().map(|&(a, b)| b - a).max().unwrap_or(0);
+            let wide = longest as f32 * rune::text::advance("0", style) + 28.0;
+            col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).py(10.0).scroll(ScrollSpec { stick_bottom: false }).scroll_xy().child(
+                col().key("preview-lines").w_full().min_w(wide).growth(GrowthSpec::default()).virtual_rows(state.ui.lines.len(), LINE, |_: &Shell, i| format!("line-{i}").into(), move |s: &Shell, i| {
                     let line = s.screens.files.get(&id).and_then(|st| {
                         let (a, b) = *st.ui.lines.get(i)?;
                         st.editor.as_ref()?.text()?.get(a..b)

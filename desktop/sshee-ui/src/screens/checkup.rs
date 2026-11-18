@@ -106,7 +106,7 @@ impl Shell {
     fn checkup_run(&mut self, id: &str, i: usize, tx: &mut Tx) {
         let Some(command) = self.checkup_fix(id) else { return };
         self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(Gate::Confirm, command));
-        tx.focus(format!("fix-no-{i}"), true);
+        tx.focus(format!("fix-no-{i}"), tx.focus_visible() || tx.by_keys());
     }
 
     /// A yes to the question: the next one (Production), or the fix runs now. What runs is
@@ -120,7 +120,7 @@ impl Shell {
             Some(next) => {
                 self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(next, command));
                 // The second question starts on Cancel, not where the first one's yes was.
-                tx.focus(format!("fix-no-{i}"), true);
+                tx.focus(format!("fix-no-{i}"), tx.focus_visible() || tx.by_keys());
             }
             None => {
                 if self.checkup_fix(id).as_deref() != Some(command.as_str()) {
@@ -136,7 +136,7 @@ impl Shell {
     /// Cancel: the question goes, and the keyboard goes back to the Run… it came from.
     fn checkup_no(&mut self, id: &str, i: usize, tx: &mut Tx) {
         self.screens.checkup.runs.remove(id);
-        tx.focus(format!("fix-run-{i}"), true);
+        tx.focus(format!("fix-run-{i}"), tx.focus_visible() || tx.by_keys());
     }
 
     /// A fix that needs you: a new terminal on the server, the command typed and run there.

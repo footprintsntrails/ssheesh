@@ -397,3 +397,21 @@ fn a_long_file_scrolls_so_the_marked_lines_sit_near_the_top() {
     assert!((band_y - (top + 3.0 * 18.0)).abs() < 1.0, "the band is at {band_y}, the text starts at {top}");
     assert!(band_y + 18.0 <= top + h);
 }
+
+#[test]
+fn a_long_line_runs_on_to_the_right_and_scrolls_there() {
+    let mut w = linux();
+    w.click("server-1");
+    let term = w.shown_tab().id;
+    w.rt.update(|s, tx| s.open_path(term, "/home/deploy/wide.csv", None, tx));
+    w.settle();
+    let files = w.shown_tab().id;
+    w.list(files, "/home/deploy", &["wide.csv"]);
+    let wide: String = (0..40).map(|n| format!("{n:04},a1b2c3d4-e5f6-7a8b-9c0d-ef1234567890,")).collect();
+    w.read(files, &format!("short line\n{wide}\nlast\n"));
+    let [_, _, view, _] = w.rect("preview-scroll").expect("the text");
+    let text = w.rect("preview-text").or_else(|| w.rect("preview-lines")).expect("the lines");
+    // The whole line is laid out, wider than the pane, so it scrolls sideways instead of
+    // being cut at the pane's edge.
+    assert!(text[2] > view * 2.0, "the text is {} wide in a pane {view} wide", text[2]);
+}

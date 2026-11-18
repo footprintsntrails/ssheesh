@@ -199,7 +199,8 @@ impl Shell {
     /// Cancel: the question goes, and the keyboard goes back to the Run… it came from.
     fn disk_no(&mut self, id: &str, i: usize, tx: &mut Tx) {
         self.screens.disk.runs.remove(id);
-        tx.focus(format!("clean-run-{i}"), true);
+        let ring = tx.focus_visible() || tx.by_keys();
+        tx.focus(format!("clean-run-{i}"), ring);
     }
 
     /// A cleanup that needs you (sudo's password): a new terminal with the command you said
@@ -214,7 +215,9 @@ impl Shell {
 /// A question under the `i`th card: in sight (a bottom card's opens below the fold), with the
 /// keyboard on its Cancel.
 fn ask_here(i: usize, tx: &mut Tx) {
-    tx.focus(format!("clean-no-{i}"), true);
+    // The ring shows only when the keyboard opened it: a click leaves no outline on Cancel.
+    let ring = tx.focus_visible() || tx.by_keys();
+    tx.focus(format!("clean-no-{i}"), ring);
     tx.scroll_into_view_in("disk-body", format!("clean-ask-{i}"));
 }
 
@@ -305,7 +308,7 @@ fn volume(t: &Theme, s: &Shell, v: &Volume, i: usize) -> El {
 /// yes is the default button: Return never says yes to deleting.
 fn question(t: &Theme, server_name: &str, at: Gate, i: usize, id: &str) -> El {
     let (title, line, yes, kind, yes_key) = match at {
-        Gate::Confirm => (gate::confirm_title(server_name), None, "Run", Push::Caution, format!("clean-yes-{i}")),
+        Gate::Confirm => (gate::confirm_title(server_name), None, "Run", Push::Primary, format!("clean-yes-{i}")),
         Gate::Production => (gate::production_title(server_name), Some(gate::PRODUCTION_LINE), "Run on Production", Push::Destructive, format!("clean-prod-{i}")),
     };
     let production = at == Gate::Production;

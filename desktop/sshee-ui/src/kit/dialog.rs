@@ -89,13 +89,14 @@ impl Look {
     }
 }
 
-/// The button's look: blue for the one Return presses (unless it takes something away), red
-/// words for one that takes something away, quiet for the rest.
-fn kind(choice: &Choice, default: bool) -> Push {
-    match (choice.destructive, default) {
-        (true, _) => Push::Caution,
-        (false, true) => Push::Primary,
-        (false, false) => Push::Quiet,
+/// The button's look: the action is the bright one (red when it takes something away, the
+/// accent otherwise) and Cancel stays quiet, even where Return presses Cancel: what Return does
+/// is a matter of safety, which button stands out is what the question is about.
+fn kind(choice: &Choice, cancel: bool) -> Push {
+    match (choice.destructive, cancel) {
+        (_, true) => Push::Quiet,
+        (true, false) => Push::Destructive,
+        (false, false) => Push::Primary,
     }
 }
 
@@ -117,7 +118,7 @@ pub fn card<S: 'static>(t: &Theme, key: &str, look: &Look, pick: impl Fn(&mut S,
     for (i, choice) in look.choices.iter().enumerate() {
         let default = look.default == Some(i);
         let pick = pick.clone();
-        let mut b = push_button(t, &choice.label, kind(choice, default), true).key(choice.key.clone()).on_press_tx(move |s: &mut S, tx: &mut Tx| pick(s, tx, i));
+        let mut b = push_button(t, &choice.label, kind(choice, look.cancel == i), true).key(choice.key.clone()).on_press_tx(move |s: &mut S, tx: &mut Tx| pick(s, tx, i));
         if default {
             b = b.default_button();
         }
@@ -142,14 +143,14 @@ mod tests {
     fn what_cant_be_undone_defaults_to_cancel() {
         let delete = Look::yes_no("Delete “a”?", "", "Delete", true, true);
         assert_eq!((delete.default, delete.cancel), (Some(0), 0));
-        assert_eq!(kind(&delete.choices[1], false), Push::Caution);
-        assert_eq!(kind(&delete.choices[0], true), Push::Primary);
+        // The action stands out, in red, and Cancel stays quiet though Return presses it.
+        assert_eq!(kind(&delete.choices[1], false), Push::Destructive);
+        assert_eq!(kind(&delete.choices[0], true), Push::Quiet);
         let discard = Look::yes_no("Discard?", "", "Discard", true, false);
         assert_eq!(discard.default, Some(1));
-        // A red button never turns blue for being the default.
-        assert_eq!(kind(&discard.choices[1], true), Push::Caution);
+        assert_eq!(kind(&discard.choices[1], false), Push::Destructive);
         let go = Look::yes_no("Download 3 GB?", "", "Download", false, false).keys("q-no", "q-yes");
-        assert_eq!((go.default, kind(&go.choices[1], true)), (Some(1), Push::Primary));
+        assert_eq!((go.default, kind(&go.choices[1], false), kind(&go.choices[0], true)), (Some(1), Push::Primary, Push::Quiet));
         assert_eq!(go.choices.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["q-no", "q-yes"]);
     }
 }
