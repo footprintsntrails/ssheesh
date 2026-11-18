@@ -98,7 +98,13 @@ fn a_crowded_tab_says_its_state_with_a_mark_and_keeps_its_cross_inside() {
     assert!(tree.contains("Reconnecting…") && tree.contains("Couldn't connect") && tree.contains("Disconnected"), "{tree}");
     let plus = w.rect("new-tab").unwrap();
     for (id, r) in w.drawn_tabs() {
-        let (x, y) = w.rt.find(&format!("tab-{}/close", id.0)).unwrap_or_else(|| panic!("tab {} has no cross", id.0));
+        // As in a browser, only the tab you're on keeps a cross: the others' names get its room.
+        let cross = w.rt.find(&format!("tab-{}/close", id.0));
+        if id != active {
+            assert!(cross.is_none(), "tab {} keeps a cross in a crowded row", id.0);
+            continue;
+        }
+        let (x, y) = cross.unwrap_or_else(|| panic!("tab {} has no cross", id.0));
         assert!(x > r[0] && x < r[0] + r[2] && y > r[1] && y < r[1] + r[3], "tab {}'s cross at {x},{y} is outside {r:?}", id.0);
         assert!(x < plus[0], "tab {}'s cross is on +", id.0);
     }
