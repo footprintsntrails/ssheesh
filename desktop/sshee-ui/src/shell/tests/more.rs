@@ -1062,6 +1062,97 @@ fn a_tab_dragged_onto_the_page_lands_beside_the_pane_under_it() {
     assert!(w.rt.state.bench.layout().groups().is_empty());
 }
 
+impl Window {
+    /// A press on `from` and moves towards `to`, without the release: what the drag shows.
+    fn drag_to(&mut self, from: (f32, f32), to: (f32, f32)) {
+        self.rt.pointer_down(from.0, from.1);
+        self.rt.frame(1.0 / 60.0);
+        for step in 1..=6 {
+            let k = step as f32 / 6.0;
+            self.rt.pointer_move(from.0 + (to.0 - from.0) * k, from.1 + (to.1 - from.1) * k);
+            self.rt.frame(1.0 / 60.0);
+        }
+        self.settle();
+    }
+}
+
+#[test]
+fn the_tab_you_are_on_dragged_onto_its_page_splits_it_with_its_neighbour() {
+    let mut w = linux();
+    w.click("server-1");
+    w.plus_terminal();
+    w.plus_terminal();
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    // On the middle tab: dragged down to the page's left side, it goes left of the tab before
+    // it in the row, which takes the right.
+    w.click(&format!("tab-{}", ids[1].0));
+    let (tx, ty) = w.rt.find(&format!("tab-{}", ids[1].0)).unwrap();
+    let [px, py, pw, ph] = w.rect("page").unwrap();
+    let to = (px + pw * 0.1, py + ph / 2.0);
+    w.drag_to((tx, ty), to);
+    w.wait(0.6);
+    // The page shows where it lands: its left half, named for the neighbour.
+    let [mx, my, mw, mh] = w.rect("drop-mark").expect("the page shows where the tab lands");
+    assert!(mx < px + 12.0 && mw < pw / 2.0 + 1.0 && mw > pw / 2.0 - 20.0 && my < py + 12.0 && mh > ph - 20.0, "{:?}", [mx, my, mw, mh]);
+    assert!(w.tree().contains("Split with Terminal"), "{}", w.tree());
+    // The tab is lifted under the pointer, over the page.
+    let [cx, cy, cw, ch] = w.rect(&format!("tab-{}", ids[1].0)).unwrap();
+    assert!((cx + cw / 2.0 - to.0).abs() < cw && (cy + ch / 2.0 - to.1).abs() < ch, "the tab follows the pointer: {:?}", [cx, cy]);
+    w.rt.pointer_up(to.0, to.1);
+    w.settle();
+    assert_eq!(w.on_screen(), [ids[1], ids[0]]);
+    let (left, right) = (w.rect(&format!("pane-{}", ids[1].0)).unwrap(), w.rect(&format!("pane-{}", ids[0].0)).unwrap());
+    assert!(left[0] < right[0] && (left[1] - right[1]).abs() < 1.0, "{left:?} {right:?}");
+    assert_eq!(w.rt.state.bench.active_id(), Some(ids[1]));
+    assert!(w.rt.find("drop-mark").is_none());
+
+    // The first tab has no tab before it: dropped at the page's bottom, it goes under the next.
+    let mut w = linux();
+    w.click("server-1");
+    w.plus_terminal();
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    w.click(&format!("tab-{}", ids[0].0));
+    let (tx, ty) = w.rt.find(&format!("tab-{}", ids[0].0)).unwrap();
+    let [px, py, pw, ph] = w.rect("page").unwrap();
+    // The middle of the page goes to its nearest side: here, just below the middle, the bottom.
+    w.drag((tx, ty), (px + pw / 2.0, py + ph * 0.62));
+    assert_eq!(w.on_screen(), [ids[1], ids[0]]);
+    let (top, under) = (w.rect(&format!("pane-{}", ids[1].0)).unwrap(), w.rect(&format!("pane-{}", ids[0].0)).unwrap());
+    assert!(top[1] < under[1] && (top[0] - under[0]).abs() < 1.0, "{top:?} {under:?}");
+    assert_eq!(w.rt.state.bench.active_id(), Some(ids[0]));
+}
+
+#[test]
+fn a_tab_dragged_along_the_row_is_lifted_and_the_others_step_aside() {
+    let mut w = linux();
+    w.click("server-1");
+    w.plus_terminal();
+    w.plus_terminal();
+    let ids: Vec<TabId> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
+    let rects: Vec<[f32; 4]> = ids.iter().map(|id| w.rect(&format!("tab-{}", id.0)).unwrap()).collect();
+    let (x0, y0) = (rects[0][0] + rects[0][2] / 2.0, rects[0][1] + rects[0][3] / 2.0);
+    // The first tab, past the middle of the second.
+    let to = rects[1][0] + rects[1][2] * 0.75;
+    w.drag_to((x0, y0), (to, y0));
+    w.wait(0.6);
+    // Under the pointer; the second stepped into its place; the third where it was.
+    let now: Vec<[f32; 4]> = ids.iter().map(|id| w.rect(&format!("tab-{}", id.0)).unwrap()).collect();
+    assert!((now[0][0] - (rects[0][0] + to - x0)).abs() < 2.0, "{:?} {:?}", now[0], rects[0]);
+    assert!((now[1][0] - rects[0][0]).abs() < 2.0, "the second steps aside: {:?} {:?}", now[1], rects[0]);
+    assert!((now[2][0] - rects[2][0]).abs() < 1.0);
+    // The room it would land in is outlined: where the second was, as wide as the first.
+    let slot = w.rect("tab-drop-slot").expect("where it lands is marked");
+    assert!((slot[0] + slot[2] - (rects[1][0] + rects[1][2])).abs() < 2.0 && (slot[2] - rects[0][2]).abs() < 1.0, "{slot:?}");
+    // The order changes on the drop, not before.
+    assert_eq!(w.rt.state.bench.tabs()[0].id, ids[0]);
+    w.rt.pointer_up(to, y0);
+    w.settle();
+    assert_eq!(w.rt.state.bench.tabs().iter().map(|t| t.id).collect::<Vec<_>>(), [ids[1], ids[0], ids[2]]);
+    assert!(w.rt.find("tab-drop-slot").is_none());
+    let back = w.rect(&format!("tab-{}", ids[0].0)).unwrap();
+    assert!((back[1] - rects[0][1]).abs() < 1.0, "it's back in the row: {back:?}");
+}
+
 #[test]
 fn panes_of_two_servers_say_whose_they_are() {
     let mut w = linux();
@@ -1266,4 +1357,84 @@ fn a_tabs_menu_takes_the_keyboard_and_return_on_it_just_opened_does_nothing() {
     assert!(w.rt.find("tab-menu").is_none());
     let tabs: Vec<_> = w.rt.state.bench.tabs().iter().map(|t| t.id).collect();
     assert!(w.rt.state.bench.together(tabs[0], tabs[1]));
+}
+
+impl Window {
+    /// Files on web-7731 beside (`Dir::Row`) or under (`Dir::Col`) the terminal on screen,
+    /// listing a folder, with the keyboard still in the terminal.
+    fn files_beside(&mut self, dir: sshee_app::workbench::layout::Dir) -> (TabId, TabId) {
+        use sshee_app::files::{Answer, Clock, Entry, EntryKind, Listing, Reply, Want};
+        let term = self.rt.state.bench.active_id().expect("a terminal on screen");
+        let files = self.rt.state.bench.open(TabKind::Files, WEB);
+        self.rt.update(|s, tx| {
+            s.bench.focus(term);
+            s.show_beside(files, dir, tx);
+        });
+        self.settle();
+        assert_eq!(self.rt.state.bench.active_id(), Some(term));
+        let asks = std::mem::take(&mut self.world.lock().unwrap().files);
+        let Some(Want::List { ticket, path }) = asks.into_iter().map(|a| a.want).find(|w| matches!(w, Want::List { .. })) else { panic!("Files asked for no folder") };
+        let entry = |name: &str, kind| Entry { name: name.into(), kind, is_link: false, size: 100, modified: 1_700_000_000, mode: "-rw-r--r--".into() };
+        let listing = Listing { path: "/home/deploy".into(), entries: vec![entry("shop", EntryKind::Dir), entry("notes.md", EntryKind::File), entry("site.zip", EntryKind::File)] };
+        self.rt.update(|s, _| crate::screens::files::deliver(s, Reply { tab: files, server: WEB.into(), answer: Answer::Listed { ticket, asked: path, result: Ok((listing, Clock::default())) } }));
+        self.settle();
+        (term, files)
+    }
+
+    /// The Files menu is open near `(x, y)` and inside the window.
+    fn menu_near(&self, x: f32, y: f32, what: &str) {
+        let [mx, my, mw, mh] = self.rect("files-menu").unwrap_or_else(|| panic!("no menu for {what}"));
+        assert!(mx >= 0.0 && my >= 0.0 && mx + mw <= 1280.0 && my + mh <= 800.0, "{what}: menu out of the window at {:?}", [mx, my, mw, mh]);
+        // At the pointer, or moved in from the window's edge just enough to fit.
+        assert!((mx - x).abs() < 4.0 || mx + mw > 1280.0 - 12.0, "{what}: menu at x {mx}, pointer at {x}");
+        assert!((my - y).abs() < 4.0 || my + mh > 800.0 - 12.0, "{what}: menu at y {my}, pointer at {y}");
+    }
+
+    fn escape(&mut self) {
+        self.key(Key::Escape, "");
+    }
+}
+
+#[test]
+fn a_files_pane_in_a_split_opens_its_menus_under_the_pointer() {
+    use sshee_app::workbench::layout::Dir;
+    for dir in [Dir::Row, Dir::Col] {
+        let mut w = linux();
+        w.click("server-1");
+        let (term, files) = w.files_beside(dir);
+        assert_eq!(w.on_screen(), [term, files]);
+        let pane = w.rect(&format!("side-{}", files.0)).unwrap();
+        // A file's menu, from a right-click on it while the keyboard is in the terminal.
+        let [rx, ry, _, rh] = w.rect("row-1").expect("the folder is listed");
+        assert!(rx >= pane[0] && ry >= pane[1], "{dir:?}: the list is in the Files pane");
+        let (x, y) = (rx + 60.0, ry + rh / 2.0);
+        w.secondary(x, y);
+        w.menu_near(x, y, "a file");
+        assert_eq!(w.rt.state.bench.active_id(), Some(files), "{dir:?}: the right-click went to the Files pane");
+        w.escape();
+        assert!(w.rt.find("files-menu").is_none());
+        // Several files: the one clicked and another (as Ctrl+click picks it), then a
+        // right-click on the second.
+        let [_, ry2, _, rh2] = w.rect("row-2").unwrap();
+        let (x2, y2) = (rx + 60.0, ry2 + rh2 / 2.0);
+        w.rt.update(|s, _| s.screens.files.get_mut(&files).unwrap().browser.click("site.zip", sshee_app::files::browser::Click::Toggle));
+        w.settle();
+        assert_eq!(w.rt.state.screens.files[&files].browser.selected().len(), 2, "{dir:?}");
+        w.secondary(x2, y2);
+        w.menu_near(x2, y2, "several files");
+        w.escape();
+        // The empty space under the rows, at the pane's right edge: the menu moves in from the
+        // window's edge when the pane is at it.
+        let (x3, y3) = (pane[0] + pane[2] - 20.0, ry2 + rh2 + 40.0);
+        w.secondary(x3, y3);
+        w.menu_near(x3, y3, "the folder");
+        w.escape();
+        // Back in the terminal, the Places list opens under its button in the Files pane.
+        w.press_in(w.rect(&format!("pane-{}", term.0)).unwrap());
+        assert_eq!(w.rt.state.bench.active_id(), Some(term));
+        w.click("files-places");
+        let ([bx, by, _, bh], [cx, cy, cw, ch]) = (w.rect("files-places").unwrap(), w.rect("files-places-card").expect("the Places list opened"));
+        assert!((cx - bx).abs() < 4.0 && cy >= by + bh && cy < by + bh + 12.0, "{dir:?}: {:?} under {:?}", [cx, cy], [bx, by]);
+        assert!(cx + cw <= 1280.0 && cy + ch <= 800.0);
+    }
 }

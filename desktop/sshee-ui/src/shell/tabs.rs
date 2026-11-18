@@ -26,11 +26,13 @@
 //! ```
 //!
 //! Three rules keep the row still under the pointer, as a browser's is:
-//! - a tab under the pointer swaps its icon for the close cross and keeps its width (the kit);
+//! - a tab under the pointer shows its close cross in room it always keeps (the kit);
 //! - while the pointer is over the row, every tab keeps the width it had when the pointer
 //!   came, and the row stays crowded or roomy as it was: a tab renamed by its shell, or one
 //!   closed with the cross, doesn't move the next cross away from the pointer;
-//! - a tab is dragged by moving it in the row itself (no ghost): it lands where the pointer is.
+//! - a dragged tab is lifted and follows the pointer; the tabs it passes step aside, and the
+//!   room it would land in is outlined (`tab-drop-slot`). The row's order changes on the drop.
+//!   Below the row, over the page, the page shows where it would land (`split::drop_mark`).
 //!
 //! The title and the row share the bar's middle (`fit`), decided together each frame from one
 //! measurement: first the title's address gives way, then the tabs crowd. A crowded row
@@ -88,13 +90,26 @@ struct Held {
     widths: HashMap<TabId, f32>,
 }
 
-/// A tab being dragged: where it was, to put it back if the drag is cancelled.
+/// A tab being dragged. It stays at its place in the row until it's dropped: drawn lifted under
+/// the pointer, with the tabs it passes stepping aside and the place it would land marked.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Dragging {
     id: TabId,
-    from: usize,
     moved: bool,
+    /// How far the pointer went since the press.
+    dx: f32,
+    dy: f32,
+    /// Below the row, over the page: it would land there, not in the row.
+    over_page: bool,
+    /// Where it would land in the row: before the `slot`th of the other tabs in sight.
+    slot: Option<usize>,
+    /// The same place in the whole row, counted without it (what `move_tab` takes).
+    to: Option<usize>,
 }
+
+/// How far each tab is drawn from its place while one is dragged along the row, and the room
+/// it would land in (`[x, y, w, h]`, window points).
+type DragMarks = (HashMap<TabId, [f32; 2]>, Option<[f32; 4]>);
 
 /// The row's state.
 #[derive(Default)]
@@ -202,60 +217,90 @@ impl Shell {
     pub(crate) fn tab_drag(&mut self, id: TabId, d: &Drag, tx: &mut Tx) {
         match d.phase {
             Phase::Down => {
-                let from = self.bench.tabs().iter().position(|t| t.id == id).unwrap_or(0);
-                self.row.drag = Some(Dragging { id, from, moved: false });
+                self.row.drag = Some(Dragging { id, moved: false, dx: 0.0, dy: 0.0, over_page: false, slot: None, to: None });
                 tx.live_only();
             }
             Phase::Move => {
                 let Some(mut drag) = self.row.drag.filter(|g| g.id == id) else { return };
-                if !drag.moved && d.dx.abs() < DRAG_START {
+                if !drag.moved && d.dx.abs() < DRAG_START && d.dy.abs() < DRAG_START {
                     tx.live_only();
                     return;
                 }
-                drag.moved = true;
-                self.row.drag = Some(drag);
+                let at = d.window_point();
+                (drag.moved, drag.dx, drag.dy) = (true, d.dx, d.dy);
                 // Over the page: it would land on a pane there (`split.rs`), not in the row.
-                let below_row = self.row.rects.get(&id).is_some_and(|r| d.window_point()[1] > r[1] + r[3] + 8.0);
-                self.sides.drop = if below_row { self.drop_target(id, d.window_point()) } else { None };
-                if self.sides.drop.is_some() || below_row {
-                    return tx.instant();
-                }
-                // The other tabs in sight, by their middles.
-                let others: Vec<(TabId, f32)> =
-                    self.row.shown.borrow().iter().filter(|t| **t != id).filter_map(|t| self.row.rects.get(t).map(|r| (*t, r[0] + r[2] / 2.0))).collect();
-                let centres: Vec<f32> = others.iter().map(|(_, c)| *c).collect();
-                let slot = layout::slot(&centres, d.window_point()[0]);
-                // Its place in the whole row, counted without the dragged tab.
-                let rest: Vec<TabId> = self.bench.tabs().iter().map(|t| t.id).filter(|t| *t != id).collect();
-                let to = match others.get(slot) {
-                    Some((before, _)) => rest.iter().position(|t| t == before),
-                    None => others.last().and_then(|(last, _)| rest.iter().position(|t| t == last)).map(|i| i + 1),
-                };
-                let now = self.bench.tabs().iter().position(|t| t.id == id);
-                match to {
-                    Some(to) if Some(to) != now => {
-                        self.bench.move_tab(id, to);
-                        tx.instant();
-                    }
-                    _ => tx.live_only(),
-                }
+                drag.over_page = self.row.rects.get(&id).is_some_and(|r| at[1] > r[1] + r[3] + 8.0);
+                self.sides.drop = if drag.over_page { self.drop_target(id, at) } else { None };
+                (drag.slot, drag.to) = if drag.over_page { (None, None) } else { self.row_slot(id, at[0]) };
+                self.row.drag = Some(drag);
+                // The tabs it passes step aside, and the marks move, on their springs; the
+                // dragged tab itself follows the pointer exactly (`strip`).
+                tx.animated();
             }
             Phase::Up => {
                 let Some(drag) = self.row.drag.take().filter(|g| g.id == id) else { return };
                 let drop = self.sides.drop.take();
-                if d.cancelled() && drag.moved {
-                    self.bench.move_tab(id, drag.from);
+                tx.instant();
+                if d.cancelled() || !drag.moved {
+                    return;
                 }
-                if let (Some(at), false) = (drop, d.cancelled()) {
+                if let Some(at) = drop {
                     return self.drop_on(id, at, tx);
                 }
-                if drag.moved {
-                    // The tab you dragged is the one you're on, as in a browser; and the
-                    // row's new order is kept for the next run.
-                    self.focus_tab(id, tx);
+                if let Some(to) = drag.to {
+                    self.bench.move_tab(id, to);
                 }
+                // The tab you dragged is the one you're on, as in a browser; and the row's new
+                // order is kept for the next run.
+                self.focus_tab(id, tx);
             }
         }
+    }
+
+    /// Where tab `id` would land in the row with the pointer at `x`: before which of the other
+    /// tabs in sight (by their middles where they were laid out), and that place in the whole
+    /// row counted without it.
+    fn row_slot(&self, id: TabId, x: f32) -> (Option<usize>, Option<usize>) {
+        let others: Vec<(TabId, f32)> = self.row.shown.borrow().iter().filter(|t| **t != id).filter_map(|t| self.row.rects.get(t).map(|r| (*t, r[0] + r[2] / 2.0))).collect();
+        let centres: Vec<f32> = others.iter().map(|(_, c)| *c).collect();
+        let slot = layout::slot(&centres, x);
+        let rest: Vec<TabId> = self.bench.tabs().iter().map(|t| t.id).filter(|t| *t != id).collect();
+        let to = match others.get(slot) {
+            Some((before, _)) => rest.iter().position(|t| t == before),
+            None => others.last().and_then(|(last, _)| rest.iter().position(|t| t == last)).map(|i| i + 1),
+        };
+        (Some(slot), to)
+    }
+
+    /// While a tab is dragged along the row: how far each tab in sight is drawn from its place
+    /// (the dragged one under the pointer, the ones it passed stepped aside), and where it
+    /// would land, `[x, y, w, h]` in window points.
+    fn drag_marks(&self) -> Option<DragMarks> {
+        let drag = self.row.drag.filter(|g| g.moved)?;
+        let shown = self.row.shown.borrow();
+        let mine = *self.row.rects.get(&drag.id)?;
+        let mut shifts = HashMap::new();
+        shifts.insert(drag.id, [drag.dx, if drag.over_page { drag.dy } else { 0.0 }]);
+        let (Some(from), Some(slot)) = (shown.iter().position(|t| *t == drag.id), drag.slot) else { return Some((shifts, None)) };
+        let others: Vec<TabId> = shown.iter().copied().filter(|t| *t != drag.id).collect();
+        // The room it leaves, and takes: its width and the row's gap.
+        let room = mine[2] + 2.0;
+        for (i, t) in others.iter().enumerate() {
+            let step = if i < from && i >= slot {
+                room
+            } else if i >= from && i < slot {
+                -room
+            } else {
+                continue;
+            };
+            shifts.insert(*t, [step, 0.0]);
+        }
+        let x = if slot <= from {
+            others.get(slot).and_then(|t| self.row.rects.get(t)).map_or(mine[0], |r| if slot == from { mine[0] } else { r[0] })
+        } else {
+            others.get(slot - 1).and_then(|t| self.row.rects.get(t)).map_or(mine[0], |r| r[0] + r[2] - mine[2])
+        };
+        Some((shifts, Some([x, mine[1], mine[2], mine[3]])))
     }
 
     pub(crate) fn open_tab_menu(&mut self, id: TabId, at: [f32; 2], tx: &mut Tx) {
@@ -555,9 +600,8 @@ fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working:
     } else if working {
         w += 7.0 + 10.0;
     }
-    if st.active {
-        w += 7.0 + 14.0;
-    }
+    // The cross, on every tab (`kit::tab`).
+    w += 7.0 + 14.0;
     w + 2.0 + if st.starts_group { 11.0 } else { 0.0 }
 }
 
@@ -571,9 +615,7 @@ fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bo
     } else if working {
         own += 6.0 + 10.0;
     }
-    if st.active {
-        own += 6.0 + 14.0;
-    }
+    own += 6.0 + 14.0;
     let mut lead = if st.starts_group { 11.0 + 2.0 } else { 0.0 };
     if leads {
         lead += 12.0 + rune::text::advance(server, theme::GROUP) + 2.0;
@@ -755,6 +797,11 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
         }
     }
 
+    // A tab being dragged along the row: how far each is drawn from its place, worked out from
+    // where the tabs were laid out (the order doesn't change until it's dropped).
+    let shifts = s.drag_marks().map(|(shifts, _)| shifts).unwrap_or_default();
+    let dragged = s.row.drag.filter(|g| g.moved).map(|g| g.id);
+
     let mut tabs = rune::row()
         .key("tabs")
         .grow(1.0)
@@ -820,6 +867,18 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
             // Under the pointer the row keeps still: this tab is as wide as it was.
             e = e.w(*width).min_w(*width);
         }
+        if let Some([dx, dy]) = shifts.get(&id).copied() {
+            e = e.offset(dx, dy);
+        }
+        if dragged == Some(id) {
+            // Lifted off the row, under the pointer exactly, over everything: the tabs it passes
+            // step aside on their springs.
+            e = e.offset_motion(rune::Anim::INSTANT).raise().fill(if st.active { t.sel } else { t.pop }).border(0.5, t.rim).shadow(6.0, 18.0, rune::Color::BLACK.alpha(if t.dark { 0.45 } else { 0.2 }));
+            if s.sides.drop.is_some() {
+                // Over the page, where the mark says it lands: it doesn't hide the mark.
+                e = e.layer_opacity(0.85);
+            }
+        }
         tabs = tabs.child(e);
     }
     if hidden {
@@ -845,6 +904,19 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
 /// What is drawn over the window for the row: a tab's menu, or the list of all tabs.
 pub(crate) fn overlays(s: &Shell, t: &'static Theme) -> Vec<El> {
     let mut out = Vec::new();
+    if let Some((_, Some([x, y, w, h]))) = s.drag_marks() {
+        // Where a tab dragged along the row lands: the room the others leave it, outlined.
+        out.push(
+            rune::el()
+                .key("tab-drop-slot")
+                .absolute(x, y)
+                .size(w, h)
+                .radius(theme::RADIUS)
+                .fill(t.ring.alpha(0.10))
+                .border(1.5, t.ring.alpha(0.6))
+                .a11y_hidden(),
+        );
+    }
     if let Some((id, at)) = s.row.menu.filter(|(id, _)| s.bench.tab(*id).is_some()) {
         out.push(rune::el().key("tab-menu-at").absolute(at[0], at[1]).size(1.0, 1.0).a11y_hidden());
         out.push(tab_menu(s, t, id));

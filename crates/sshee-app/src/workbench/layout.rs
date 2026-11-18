@@ -539,6 +539,20 @@ pub fn zone([x, y, w, h]: [f32; 4], (px, py): (f32, f32)) -> Option<Zone> {
     })
 }
 
+/// The side of a page drawn at `[x, y, w, h]` that the pointer at `(px, py)` is over, as
+/// [`zone`] says, but never the middle: there, the nearest edge. The tab on screen dragged onto
+/// its own page splits it with a neighbour, so it always goes to a side.
+pub fn side(rect: [f32; 4], (px, py): (f32, f32)) -> Option<Zone> {
+    let z = zone(rect, (px, py))?;
+    if z != Zone::Middle {
+        return Some(z);
+    }
+    let [x, y, w, h] = rect;
+    let (fx, fy) = ((px - x) / w, (py - y) / h);
+    let near = [(fx, Zone::Left), (1.0 - fx, Zone::Right), (fy, Zone::Top), (1.0 - fy, Zone::Bottom)];
+    near.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, z)| z)
+}
+
 /// The preset shapes of Settings' "Arrange open panes" (0.10's `Arrangement`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arrangement {
@@ -943,6 +957,14 @@ mod tests {
         assert_eq!(zone(r, (300.0, 150.0)), Some(Zone::Middle));
         assert_eq!(zone(r, (50.0, 150.0)), None);
         assert_eq!(zone([0.0, 0.0, 0.0, 10.0], (0.0, 5.0)), None);
+        // `side`: the same, with the middle given to its nearest edge.
+        assert_eq!(side(r, (110.0, 150.0)), Some(Zone::Left));
+        assert_eq!(side(r, (300.0, 240.0)), Some(Zone::Bottom));
+        assert_eq!(side(r, (280.0, 150.0)), Some(Zone::Left));
+        assert_eq!(side(r, (330.0, 150.0)), Some(Zone::Right));
+        assert_eq!(side(r, (300.0, 120.0)), Some(Zone::Top));
+        assert_eq!(side(r, (300.0, 180.0)), Some(Zone::Bottom));
+        assert_eq!(side(r, (50.0, 150.0)), None);
     }
 
     #[test]
