@@ -114,7 +114,10 @@ fn a_servers_tunnels_open_from_its_menu() {
         let Some(run) = run(&format!("tunnels-{theme}"), theme, script) else { return };
         assert!(run.element("tunnels-dialog").is_some(), "{theme}");
         // web-7731's three: Grafana on, the proxy off, the dev site on the server.
-        assert!(run.says("Grafana") && run.says("On at localhost:3000"), "{theme}: {}", run.tree_text);
+        assert!(run.says("Grafana") && run.says("On at") && run.says("Copy localhost:3000"), "{theme}: {}", run.tree_text);
+        // What the server runs, each with its button: Grafana through its saved tunnel.
+        assert!(run.says("Web apps on this server") && run.says("Shop: storefront") && run.says("Other ports (2)"), "{theme}: {}", run.tree_text);
+        assert!(run.element("app-1-open").is_some() && run.element("app-0-stop").is_some(), "{theme}");
         assert!(run.says("Browse through the server") && run.says("Off"));
         assert!(run.says("On at port 9000 on the server") && run.says("2 on"));
     }

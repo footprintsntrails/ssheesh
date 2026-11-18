@@ -10,7 +10,9 @@
 //!     └── main     column
 //!         ├── page     the tab on screen: a terminal pane, or a placeholder; tabs split
 //!         │            right and down (`split.rs`)
-//!         └── status   24 pt: CPU, Memory, Disk, Uptime, Down, Up … Tor
+//!         └── status   24 pt: CPU, Memory, Disk, Uptime, Down, Up … Tor; a click on the
+//!                      numbers opens Stats, a right click its menu (vitals-menu: Open full
+//!                      stats, Hide vitals)
 //! ```
 //!
 //! The row of tabs is `tabs.rs`; its menu and the list of all tabs are drawn last, over the
@@ -89,6 +91,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .children(super::tabs::overlays(s, t))
         // Over everything: the palette, a server's card and menu, "Add a server".
         .children(screens::overlays(s, t, cx))
+        // The status bar's menu.
+        .children(vitals_menu(s, t, cx))
         // A confirmation, over all of it (`notes.rs`).
         .children(super::notes::dialog_view(s, t))
         // A tab being dragged over the page: where it would land.
@@ -244,6 +248,41 @@ fn env_stripe(s: &Shell, t: &'static Theme) -> Option<El> {
     Some(el().key("env-stripe").pin(Some(0.0), Some(0.0), Some(0.0), None).h(2.0).fill(color).a11y_hidden())
 }
 
+impl Shell {
+    /// The status bar's numbers were clicked: the machine on screen's Stats.
+    pub fn open_vitals_stats(&mut self, tx: &mut rune::Tx) {
+        self.screens.vitals_menu = None;
+        if let Some(server) = self.bench.current_key().map(str::to_owned) {
+            self.show_tab(TabKind::Stats, &server, None, tx);
+        }
+    }
+
+    /// "Hide vitals": Settings' "Server vitals" goes off.
+    fn hide_vitals(&mut self, tx: &mut rune::Tx) {
+        self.screens.vitals_menu = None;
+        self.change_settings(tx, |st| st.set(|s| s.show_vitals = false));
+        self.settle(tx);
+    }
+}
+
+/// The status bar's menu, under the pointer that opened it.
+fn vitals_menu(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
+    use crate::kit::menu::{context_menu, menu_row, RowState, ROW};
+    let at = s.screens.vitals_menu?;
+    let within = cx.layout_size("window").unwrap_or([super::SIZE.0, super::SIZE.1]);
+    let rows = [
+        menu_row(t, "Open full stats", None, RowState::Rest).key("vitals-stats").on_press_tx(|s: &mut Shell, tx| s.open_vitals_stats(tx)),
+        menu_row(t, "Hide vitals", None, RowState::Rest).key("vitals-hide").on_press_tx(|s: &mut Shell, tx| s.hide_vitals(tx)),
+    ];
+    // Opened from the status bar: it goes up from the pointer, clear of the bar.
+    let height = 2.0 * ROW + 2.0 * crate::kit::menu::PAD;
+    let at = [at[0], at[1] - height - theme::STATUS_HEIGHT / 2.0 - 2.0];
+    Some(context_menu(t, at, within, 180.0, 2.0 * ROW, rows).key("vitals-menu").focusable(true).no_focus_ring().modal_tx(true, |s: &mut Shell, tx| {
+        s.screens.vitals_menu = None;
+        s.settle(tx);
+    }))
+}
+
 /// How wide a vital sign is in the status bar (`kit::status::status_item`).
 fn status_item_width(label: &str, value: &str, warn: bool) -> f32 {
     if warn {
@@ -286,13 +325,35 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         if let Some(latency) = tor {
             room -= status_tor_width(latency) + 2.0 * 20.0;
         }
+        // A click opens the machine's Stats (0.10's "Open full stats"); a right click, the
+        // menu with "Hide vitals".
+        let mut numbers = row()
+            .key("status-vitals")
+            .h_full()
+            .gap(20.0)
+            .px(6.0)
+            .ml(-6.0)
+            .items_center()
+            .hover(t.hov2)
+            .press(t.down)
+            .cursor(rune::Cursor::Pointer)
+            .role("button")
+            .label_static("Open full stats")
+            .help("Open full stats. Right-click for more")
+            .on_press_tx(|s: &mut Shell, tx| s.open_vitals_stats(tx))
+            .on_secondary_press(|s: &mut Shell, p, tx| {
+                s.screens.vitals_menu = Some([p.x, p.y]);
+                tx.focus("vitals-menu", false);
+                tx.instant();
+            });
         for (i, v) in vitals.items().iter().enumerate() {
             room -= status_item_width(&v.label, &v.value, v.warn) + if i > 0 { 20.0 } else { 0.0 };
             if room < 0.0 {
                 break;
             }
-            bar = bar.child(status_item(t, &v.label, &v.value, v.warn).key(format!("vital-{i}")));
+            numbers = numbers.child(status_item(t, &v.label, &v.value, v.warn).key(format!("vital-{i}")));
         }
+        bar = bar.child(numbers);
     }
     bar = bar.child(spacer());
     if let Some(latency_ms) = tor {

@@ -156,9 +156,197 @@ fn log_line(line: &str) -> Option<String> {
     Some(if shown.chars().count() > LOG_WIDTH { format!("{}…", shown.chars().take(LOG_WIDTH - 1).collect::<String>()) } else { shown })
 }
 
+/// How long Tor gets to start before you're told it hasn't, and why (0.10's `SLOW_START_MS`).
+pub const SLOW_START_SECS: f64 = 25.0;
+
+/// A toast's tone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Info,
+    Success,
+    Error,
+}
+
+/// What a toast about Tor says (0.10's `src/lib/tor.ts`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub tone: Tone,
+    pub title: String,
+    pub body: String,
+    /// It offers "Show log".
+    pub show_log: bool,
+}
+
+impl Note {
+    fn new(tone: Tone, title: &str, body: impl Into<String>) -> Note {
+        Note { tone, title: title.into(), body: body.into(), show_log: false }
+    }
+}
+
+/// " A terminal on a server without tmux stays as it is until it reconnects.": what a switch
+/// leaves on the old way, after a sentence; empty when nothing stayed.
+pub fn stayed_note(stayed: usize) -> String {
+    match stayed {
+        0 => String::new(),
+        1 => " A terminal on a server without tmux stays as it is until it reconnects.".into(),
+        n => format!(" {n} terminals on servers without tmux stay as they are until they reconnect."),
+    }
+}
+
+/// Tor was turned off: servers see you again, and what stayed on Tor.
+pub fn turned_off(stayed: usize) -> Note {
+    Note::new(Tone::Info, "Tor is off", format!("Servers see your own address again.{}", stayed_note(stayed)))
+}
+
+/// Tor was turned on: what moves to it now. Nothing when everything did (it says "Tor is on"
+/// once it is: [`Follow`]).
+pub fn turned_on(stayed: usize) -> Option<Note> {
+    (stayed > 0).then(|| Note::new(Tone::Info, "Moving your terminals to Tor", stayed_note(stayed).trim()))
+}
+
+/// "New routes" was pressed.
+pub fn new_routes(stayed: usize) -> Note {
+    Note::new(Tone::Info, "New Tor routes", format!("Terminals reconnect on each server's fastest new route.{}", stayed_note(stayed)))
+}
+
+/// What has been said about Tor's state, so each thing is said once (0.10's `follow`): "Tor is
+/// on" once it is after you turned it on, and "isn't connected yet" when it failed or took
+/// longer than [`SLOW_START_SECS`] to start.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Follow {
+    /// Turned on by you: "Tor is on" is said when it is.
+    announce_on: bool,
+    /// The trouble said last, not said again.
+    told: String,
+    /// While starting: when it has taken too long, on the window's clock (set at the first
+    /// tick after it started).
+    slow_at: Option<f64>,
+}
+
+impl Follow {
+    /// You turned Tor on or off, or started it afresh.
+    pub fn switching(&mut self, on: bool) {
+        self.announce_on = on;
+        if on {
+            self.told.clear();
+        }
+    }
+
+    /// Tor's state changed: what to say.
+    pub fn status(&mut self, status: &Status) -> Option<Note> {
+        if !matches!(status, Status::Starting { .. }) {
+            self.slow_at = None;
+        }
+        match status {
+            Status::On => {
+                self.told.clear();
+                std::mem::take(&mut self.announce_on).then(|| Note::new(Tone::Success, "Tor is on", "Servers see a Tor address instead of yours, and your internet provider doesn't see which servers you use."))
+            }
+            Status::Off => {
+                self.announce_on = false;
+                self.told.clear();
+                None
+            }
+            Status::Failed { message } => self.trouble(message),
+            Status::Starting { .. } => None,
+        }
+    }
+
+    /// Every frame, at `now` on the window's clock: what to say when a start has taken too
+    /// long, and when to look again.
+    pub fn tick(&mut self, status: &Status, now: f64) -> (Option<Note>, Option<f64>) {
+        let Status::Starting { note, .. } = status else {
+            self.slow_at = None;
+            return (None, None);
+        };
+        match self.slow_at {
+            None => {
+                let at = now + SLOW_START_SECS;
+                self.slow_at = Some(at);
+                (None, Some(at))
+            }
+            Some(at) if now >= at => {
+                self.slow_at = Some(f64::INFINITY);
+                (self.trouble(note.as_deref().unwrap_or("It's taking longer than it should.")), None)
+            }
+            Some(at) => (None, at.is_finite().then_some(at)),
+        }
+    }
+
+    fn trouble(&mut self, why: &str) -> Option<Note> {
+        let why = sentence(why);
+        if self.told == why {
+            return None;
+        }
+        self.told.clone_from(&why);
+        let mut note = Note::new(Tone::Error, "Tor isn't connected yet", format!("{why} Your servers wait until it is: SSHeesh won't connect them around Tor."));
+        note.show_log = true;
+        Some(note)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turning_tor_on_says_so_once_it_is() {
+        let mut f = Follow::default();
+        // On from the last run: nothing to say.
+        assert_eq!(f.status(&Status::On), None);
+        f.switching(true);
+        assert_eq!(f.status(&Status::Starting { percent: 10, note: None }), None);
+        let on = f.status(&Status::On).unwrap();
+        assert_eq!((on.tone, on.title.as_str()), (Tone::Success, "Tor is on"));
+        assert!(on.body.contains("Tor address instead of yours"));
+        // Once.
+        assert_eq!(f.status(&Status::On), None);
+        // Turned off before it came on: nothing.
+        f.switching(true);
+        f.status(&Status::Off);
+        assert_eq!(f.status(&Status::On), None);
+    }
+
+    #[test]
+    fn a_start_that_fails_or_takes_too_long_is_said_once_with_its_log() {
+        let mut f = Follow::default();
+        f.switching(true);
+        let starting = Status::Starting { percent: 30, note: Some("Your network may block Tor".into()) };
+        assert_eq!(f.status(&starting), None);
+        // The first tick starts the wait; nothing before 25 seconds.
+        assert_eq!(f.tick(&starting, 100.0), (None, Some(125.0)));
+        assert_eq!(f.tick(&starting, 110.0), (None, Some(125.0)));
+        let (note, again) = f.tick(&starting, 125.5);
+        let note = note.unwrap();
+        assert_eq!((note.tone, note.title.as_str(), note.show_log, again), (Tone::Error, "Tor isn't connected yet", true, None));
+        assert_eq!(note.body, "Your network may block Tor. Your servers wait until it is: SSHeesh won't connect them around Tor.");
+        assert_eq!(f.tick(&starting, 200.0), (None, None), "said once");
+        // A failure with the same words isn't said again; other words are.
+        assert_eq!(f.status(&Status::Failed { message: "Your network may block Tor.".into() }), None);
+        assert!(f.status(&Status::Failed { message: "Tor's clock is wrong".into() }).is_some());
+        // Without a note, it says it's slow.
+        let mut f = Follow::default();
+        let plain = Status::Starting { percent: 5, note: None };
+        f.tick(&plain, 0.0);
+        assert!(f.tick(&plain, 30.0).0.unwrap().body.starts_with("It's taking longer than it should."));
+        // Coming on in time says nothing about trouble, and the wait starts again next time.
+        let mut f = Follow::default();
+        f.tick(&plain, 0.0);
+        f.status(&Status::On);
+        assert_eq!(f.tick(&Status::On, 40.0), (None, None));
+        assert_eq!(f.tick(&plain, 50.0), (None, Some(75.0)));
+    }
+
+    #[test]
+    fn switching_says_what_stayed_on_the_old_way() {
+        assert_eq!(turned_off(0), Note::new(Tone::Info, "Tor is off", "Servers see your own address again."));
+        assert_eq!(turned_off(1).body, "Servers see your own address again. A terminal on a server without tmux stays as it is until it reconnects.");
+        assert_eq!(turned_on(0), None);
+        let moving = turned_on(2).unwrap();
+        assert_eq!((moving.title.as_str(), moving.body.as_str()), ("Moving your terminals to Tor", "2 terminals on servers without tmux stay as they are until they reconnect."));
+        assert_eq!(new_routes(0).body, "Terminals reconnect on each server's fastest new route.");
+        assert_eq!(new_routes(0).title, "New Tor routes");
+    }
 
     #[test]
     fn the_sidebar_and_the_status_bar_read_the_short_state() {

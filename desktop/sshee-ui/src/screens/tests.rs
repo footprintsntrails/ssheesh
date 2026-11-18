@@ -417,7 +417,7 @@ fn a_command_never_runs_without_return_on_its_own_row() {
 }
 
 #[test]
-fn a_snippet_is_listed_but_not_chosen_and_one_with_blanks_is_typed_not_run() {
+fn a_snippet_is_listed_but_not_chosen_and_one_with_blanks_opens_its_form() {
     let mut w = Window::busy();
     w.key(Key::Command('l'), "cs");
     w.type_text("cmd: disks");
@@ -427,12 +427,15 @@ fn a_snippet_is_listed_but_not_chosen_and_one_with_blanks_is_typed_not_run() {
     w.key(Key::Down, "");
     w.key(Key::Enter, "");
     assert_eq!(w.written(0), "df -h -x tmpfs -x devtmpfs\r");
-    // A snippet with blanks is put on the command line for you to finish.
+    // A snippet with blanks, by its name: it runs nothing, so it's chosen, and Return opens
+    // its form to fill them in.
     w.key(Key::Command('l'), "cs");
     w.type_text("cmd: follow");
-    w.key(Key::Down, "");
+    assert_eq!(w.rt.state.screens.palette.hot, Some(0));
+    assert!(w.tree().contains("Follow a container's log"), "{}", w.tree());
     w.key(Key::Enter, "");
-    assert_eq!(w.written(0), "df -h -x tmpfs -x devtmpfs\rdocker logs -f --tail {{lines:100}} {{container}}");
+    assert!(!w.rt.state.screens.palette.open && w.rt.find("snippets").is_some());
+    assert_eq!(w.written(0), "df -h -x tmpfs -x devtmpfs\r");
 }
 
 #[test]

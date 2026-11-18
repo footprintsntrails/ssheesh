@@ -185,6 +185,27 @@ pub fn remove(list: &mut Snippets, id: &str) {
     list.snippets.retain(|s| s.id != id);
 }
 
+/// The tab the fill-in form asks the server's containers for (a `containers::Ask` is
+/// addressed to a tab, and no tab has this number): its answer comes back to the form.
+pub const FORM_TAB: crate::workbench::TabId = crate::workbench::TabId(u64::MAX);
+
+/// One container a `{{container}}` blank offers: its name, and how the list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Choice {
+    pub name: String,
+    /// "web-api", or "worker (stopped)".
+    pub label: String,
+}
+
+/// What a `{{container}}` blank offers from a look at the server: running containers first,
+/// then by name (0.10's form).
+pub fn container_choices(list: &crate::containers::ContainerList) -> Vec<Choice> {
+    let mut all: Vec<&crate::containers::Container> = list.containers.iter().collect();
+    all.sort_by(|a, b| b.running.cmp(&a.running).then_with(|| a.name.cmp(&b.name)));
+    all.dedup_by(|a, b| a.name == b.name);
+    all.into_iter().map(|c| Choice { name: c.name.clone(), label: if c.running { c.name.clone() } else { format!("{} (stopped)", c.name) } }).collect()
+}
+
 /// An id no snippet has: `s-1`, `s-2`… (0.10's are `s-` and a random word; any unique text
 /// does).
 fn new_id(list: &[Snippet]) -> String {
@@ -197,6 +218,18 @@ mod tests {
 
     fn none(_: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn a_container_blank_offers_running_containers_first() {
+        use crate::containers::{Container, ContainerList};
+        use crate::model::Engine;
+        let c = |name: &str, running: bool| Container { engine: Engine::Docker, id: name.into(), name: name.into(), image: "img".into(), running, state: String::new(), status: String::new(), ports: String::new(), project: None };
+        let list = ContainerList { containers: vec![c("worker", false), c("web-api", true), c("db", true), c("cache", false)], ..ContainerList::default() };
+        let labels: Vec<String> = container_choices(&list).into_iter().map(|c| c.label).collect();
+        assert_eq!(labels, ["db", "web-api", "cache (stopped)", "worker (stopped)"]);
+        assert_eq!(container_choices(&list)[3].name, "worker");
+        assert!(container_choices(&ContainerList::default()).is_empty());
     }
 
     #[test]

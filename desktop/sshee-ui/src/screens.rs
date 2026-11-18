@@ -93,6 +93,8 @@ pub struct States {
     pub tor: tor::State,
     /// A server's tunnels, and every saved tunnel with its state.
     pub tunnels: tunnels::State,
+    /// The status bar's menu is open, its corner where the pointer was.
+    pub vitals_menu: Option<[f32; 2]>,
 }
 
 impl States {
@@ -136,6 +138,7 @@ impl States {
         self.whats_new.releases.clear();
         self.tor.open = false;
         self.tunnels.open = None;
+        self.vitals_menu = None;
     }
 }
 
@@ -150,7 +153,7 @@ pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::s
     out.extend([recipes::aside(s, t), tour::hint(s, t)].into_iter().flatten());
     out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t, cx), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
     // The security check, recipes, snippets; the welcome, the tour and "What's new".
-    out.extend([checkup::view(s, t), disk::view(s, t), recipes::view(s, t), snippets::view(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
+    out.extend([checkup::view(s, t), disk::view(s, t), recipes::view(s, t), snippets::view(s, t), snippets::menu(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
     out
 }
 

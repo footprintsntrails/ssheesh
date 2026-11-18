@@ -283,7 +283,9 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
         .help("Drag onto another pane to move it, onto the tabs to show it alone. Double-click to fill the window")
         .on_drag(move |s: &mut Shell, d, tx| s.pane_drag(id, d, tx))
         .child(icon(tab_icon(tab), theme::ICON, ink))
-        .child(rune::text(label).key("side-name").font(theme::TAB_NAME).color(ink).single_line().truncate_fade().shrink());
+        .child(rune::text(label).key("side-name").font(theme::TAB_NAME).color(ink).single_line().truncate_fade().shrink())
+        // Whether this terminal goes through Tor, while Tor is on.
+        .children(if tab.kind == TabKind::Terminal { screens::tor::mark(s, id, 13.0, t) } else { None });
     if mixed {
         let server = s.bench.server(&tab.server);
         let name = server.map_or("Unknown server", |sv| sv.name.as_str());

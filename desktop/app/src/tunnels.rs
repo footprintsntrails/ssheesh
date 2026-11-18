@@ -128,6 +128,27 @@ impl Tunnels {
                     }
                 }
             }
+            // What the server runs, each page's title asked for: over ssh, on a thread.
+            Ask::Scan { host } => {
+                let (target, prepare) = reach;
+                let env = self.env.clone();
+                let spawned = std::thread::Builder::new().name("tunnels-scan".into()).spawn({
+                    let (remote, host) = (remote.clone(), host.clone());
+                    move || {
+                        let result = match target {
+                            Some(mut target) => {
+                                prepare(&mut target);
+                                sshee_core::tunnels::scan(&target, &env).map(scan_of).map_err(|e| e.message)
+                            }
+                            None => Err("This server isn't in the list anymore.".into()),
+                        };
+                        remote.tunnels(Reply::Scanned { host, result });
+                    }
+                });
+                if let Err(e) = spawned {
+                    remote.tunnels(Reply::Scanned { host, result: Err(format!("Couldn't look at the server: {e}")) });
+                }
+            }
         }
     }
 
@@ -148,6 +169,26 @@ pub fn core_forward(f: &sshee_app::model::Forward) -> Option<Forward> {
         ForwardKind::Remote => Forward::Remote { remote_port, local_port: f.local_port },
         ForwardKind::Other(_) => return None,
     })
+}
+
+/// A look at a server as the window takes it.
+pub fn scan_of(s: sshee_core::tunnels::WebAppScan) -> sshee_app::tunnels::Scan {
+    let apps = s
+        .apps
+        .into_iter()
+        .map(|a| sshee_app::tunnels::WebApp {
+            port: a.port,
+            remote_host: a.remote_host,
+            process: a.process,
+            known_as: a.known_as,
+            title: a.title,
+            scheme: a.scheme,
+            status: a.status,
+            web: a.web,
+            public: a.public,
+        })
+        .collect();
+    sshee_app::tunnels::Scan { apps, curl: s.curl }
 }
 
 /// sshee-core's state as the window's.

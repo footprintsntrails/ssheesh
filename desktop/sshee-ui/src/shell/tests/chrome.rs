@@ -181,6 +181,35 @@ fn the_status_bar_drops_vitals_before_tor() {
     }
 }
 
+#[test]
+fn the_vitals_open_stats_and_their_menu_hides_them() {
+    let mut w = linux();
+    w.click("server-1");
+    w.rt.update(|s, _| s.bench.set_vitals(WEB, Some(Vitals { cpu: Some(0.38), memory: 0.6, disk: Some((0.44, None)), uptime_secs: 3_200_000, down: None, up: None })));
+    w.settle();
+    // A click on the numbers: the server's Stats, with its other tools under what it is.
+    w.click("status-vitals");
+    assert_eq!(w.rt.state.bench.active().map(|t| t.kind), Some(TabKind::Stats));
+    assert!(w.rt.find("stats-tunnels").is_some() && w.rt.find("stats-recipes").is_some());
+    w.click("stats-tunnels");
+    assert!(w.rt.find("tunnels-dialog").is_some());
+    w.rt.update(|s, tx| s.close_tunnels(tx));
+    w.settle();
+    w.click("stats-recipes");
+    assert!(w.rt.state.screens.recipes.is_open());
+    w.rt.update(|s, _| s.screens.close_all());
+    w.settle();
+    // A right click: the menu, whose "Hide vitals" turns Settings' switch off.
+    let (x, y) = w.rt.find("status-vitals").unwrap();
+    w.rt.secondary_down(x, y);
+    w.rt.secondary_up(x, y);
+    w.settle();
+    assert!(w.rt.find("vitals-menu").is_some());
+    w.click("vitals-hide");
+    assert!(!w.rt.state.settings.get().show_vitals);
+    assert!(w.rt.find("vitals-menu").is_none() && w.rt.find("status-vitals").is_none());
+}
+
 impl Window {
     /// The tooltip over `key`, once the pointer has rested on it.
     fn tip_of(&mut self, key: &str) -> [f32; 4] {

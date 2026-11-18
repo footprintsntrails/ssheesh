@@ -350,6 +350,7 @@ impl Backend for LiveBackend {
             durable: Arc::new(AtomicBool::new(false)),
             saved: self.store.clone().zip(server.and_then(|s| sshee_app::servers::host_id(&s.key()).map(str::to_owned))),
             signin: server.filter(|s| !s.is_local()).map(Server::key),
+            through_tor: self.remote.clone().filter(|_| server.is_some_and(|s| !s.is_local())).map(|r| (r, tab.id)),
             known: self.known.clone(),
             watch: Arc::default(),
             closed: Mutex::new(false),
@@ -452,6 +453,10 @@ impl Backend for LiveBackend {
                 reroute_tunnels();
                 if stayed == 0 {
                     sshee_core::ssh::close_shared(&env, !sshee_core::tor::is_on());
+                }
+                // Said in a toast: off, moving to Tor, new routes, and what stayed as it was.
+                if let Some(remote) = &remote {
+                    remote.tor_switched(command, stayed);
                 }
             }
         });
@@ -582,10 +587,18 @@ impl Backend for LiveBackend {
 
     fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
         let reach: crate::edit::Reach = match &ask {
-            sshee_app::tunnels::Ask::Start { host, .. } => self.reach(&format!("host:{host}")),
+            sshee_app::tunnels::Ask::Start { host, .. } | sshee_app::tunnels::Ask::Scan { host } => self.reach(&format!("host:{host}")),
             _ => (None, Box::new(|_: &mut Target| {})),
         };
         self.tunnels.ask(ask, reach);
+    }
+
+    fn port_problem(&mut self, port: u16) -> Option<String> {
+        sshee_core::tunnels::port_problem(port).map(|e| e.message)
+    }
+
+    fn free_port(&mut self, preferred: u16, avoid: &[u16]) -> Result<u16, String> {
+        sshee_core::tunnels::pick_local_port(preferred, avoid).map_err(|e| e.message)
     }
 }
 
@@ -613,6 +626,9 @@ struct Inner {
     /// The server's key in the sidebar (none for this computer): what [`Known`] keeps the
     /// password that got this terminal in under.
     signin: Option<String>,
+    /// A server's terminal: the window is told whether each connection went through Tor
+    /// (`Remote::through_tor`, the pane's Tor mark).
+    through_tor: Option<(Remote, sshee_app::workbench::TabId)>,
     known: Known,
     /// What is typed at ssh's password prompt while connecting (`crate::signin`).
     watch: Arc<Mutex<Watch>>,
@@ -810,6 +826,7 @@ impl Inner {
         let used: Arc<Mutex<Option<sshee_core::secrets::Secret>>> = Arc::default();
         let started_with = used.clone();
         let was_down = Arc::new(AtomicBool::new(false));
+        let through_tor = self.through_tor.clone();
         let sink: EventSink = Arc::new(move |event| match event {
             SessionEvent::Output { data } => {
                 bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -824,7 +841,10 @@ impl Inner {
                 }
                 durable.store(matches!(state, SessionState::Connected { durable: true, .. }), Ordering::Relaxed);
                 match &state {
-                    SessionState::Connected { durable, .. } => {
+                    SessionState::Connected { durable, tor } => {
+                        if let Some((remote, tab)) = &through_tor {
+                            remote.through_tor(*tab, *tor);
+                        }
                         model.connected(*durable, if *durable { HISTORY_TMUX } else { HISTORY_OWN });
                         // A shell without tmux that came back is a new one: said on screen.
                         if was_down.swap(false, Ordering::Relaxed) && !*durable {

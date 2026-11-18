@@ -70,6 +70,10 @@ impl Backend for Fake {
     fn tunnels(&mut self, ask: TunnelAsk) {
         self.told.lock().unwrap().tunnels.push(ask);
     }
+    /// Port 5432 here is taken, as by a local database.
+    fn port_problem(&mut self, port: u16) -> Option<String> {
+        (port == 5432).then(|| "Port 5432 on this computer is already in use.".to_owned())
+    }
     fn replays(&self) -> bool {
         true
     }
@@ -250,18 +254,33 @@ fn a_servers_tunnels_are_added_switched_and_removed() {
     assert!(w.tree().contains("Tunnels…"));
     w.click("sm-5");
     assert!(w.has("tunnels-dialog"));
-    // Nothing saved: the form is open, on the server's port.
-    assert!(w.has("tunnels-form") && !w.has("tunnels-empty"));
+    // It looks at what the server runs; nothing saved yet.
+    assert_eq!(w.told.lock().unwrap().tunnels.first(), Some(&TunnelAsk::Scan { host: "web".into() }));
+    assert!(w.has("tunnels-empty") && w.has("tunnels-looking"));
+    w.click("tunnels-add");
+    assert!(w.has("tunnels-form"));
     w.type_text("3000");
     assert!(w.tree().contains("localhost:3000 on this computer opens the server's port 3000."), "{}", w.tree());
     w.click("tun-save");
-    let asks = w.told.lock().unwrap().tunnels.clone();
+    let asks: Vec<TunnelAsk> = w.told.lock().unwrap().tunnels.iter().filter(|a| !matches!(a, TunnelAsk::Scan { .. })).cloned().collect();
     assert!(matches!(&asks[0], TunnelAsk::Start { id, host, forward } if id == "tun-1" && host == "web" && forward.local_port == 3000), "{asks:?}");
     assert!(matches!(&asks[1], TunnelAsk::Save(list) if list.by_host["web"].len() == 1));
     assert!(w.has("tunnel-tun-1") && !w.has("tunnels-form"));
     assert!(w.tree().contains("Starting…"));
     w.backend(|r| r.tunnels(Reply::State { id: "tun-1".into(), state: Some(State::On { warning: None }) }));
-    assert!(w.tree().contains("On at localhost:3000") && w.tree().contains("1 on"));
+    assert!(w.tree().contains("On at") && w.tree().contains("1 on"));
+    // On: its address copies with a click, and it opens in the browser.
+    w.click("tunnel-tun-1-copy");
+    assert_eq!(w.rt.state.screens.notes.titles(), ["Copied"]);
+    w.click("tunnel-tun-1-browse");
+    assert_eq!(w.rt.take_url_requests(), ["http://localhost:3000/"]);
+
+    // A port here something else uses is refused before it's saved.
+    w.click("tunnels-add");
+    w.type_text("5432");
+    w.click("tun-save");
+    assert!(w.tree().contains("Port 5432 on this computer is already in use."), "{}", w.tree());
+    w.click("tun-cancel");
 
     // A second one on the same port here is refused, in words.
     w.click("tunnels-add");
@@ -279,6 +298,115 @@ fn a_servers_tunnels_are_added_switched_and_removed() {
     assert!(!w.has("tunnel-tun-1") && w.has("tunnels-empty"));
     w.click("tunnels-done");
     assert!(!w.has("tunnels-dialog"));
+}
+
+#[test]
+fn a_web_app_opens_in_the_browser_through_a_tunnel_that_can_be_kept() {
+    use sshee_app::tunnels::{Scan, WebApp, SERVER};
+    let mut w = Window::open();
+    w.rt.update(|s, tx| s.open_tunnels("host:web", tx));
+    w.settle();
+    let app = |port: u16, title: Option<&str>, known_as: Option<&str>, web: bool| WebApp { port, remote_host: SERVER.into(), title: title.map(str::to_owned), known_as: known_as.map(str::to_owned), scheme: web.then(|| "http".into()), web, ..WebApp::default() };
+    let scan = Scan { apps: vec![app(8080, Some("Shop: storefront"), None, true), app(5432, None, Some("PostgreSQL"), false)], curl: true };
+    w.backend(|r| r.tunnels(Reply::Scanned { host: "web".into(), result: Ok(scan) }));
+    let tree = w.tree();
+    assert!(tree.contains("Web apps on this server") && tree.contains("Shop: storefront") && tree.contains("port 8080"), "{tree}");
+    // Not websites: under "Other ports", with Connect.
+    assert!(!tree.contains("PostgreSQL") && tree.contains("Other ports (1)"));
+    w.click("tunnels-other");
+    assert!(w.tree().contains("PostgreSQL") && w.has("other-0-connect"));
+
+    // Open: a temporary tunnel on the same port, and the browser once it's on.
+    w.click("app-0-open");
+    let start = w.told.lock().unwrap().tunnels.last().cloned();
+    let Some(TunnelAsk::Start { id, forward, .. }) = start else { panic!("{start:?}") };
+    assert_eq!((forward.local_port, forward.remote_port), (8080, Some(8080)));
+    assert!(w.tree().contains("Starting…"));
+    assert!(w.rt.take_url_requests().is_empty());
+    w.backend(|r| r.tunnels(Reply::State { id: id.clone(), state: Some(State::On { warning: None }) }));
+    assert_eq!(w.rt.take_url_requests(), ["http://localhost:8080/"]);
+    // On: its address (a click copies it), Open, Keep and Stop.
+    assert!(w.has("app-0-copy") && w.has("app-0-keep") && w.has("app-0-stop"));
+    w.click("app-0-copy");
+    assert_eq!(w.rt.state.screens.notes.titles(), ["Copied"]);
+    // Kept: it's a saved tunnel now, named after the page, and nothing starts again.
+    w.click("app-0-keep");
+    assert!(matches!(w.told.lock().unwrap().tunnels.last(), Some(TunnelAsk::Save(list)) if list.by_host["web"][0].name.as_deref() == Some("Shop: storefront")));
+    assert!(w.has(&format!("tunnel-{id}")) && !w.has("app-0-keep"));
+    // Stop switches the saved one off.
+    w.click("app-0-stop");
+    assert!(w.told.lock().unwrap().tunnels.contains(&TunnelAsk::Stop { id: id.clone() }));
+    assert!(w.has("app-0-open"));
+}
+
+#[test]
+fn a_server_that_cant_be_looked_at_says_why() {
+    let mut w = Window::open();
+    w.rt.update(|s, tx| s.open_tunnels("host:web", tx));
+    w.settle();
+    w.backend(|r| r.tunnels(Reply::Scanned { host: "web".into(), result: Err("Couldn't reach the server.".into()) }));
+    assert!(w.has("tunnels-scan-error") && w.tree().contains("Couldn't reach the server."));
+    // Look again.
+    w.click("tunnels-reload");
+    assert_eq!(w.told.lock().unwrap().tunnels.iter().filter(|a| matches!(a, TunnelAsk::Scan { .. })).count(), 2);
+}
+
+#[test]
+fn tor_says_what_it_did_in_toasts() {
+    let mut w = Window::open();
+    let titles = |w: &Window| w.rt.state.screens.notes.titles().iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    // Turned on: said once it is.
+    w.click("tor");
+    w.backend(|r| r.tor_status(Status::Starting { percent: 20, note: None }));
+    assert!(titles(&w).is_empty());
+    w.backend(|r| r.tor_status(Status::On));
+    assert_eq!(titles(&w), ["Tor is on"]);
+    // Off, and the terminals without tmux that stayed as they were.
+    w.backend(|r| r.tor_switched(TorCommand::Off, 2));
+    let toast = w.rt.state.screens.notes.toasts().last().map(|(_, t)| t.clone()).unwrap();
+    assert_eq!(toast.title, "Tor is off");
+    assert_eq!(toast.body.as_deref(), Some("Servers see your own address again. 2 terminals on servers without tmux stay as they are until they reconnect."));
+    w.backend(|r| r.tor_switched(TorCommand::NewRoutes, 0));
+    assert_eq!(titles(&w).last().map(String::as_str), Some("New Tor routes"));
+}
+
+#[test]
+fn a_tor_start_that_takes_too_long_says_so_with_its_log() {
+    let mut w = Window::open();
+    w.backend(|r| r.tor_status(Status::Starting { percent: 5, note: Some("Your network may block Tor.".into()) }));
+    for _ in 0..27 {
+        w.rt.frame(1.0);
+    }
+    w.settle();
+    let toast = w.rt.state.screens.notes.toasts().find(|(_, t)| t.title == "Tor isn't connected yet").map(|(id, t)| (id, t.clone()));
+    let (id, toast) = toast.unwrap_or_else(|| panic!("{:?}", w.rt.state.screens.notes.titles()));
+    assert!(toast.body.as_deref().unwrap().starts_with("Your network may block Tor. Your servers wait until it is"));
+    assert_eq!(toast.action.as_ref().map(|(l, _)| l.as_str()), Some("Show log"));
+    w.rt.update(move |s, _| s.act_on_toast(id));
+    assert_eq!(w.told.lock().unwrap().shown, 1);
+}
+
+#[test]
+fn each_terminal_on_a_server_shows_whether_it_goes_through_tor() {
+    let mut w = Window::open();
+    w.click("server-1");
+    let tab = w.rt.state.bench.active_id().unwrap();
+    // Tor off: no mark.
+    assert!(!w.has(&format!("tor-mark-{}", tab.0)));
+    w.backend(|r| r.tor_status(Status::On));
+    assert!(w.has(&format!("tor-mark-{}", tab.0)));
+    assert!(w.tree().contains("Through Tor: this server sees a Tor address, not yours"), "{}", w.tree());
+    // It connected around Tor: orange, and says why.
+    let remote = w.remote.clone();
+    w.backend(move |_| remote.through_tor(tab, false));
+    assert!(w.tree().contains("This terminal doesn't go through Tor"), "{}", w.tree());
+    let remote = w.remote.clone();
+    w.backend(move |_| remote.through_tor(tab, true));
+    assert!(!w.tree().contains("This terminal doesn't go through Tor"));
+    // This computer's terminals have none.
+    w.click("server-0");
+    let local = w.rt.state.bench.active_id().unwrap();
+    assert!(!w.has(&format!("tor-mark-{}", local.0)));
 }
 
 #[test]

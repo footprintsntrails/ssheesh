@@ -234,15 +234,33 @@ pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
     }
     let name = s.bench.server(&server).map_or_else(|| "This machine".to_owned(), |sv| s.server_shown(&server, &sv.name).into_owned());
     let about = rules::about(v, facts, &name, !s.streaming());
-    let body = col()
+    let mut body = col()
         .key("stats-body")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom: false })
         .child(table)
-        .child(text(s.text_shown(&about).into_owned()).key("stats-about").font(theme::NOTE).color(t.l2).wrap().px(16.0).pt(12.0))
-        .child(programs(s, id, t));
+        .child(text(s.text_shown(&about).into_owned()).key("stats-about").font(theme::NOTE).color(t.l2).wrap().px(16.0).pt(12.0));
+    // A server's other tools, under what it is (0.10's).
+    if s.bench.server(&server).is_some_and(|sv| !sv.is_local()) {
+        let (tunnels, recipes) = (server.clone(), server.clone());
+        body = body.child(
+            row()
+                .key("stats-tools")
+                .gap(6.0)
+                .px(16.0)
+                .pt(10.0)
+                .child(
+                    push_button(t, "Web apps and tunnels", Push::Quiet, true)
+                        .key("stats-tunnels")
+                        .help("The server's web apps in your browser, and its ports here on this computer")
+                        .on_press_tx(move |s: &mut Shell, tx| s.open_tunnels(&tunnels, tx)),
+                )
+                .child(push_button(t, "Recipes", Push::Quiet, true).key("stats-recipes").help("Step-by-step guides for this server").on_press_tx(move |s: &mut Shell, tx| s.open_recipes(&recipes, None, tx))),
+        );
+    }
+    let body = body.child(programs(s, id, t));
     page.child(body)
 }
 

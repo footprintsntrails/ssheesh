@@ -129,6 +129,16 @@ impl Backend for FakeBackend {
     fn snippets_changed(&mut self, list: &Snippets) {
         self.world.lock().unwrap().saved.push(list.clone());
     }
+    /// web-7731 runs two containers, one of them stopped.
+    fn containers(&mut self, ask: sshee_app::containers::Ask) {
+        use sshee_app::containers::{Answer, Container, ContainerList, Want};
+        let Want::List { ticket } = ask.want else { return };
+        let c = |name: &str, running: bool| Container { engine: sshee_app::model::Engine::Docker, id: name.into(), name: name.into(), image: "img".into(), running, state: String::new(), status: String::new(), ports: String::new(), project: None };
+        let list = ContainerList { containers: vec![c("worker", false), c("web-api", true)], ..ContainerList::default() };
+        if let Some(remote) = &self.remote {
+            remote.containers(ask.reply(Answer::Listed { ticket, result: Ok(list) }));
+        }
+    }
     fn welcome(&mut self) -> bool {
         self.start.welcome
     }
@@ -448,6 +458,31 @@ fn a_snippet_kept_for_one_server_runs_there_and_asks_on_production() {
     assert!(w.has("snip-ask"));
     w.click("snip-yes");
     assert!(w.written_on(WEB).contains("df -h -x tmpfs -x devtmpfs\r"), "{:?}", w.written_on(WEB));
+}
+
+#[test]
+fn a_snippet_with_blanks_picked_in_the_palette_opens_its_form_with_the_servers_containers() {
+    let mut w = Window::open();
+    w.click("server-1");
+    w.rt.update(|s, tx| s.open_palette("follow a container", tx));
+    w.settle();
+    // Listed by its name, its command beside it; Return opens its form, nothing runs.
+    assert!(w.tree().contains("Follow a container's log"), "{}", w.tree());
+    w.key(Key::Enter);
+    assert!(w.has("snippets") && !w.has("palette"), "{}", w.tree());
+    assert!(w.tree().contains("Into the terminal of web-7731"));
+    // {{container}} is a pop-up of the server's containers, running ones first.
+    assert!(w.tree().contains("Pick a container…"), "{}", w.tree());
+    w.click("blank-container");
+    assert!(w.has("popup-menu"));
+    assert!(w.tree().contains("web-api") && w.tree().contains("worker (stopped)"), "{}", w.tree());
+    w.click("item-0");
+    assert!(!w.has("popup-menu"));
+    assert!(w.tree().contains("docker logs -f --tail 100 web-api"), "{}", w.tree());
+    // web-7731 is Production: Run asks first.
+    w.click("snip-go");
+    w.click("snip-yes");
+    assert!(w.written_on(WEB).contains("docker logs -f --tail 100 web-api\r"), "{:?}", w.written_on(WEB));
 }
 
 // ---------------------------------------------------------------- welcome, tour, what's new
