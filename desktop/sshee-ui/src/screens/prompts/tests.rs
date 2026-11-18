@@ -20,6 +20,8 @@ struct Seen {
     status: Option<StatusSink>,
     written: Vec<u8>,
     did: Vec<String>,
+    /// What the session says it's doing while it connects.
+    phase: Option<crate::terminal::connecting::Phase>,
 }
 
 struct FakeLink(Arc<Mutex<Seen>>);
@@ -48,6 +50,9 @@ impl TermLink for FakeLink {
     }
     fn sleep(&self) {
         self.0.lock().unwrap().did.push("sleep".into());
+    }
+    fn phase(&self) -> Option<crate::terminal::connecting::Phase> {
+        self.0.lock().unwrap().phase
     }
 }
 
@@ -130,6 +135,15 @@ impl Window {
     fn status(&mut self, n: usize, status: LinkStatus) {
         let sink = self.session(n).lock().unwrap().status.clone().expect("the session opened");
         sink(status);
+        self.frames(4);
+    }
+
+    /// Session `n`'s program prints `bytes`, at the pane's own (virtual) time, so its frame is
+    /// due at once.
+    fn print(&mut self, n: usize, bytes: &[u8]) {
+        let model = self.session(n).lock().unwrap().model.clone().unwrap();
+        let now = self.rt.state.active_pane().unwrap().now();
+        model.feed_at(bytes, now);
         self.frames(4);
     }
 
@@ -313,4 +327,88 @@ fn a_programs_progress_reaches_its_pane() {
     w.frames(12);
     let progress = w.rt.state.active_pane().unwrap().progress().expect("a progress");
     assert_eq!(progress.value, 42.0);
+}
+
+// ---- "Connecting to web-7731…" (`terminal/connecting.rs`)
+
+#[test]
+fn an_empty_terminal_says_where_it_connects_until_the_shell_prints() {
+    let mut w = Window::on_web();
+    w.session(0).lock().unwrap().phase = Some(crate::terminal::connecting::Phase::Tor);
+    w.status(0, LinkStatus::Connecting);
+    // A quick connection doesn't flash it.
+    assert!(w.rt.find("connect-screen").is_none());
+    w.frames(12);
+    assert!(w.rt.find("connect-screen").is_some());
+    let tree = w.tree();
+    assert!(tree.contains("Connecting to web-7731…") && tree.contains("Through Tor"), "{tree}");
+    // In: tmux starts on the server, and it says so until the shell draws.
+    w.session(0).lock().unwrap().phase = None;
+    w.status(0, LinkStatus::Connected { durable: true });
+    let tree = w.tree();
+    assert!(tree.contains("Connecting to web-7731…") && tree.contains("Starting tmux") && !tree.contains("Through Tor"), "{tree}");
+    w.print(0, b"deploy@web-7731:~$ ");
+    assert!(w.rt.find("connect-screen").is_none(), "gone the moment the shell prints");
+    assert!(!w.tree().contains("Connecting to"));
+}
+
+#[test]
+fn a_password_prompt_takes_the_place_of_connecting_and_keys_answer_it() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.frames(12);
+    assert!(w.rt.find("connect-screen").is_some());
+    w.print(0, b"deploy@203.0.113.17's password: ");
+    assert!(w.rt.find("connect-screen").is_none(), "ssh's question shows");
+    w.key(Key::Text("x".into()));
+    assert_eq!(w.written(0), "x");
+}
+
+#[test]
+fn connecting_that_fails_shows_the_card_not_the_loader() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.frames(12);
+    w.status(0, LinkStatus::Gone { note: "The server didn't accept your login. Check the user name and key, then retry.".into() });
+    assert!(w.rt.find("connect-screen").is_none());
+    assert!(w.tree().contains("Couldn't connect"), "{}", w.tree());
+    // A drop that retries: its countdown, not the loader.
+    w.status(0, LinkStatus::Retrying { attempt: 2, retry_in_ms: 8000, reason: "The server stopped responding".into() });
+    assert!(w.rt.find("connect-screen").is_none() && w.rt.find("card-countdown").is_some());
+}
+
+#[test]
+fn signed_in_with_nothing_printed_lets_go_of_connecting_after_a_while() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.frames(12);
+    w.status(0, LinkStatus::Connected { durable: false });
+    assert!(w.tree().contains("Starting the shell"));
+    w.frames(60 * 2 + 10);
+    assert!(w.rt.find("connect-screen").is_none(), "a quiet program isn't hidden for good");
+}
+
+#[test]
+fn connecting_again_over_what_is_on_screen_is_the_small_note() {
+    let mut w = Window::on_web();
+    w.print(0, b"deploy@web-7731:~$ ");
+    // "Try again" after it stopped: what was on screen stays seen.
+    w.status(0, LinkStatus::Connecting);
+    w.frames(40);
+    assert!(w.rt.find("connect-screen").is_none());
+    assert!(w.rt.find("session-note").is_some() && w.tree().contains("Reconnecting…"), "{}", w.tree());
+    w.status(0, LinkStatus::Connected { durable: true });
+    assert!(!w.tree().contains("Reconnecting…"));
+}
+
+/// Streamer mode hides the server's name in it.
+#[test]
+fn connecting_names_the_server_as_streamer_mode_shows_it() {
+    let mut w = Window::on_web();
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
+    w.frames(2);
+    w.status(0, LinkStatus::Connecting);
+    w.frames(12);
+    let tree = w.tree();
+    assert!(tree.contains("Connecting to") && !tree.contains("web-7731"), "{tree}");
 }

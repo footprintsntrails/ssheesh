@@ -8,6 +8,7 @@
 //! ├── scroll         the scroll bar, over the right edge
 //! ├── to-bottom      "Jump to the bottom", while scrolled up with new output below
 //! ├── link-hint      what a click on the link under the pointer does
+//! ├── connect-screen "Connecting to web-7731…", while nothing is on screen yet
 //! ├── find           the find bar, top right
 //! └── menu           the pane's menu, where it was asked for
 //! ```
@@ -166,6 +167,8 @@ pub struct Overlays {
     pub(crate) post: Arc<Postbox>,
     /// The session's cards, idle and waking (`session.rs`).
     pub(crate) session: super::session::Session,
+    /// "Connecting to web-7731…" over a terminal with nothing on screen yet (`connecting.rs`).
+    pub(crate) connecting: super::connecting::Connecting,
     wishes: Vec<Wish>,
     /// The program in the foreground, when something tells (the agents' watch will):
     /// who gets Ctrl+F depends on it.
@@ -262,6 +265,7 @@ impl TermPane {
             }
         }
         changed |= self.poll_session(clock, tx);
+        changed |= self.poll_connecting(clock, tx);
         changed |= self.poll_away(clock, tx);
         changed |= self.poll_links(clock, tx);
         changed |= self.poll_scroll();
@@ -277,6 +281,8 @@ pub fn layer<S: 'static>(term: El, pane: &TermPane, cx: &mut Cx<S>, get: impl Fn
     layer = layer.children(scrollbar::bar(pane, t, get));
     layer = layer.children(scrollbar::to_bottom(pane, t, get));
     layer = layer.children(links::hint(pane, t, m));
+    // "Connecting to web-7731…" while nothing is on screen yet (`connecting.rs`).
+    layer = layer.children(super::connecting::view(pane, t));
     // The session's card or note (`screens/prompts.rs`).
     layer = layer.children(crate::screens::prompts::card(pane, t, get));
     layer = layer.children(find::bar(pane, t, get));

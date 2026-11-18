@@ -251,7 +251,14 @@ fn card(state: &str) -> Fixture {
     let out = "\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ls /srv/backups\r\n2026-11-12.tar.zst  2026-11-13.tar.zst  2026-11-14.tar.zst\r\n\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ";
     // Nothing is on screen before a server's key is trusted: no session has started.
     let out = if state.starts_with("hostkey") { "" } else { out };
-    let value = serde_json::json!({ "durable": true, "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true }, { "t": 0.0, "status": state } ] });
+    // A slow sign-in: its key looked up, then tmux starting, then the shell, 2.6 s in.
+    let value = if state == "connecting" {
+        serde_json::json!({ "durable": true, "events": [
+            { "t": 0.0, "status": "connecting" }, { "t": 0.0, "phase": "key" }, { "t": 1.0, "phase": "" },
+            { "t": 2.0, "status": "connected" }, { "t": 2.6, "out": out }, { "t": 2.6, "echo": true } ] })
+    } else {
+        serde_json::json!({ "durable": true, "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true }, { "t": 0.0, "status": state } ] })
+    };
     Fixture::from_json(&value, Path::new("."), 1).expect("a card's fixture reads")
 }
 

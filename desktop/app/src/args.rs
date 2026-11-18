@@ -14,7 +14,8 @@ usage: ssheesh-preview [options]
   --demo-whats-new    with --demo: start with What's new, as after an update from 0.10.14
   --demo-card STATE   with --demo: the first terminal on backups shows a session card
                       (hostkey-new, hostkey-changed, disconnected, retrying, rejoining,
-                      asleep, failed, ended); without it, backups asks to trust its key
+                      asleep, failed, ended, connecting: a slow sign-in); without it,
+                      backups asks to trust its key
   --ssh-config FILE   the ssh config to list servers from and connect with (ssh's -F),
                       instead of ~/.ssh/config
   --tor-check         start this copy's Tor without a window and say each step

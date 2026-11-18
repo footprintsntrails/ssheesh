@@ -57,7 +57,8 @@ pub fn card<S: 'static>(pane: &TermPane, t: &'static Theme, get: impl Fn(&mut S)
             col().min_w(0.0).shrink().child(line(t, &reason, true)).child(text(when).key("card-countdown").font(theme::VALUE).color(t.l2).single_line()),
             Some(again(t, "Now", get)),
         ),
-        Card::Rejoining => note(t, dot(t.orange), line(t, "Reconnecting…", true), None),
+        // The small kin of "Connecting to …" (`terminal/connecting.rs`): the text stays seen.
+        Card::Rejoining => note(t, crate::icons::logo_loader(16.0), line(t, "Reconnecting…", true), None),
         Card::Back { durable } => note(
             t,
             dot(t.green),

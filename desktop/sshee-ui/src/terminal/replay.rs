@@ -27,7 +27,9 @@
 //!   ones), for "while you were away".
 //! - `status: "…"` puts the session in a state its cards show: `hostkey-new`,
 //!   `hostkey-changed`, `disconnected`, `retrying`, `rejoining`, `asleep`, `failed`, `ended`,
-//!   `connected`. Trusting a key, Reconnect and Try again connect it again at once.
+//!   `connecting`, `connected`. Trusting a key, Reconnect and Try again connect it again at once.
+//! - `phase: "tor"` or `"key"` is what a connecting session says it is doing
+//!   (`connecting::Phase`); `phase: ""` says nothing.
 //! - Anything else in an event (`mark`, notes) is ignored: marks belong in Rune's `--script`.
 //!
 //! `--replay-out` records JSON lines with the pane's clock: `{"t":…,"write":"…"}` (the bytes as
@@ -60,6 +62,8 @@ pub enum Step {
     Back { history: String, away_ms: Option<u64> },
     /// The session is in this state (`status` in the fixture).
     Status(LinkStatus),
+    /// What the session says it is doing while it connects (`phase`).
+    Phase(Option<super::connecting::Phase>),
 }
 
 /// A fixture's `status` word as the state it names (made-up fingerprints and reasons).
@@ -78,6 +82,7 @@ pub fn status_named(word: &str) -> Option<LinkStatus> {
         "asleep" => LinkStatus::Asleep,
         "failed" => LinkStatus::Gone { note: "The server didn't accept your login. Check the user name and key, then retry.".into() },
         "ended" => LinkStatus::Ended { code: Some(0) },
+        "connecting" => LinkStatus::Connecting,
         "connected" => LinkStatus::Connected { durable: true },
         _ => return None,
     })
@@ -145,6 +150,12 @@ impl Fixture {
             } else if let Some(word) = e["status"].as_str() {
                 let status = status_named(word).ok_or_else(|| format!("event {i}: no status {word:?}"))?;
                 steps.push((t, Step::Status(status)));
+            } else if let Some(word) = e["phase"].as_str() {
+                let phase = super::connecting::Phase::named(word);
+                if phase.is_none() && !word.is_empty() {
+                    return Err(format!("event {i}: no phase {word:?}"));
+                }
+                steps.push((t, Step::Phase(phase)));
             } else if let Some(history) = e["back"]["history"].as_str() {
                 let away_ms = e["back"]["away_min"].as_u64().map(|m| m * 60_000);
                 steps.push((t, Step::Back { history: history.to_owned(), away_ms }));
@@ -237,6 +248,8 @@ pub struct ReplayLink {
     status: Option<StatusSink>,
     /// tmux's history since the session last came back.
     history: RefCell<Option<(String, Option<u64>)>>,
+    /// What the fixture says the session is doing while it connects.
+    phase: Cell<Option<super::connecting::Phase>>,
 }
 
 impl ReplayLink {
@@ -252,6 +265,7 @@ impl ReplayLink {
             bytes: Cell::new(0),
             status: None,
             history: RefCell::new(None),
+            phase: Cell::new(None),
         }
     }
 
@@ -361,6 +375,7 @@ impl TermLink for ReplayLink {
                         status(state);
                     }
                 }
+                Step::Phase(phase) => self.phase.set(phase),
                 Step::Back { history, away_ms } => {
                     *self.history.borrow_mut() = Some((history, away_ms));
                     if let Some(status) = &self.status {
@@ -374,6 +389,10 @@ impl TermLink for ReplayLink {
 
     fn bytes_received(&self) -> u64 {
         self.bytes.get()
+    }
+
+    fn phase(&self) -> Option<super::connecting::Phase> {
+        self.phase.get()
     }
 
     fn note_copy(&self, text: &str) {
@@ -428,6 +447,21 @@ mod tests {
             let v = json!({ "events": [ { "t": 0, "out": bad } ] });
             assert!(Fixture::from_json(&v, Path::new("."), 0).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_fixture_plays_a_slow_sign_in() {
+        let v = json!({ "events": [ { "t": 0, "status": "connecting" }, { "t": 0, "phase": "tor" }, { "t": 1, "phase": "" }, { "t": 2, "status": "connected" } ] });
+        let f = Fixture::from_json(&v, Path::new("."), 0).unwrap();
+        assert_eq!(f.steps[0].1, Step::Status(LinkStatus::Connecting));
+        assert_eq!(f.steps[1].1, Step::Phase(Some(super::super::connecting::Phase::Tor)));
+        assert_eq!(f.steps[2].1, Step::Phase(None));
+        let mut link = ReplayLink::new(f, None);
+        link.tick(0.0, Instant::now());
+        assert_eq!(link.phase(), Some(super::super::connecting::Phase::Tor));
+        link.tick(1.5, Instant::now());
+        assert_eq!(link.phase(), None);
+        assert!(Fixture::from_json(&json!({ "events": [ { "t": 0, "phase": "password" } ] }), Path::new("."), 0).is_err());
     }
 
     #[test]
