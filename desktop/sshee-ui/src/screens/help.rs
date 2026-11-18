@@ -63,9 +63,18 @@ pub const PLACES: &str = "Folders most Linux servers have. Logs (/var/log) is wh
 /// Stats: the load average.
 pub const LOAD: &str = "Load is how many programs want the processor at once, averaged over the last 1, 5 and 15 minutes. While it stays below the number of cores, the server keeps up; above that, programs wait their turn.";
 
+/// "Add a server": signing in with a key.
+pub const SIGN_IN: &str = "A key is a pair of files: the private one stays on this computer, the public one goes on the server, and signing in proves you hold it without sending it. It's safer than a password and there's nothing to type. A password manager such as 1Password or Bitwarden can keep your keys and hand them to ssh, asking you each time.";
+
+/// "Add a server": the port.
+pub const PORT: &str = "The numbered door on the server that ssh knocks on. It's 22 unless whoever set up the server chose another; your hosting provider's page says which.";
+
+/// "Add a server": the server's fingerprint, when the check asks to trust it.
+pub const FINGERPRINT: &str = "Every server has its own key, and its fingerprint is a short summary of it. If it matches the one your hosting provider shows, you're talking to your server and not an impostor. SSHeesh remembers it and warns you if it ever changes.";
+
 /// Every one of the words above, for tests.
 #[cfg(test)]
-pub const ALL: [&str; 7] = [TUNNEL_KINDS, SAVED_TUNNELS, SNIPPET_BLANKS, CONTAINERS, DOCKER_DISK, PLACES, LOAD];
+pub const ALL: [&str; 10] = [TUNNEL_KINDS, SAVED_TUNNELS, SNIPPET_BLANKS, CONTAINERS, DOCKER_DISK, PLACES, LOAD, SIGN_IN, PORT, FINGERPRINT];
 
 /// What a screen reader hears of the "?" named "About {about}" on screen: its description.
 #[cfg(test)]

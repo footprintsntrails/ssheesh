@@ -352,6 +352,11 @@ fn section(t: &Theme, name: &str, body: El) -> El {
     col().w_full().gap(8.0).child(text(name).font(theme::GROUP).color(t.l2).single_line()).child(body)
 }
 
+/// [`section`] with a "?" after its name.
+fn section_with(t: &Theme, name: &str, mark: El, body: El) -> El {
+    col().w_full().gap(8.0).child(row().gap(4.0).items_center().child(text(name).font(theme::GROUP).color(t.l2).single_line()).child(mark)).child(body)
+}
+
 /// The red line under the form.
 fn error_line(t: &Theme, why: &str) -> El {
     row().key("add-error").w_full().gap(6.0).items_start().role("alert").child(icon(Icon::Warning, 13.0, t.red).mt(1.0)).child(text(why).font(theme::NOTE).color(t.red).grow(1.0).shrink().min_w(0.0).wrap())
@@ -393,7 +398,7 @@ fn radio(t: &Theme, title: &str, badge: Option<&str>, detail: &str, chosen: bool
 
 /// "Sign in with": a key (yours, one found in `~/.ssh`, or a file), a password, or a password
 /// manager.
-fn sign_in(state: &State, t: &Theme) -> El {
+fn sign_in(s: &Shell, state: &State, t: &Theme) -> El {
     let managers = state.local.as_ref().map(|l| l.managers()).unwrap_or_default();
     let mut ways = vec![
         choice(t, "SSH key", state.sign_in == SignIn::Key).key("add-key").on_press_tx(|s: &mut Shell, _| s.screens.add_server.sign_in = SignIn::Key),
@@ -472,7 +477,8 @@ fn sign_in(state: &State, t: &Theme) -> El {
             list
         }
     };
-    section(t, "Sign in with", col().w_full().gap(8.0).items_start().child(choices(t, ways).label_static("Sign in with")).child(how))
+    let mark = super::help::tip(s, t, "add-signin-about", "signing in", super::help::SIGN_IN);
+    section_with(t, "Sign in with", mark, col().w_full().gap(8.0).items_start().child(choices(t, ways).label_static("Sign in with")).child(how))
 }
 
 /// "In your list": the icon (its picker opens in place), the colour, the label, the name.
@@ -609,7 +615,7 @@ fn pick_picture(tx: &mut Tx) {
 }
 
 /// "Check before adding" and what it found (0.10's `TestResult`).
-fn check(state: &State, t: &Theme, ready: bool) -> El {
+fn check(s: &Shell, state: &State, t: &Theme, ready: bool) -> El {
     let label = if state.testing { "Checking…" } else { "Check before adding" };
     let mut out = col().w_full().gap(8.0).items_start().child(push_button(t, label, Push::Quiet, ready && !state.testing && !state.busy).key("add-test").on_press_tx(|s: &mut Shell, _| s.add_server_test(false)));
     let Some(tested) = state.check_shown() else { return out };
@@ -641,7 +647,8 @@ fn check(state: &State, t: &Theme, ready: bool) -> El {
             for (kind, sha) in tested.fingerprints() {
                 words = words.child(rune::el().w_full().px(8.0).py(5.0).radius(theme::RADIUS_ROW).fill(t.hov2).child(text(format!("{kind} {sha}")).font(theme::CODE).color(t.l1).wrap()));
             }
-            words = words.child(push_button(t, "Trust it and continue", Push::Primary, !state.testing).key("add-trust").on_press_tx(|s: &mut Shell, _| s.add_server_test(true)));
+            let trust = push_button(t, "Trust it and continue", Push::Primary, !state.testing).key("add-trust").on_press_tx(|s: &mut Shell, _| s.add_server_test(true));
+            words = words.child(row().gap(6.0).items_center().child(trust).child(super::help::tip(s, t, "add-print-about", "the server's fingerprint", super::help::FINGERPRINT)));
         }
         steps = steps.child(row().key(format!("test-step-{i}")).w_full().gap(8.0).items_start().child(icon(mark, 14.0, color).mt(2.0)).child(words));
     }
@@ -692,7 +699,13 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
             .w_full()
             .gap(8.0)
             .child(labelled(t, "Address", field(t, address, bad_address)).grow(1.0).min_w(0.0))
-            .child(labelled(t, "Port", field(t, port, bad_port)).w(76.0))
+            .child(
+                col()
+                    .gap(4.0)
+                    .w(76.0)
+                    .child(row().gap(2.0).items_center().child(text("Port").font(theme::SMALL).color(t.l2).single_line().a11y_hidden()).child(super::help::tip(s, t, "add-port-about", "the port", super::help::PORT)))
+                    .child(field(t, port, bad_port)),
+            )
             .child(labelled(t, "User", field(t, user, false)).w(120.0)),
     );
     // A pasted ssh command, read back: what the box means. Until then, that one can be pasted.
@@ -708,10 +721,10 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
         place = place.child(text("Or paste a whole ssh command, like ssh root@host -p 2222.").key("add-paste-hint").font(theme::SMALL).color(t.l2).wrap());
     }
     page = page.child(section(t, "Where", place));
-    page = page.child(sign_in(state, t));
+    page = page.child(sign_in(s, state, t));
     let shown_host = form.parsed().host;
     page = page.child(in_your_list(state, t, shown_host.trim()));
-    page = page.child(check(state, t, form.ready()));
+    page = page.child(check(s, state, t, form.ready()));
 
     page
 }

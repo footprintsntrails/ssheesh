@@ -49,7 +49,12 @@ fn a_server_is_checked_before_it_is_added_and_its_new_identity_trusted_by_hand()
     let mut w = Window::open(false);
     w.click("add-server");
     w.type_text("root@203.0.113.90");
+    // Signing in, the port and the fingerprint each have a "?" for whoever is new to them.
+    for (about, words) in [("signing in", crate::screens::help::SIGN_IN), ("the port", crate::screens::help::PORT)] {
+        assert_eq!(crate::screens::help::heard(&w.rt, about).as_deref(), Some(words), "{about}");
+    }
     w.click("add-test");
+    assert_eq!(crate::screens::help::heard(&w.rt, "the server's fingerprint").as_deref(), Some(crate::screens::help::FINGERPRINT));
     let tree = w.tree();
     assert!(tree.contains("The server answered") && tree.contains("First time here. Is this really your server?"), "{tree}");
     assert!(tree.contains(sshee_app::servers::MADE_UP_FINGERPRINT));
