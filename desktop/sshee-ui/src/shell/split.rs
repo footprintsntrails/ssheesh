@@ -26,7 +26,7 @@ use sshee_app::workbench::{Tab, TabId, TabKind};
 use super::state::Shell;
 use super::tabs::tab_icon;
 use crate::icons::{icon, Icon};
-use crate::kit::chip::prod_chip;
+use crate::kit::chip::env_chip;
 use crate::screens;
 use crate::terminal::view::pane_view_with;
 use crate::theme::{self, Theme};
@@ -288,8 +288,8 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
         let server = s.bench.server(&tab.server);
         let name = server.map_or("Unknown server", |sv| sv.name.as_str());
         head = head.child(rune::text(s.server_shown(&tab.server, name).into_owned()).key("side-server").font(theme::TAB_SERVER).color(t.l2).single_line());
-        if server.is_some_and(|sv| sv.is_prod()) {
-            head = head.child(prod_chip(t, false));
+        if let Some(env) = server.and_then(|sv| sv.env.as_ref()) {
+            head = head.child(env_chip(t, env));
         }
     }
     // The AI agents this terminal can start, as in 0.10's header.

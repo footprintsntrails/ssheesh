@@ -114,6 +114,10 @@ pub fn open_into(s: &mut Shell, tab: TabId, id: &str, run: ContainerRun, tx: &mu
 /// The backend's answer (`Remote::containers`): a look, or how a button went. The next look
 /// is timed from here.
 pub fn deliver(s: &mut Shell, reply: Reply, tx: &mut Tx) {
+    // A tree under a server in the sidebar asked (`screens::rail_tree`).
+    if super::rail_tree::deliver(s, &reply, tx) {
+        return;
+    }
     let Some(state) = s.screens.containers.get_mut(&reply.tab) else { return };
     match reply.answer {
         Answer::Listed { ticket, result } => {

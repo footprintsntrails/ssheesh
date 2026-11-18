@@ -1,6 +1,7 @@
 //! A server's card: what shows beside its icon in the sidebar while the pointer rests there
 //! (the design's "carried over" sheet). Its name and label, its address and whether it's
-//! reached through Tor, how many tabs are open on it, and who waits there and since when:
+//! reached through Tor, its status ("Connected · 2 tabs open", "Connection lost,
+//! reconnecting…", "Couldn't connect") and who waits there and since when:
 //! "Claude Code needs you, 2 min". A sidebar of icons alone needn't be known by heart.
 //!
 //! What the card says is `sshee_app::home::Card`. It comes up after the pointer has rested a
@@ -12,8 +13,9 @@ use std::time::Duration;
 
 use rune::{col, row, text, Align, El, Side, Tx};
 use sshee_app::home::Card;
+use sshee_app::workbench::Health;
 
-use crate::kit::chip::prod_chip;
+use crate::kit::chip::env_chip;
 use crate::kit::dot;
 use crate::kit::popover::popover;
 use crate::shell::Shell;
@@ -37,6 +39,8 @@ pub struct State {
     pub shown: bool,
     /// Until then, another icon's card shows at once.
     warm_until: f64,
+    /// The server row the pointer is over, card or not: the list shows its "+" and chevron.
+    pub row: Option<usize>,
 }
 
 impl State {
@@ -52,6 +56,11 @@ impl Shell {
     pub fn hover_server(&mut self, index: usize, inside: bool, tx: &mut Tx) {
         let now = tx.clock();
         let card = &mut self.screens.server_card;
+        if inside {
+            card.row = Some(index);
+        } else if card.row == Some(index) {
+            card.row = None;
+        }
         if inside {
             card.over = Some(index);
             card.since = now;
@@ -82,14 +91,20 @@ pub(crate) fn tick(s: &mut Shell, now: f64) -> bool {
 /// The card's contents, on the popover surface.
 pub fn card(t: &Theme, c: &Card) -> El {
     let mut name = row().gap(7.0).items_center().child(text(&c.name).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate().shrink());
-    if c.prod {
-        name = name.child(prod_chip(t, false));
+    if let Some(env) = &c.env {
+        name = name.child(env_chip(t, env));
     }
     let mut e = popover(t, WIDTH).role("tooltip").px(13.0).py(11.0).gap(5.0).child(name);
     if let Some(address) = &c.address {
         e = e.child(text(address).font(theme::NOTE).color(t.l2).single_line().truncate());
     }
-    e = e.child(text(&c.tabs).font(theme::NOTE).color(t.l2).single_line());
+    // Trouble in its colour; all well, quiet.
+    let tone = match c.health {
+        Health::Lost => t.orange,
+        Health::Failed => t.red,
+        _ => t.l2,
+    };
+    e = e.child(text(&c.status).key("card-status").font(theme::NOTE).color(tone).single_line().truncate());
     if !c.waiting.is_empty() {
         // Under a hairline: what you'd go there for.
         let mut waits = col().w_full().gap(5.0).mt(3.0).pt(6.0).border_sides([1.0, 0.0, 0.0, 0.0], t.hair);

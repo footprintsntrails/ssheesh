@@ -229,3 +229,61 @@ fn the_first_connect_guesses_the_icon_once_and_new_config_hosts_are_noted_in_the
     w.click("config-new");
     assert!(w.tree().contains("Servers from ~/.ssh/config"));
 }
+
+#[test]
+fn a_colour_of_your_own_and_a_picture_are_given_as_the_server_is_added() {
+    let mut w = Window::open(false);
+    w.click("add-server");
+    w.type_text("root@203.0.113.90");
+    // A colour typed: it wins over the swatches while it reads as one.
+    w.click("look-color-2");
+    w.click("look-hex");
+    w.type_text("#0a7c5f");
+    // A picture (the system's picker is the person's: its answer is set here).
+    w.rt.update(|s, _| s.screens.add_server.picture = Some("/home/demo/Pictures/web.png".into()));
+    w.settle();
+    assert!(w.tree().contains("web.png"), "{}", w.tree());
+    w.click("add-save");
+    let new = w.asks().into_iter().find_map(|a| match a {
+        Ask::Add(new) => Some(new),
+        _ => None,
+    });
+    assert_eq!(new.unwrap().look, Some(PickedLook { icon: "server".into(), color: "#0a7c5f".into(), image: None }));
+    // Once it's in the list, its picture is made its icon.
+    let added = w.rt.state.bench.servers().last().unwrap().key();
+    assert!(w.asks().contains(&Ask::SetImage { server: added, path: "/home/demo/Pictures/web.png".into() }), "{:?}", w.asks());
+}
+
+#[test]
+fn a_server_without_tmux_offers_its_install_command_to_copy() {
+    let mut w = Window::open(false);
+    w.click("add-server");
+    w.type_text("deploy@bare-7731");
+    w.click("add-test");
+    w.click("add-trust");
+    w.reveal("step-copy");
+    let tree = w.tree();
+    assert!(tree.contains("tmux isn't installed") && tree.contains(sshee_app::servers::INSTALL_TMUX), "{tree}");
+    w.click("step-copy");
+    assert!(w.rt.state.screens.notes.titles().contains(&"Copied"));
+}
+
+#[test]
+fn removing_a_server_stops_and_forgets_its_tunnels() {
+    use sshee_app::tunnels::{local, Ask as TunnelAsk, SERVER};
+    let mut w = Window::open(false);
+    w.rt.update(|s, _| {
+        let t = &mut s.screens.tunnels.tunnels;
+        t.save("db", None, "Postgres", local(15432, SERVER, 5432));
+        t.save("web", None, "", local(3000, SERVER, 3000));
+    });
+    w.right_click("server-2");
+    w.click("sm-13");
+    w.click("dialog-yes");
+    assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));
+    let asked = w.world.lock().unwrap().tunnels.clone();
+    assert_eq!(asked.first(), Some(&TunnelAsk::Stop { id: "tun-1".into() }));
+    assert!(matches!(asked.last(), Some(TunnelAsk::Save(list)) if !list.by_host.contains_key("db") && list.by_host.contains_key("web")));
+    assert!(w.rt.state.screens.tunnels.tunnels.of("db").is_empty());
+    assert_eq!(w.rt.state.screens.tunnels.tunnels.of("web").len(), 1);
+}

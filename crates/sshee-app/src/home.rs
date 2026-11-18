@@ -7,7 +7,7 @@
 //! over everything on the page.
 
 use crate::model::EnvLabel;
-use crate::workbench::{ServerKey, TabId, TabKind, Tor, Workbench};
+use crate::workbench::{Health, ServerKey, TabId, TabKind, Tor, Workbench};
 use std::collections::HashMap;
 
 /// How many closed tabs the page lists (0.10 shows five of the twenty kept).
@@ -281,11 +281,15 @@ impl Waits {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
     pub name: String,
-    pub prod: bool,
+    /// Production, Staging or Development: the chip beside its name.
+    pub env: Option<EnvLabel>,
     /// "postgres@203.0.113.31, through Tor"; "This computer" has none.
     pub address: Option<String>,
-    /// "2 tabs open", "No tabs open".
-    pub tabs: String,
+    /// How its terminals are doing: the status line's tone.
+    pub health: Health,
+    /// "Connected · 2 tabs open", "Connection lost, reconnecting…", "Couldn't connect",
+    /// "Connecting…"; with nothing connected, "2 tabs open" or "No tabs open".
+    pub status: String,
     /// "Claude Code needs you, 2 min": one line per tab that waits, the longest wait first.
     pub waiting: Vec<String>,
 }
@@ -301,6 +305,12 @@ impl Card {
             1 => "1 tab open".to_owned(),
             n => format!("{n} tabs open"),
         };
+        let health = bench.health(server);
+        let status = match health.words() {
+            Some(words) => words.to_owned(),
+            None if health == Health::Live => format!("Connected · {tabs}"),
+            None => tabs,
+        };
         let mut waiting: Vec<(f64, String)> = bench
             .tabs_on(server)
             .filter(|t| t.needs_you)
@@ -313,7 +323,7 @@ impl Card {
             })
             .collect();
         waiting.sort_by(|a, b| b.0.total_cmp(&a.0));
-        Some(Card { name: s.name.clone(), prod: s.is_prod(), address, tabs, waiting: waiting.into_iter().map(|(_, line)| line).collect() })
+        Some(Card { name: s.name.clone(), env: s.env.clone(), address, health, status, waiting: waiting.into_iter().map(|(_, line)| line).collect() })
     }
 }
 
@@ -468,7 +478,7 @@ mod tests {
         let mut waits = Waits::default();
         waits.note(&w, 10.0);
         let card = Card::of(&w, DB, &waits, 10.0).unwrap();
-        assert_eq!((card.name.as_str(), card.prod, card.address.as_deref(), card.tabs.as_str()), ("db-main", true, Some("postgres@203.0.113.31"), "2 tabs open"));
+        assert_eq!((card.name.as_str(), card.env.clone(), card.address.as_deref(), card.status.as_str()), ("db-main", Some(EnvLabel::Prod), Some("postgres@203.0.113.31"), "2 tabs open"));
         assert!(card.waiting.is_empty());
         // Two wait, one since two minutes, the other just now: the longest wait first.
         w.set_needs_you(migration, true);
@@ -485,8 +495,18 @@ mod tests {
         assert_eq!(waits.waited(migration, 150.0), None);
         // This computer has no address and never goes through Tor.
         let card = Card::of(&w, "local", &waits, 150.0).unwrap();
-        assert_eq!((card.name.as_str(), card.address, card.tabs.as_str()), ("This computer", None, "No tabs open"));
+        assert_eq!((card.name.as_str(), card.address, card.status.as_str()), ("This computer", None, "No tabs open"));
         assert_eq!(Card::of(&w, "host:gone", &waits, 0.0), None);
+        // Its status line: connected with what's open, or the trouble alone.
+        w.set_link(shell, crate::workbench::Link::Connected { durable: true });
+        assert_eq!(Card::of(&w, DB, &waits, 150.0).unwrap().status, "Connected · 2 tabs open");
+        w.set_link(migration, crate::workbench::Link::Reconnecting);
+        let card = Card::of(&w, DB, &waits, 150.0).unwrap();
+        assert_eq!((card.health, card.status.as_str()), (Health::Lost, "Connection lost, reconnecting…"));
+        w.set_link(migration, crate::workbench::Link::Failed);
+        assert_eq!(Card::of(&w, DB, &waits, 150.0).unwrap().status, "Couldn't connect");
+        w.set_link(migration, crate::workbench::Link::Ended);
+        w.set_link(shell, crate::workbench::Link::Ended);
         // A demo's scene: the wait began before the window did.
         w.go_to(WEB);
         w.set_needs_you(migration, true);

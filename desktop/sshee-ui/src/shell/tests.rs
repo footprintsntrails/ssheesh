@@ -581,3 +581,6 @@ mod chrome;
 
 /// Every shortcut, everywhere, on both keyboards, and moved to other keys.
 mod hotkeys;
+
+/// The sidebar's servers: their state, labels, load, the row's "+", the title's menu.
+mod sidebar;

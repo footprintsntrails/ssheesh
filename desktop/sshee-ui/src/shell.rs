@@ -10,6 +10,7 @@ pub mod keys;
 pub mod notes;
 mod place;
 pub mod rail;
+pub mod rail_load;
 pub mod sheet;
 pub mod split;
 pub mod state;

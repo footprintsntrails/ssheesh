@@ -159,6 +159,51 @@ pub enum Link {
     Failed,
 }
 
+/// How a machine's terminals are doing, as one mark on its icon in the sidebar and one line
+/// on its card (0.10's `Health`): the most urgent of its terminals' links. Connected is the
+/// usual case, and only trouble is marked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Health {
+    /// No terminal is connected or trying (none open, none shown yet, or asleep).
+    #[default]
+    Idle,
+    Connecting,
+    Live,
+    /// A connection dropped and is being brought back.
+    Lost,
+    /// Signing in failed.
+    Failed,
+}
+
+impl Health {
+    /// What one tab's link says of its machine. A terminal disconnected (it may only be
+    /// asleep) or ended isn't marked: its tab says so.
+    pub fn of(link: Link) -> Health {
+        match link {
+            Link::Connecting => Health::Connecting,
+            Link::Connected { .. } => Health::Live,
+            Link::Reconnecting => Health::Lost,
+            Link::Failed => Health::Failed,
+            _ => Health::Idle,
+        }
+    }
+
+    /// The card's words for it, when it says more than the tabs do.
+    pub fn words(self) -> Option<&'static str> {
+        match self {
+            Health::Idle | Health::Live => None,
+            Health::Connecting => Some("Connecting…"),
+            Health::Lost => Some("Connection lost, reconnecting…"),
+            Health::Failed => Some("Couldn't connect"),
+        }
+    }
+
+    /// Trouble or on its way: what the sidebar marks.
+    pub fn marked(self) -> bool {
+        matches!(self, Health::Connecting | Health::Lost | Health::Failed)
+    }
+}
+
 /// What a tab says after its name, if anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Badge {
@@ -494,6 +539,11 @@ impl Workbench {
     /// Something on this machine waits for you: the orange dot on its icon.
     pub fn server_needs_you(&self, key: &str) -> bool {
         self.tabs_on(key).any(|t| t.needs_you)
+    }
+
+    /// How this machine's terminals are doing: the most urgent of their links.
+    pub fn health(&self, key: &str) -> Health {
+        self.tabs_on(key).map(|t| Health::of(t.link)).max().unwrap_or_default()
     }
 
     /// The lowest number no other tab of this kind on this machine has.
@@ -1084,6 +1134,32 @@ mod tests {
         let w = Workbench::new(vec![Server::host("a", "a", ""), Server::this_computer(), Server::host("a", "again", "")]);
         let names: Vec<&str> = w.servers().iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["a", "This computer"]);
+    }
+
+    #[test]
+    fn a_machine_is_as_healthy_as_its_most_troubled_terminal() {
+        let mut w = bench();
+        assert_eq!(w.health(WEB), Health::Idle);
+        let a = w.open(TabKind::Terminal, WEB);
+        let b = w.open(TabKind::Terminal, WEB);
+        w.open(TabKind::Files, WEB);
+        w.set_link(a, Link::Connecting);
+        assert_eq!(w.health(WEB), Health::Connecting);
+        w.set_link(a, Link::Connected { durable: true });
+        assert_eq!(w.health(WEB), Health::Live);
+        w.set_link(b, Link::Reconnecting);
+        assert_eq!(w.health(WEB), Health::Lost);
+        w.set_link(b, Link::Failed);
+        assert_eq!(w.health(WEB), Health::Failed);
+        // Asleep or ended isn't trouble: the tab says so, the sidebar doesn't.
+        w.set_link(b, Link::Disconnected);
+        assert_eq!(w.health(WEB), Health::Live);
+        w.set_link(a, Link::Ended);
+        assert_eq!(w.health(WEB), Health::Idle);
+        assert!(!Health::Live.marked() && Health::Lost.marked() && Health::Connecting.marked());
+        assert_eq!(Health::Failed.words(), Some("Couldn't connect"));
+        // Another machine's tabs don't count.
+        assert_eq!(w.health(DB), Health::Idle);
     }
 
     #[test]

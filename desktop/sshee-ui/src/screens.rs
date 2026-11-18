@@ -19,6 +19,7 @@ pub mod home;
 pub mod palette;
 pub mod recipes;
 pub mod prompts;
+pub mod rail_tree;
 pub mod server_card;
 pub mod server_menu;
 pub mod settings;
@@ -93,6 +94,8 @@ pub struct States {
     pub tor: tor::State,
     /// A server's tunnels, and every saved tunnel with its state.
     pub tunnels: tunnels::State,
+    /// Containers under the servers in the sidebar's list, and a container's menu there.
+    pub rail_tree: rail_tree::State,
 }
 
 impl States {
@@ -108,7 +111,7 @@ impl States {
     /// Something is open over the window (the palette, a dialog, a menu): no shortcut fires
     /// behind it and no key reaches a terminal, as behind any dialog in 0.10.
     pub fn any_open(&self) -> bool {
-        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some() || self.tools_open() || self.notes.asking()
+        self.palette.open || self.add_server.open || self.server_menu.open.is_some() || self.agent.holds_keyboard() || self.tor.open || self.tunnels.open.is_some() || self.rail_tree.menu.is_some() || self.tools_open() || self.notes.asking()
     }
 
     /// The security check, recipes, snippets, the welcome, the tour or "What's new" is open.
@@ -136,6 +139,7 @@ impl States {
         self.whats_new.releases.clear();
         self.tor.open = false;
         self.tunnels.open = None;
+        self.rail_tree.menu = None;
     }
 }
 
@@ -148,7 +152,7 @@ pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::s
     out.extend(agent::overlays(s, t, cx));
     // A recipe stepped aside, and a hint.
     out.extend([recipes::aside(s, t), tour::hint(s, t)].into_iter().flatten());
-    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t, cx), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
+    out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t, cx), tor::view(s, t, cx), tunnels::view(s, t), rail_tree::menu(s, t)].into_iter().flatten());
     // The security check, recipes, snippets; the welcome, the tour and "What's new".
     out.extend([checkup::view(s, t), disk::view(s, t), recipes::view(s, t), snippets::view(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
     out

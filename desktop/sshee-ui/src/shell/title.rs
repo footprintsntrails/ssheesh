@@ -2,23 +2,26 @@
 //!
 //! ```text
 //! title           the machine on screen: its name, its address after it in a quieter tone
-//! │               (neither in streamer mode: "Server 2"), "Prod"; a click opens its tools
-//! └── title-menu  New terminal, Files, Copy address (0.10's AddressChip)
+//! │               (neither in streamer mode: "Server 2"), its label ("Prod", "Staging",
+//! │               "Dev"); a click opens its tools
+//! └── title-menu  New terminal, Files · Web apps and tunnels, Recipes (a server's) · Copy
+//!                 address (0.10's AddressChip and `toolItems`)
 //! bar-tools       only while the sidebar is hidden: main menu (a Mac's logo lives in the
 //!                 sidebar), security check, Tor, settings (0.10's top bar did the same)
 //! ```
 //!
 //! On the main menu the title is the app's name and a click opens the command palette, as
-//! before. Tunnels and Recipes join the menu when their screens land.
+//! before.
 
 use rune::{row, text, Align, El, Key, KeyEvent, Side, Tx};
 use sshee_app::palette::shortcut_label;
 use sshee_app::workbench::shortcuts::Shortcut;
+use sshee_app::model::EnvLabel;
 use sshee_app::workbench::{ServerKey, TabKind, Tor};
 
 use super::state::Shell;
 use crate::icons::{icon, Icon};
-use crate::kit::chip::prod_chip;
+use crate::kit::chip::{env_chip, env_chip_width};
 use crate::kit::list::{list_row, list_rule, ListRow};
 use crate::kit::menu::RowState;
 use crate::kit::popover::popover;
@@ -39,6 +42,9 @@ pub(crate) struct TitleMenu {
 enum Tool {
     NewTerminal,
     Files,
+    /// A server's tunnels (`screens::tunnels`).
+    Tunnels,
+    Recipes,
     CopyAddress,
 }
 
@@ -56,6 +62,10 @@ impl Shell {
     /// The title's menu: rows that can be picked for `server`.
     fn title_tools(&self, server: &str) -> Vec<Vec<Tool>> {
         let mut groups = vec![vec![Tool::NewTerminal, Tool::Files]];
+        // A server's own: this computer has no tunnels to it, nor recipes for it.
+        if self.bench.server(server).is_some_and(|sv| !sv.is_local()) {
+            groups.push(vec![Tool::Tunnels, Tool::Recipes]);
+        }
         // An address to copy: a server's, and not while streaming.
         if self.bench.server(server).is_some_and(|sv| !sv.is_local() && !sv.address.is_empty()) && !self.streaming() {
             groups.push(vec![Tool::CopyAddress]);
@@ -112,6 +122,8 @@ impl Shell {
             Tool::Files => {
                 self.open_files_on(&menu.server, None, tx);
             }
+            Tool::Tunnels => self.open_tunnels(&menu.server, tx),
+            Tool::Recipes => self.open_recipes(&menu.server, None, tx),
             Tool::CopyAddress => {
                 if let Some(address) = self.bench.server(&menu.server).map(|sv| sv.address.clone()) {
                     tx.copy(address);
@@ -136,36 +148,39 @@ impl Shell {
     }
 }
 
-/// What the title says: the machine's name, "Prod", and the address it may show after them
-/// (none in streamer mode or for this computer).
-fn parts(s: &Shell) -> (std::borrow::Cow<'_, str>, bool, Option<String>) {
-    let (name, prod) = s.bench.window_title();
+/// What the title says: the machine's name, its label, and the address it may show after
+/// them (none in streamer mode or for this computer).
+fn parts(s: &Shell) -> (std::borrow::Cow<'_, str>, Option<EnvLabel>, Option<String>) {
+    let (name, _) = s.bench.window_title();
     let key = s.bench.current_key();
     let name = s.server_shown(key.unwrap_or("local"), name);
-    let address = key.and_then(|k| s.bench.server(k)).filter(|sv| !sv.is_local() && !s.streaming()).map(|sv| sv.address.clone()).filter(|a| !a.is_empty());
-    (name, prod, address)
+    let server = key.and_then(|k| s.bench.server(k));
+    let env = server.and_then(|sv| sv.env.clone());
+    let address = server.filter(|sv| !sv.is_local() && !s.streaming()).map(|sv| sv.address.clone()).filter(|a| !a.is_empty());
+    (name, env, address)
 }
 
 /// How wide the title is without its address, its margins counted, and how much its address
 /// adds, when it has one: for sharing the bar with the tabs (`tabs::fit`).
 pub(crate) fn widths(s: &Shell) -> (f32, Option<f32>) {
-    let (name, prod, address) = parts(s);
+    let (name, env, address) = parts(s);
     let mut w = 2.0 + 10.0 + 12.0 + rune::text::advance(&name, theme::TEXT_BOLD);
-    if prod {
-        w += 8.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
+    if let Some(env) = &env {
+        w += 8.0 + env_chip_width(env);
     }
     (w, address.map(|a| 8.0 + rune::text::advance(&a, theme::TAB_SERVER)))
 }
 
-/// The title: the machine on screen, its address, and "Prod". `with_address`: there's room
+/// The title: the machine on screen, its address, and its label. `with_address`: there's room
 /// for the address, the tabs taken care of first (`tabs::fit`).
 pub(crate) fn title(s: &Shell, t: &'static Theme, active: bool, with_address: bool) -> El {
     let key = s.bench.current_key();
     // Its address after its name, quieter, while the row of tabs has room to spare.
-    let (name, prod, address) = parts(s);
+    let (name, env, address) = parts(s);
     let address = address.filter(|_| with_address);
     let help = match key {
-        Some(_) => "New terminal, Files, copy the address".to_owned(),
+        Some(k) if s.bench.server(k).is_some_and(|sv| !sv.is_local()) => "New terminal, Files, web apps and tunnels, recipes".to_owned(),
+        Some(_) => "New terminal, Files".to_owned(),
         None => s.text_shown(&sshee_app::palette::placeholder(&s.bench)).into_owned(),
     };
     let label = match &address {
@@ -199,8 +214,8 @@ pub(crate) fn title(s: &Shell, t: &'static Theme, active: bool, with_address: bo
     if let Some(address) = address {
         e = e.child(text(address).key("title-address").font(theme::TAB_SERVER).color(t.l2).single_line().truncate().shrink().min_w(0.0));
     }
-    if prod {
-        e = e.child(prod_chip(t, false));
+    if let Some(env) = &env {
+        e = e.child(env_chip(t, env));
     }
     e
 }
@@ -222,6 +237,8 @@ pub(crate) fn title_menu(s: &Shell, t: &'static Theme) -> Option<El> {
             let (key, label, glyph, caps) = match tool {
                 Tool::NewTerminal => ("tm-terminal", "New terminal", Icon::Terminal, keys.as_deref()),
                 Tool::Files => ("tm-files", "Files", Icon::Folder, files_keys.as_deref()),
+                Tool::Tunnels => ("tm-tunnels", "Web apps and tunnels", Icon::Link, None),
+                Tool::Recipes => ("tm-recipes", "Recipes", Icon::Doc, None),
                 Tool::CopyAddress => ("tm-copy", "Copy address", Icon::Copy, None),
             };
             let spec = ListRow { icon: Some(glyph), label, keys: caps, state, ..ListRow::default() };
@@ -300,6 +317,6 @@ pub(crate) fn bar_tools(s: &Shell, t: &'static Theme) -> Option<El> {
             .child(button("bar-check", Icon::Shield, "Security check", FootTool::Check, s.screens.checkup.is_open(), t.l2))
             .child(button("bar-disk", Icon::Drive, "Free up disk space", FootTool::Disk, s.screens.disk.is_open(), t.l2))
             .child(button("bar-tor", Icon::Tor, "Tor", FootTool::Tor, false, tor_ink).help(crate::screens::tor::button_help(s)).on_secondary_press(|s: &mut Shell, _, tx| s.toggle_tor(tx)))
-            .child(button("bar-settings", Icon::Gear, "Settings", FootTool::Settings, s.screens.settings.open, t.l2)),
+            .child(button("bar-settings", Icon::Gear, "Settings", FootTool::Settings, s.screens.settings.open, t.l2).help(super::rail::with_keys(s, "Settings", Shortcut::Settings))),
     )
 }
