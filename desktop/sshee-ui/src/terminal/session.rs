@@ -171,6 +171,9 @@ impl TermPane {
             }
             LinkStatus::Reconnecting { note } => Some(Card::Retrying { reason: "The connection dropped".into(), line: note_line(note) }),
             LinkStatus::Rejoining { .. } if s.rejoin_shown => Some(Card::Rejoining),
+            // Connecting again over what's on screen ("Try again"), as a reconnect does. With
+            // nothing on screen it's "Connecting to …" instead (`connecting.rs`).
+            LinkStatus::Connecting if s.rejoin_shown && self.last_output.is_some() => Some(Card::Rejoining),
             LinkStatus::Gone { note } => {
                 let (title, body, again) = prompts::stopped(Some(note));
                 Some(Card::Stopped { title, body, again, review: prompts::about_identity(note), failed: true })
@@ -201,6 +204,8 @@ impl TermPane {
     /// unused connection. True when what is drawn changed.
     pub(crate) fn poll_session(&mut self, clock: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        // Once the shell has drawn.
+        self.ask_agents();
         let since = self.over.session.since;
         match &self.status {
             LinkStatus::Retrying { retry_in_ms, .. } => {
@@ -213,7 +218,7 @@ impl TermPane {
                     tx.wake_after(Duration::from_secs_f64(0.25));
                 }
             }
-            LinkStatus::Rejoining { .. } if !self.over.session.rejoin_shown => {
+            LinkStatus::Rejoining { .. } | LinkStatus::Connecting if !self.over.session.rejoin_shown => {
                 let due = since + prompts::REJOIN_DELAY;
                 if clock + 1e-6 >= due {
                     self.over.session.rejoin_shown = true;
@@ -568,10 +573,12 @@ impl TermPane {
         }
     }
 
-    /// Asks the server once which agents it has, when its terminal is connected.
+    /// Asks the server once which agents it has, when its terminal is connected and its shell
+    /// has drawn: the shell's first screen doesn't wait behind the question (on Windows, a
+    /// sign-in of its own).
     pub(crate) fn ask_agents(&mut self) {
         let s = &self.over.session;
-        if s.agents_asked || !s.on_server || !matches!(self.status, LinkStatus::Connected { .. }) {
+        if s.agents_asked || !s.on_server || !matches!(self.status, LinkStatus::Connected { .. }) || self.last_output.is_none() {
             return;
         }
         self.over.session.agents_asked = true;

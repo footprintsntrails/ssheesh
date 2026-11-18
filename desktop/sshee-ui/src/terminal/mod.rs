@@ -9,6 +9,7 @@
 //! ```
 
 pub mod away;
+pub mod connecting;
 pub mod coverage;
 pub mod echo;
 pub mod find;
@@ -130,6 +131,11 @@ pub trait TermLink {
     /// All the output the session has had so far, in bytes (for the meter).
     fn bytes_received(&self) -> u64 {
         0
+    }
+    /// What the session is doing while it connects, when the link knows: the quiet second
+    /// line under "Connecting to web-7731…" (`connecting.rs`).
+    fn phase(&self) -> Option<connecting::Phase> {
+        None
     }
     /// The pane copied `text` to the clipboard. A replay records it (its fixtures are made
     /// up); a live session ignores it.

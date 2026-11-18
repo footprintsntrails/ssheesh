@@ -138,7 +138,9 @@ impl Watcher {
                             if let Some((key, target)) = next {
                                 // A machine just named is looked at at once; one looked at
                                 // already keeps what it had, so its CPU shows at once.
-                                let m = machines.entry(key.clone()).or_insert_with(|| Machine::new(target));
+                                let m = machines.entry(key.clone()).or_insert_with(|| Machine::new(target.clone()));
+                                // Signed in as its terminal is now (a password typed since).
+                                m.target = target;
                                 m.next = Instant::now();
                                 on_screen = Some(key);
                             } else {
@@ -149,7 +151,7 @@ impl Watcher {
                     Ok(Say::Also(list)) => {
                         also = list.iter().map(|w| w.0.clone()).collect();
                         for (key, target) in list {
-                            machines.entry(key).or_insert_with(|| Machine::new(target));
+                            machines.entry(key).and_modify(|m| m.target = target.clone()).or_insert_with(|| Machine::new(target));
                         }
                     }
                     Err(RecvTimeoutError::Disconnected) => return,

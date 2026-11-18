@@ -1262,6 +1262,26 @@ fn a_new_server_asks_about_its_key_and_the_session_cards_show_in_both_appearance
     }
 }
 
+/// A slow sign-in (`--demo-card connecting`): the empty terminal says where it connects and
+/// what it's doing, in both appearances, and goes once the shell draws.
+#[test]
+fn a_slow_sign_in_says_where_it_connects_until_the_shell_draws() {
+    for theme in ["dark", "light"] {
+        // Its key looked up (the first second), then tmux starting.
+        for (at, said) in [(0.9, "Checking the server's key"), (2.3, "Starting tmux")] {
+            let script = json!([tap(0.3, "server-3"), { "t": at, "type": "mark", "name": "end" }]);
+            let Some(run) = run(&format!("connecting-{theme}-{at}"), &["--demo", "--demo-card", "connecting", "--theme", theme], Some(script)) else { return };
+            assert!(run.tree_text.contains("Connecting to backups…") && run.tree_text.contains(said), "{theme} {at}: {said}");
+            // In the middle of the terminal, under the top row.
+            let [x, y, w, h] = run.rect("connect-screen-title");
+            assert!(y > 300.0 && y + h < 500.0 && (x + w / 2.0 - 666.0).abs() < 40.0, "{theme}: {:?}", [x, y, w, h]);
+        }
+        let script = json!([tap(0.3, "server-3"), { "t": 3.4, "type": "mark", "name": "end" }]);
+        let Some(run) = run(&format!("connecting-{theme}-done"), &["--demo", "--demo-card", "connecting", "--theme", theme], Some(script)) else { return };
+        assert!(run.element("connect-screen").is_none() && !run.tree_text.contains("Connecting to"), "{theme}: gone once the shell drew");
+    }
+}
+
 // ---- Containers and Stats
 
 /// The palette, `words` typed into it, and Return: the Containers or Stats tab of the machine
