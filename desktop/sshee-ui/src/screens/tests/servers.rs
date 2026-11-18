@@ -144,9 +144,11 @@ fn the_address_is_copied_except_in_streamer_mode_and_a_saved_password_forgotten(
     assert!(!w.tree().contains("Forget saved password"));
     w.click("sm-7");
     assert!(w.rt.state.screens.notes.titles().contains(&"Copied the address"));
-    // Forgetting it: asked of the backend, said in a toast, and the row is gone.
+    // Forgetting it: asked first, then of the backend, said in a toast, and the row is gone.
     w.right_click("server-1");
     w.click("sm-13");
+    assert!(w.tree().contains("Forget the saved password for web-7731?"), "{}", w.tree());
+    w.click("dialog-yes");
     assert!(w.asks().contains(&Ask::ForgetPassword { server: WEB.into() }));
     assert!(w.rt.state.screens.notes.titles().iter().any(|t| t.starts_with("Forgot the saved password")));
     w.right_click("server-1");

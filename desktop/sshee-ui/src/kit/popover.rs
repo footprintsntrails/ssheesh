@@ -10,14 +10,17 @@ use rune::{text, Color, El};
 use crate::theme::{self, Theme};
 
 /// The surface, `width` points wide, its children in a column.
+/// It fades in from 97% of its size, growing from its top edge, and fades out
+/// (`kit::motion`); a dialog's card or a toast comes in as its own kind instead.
 pub fn popover(t: &Theme, width: f32) -> El {
-    rune::col()
+    let surface = rune::col()
         .w(width)
         .radius(theme::RADIUS_POPOVER)
         .fill(t.pop)
         .border(1.0, t.rim)
         .shadow(16.0, 40.0, Color::BLACK.alpha(0.3))
-        .role("dialog")
+        .role("dialog");
+    crate::kit::motion::enters(surface, crate::kit::motion::Entrance::Pop)
 }
 
 /// A popover's foot: a quiet hint at the left ("Press 1, 2 or 3, or click an answer") and

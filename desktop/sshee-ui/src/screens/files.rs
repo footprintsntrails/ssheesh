@@ -312,7 +312,24 @@ pub(crate) fn shown(s: &mut Shell) {
     for id in s.tabs_on_screen() {
         let Some(tab) = s.bench.tab(id).filter(|t| t.kind == TabKind::Files && !s.screens.files.contains_key(&t.id)).cloned() else { continue };
         s.screens.files.insert(tab.id, State::new(&tab.server, tab.path.as_deref().unwrap_or("~")));
+        hidden_default(s, tab.id);
         load(s, tab.id, |b, cache, now| b.start(cache, now));
+    }
+}
+
+/// Whether `tab` shows dot files when nobody chose: yes when the machine is signed in to as
+/// root (its address's user, or a home folder of /root), whose files mostly are dot files.
+/// "Show hidden files" chosen in this tab holds; chosen in another Files tab on the same
+/// machine, it holds here too.
+fn hidden_default(s: &mut Shell, tab: TabId) {
+    let Some(server) = s.screens.files.get(&tab).filter(|st| st.browser.hidden_choice().is_none()).map(|st| st.browser.server().to_owned()) else { return };
+    let chosen = s.screens.files.iter().filter(|(id, st)| **id != tab && st.browser.server() == server).find_map(|(_, st)| st.browser.hidden_choice());
+    let user_is_root = s.bench.server(&server).is_some_and(|sv| sv.address.split_once('@').is_some_and(|(user, _)| user == "root"));
+    let root = user_is_root || home_of(s, &server).as_deref() == Some("/root");
+    let Some(state) = s.screens.files.get_mut(&tab) else { return };
+    match chosen {
+        Some(show) => state.browser.set_show_hidden(show),
+        None => state.browser.hidden_by_default(root),
     }
 }
 
@@ -831,6 +848,8 @@ fn apply(s: &mut Shell, reply: Reply) {
                 Ok((listing, clock)) => {
                     let kept = screens.dirs.remember(&server, &asked, listing, clock, now);
                     state.browser.listed(ticket, kept, clock);
+                    // A home folder of /root now known: root's dot files show.
+                    hidden_default(s, tab);
                     keep_place(s, tab);
                     reveal(s, tab);
                 }
@@ -1113,6 +1132,31 @@ mod tests {
         // Shown again (another settle) asks nothing more.
         shown(&mut w.s);
         assert!(w.wants().is_empty());
+    }
+
+    #[test]
+    fn root_sees_dot_files_unless_it_chose_not_to() {
+        // deploy@: hidden as ever.
+        let w = Window::at_home();
+        assert!(!w.state().browser.show_hidden());
+        // A home folder of /root (this computer, or a server whose user isn't in its address).
+        let mut w = Window::open();
+        w.list(Listing { path: "/root".into(), entries: vec![entry(".bashrc", EntryKind::File), entry("backup.sh", EntryKind::File)] });
+        assert!(w.state().browser.show_hidden() && w.state().browser.len() == 2);
+        // Turned off here: it stays off, and a second Files tab on the machine starts off too.
+        w.s.screens.files.get_mut(&w.tab).unwrap().browser.set_show_hidden(false);
+        refresh(&mut w.s, w.tab);
+        w.list(Listing { path: "/root".into(), entries: vec![entry(".bashrc", EntryKind::File)] });
+        assert!(!w.state().browser.show_hidden());
+        let second = w.s.bench.open_files(WEB);
+        w.s.bench.focus(second);
+        shown(&mut w.s);
+        assert!(!w.s.screens.files[&second].browser.show_hidden());
+        // root@ in the address: shown from the first moment.
+        let mut bench = Workbench::new(vec![Server::host("web", "web-7731", "root@203.0.113.17")]);
+        let tab = bench.open_files(WEB);
+        let s = Shell::new(bench, Box::new(Asked(Arc::default(), Arc::default())), Options::default(), None);
+        assert!(s.screens.files[&tab].browser.show_hidden());
     }
 
     #[test]

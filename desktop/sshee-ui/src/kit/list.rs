@@ -14,6 +14,8 @@ use crate::theme::{self, Theme};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListRow<'a> {
     pub icon: Option<Icon>,
+    /// The icon's own colour (a server's), on a row that isn't the highlighted one.
+    pub tint: Option<rune::Color>,
     pub label: &'a str,
     /// The label is a command: in the terminal's font.
     pub mono: bool,
@@ -57,7 +59,12 @@ pub fn list_row(t: &Theme, spec: &ListRow) -> El {
         row = row.checked(on).child(if on { icon(Icon::Check, theme::ICON, ink) } else { rune::el().size(theme::ICON, theme::ICON) });
     }
     if let Some(glyph) = spec.icon {
-        row = row.child(icon(glyph, theme::ICON, if spec.destructive && !on_color { t.red } else { quiet }));
+        let ink = match spec.tint {
+            Some(tint) if !on_color => tint,
+            _ if spec.destructive && !on_color => t.red,
+            _ => quiet,
+        };
+        row = row.child(icon(glyph, theme::ICON, ink));
     }
     let label = text(spec.label).key("label").font(if spec.mono { theme::CODE } else { theme::TEXT }).color(ink).single_line().truncate().shrink();
     row = row.child(label);

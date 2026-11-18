@@ -246,7 +246,8 @@ const DIALOG_MARGIN: f32 = 24.0;
 /// taller than the window less a margin (its body scrolls instead). Esc runs `close`.
 pub(crate) fn dialog(t: &Theme, scrim_key: &'static str, key: &'static str, label: &'static str, width: f32, content: El, close: impl Fn(&mut Shell, &mut Tx) + 'static) -> El {
     let surface = popover(t, width).key(key).label_static(label).max_h(680.0).shrink().min_h(0.0).modal_tx(false, close).child(content);
-    col().key(scrim_key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).py(DIALOG_MARGIN).fill(t.scrim()).items_center().justify_center().child(surface)
+    let surface = crate::kit::motion::enters(surface, crate::kit::motion::Entrance::Card);
+    crate::kit::motion::enters(col().key(scrim_key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).py(DIALOG_MARGIN).fill(t.scrim()).items_center().justify_center().child(surface), crate::kit::motion::Entrance::Scrim)
 }
 
 /// A dialog's body: padded, and scrolling when it's long.
@@ -403,7 +404,8 @@ fn picker(t: &Theme, s: &Shell) -> El {
         let key = server.key();
         let name = s.server_shown(&key, &server.name).into_owned();
         let address = if s.streaming() { String::new() } else { server.address.clone() };
-        let spec = ListRow { icon: Some(Icon::for_server(&server.icon)), label: &name, note: &address, prod: server.is_prod(), ..ListRow::default() };
+        let tint = crate::screens::server_menu::own_color(s, &key);
+        let spec = ListRow { icon: Some(Icon::for_server(&server.icon)), tint, label: &name, note: &address, prod: server.is_prod(), ..ListRow::default() };
         list = list.child(list_row(t, &spec).key(format!("check-pick-{i}")).hover(t.hov2).focusable(true).role("button").on_press_tx(move |s: &mut Shell, tx| s.open_checkup(&key, tx)));
     }
     col().w_full().gap(8.0).child(text("Which server?").font(theme::GROUP_TITLE).color(t.l2).single_line()).child(list)
@@ -437,7 +439,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         page = page.child(picker(t, s));
     } else {
         if state.loading && state.report.is_none() {
-            page = page.child(row().key("check-waiting").w_full().py(24.0).gap(8.0).items_center().role("status").child(crate::kit::progress_ring(14.0, 1.6, t.l2)).child(text(checkup::CHECKING).font(theme::NOTE).color(t.l2).single_line()));
+            page = page.child(row().key("check-waiting").w_full().py(24.0).gap(8.0).items_center().role("status").child(crate::icons::logo_loader(16.0)).child(text(checkup::CHECKING).font(theme::NOTE).color(t.l2).single_line()));
         }
         if let Some(why) = &state.error {
             page = page.child(note(t, &s.text_shown(why), true).key("check-error").role("alert"));

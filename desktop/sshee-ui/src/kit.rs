@@ -23,6 +23,7 @@ pub mod graph;
 pub mod keycap;
 pub mod list;
 pub mod menu;
+pub mod motion;
 pub mod popover;
 pub mod popup;
 pub mod push;
@@ -35,9 +36,8 @@ pub mod tab;
 pub mod tile;
 pub mod toast;
 
-use rune::{canvas, el, Color, El, LineCap, Shape};
+use rune::{el, Color, El};
 
-use crate::svg::{self, Fit};
 use crate::theme::Theme;
 
 /// A round dot, `size` points across.
@@ -52,14 +52,32 @@ pub fn ringed_dot(size: f32, ring: f32, color: Color, surface: Color) -> El {
     el().size(outer, outer).radius(outer / 2.0).fill(surface).items_center().justify_center().a11y_hidden().child(dot(size, color))
 }
 
-/// Three quarters of a circle, `size` points across: something is on its way (reconnecting,
-/// Tor starting). Still, as the design draws it.
+/// The spinner's three quarters of a circle on a 16-unit square, its line 2 units wide.
+static RING: rune::Icon = rune::Icon {
+    name: "sshee-progress-ring",
+    view: 16.0,
+    body: r#"<path d="M8 1A7 7 0 1 1 1 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>"#,
+};
+
+/// [`RING`] with a line half as wide, for a ring around a whole sidebar button.
+static RING_FINE: rune::Icon = rune::Icon {
+    name: "sshee-progress-ring-fine",
+    view: 16.0,
+    body: r#"<path d="M8 0.5A7.5 7.5 0 1 1 0.5 8" stroke="currentColor" stroke-width="1" stroke-linecap="round" fill="none"/>"#,
+};
+
+/// How long the ring takes to go round once, in seconds.
+const RING_TURN: f64 = 0.9;
+
+/// Three quarters of a circle, `size` points across, going round: something is on its way
+/// (reconnecting, Tor starting, a tab connecting). The turn is Rune's loop on the render clock,
+/// so it asks for frames only while it's on screen, and none from the view. Under Reduce Motion
+/// (the system's, or Settings → Appearance → Animations off) Rune holds every loop still: the
+/// ring rests where it starts, as the design draws it. `line` picks the thinner drawing for a
+/// big ring (a line under a tenth of its size).
 pub fn progress_ring(size: f32, line: f32, color: Color) -> El {
-    let r = (size - line) / 2.0;
-    let c = size / 2.0;
-    let d = format!("M{c} {}A{r} {r} 0 1 1 {} {c}", c - r, c - r);
-    let arc = svg::path(&d, Fit { scale: 1.0, dx: 0.0, dy: 0.0 });
-    canvas(Shape::new().stroke_path(&arc, line, LineCap::Round, color)).size(size, size).a11y_hidden()
+    let drawing = if line / size < 0.09 { &RING_FINE } else { &RING };
+    rune::icon(drawing, size).color(color).looping(rune::LoopSpec::rotation(RING_TURN)).a11y_hidden()
 }
 
 /// A hollow circle: a connection that is gone.

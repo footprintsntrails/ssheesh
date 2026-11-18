@@ -110,8 +110,7 @@ fn sign(id: &str) -> Icon {
         "tabs" => Icon::Terminal,
         "durable" => Icon::Wifi,
         "check" => Icon::Shield,
-        "split" => Icon::SideBySide,
-        _ => Icon::EyeOff,
+        _ => Icon::SideBySide,
     }
 }
 

@@ -113,6 +113,9 @@ pub struct Look {
     pub color: String,
     /// You picked it; else the icon is the guessed one and the colour the server's own.
     pub picked: bool,
+    /// `color` is one you picked. Without one, the window draws the icon quiet, in the theme's
+    /// grey; `color` is still the server's own ([`host_color`]), for the pickers to start from.
+    pub own_color: bool,
     /// A picture of your own instead of the icon: a small PNG as a data URL (0.10's own
     /// shape). Never drawn while streaming.
     pub image: Option<String>,
@@ -244,6 +247,7 @@ impl Looks {
                 icon: if mine.icon.is_empty() { "server".into() } else { mine.icon.clone() },
                 color: if mine.color.is_empty() { host_color(host_id).into() } else { mine.color.clone() },
                 picked: true,
+                own_color: !mine.color.is_empty(),
                 // A picture that doesn't read is left in the file, and not drawn.
                 image: mine.image.clone().filter(|i| image_bytes(i).is_some()),
                 guessed: auto.guessed,
@@ -256,19 +260,15 @@ impl Looks {
     /// colour.
     pub fn automatic_look(&self, host_id: &str) -> Look {
         let guessed = self.labels.auto_looks.get(host_id).map(|l| l.icon.clone()).filter(|i| !i.is_empty());
-        Look { icon: guessed.clone().unwrap_or_else(|| "server".into()), color: host_color(host_id).into(), picked: false, image: None, guessed }
+        Look { icon: guessed.clone().unwrap_or_else(|| "server".into()), color: host_color(host_id).into(), picked: false, own_color: false, image: None, guessed }
     }
 
-    /// Picks an icon; the colour stays as it shows and a picture goes (0.10's look picker:
-    /// picking an icon or a colour drops the picture).
+    /// Picks an icon; the colour stays as it is (one you picked, or none) and a picture goes
+    /// (0.10's look picker: picking an icon or a colour drops the picture).
     pub fn set_icon(&mut self, host_id: &str, icon: &str) {
-        let shown = self.look(host_id);
         let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
         look.icon = icon.to_owned();
         look.image = None;
-        if look.color.is_empty() {
-            look.color = shown.color;
-        }
     }
 
     /// Picks a colour (anything [`parse_color`] reads); the icon stays as it shows and a
@@ -293,12 +293,13 @@ impl Looks {
             Some(image) => {
                 let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
                 look.icon = shown.icon;
-                look.color = shown.color;
+                // A colour you picked stays; the server's own isn't made yours.
+                look.color = if shown.own_color { shown.color } else { String::new() };
                 look.image = Some(image);
             }
             None => {
                 let auto = self.automatic_look(host_id);
-                if shown.icon == auto.icon && shown.color == auto.color {
+                if shown.icon == auto.icon && !shown.own_color {
                     self.labels.looks.shift_remove(host_id);
                 } else if let Some(look) = self.labels.looks.get_mut(host_id) {
                     look.image = None;
@@ -328,7 +329,8 @@ impl Looks {
     /// A look given when a server is added: what was picked in the form.
     pub fn set_look(&mut self, host_id: &str, look: HostLook) {
         let mut look = look;
-        look.color = parse_color(&look.color).unwrap_or_else(|| host_color(host_id).into());
+        // No colour picked (or one that doesn't read): the icon stays quiet.
+        look.color = parse_color(&look.color).unwrap_or_default();
         self.labels.looks.insert(host_id.to_owned(), look);
     }
 
@@ -485,12 +487,13 @@ mod tests {
         assert_eq!(looks.look("saved:1"), Look { icon: "server".into(), color: host_color("saved:1").into(), picked: false, ..Look::default() });
         looks.labels.auto_looks.insert("saved:1".into(), AutoLook { icon: "database".into(), ..AutoLook::default() });
         assert_eq!(looks.look("saved:1").icon, "database");
-        // Picking an icon keeps the colour it showed; picking a colour keeps the icon.
+        // Picking an icon picks no colour: it shows the server's own, quiet. Picking a colour
+        // keeps the icon.
         looks.set_icon("saved:1", "globe");
         let guessed = Some("database".to_owned());
-        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: host_color("saved:1").into(), picked: true, guessed: guessed.clone(), image: None });
+        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: host_color("saved:1").into(), picked: true, own_color: false, guessed: guessed.clone(), image: None });
         looks.set_color("saved:1", "#7E8590");
-        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: "#7e8590".into(), picked: true, guessed, image: None });
+        assert_eq!(looks.look("saved:1"), Look { icon: "globe".into(), color: "#7e8590".into(), picked: true, own_color: true, guessed, image: None });
         looks.set_color("saved:2", "#2389e2");
         assert_eq!(looks.look("saved:2").icon, "server");
         // A colour that isn't one changes nothing.
@@ -652,7 +655,7 @@ mod tests {
         looks.set_env("cfg:web-7731", Some(EnvLabel::Prod));
         looks.carry(&old, &[("saved:old1".into(), "saved:new1".into())]);
         assert_eq!(looks.env("saved:new1"), Some(&EnvLabel::Prod));
-        assert_eq!(looks.look("saved:new1"), Look { icon: "database".into(), color: "#0997b4".into(), picked: true, ..Look::default() });
+        assert_eq!(looks.look("saved:new1"), Look { icon: "database".into(), color: "#0997b4".into(), picked: true, own_color: true, ..Look::default() });
         assert_eq!(looks.env("cfg:web-7731"), Some(&EnvLabel::Prod));
         assert_eq!(looks.look("cfg:web-7731").icon, "globe");
         // A saved server that wasn't brought over brings nothing.

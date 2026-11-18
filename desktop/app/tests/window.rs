@@ -314,7 +314,7 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
         assert_eq!(run.rect("status"), [52.0, 776.0, 1228.0, 24.0], "{theme}");
         assert_eq!(run.rect("settings-nav")[2], 232.0, "{theme}");
         assert_eq!(run.fill("window"), format!("{frame}ff"), "{theme}");
-        // The list: ten sections, Layout first and picked in the selection's blue.
+        // The list: ten sections, Layout first and picked in the theme's quiet fill.
         for (n, (id, name)) in [
             ("layout", "Layout"),
             ("appearance", "Appearance"),
@@ -559,7 +559,7 @@ fn streamer_mode_hides_every_name_the_window_draws() {
         for name in ["web-7731", "web-staging", "backups", "db-main", "203.0.113", "deploy"] {
             assert!(!run.tree_text.contains(name), "{name} is still in the tree");
         }
-        // The switch says it's on.
+        // The status bar says it's on.
         assert_eq!(run.label("streamer"), "Streamer mode");
         assert!(run.tree_text.contains("Streamer mode is on"));
     });
@@ -588,7 +588,7 @@ fn a_tab_has_a_menu_and_a_crowded_row_has_a_list() {
         assert!(run.element("tab-3").is_none(), "the agent's tab should be out of sight");
         assert!(run.tree_text.contains("Migration 0042, db-main, Needs you"));
         let window = run.rect("window");
-        for key in ["tab-26", "tab-list", "new-tab", "streamer"] {
+        for key in ["tab-26", "tab-list", "new-tab"] {
             let r = run.rect(key);
             assert!(r[0] >= 0.0 && r[0] + r[2] <= window[2], "{key} is off the window: {r:?}");
         }

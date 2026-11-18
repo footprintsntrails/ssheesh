@@ -1471,10 +1471,10 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                 el().w_full().h_full().max_w(w).max_h(h).pixels_fit(picture.pixels(), SurfaceFit::Fit).label(format!("Picture {}", s.text_shown(&name))),
             )
         }
-        None => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
+        None => centered(vec![crate::icons::logo_loader(20.0), text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
     };
     let body = match editor.body() {
-        Body::Loading => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
+        Body::Loading => centered(vec![crate::icons::logo_loader(20.0), text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
         // An SVG, drawn as it's saved; Source edits it.
         Body::Text { .. } if svg && !state.ui.source => picture(),
         // Markdown, formatted: from what's typed, so an edit in Source shows here.

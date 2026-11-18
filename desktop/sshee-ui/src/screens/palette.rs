@@ -372,8 +372,14 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> Option<El> {
             Action::Server(key) if s.streaming() => (s.server_shown(key, &r.label), std::borrow::Cow::Borrowed("")),
             _ => (s.text_shown(&r.label), s.text_shown(&r.note)),
         };
+        // A server in the colour you picked for it.
+        let tint = match &r.action {
+            Action::Server(key) => crate::screens::server_menu::own_color(s, key),
+            _ => None,
+        };
         let spec = ListRow {
             icon: Some(glyph(&r.glyph)),
+            tint,
             label: &label,
             mono: r.mono,
             note: &note,

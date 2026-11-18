@@ -680,11 +680,12 @@ fn streamer_mode_is_one_thing_whichever_switch_turns_it() {
     let mut w = Window::defaults();
     w.click("server-1");
     let streaming = |w: &Window| (w.settings().streamer_mode, w.rt.state.streaming(), w.rt.state.panes.values().next().unwrap().view.borrow().look().streaming);
-    // The eye in the top row: saved in Settings, and the terminal hides names.
-    w.click("streamer");
+    // The palette's switch: saved in Settings, and the terminal hides names.
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
+    w.settle();
     assert_eq!(streaming(&w), (true, true, true));
     assert!(!w.tree().contains("web-7731"));
-    // Settings' switch shows it on, and turns it off for the eye too.
+    // Settings' switch shows it on, and turns it off.
     w.go(Section::Privacy);
     w.click("privacy-streamer-control");
     assert_eq!(streaming(&w), (false, false, false));
@@ -692,8 +693,8 @@ fn streamer_mode_is_one_thing_whichever_switch_turns_it() {
     w.key(Key::Command('h'), "cs");
     assert_eq!(streaming(&w), (true, true, true));
     assert!(w.rt.state.screens.settings.open && w.rt.state.screens.settings.section == Section::Privacy);
-    // The eye's own state is the setting's.
-    assert_eq!(w.fill("streamer"), Theme::of(true).selrail.hex());
+    // While it's on, the status bar says so.
+    assert!(w.has("streamer"));
 }
 
 #[test]

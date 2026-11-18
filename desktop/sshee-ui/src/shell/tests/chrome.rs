@@ -14,12 +14,11 @@ impl Window {
         self.rt.state.bench.tabs().iter().filter_map(|t| Some((t.id, self.rect(&format!("tab-{}", t.id.0))?))).collect()
     }
 
-    /// "+" is whole in the window and clear of streamer mode's eye, every tab is before it, and
-    /// a few more frames move none of it: the title and the row agree.
+    /// "+" is whole in the window, every tab is before it, and a few more frames move none of
+    /// it: the title and the row agree.
     fn plus_in_window(&mut self, width: f32, what: &str) {
         let plus = self.rect("new-tab").unwrap_or_else(|| panic!("{what}: no +"));
-        let eye = self.rect("streamer").expect("the eye");
-        assert!(plus[0] + plus[2] <= eye[0] + 0.5 && eye[0] + eye[2] <= width + 0.5, "{what}: + at {plus:?}, the eye at {eye:?}");
+        assert!(plus[0] + plus[2] <= width + 0.5, "{what}: + at {plus:?}");
         for (id, r) in self.drawn_tabs() {
             assert!(r[0] + r[2] <= plus[0] + 0.5, "{what}: tab {} at {r:?} runs onto + at {plus:?}", id.0);
         }
@@ -89,6 +88,10 @@ fn a_crowded_tab_says_its_state_with_a_mark_and_keeps_its_cross_inside() {
         s.bench.set_link(ids[ids.len() - 3], Link::Disconnected);
     });
     w.settle();
+    // A tab the wider marks push out of sight has faded out.
+    for _ in 0..15 {
+        w.rt.frame(1.0 / 60.0);
+    }
     w.plus_in_window(900.0, "reconnecting");
     // The words are only said to a screen reader; the cross is inside its tab.
     let tree = w.tree();

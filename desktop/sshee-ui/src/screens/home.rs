@@ -236,10 +236,12 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         let key = server.key.map(String::from);
         // Streamer mode: "Server 2", as everywhere else.
         let name = s.server_shown(&server.server, &server.name);
-        let color = state.colors.get(&server.server).and_then(|c| rune::color::hex(c));
+        // Its picture, else its icon in the colour you picked, washed over its square; else quiet.
+        let color = crate::screens::server_menu::own_color(s, &server.server);
         let label = server.env.as_ref().map(|env| (env_short(env), *env == EnvLabel::Prod));
         let spec = Tile {
             icon: Some(Icon::for_server(&server.icon)),
+            glyph: Some(crate::screens::server_menu::glyph_of(s, &server.server, &server.icon, 22.0, t.l2on)),
             name: &name,
             label,
             tint: color,
@@ -251,14 +253,14 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         };
         let (to, menu) = (server.server.clone(), server.server.clone());
         tiles = tiles.child(
-            tile(t, &spec)
+            tile(t, spec)
                 .key(format!("tile-{i}"))
                 .on_press_tx(move |s: &mut Shell, tx| s.go_to(&to, tx))
                 .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx)),
         );
     }
     let add = Tile { icon: Some(Icon::Plus), name: "Add a server", focused: on(Spot::Add), dashed: true, ..Tile::default() };
-    tiles = tiles.child(tile(t, &add).key("tile-add").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
+    tiles = tiles.child(tile(t, add).key("tile-add").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
 
     let mut column = col().key("home-column").w_full().max_w(720.0).px(24.0).pt(56.0).pb(40.0).items_center().child(search).child(tiles.mt(32.0));
 

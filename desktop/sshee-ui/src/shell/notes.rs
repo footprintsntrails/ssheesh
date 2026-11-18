@@ -203,9 +203,9 @@ impl Shell {
         if yes {
             then(self, tx);
         }
-        // Keys go back to where they were: the terminal on screen.
+        // Keys go back to where they were: the terminal on screen. The question fades out
+        // (`kit::motion`) unless what the answer did landed at once.
         self.settle_in_place(tx);
-        tx.instant();
     }
 }
 

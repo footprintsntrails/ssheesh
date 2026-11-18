@@ -279,7 +279,8 @@ pub fn overlay(s: &Shell, t: &'static Theme) -> Option<El> {
 }
 
 fn layer(t: &Theme, card: El) -> El {
-    el().key("edit-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(card)
+    let card = crate::kit::motion::enters(card, crate::kit::motion::Entrance::Card);
+    crate::kit::motion::enters(el().key("edit-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(card), crate::kit::motion::Entrance::Scrim)
 }
 
 fn conflict(s: &Shell, session: &Session, t: &'static Theme) -> El {

@@ -470,10 +470,10 @@ fn the_welcome_offers_0_10s_servers_then_the_tour() {
     again.rt.update(|s, tx| s.open_tour(0, tx));
     again.settle();
     assert!(again.tree().contains("Find anything"), "{}", again.tree());
-    for _ in 0..5 {
+    for _ in 0..4 {
         again.click("tour-next");
     }
-    assert!(again.tree().contains("Streaming? Hide it all"));
+    assert!(again.tree().contains("Two tabs at once"));
     again.key(Key::Enter);
     assert!(!again.has("tour"));
 }
