@@ -456,7 +456,16 @@ fn run_action(s: &mut Shell, tab: TabId, action: Action, clicked: Option<String>
     tx.instant();
 }
 
+/// A right-click or a toolbar button in a Files pane beside another makes it the pane you're
+/// in, as a click on its page does: what opens takes the keys.
+fn into_pane(s: &mut Shell, tab: TabId, tx: &mut Tx) {
+    if s.bench.active_id() != Some(tab) {
+        s.focus_tab(tab, tx);
+    }
+}
+
 fn open_menu(s: &mut Shell, tab: TabId, clicked: Option<&str>, at: PointerPress, tx: &mut Tx) {
+    into_pane(s, tab, tx);
     if let (Some(name), Some(state)) = (clicked, s.screens.files.get_mut(&tab)) {
         state.browser.context_click(name);
     }
@@ -682,6 +691,7 @@ fn tool(t: &Theme, key: &'static str, glyph: Icon, name: &'static str, on: bool,
     let b = toolbar_button(t, key, glyph, name);
     if on {
         b.on_press_tx(move |s: &mut Shell, tx| {
+            into_pane(s, tab, tx);
             run(s, tab, tx);
             tx.instant();
         })
@@ -877,6 +887,7 @@ fn toolbar(s: &Shell, id: TabId, t: &'static Theme, width: f32) -> El {
     let mut bar = row().key("files-toolbar").w_full().h(TOOLBAR).items_center().gap(2.0).px(8.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(lit(
         state.ui.places,
         toolbar_button(t, "files-places", Icon::Star, "Bookmarks: go to a place, a bookmarked folder or a recent one").on_press_tx(move |s: &mut Shell, tx| {
+            into_pane(s, id, tx);
             let home = s.screens.files.get(&id).map(|st| st.browser.server().to_owned());
             if let Some(ui) = ui(s, id) {
                 ui.places = !ui.places;
@@ -1596,9 +1607,18 @@ fn question_safe(t: &'static Theme, q: &Confirm, safe: bool, yes: impl Fn(&mut S
     dialog::dialog(t, "files-question", &look, move |s: &mut Shell, tx: &mut Tx, i| if i == 1 { yes(s, tx) } else { no(s, tx) })
 }
 
-/// What a Files tab shows over the window: its menu, its question, its bookmarks.
+/// What a Files tab on screen shows over the window: its menu, its question, its bookmarks.
+/// The tab you're on first; then a Files pane beside it (its toolbar's buttons don't move the
+/// keyboard there, so its bookmarks or a question it asked open while you're in another pane).
 pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
-    let id = s.bench.active().filter(|tab| tab.kind == TabKind::Files)?.id;
+    let active = s.bench.active_id();
+    let mut files: Vec<TabId> = s.bench.on_screen().into_iter().filter(|id| s.bench.tab(*id).is_some_and(|tab| tab.kind == TabKind::Files)).collect();
+    files.sort_by_key(|id| Some(*id) != active);
+    files.into_iter().find_map(|id| tab_overlay(s, id, t, cx))
+}
+
+/// [`overlay`] for Files tab `id`: `None` when nothing of it is open over the window.
+fn tab_overlay(s: &Shell, id: TabId, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let state = s.screens.files.get(&id)?;
     if let Some(q) = state.ui.confirm.as_ref().map(|(q, _)| shown(s, q)) {
         let answer = move |yes: bool| {

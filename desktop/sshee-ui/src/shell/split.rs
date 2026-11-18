@@ -111,14 +111,29 @@ impl Shell {
     }
 
     /// Where a tab or pane `dragged` would land with the pointer at `at` (window points): a
-    /// side or the middle of a pane on screen, not its own.
+    /// side or the middle of a pane on screen, not its own. The tab on screen dragged onto its
+    /// own page (alone there) splits it with its neighbour in the row, on the side it's over:
+    /// it lands beside that neighbour, which takes the rest.
     pub(crate) fn drop_target(&self, dragged: TabId, at: [f32; 2]) -> Option<(TabId, Zone)> {
         let p = (at[0], at[1]);
         if self.split_on_screen().is_some() {
             return self.tabs_on_screen().into_iter().filter(|id| *id != dragged).find_map(|id| Some((id, layout::zone(*self.sides.panes.get(&id)?, p)?)));
         }
-        let id = self.bench.active_id().filter(|id| *id != dragged)?;
-        Some((id, layout::zone(self.sides.page?, p)?))
+        let active = self.bench.active_id()?;
+        if active != dragged {
+            return Some((active, layout::zone(self.sides.page?, p)?));
+        }
+        let beside = self.row_neighbour(dragged)?;
+        Some((beside, layout::side(self.sides.page?, p)?))
+    }
+
+    /// The tab before `id` in the row, or after it when it's first: the one the tab on screen
+    /// shares the page with when dragged onto it.
+    pub(crate) fn row_neighbour(&self, id: TabId) -> Option<TabId> {
+        let tabs = self.bench.tabs();
+        let i = tabs.iter().position(|t| t.id == id)?;
+        let other = if i > 0 { tabs.get(i - 1) } else { tabs.get(1) };
+        other.map(|t| t.id)
     }
 
     /// A tab or pane dropped on a pane: it lands there, and you're on it.
@@ -449,7 +464,13 @@ pub(crate) fn drop_mark(s: &Shell, t: &Theme) -> Option<El> {
         Zone::Middle => [x, y, w, h],
     };
     let swap = zone == Zone::Middle && s.bench.layout().shown_with(target).is_some();
-    let words = if swap { "Swap places" } else { "Move here" };
+    // The tab on screen over its own page: the rest of it goes to its neighbour in the row.
+    let neighbour = s.split_on_screen().is_none() && s.bench.active_id() != Some(target);
+    let words = match s.bench.tab(target) {
+        Some(tab) if neighbour => format!("Split with {}", s.text_shown(&tab.label())),
+        _ if swap => "Swap places".to_owned(),
+        _ => "Move here".to_owned(),
+    };
     Some(
         rune::el()
             .key("drop-mark")

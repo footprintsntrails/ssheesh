@@ -1,9 +1,9 @@
 //! A tab in the top row: its kind's icon, its name, its server's name in a quieter tone, then
 //! what it has to say ("Prod", "Needs you", "Reconnecting…").
 //!
-//! - The tab you're on is a rounded lighter fill with a close cross at its end.
-//! - Under the pointer, any other tab gets a fainter fill and the cross takes the icon's
-//!   place: the tab keeps its width.
+//! - Every tab ends with the same close cross, after its status mark: always on the tab
+//!   you're on, under the pointer on the others (its room is kept, so the tab keeps its width).
+//! - The tab you're on is a rounded lighter fill; under the pointer any other gets a fainter one.
 //! - In a window that isn't in front, the tab you're on goes quiet; "Prod" stays red.
 //! - When the row is crowded (`Tab::compact`), the server is named once before its group
 //!   instead of in every tab, and a long name fades out at its end.
@@ -40,22 +40,11 @@ pub struct Tab<'a> {
     pub compact: bool,
 }
 
-/// The icon's place in a tab that isn't the one you're on: the icon, and under the pointer
-/// the close cross instead. A press there closes the tab.
-fn icon_or_close<S: 'static>(t: &Theme, glyph: Icon, ink: Color, on_close: impl Fn(&mut S, &mut Tx) + 'static) -> El {
-    rune::el()
-        .key("close")
-        .size(theme::ICON, theme::ICON)
-        .role("button")
-        .label_static("Close tab")
-        .on_press_tx(on_close)
-        .child(icon(glyph, theme::ICON, ink).absolute(0.0, 0.0).group_opacity(1.0, 0.0))
-        .child(icon(Icon::Close, theme::ICON, t.l2on).absolute(0.0, 0.0).group_opacity(0.0, 1.0))
-}
-
-/// The cross at the end of the tab you're on.
-fn close_button<S: 'static>(t: &Theme, on_close: impl Fn(&mut S, &mut Tx) + 'static) -> El {
-    rune::el()
+/// The cross at the end of every tab, after what it has to say: the same glyph, size and ink
+/// on each. Shown on the tab you're on; on the others, while the pointer is over them (its room
+/// is kept, so a tab doesn't change width under the pointer).
+fn close_button<S: 'static>(t: &Theme, shown: bool, on_close: impl Fn(&mut S, &mut Tx) + 'static) -> El {
+    let e = rune::el()
         .key("close")
         .size(20.0, 20.0)
         .ml(-1.0)
@@ -68,7 +57,12 @@ fn close_button<S: 'static>(t: &Theme, on_close: impl Fn(&mut S, &mut Tx) + 'sta
         .role("button")
         .label_static("Close tab")
         .on_press_tx(on_close)
-        .child(icon(Icon::Close, 14.0, t.l2on))
+        .child(icon(Icon::Close, 14.0, t.l2on));
+    if shown {
+        e
+    } else {
+        e.group_opacity(0.0, 1.0)
+    }
 }
 
 /// What a tab has to say after its name. In a crowded row only its mark (the dot, the ring),
@@ -135,17 +129,13 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     } else {
         e.hover(t.hov2).press(t.down)
     };
-    // One cross per tab: at the end of the tab you're on, in the icon's place on the others.
-    let (lead_close, end_close) = if active { (None, Some(on_close)) } else { (Some(on_close), None) };
-    e = match lead_close {
-        Some(close) => e.hover_group().child(icon_or_close(t, spec.icon, icon_ink, close)),
-        None => e.child(icon(spec.icon, theme::ICON, icon_ink)),
-    };
+    e = e.hover_group().child(icon(spec.icon, theme::ICON, icon_ink));
     // The name fades out at its end in any tab narrower than its words: a crowded row, or a
     // tab the row holds at its width while the pointer is over it.
     let name = text(spec.name).key("name").font(theme::TAB_NAME).color(name_ink).single_line().truncate_fade().shrink();
     if compact {
-        e = e.shrink().min_w(theme::ICON + 16.0);
+        // Its icon and its cross stay inside it; the name gives way.
+        e = e.shrink().min_w(theme::ICON + 16.0 + 6.0 + 14.0);
     }
     e = e.child(name);
     if let Some(server) = spec.server {
@@ -163,10 +153,7 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     } else if spec.working {
         e = e.child(rune::row().key("working").items_center().label_static("Working").child(progress_ring(10.0, 1.5, t.l2)));
     }
-    if let Some(close) = end_close {
-        e = e.child(close_button(t, close));
-    }
-    e
+    e.child(close_button(t, active, on_close))
 }
 
 /// A group's name when the row is crowded: the server, once, before its tabs. `current`: the

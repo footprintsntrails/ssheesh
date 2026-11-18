@@ -62,6 +62,8 @@ impl TermLink for FakeLink {
 struct World {
     sessions: Vec<(String, Arc<Mutex<Seen>>)>,
     watching: Option<String>,
+    /// What Files tabs asked for.
+    files: Vec<sshee_app::files::Ask>,
 }
 
 struct FakeBackend(Arc<Mutex<World>>);
@@ -74,6 +76,9 @@ impl Backend for FakeBackend {
     }
     fn watch(&mut self, server: Option<&Server>) {
         self.0.lock().unwrap().watching = server.map(Server::key);
+    }
+    fn files(&mut self, ask: sshee_app::files::Ask) {
+        self.0.lock().unwrap().files.push(ask);
     }
     fn replays(&self) -> bool {
         true
