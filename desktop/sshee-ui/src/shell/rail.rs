@@ -363,6 +363,7 @@ fn list_server(s: &Shell, t: &'static Theme, i: usize, server: &Server, selected
             .label(if open { format!("Hide containers on {name}") } else { format!("Show containers on {name}") })
             .expanded(open)
             .help(if open { "Hide containers" } else { "Show containers" })
+            .on_hover_change(move |s: &mut Shell, inside, tx| s.hover_server_button(i, inside, tx))
             .on_press_tx(move |s: &mut Shell, tx| s.toggle_containers(&there, tx))
             .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 10.0, t.l2))
     } else {
@@ -395,6 +396,7 @@ fn list_server(s: &Shell, t: &'static Theme, i: usize, server: &Server, selected
                 .role("button")
                 .label(format!("New terminal on {name}"))
                 .help(format!("New terminal on {name}"))
+                .on_hover_change(move |s: &mut Shell, inside, tx| s.hover_server_button(i, inside, tx))
                 .on_press_tx(move |s: &mut Shell, tx| {
                     s.screens.server_card.hide();
                     s.bench.open(TabKind::Terminal, &there);

@@ -90,6 +90,36 @@ fn the_row_under_the_pointer_offers_a_new_terminal_there_and_its_containers() {
 }
 
 #[test]
+fn a_rows_button_shows_its_tooltip_and_not_the_servers_card_too() {
+    let mut w = linux();
+    w.wide();
+    w.rt.help_delay = 0.0;
+    let rest = |w: &mut Window| {
+        for _ in 0..30 {
+            w.rt.frame(1.0 / 60.0);
+        }
+    };
+    w.hover("server-2");
+    rest(&mut w);
+    assert!(w.rt.find("server-card").is_some(), "the card came up on the row");
+    // On the chevron: its tooltip, and the card makes way.
+    w.hover("expand-2");
+    rest(&mut w);
+    assert_eq!(w.rt.help_tooltip().map(|(t, _)| t.to_owned()).as_deref(), Some("Show containers"));
+    assert!(w.rt.find("server-card").is_none(), "the card and the chevron's tooltip show together");
+    // The "+" too.
+    w.hover("new-on-2");
+    rest(&mut w);
+    assert!(w.rt.help_tooltip().is_some() && w.rt.find("server-card").is_none());
+    // Back on the name, the card comes back after a rest.
+    let (x, y) = w.rt.find("server-2").unwrap();
+    w.rt.pointer_move(x, y);
+    w.settle();
+    rest(&mut w);
+    assert!(w.rt.find("server-card").is_some());
+}
+
+#[test]
 fn staging_and_dev_are_labelled_like_prod() {
     let mut w = linux();
     w.rt.update(|s, _| {
