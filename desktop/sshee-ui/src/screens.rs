@@ -61,9 +61,9 @@ pub struct States {
     /// downloads in progress (what finished or failed is said in a toast: `notes`).
     pub dirs: sshee_app::dir_cache::DirCache,
     pub bookmarks: sshee_app::model::Bookmarks,
-    /// Where Files copied to last ("Copy to another folder or server"): the server and folder
-    /// it opens on next time.
-    pub copy_last: Option<(String, String)>,
+    /// Where Files copied to last ("Copy to another folder or server"): the server it opens on
+    /// next time, and the folder on each server.
+    pub copy_last: files::CopyMemory,
     pub transfers: sshee_app::transfers::Transfers,
     /// Files open in an editor elsewhere, and the editors on this computer.
     pub edits: sshee_app::files::edit::Edits,

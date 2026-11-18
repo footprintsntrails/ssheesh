@@ -69,6 +69,14 @@ pub struct CopyTo {
     pub error: Option<String>,
 }
 
+/// Where "Copy to another folder or server" copied to (0.10's `lastHost`, `lastDir`): the
+/// dialog opens on the last server, each server in its last folder.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CopyMemory {
+    pub last: Option<String>,
+    pub dirs: std::collections::HashMap<String, String>,
+}
+
 /// Files copied on this computer, waiting for a yes before they go to the server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Paste {
@@ -260,9 +268,15 @@ pub fn point_at(s: &mut Shell, tab: TabId, folder: Option<String>, clock: f64) {
 }
 
 /// Every frame (`Shell::poll`): a folder pointed at long enough is listed ahead, and a Files
-/// tab unused off screen lets go of its server's connection.
-pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut rune::Tx) {
+/// tab unused off screen lets go of its server's connection. True when an open picture was
+/// decoded since: drawn again, it knows its size (the footer's pixels, never drawn bigger).
+pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut rune::Tx) -> bool {
     idle(s, clock, tx);
+    // Every tab looks (each keeps whether its picture was decoded), not just until one says yes.
+    let mut decoded = false;
+    for st in s.screens.files.values_mut() {
+        decoded |= st.ui.picture_decoded();
+    }
     let due: Vec<(TabId, String, String)> = s
         .screens
         .files
@@ -283,6 +297,7 @@ pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut rune::Tx) {
     for (tab, server, path) in due {
         peek_into(s, tab, &server, &path);
     }
+    decoded
 }
 
 /// Settings → Terminal → "Disconnect unused terminals", for Files: a tab on a server that has
@@ -392,6 +407,10 @@ pub fn show_path(s: &mut Shell, tab: TabId, path: &str) {
         return;
     }
     state.reveal = Some((dir.clone(), name.clone()));
+    // A dot file pointed at shows with the other hidden ones (0.10).
+    if name.starts_with('.') {
+        state.browser.set_show_hidden(true);
+    }
     go_now(s, tab, &dir);
     if let Some(state) = s.screens.files.get_mut(&tab) {
         state.browser.select_when_listed(&name);
@@ -493,6 +512,20 @@ pub fn open(s: &mut Shell, tab: TabId, name: &str) {
     let (editor, want) = Editor::open(&dir, name, &mut state.tickets);
     state.editor = Some(editor);
     state.browser.select_only(name);
+    if let Some(want) = want {
+        ask(s, tab, want);
+    }
+}
+
+/// A file of the folder `dir`, which isn't the one on screen (picked in the folder looked into
+/// with »): it opens beside the list, and the tab stays where it is (0.10).
+pub fn open_from(s: &mut Shell, tab: TabId, dir: &str, name: &str) {
+    let Some(state) = s.screens.files.get_mut(&tab) else { return };
+    if dir == state.browser.dir() {
+        return open(s, tab, name);
+    }
+    let (editor, want) = Editor::open(dir, name, &mut state.tickets);
+    state.editor = Some(editor);
     if let Some(want) = want {
         ask(s, tab, want);
     }
@@ -622,7 +655,7 @@ pub fn archive(s: &mut Shell, tab: TabId, names: &[String], typed: &str) -> bool
 // ---- copies to a folder or a server
 
 /// "Copy to another folder or server…": the dialog, for these rows. It opens on the server you
-/// copied to last time, else this one (when it's a server), else the first server.
+/// copied to last time, else another server than this one, else this one (as 0.10's did).
 pub fn open_copy(s: &mut Shell, tab: TabId, names: &[String]) {
     let Some(state) = s.screens.files.get(&tab) else { return };
     let paths: Vec<String> = names.iter().map(|n| state.browser.path_of(n)).collect();
@@ -631,8 +664,9 @@ pub fn open_copy(s: &mut Shell, tab: TabId, names: &[String]) {
     }
     let here = state.browser.server().to_owned();
     let servers = copy_targets(s);
-    let last = s.screens.copy_last.as_ref().map(|(server, _)| server.clone()).filter(|k| servers.contains(k));
-    let to = last.or_else(|| servers.iter().find(|k| **k == here).cloned()).or_else(|| servers.first().cloned());
+    let last = s.screens.copy_last.last.clone().filter(|k| servers.contains(k));
+    // Another server than this one, first: a copy to the same one is to another folder.
+    let to = last.or_else(|| servers.iter().find(|k| **k != here).cloned()).or_else(|| servers.first().cloned());
     if let Some(state) = s.screens.files.get_mut(&tab) {
         state.copy = Some(CopyTo { paths, to: None, place: None, asked: None, error: None });
     }
@@ -651,10 +685,10 @@ pub fn copy_targets(s: &Shell) -> Vec<String> {
 /// (on the same server), else its home.
 pub fn copy_server(s: &mut Shell, tab: TabId, server: &str) {
     let Some(state) = s.screens.files.get(&tab) else { return };
-    let start = match &s.screens.copy_last {
-        Some((last, dir)) if last == server => dir.clone(),
-        _ if state.browser.server() == server => state.browser.dir().to_owned(),
-        _ => "~".to_owned(),
+    let start = match s.screens.copy_last.dirs.get(server) {
+        Some(dir) => dir.clone(),
+        None if state.browser.server() == server => state.browser.dir().to_owned(),
+        None => "~".to_owned(),
     };
     if let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()) {
         copy.to = Some(server.to_owned());
@@ -685,13 +719,30 @@ fn copy_listed(s: &mut Shell, tab: TabId, server: &str, asked: &str) {
     dirs.sort_by(|a, b| sshee_app::files::browser::natural_cmp(a, b));
     copy.place = Some((cached.path.clone(), dirs));
     copy.asked = None;
+    // The path field shows where it is now.
+    if let Some(state) = s.screens.files.get_mut(&tab) {
+        state.ui.copy_typed = rune::TextEdit::new(cached.path.clone());
+    }
+}
+
+/// Why the copy can't go into the folder the dialog shows (`ops::copy_blocked`).
+pub fn copy_blocked(s: &Shell, tab: TabId) -> Option<String> {
+    let state = s.screens.files.get(&tab)?;
+    let copy = state.copy.as_ref()?;
+    let (dest, _) = copy.place.as_ref()?;
+    let same = copy.to.as_deref() == Some(state.browser.server());
+    ops::copy_blocked(same, &paths::parent(copy.paths.first()?), &copy.paths, dest)
 }
 
 /// "Copy here": the copy starts, under a card, into the folder the dialog shows.
 pub fn copy_here(s: &mut Shell, tab: TabId) {
+    if copy_blocked(s, tab).is_some() {
+        return;
+    }
     let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.take()) else { return };
     let (Some(to), Some((dir, _))) = (copy.to, copy.place) else { return };
-    s.screens.copy_last = Some((to.clone(), dir.clone()));
+    s.screens.copy_last.last = Some(to.clone());
+    s.screens.copy_last.dirs.insert(to.clone(), dir.clone());
     send_copy(s, tab, to, copy.paths, dir, false);
 }
 
@@ -799,6 +850,14 @@ pub fn download_to(s: &mut Shell, tab: TabId, dir: &str, names: &[String], into:
         Some(into) => Want::DownloadInto { id, items, into },
         None => Want::Download { id, items },
     });
+}
+
+/// The file open beside the list, downloaded into Downloads. It may be of another folder than
+/// the one on screen (opened from the folder looked into with »).
+pub fn download_file(s: &mut Shell, tab: TabId, path: &str) {
+    let Some(server) = s.screens.files.get(&tab).map(|st| st.browser.server().to_owned()).filter(|sv| sv != "local") else { return };
+    let id = s.screens.transfers.begin(Kind::Download, files_label(&[path]), tab, &server);
+    ask(s, tab, Want::Download { id, items: vec![Item { path: path.to_owned(), is_dir: false }] });
 }
 
 /// Rows dragged onto a folder of another server's Files tab: copied straight across, under a
@@ -1527,6 +1586,51 @@ mod tests {
         assert!(w.state().replace.is_some());
         answer_replace(&mut w.s, w.tab, true);
         assert!(matches!(w.wants()[..], [Want::CopyTo { overwrite: true, .. }]));
+    }
+
+    #[test]
+    fn a_copy_refuses_its_own_folder_and_each_server_opens_where_it_copied_last() {
+        let mut w = Window::at_home();
+        open_copy(&mut w.s, w.tab, &["shop".into()]);
+        w.answer(Answer::Peeked { asked: "/home/deploy".into(), result: Ok((home(), Clock::default())) });
+        // The folder they're in, and the folder itself: no.
+        assert_eq!(copy_blocked(&w.s, w.tab).as_deref(), Some("They're already in this folder. Pick another one."));
+        copy_go(&mut w.s, w.tab, "/home/deploy/shop");
+        w.answer(Answer::Peeked { asked: "/home/deploy/shop".into(), result: Ok((Listing { path: "/home/deploy/shop".into(), entries: vec![] }, Clock::default())) });
+        assert_eq!(copy_blocked(&w.s, w.tab).as_deref(), Some("Can't copy shop into itself. Pick a folder outside it."));
+        w.wants();
+        copy_here(&mut w.s, w.tab);
+        assert_eq!(w.wants(), [], "nothing copies into itself");
+        // The path field follows the folder shown.
+        assert_eq!(w.state().ui.copy_typed.text, "/home/deploy/shop");
+        // Somewhere else on the server: it copies, and that folder is where the server opens next.
+        copy_go(&mut w.s, w.tab, "/srv");
+        w.answer(Answer::Peeked { asked: "/srv".into(), result: Ok((Listing { path: "/srv".into(), entries: vec![] }, Clock::default())) });
+        assert_eq!(copy_blocked(&w.s, w.tab), None);
+        copy_here(&mut w.s, w.tab);
+        assert!(matches!(&w.wants()[..], [.., Want::CopyTo { dir, .. }] if dir == "/srv"));
+        assert_eq!(w.s.screens.copy_last.dirs.get(WEB).map(String::as_str), Some("/srv"));
+        open_copy(&mut w.s, w.tab, &["notes.md".into()]);
+        assert!(matches!(&w.wants()[..], [.., Want::Peek { path }] if path == "/srv"));
+    }
+
+    #[test]
+    fn a_file_of_a_folder_looked_into_opens_beside_and_the_tab_stays() {
+        let mut w = Window::at_home();
+        open_from(&mut w.s, w.tab, "/home/deploy/shop", "package.json");
+        assert_eq!(w.state().browser.dir(), "/home/deploy");
+        assert_eq!(w.state().editor.as_ref().map(|e| e.path()).as_deref(), Some("/home/deploy/shop/package.json"));
+        assert!(matches!(&w.wants()[..], [Want::Read { path, .. }] if path == "/home/deploy/shop/package.json"));
+    }
+
+    #[test]
+    fn a_dot_file_from_a_terminal_shows_the_hidden_files() {
+        let mut w = Window::at_home();
+        assert!(!w.state().browser.show_hidden());
+        show_path(&mut w.s, w.tab, "/home/deploy/notes.md");
+        assert!(!w.state().browser.show_hidden(), "only for a dot file");
+        show_path(&mut w.s, w.tab, "/home/deploy/.env");
+        assert!(w.state().browser.show_hidden());
     }
 
     #[test]

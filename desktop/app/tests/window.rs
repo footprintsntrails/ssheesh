@@ -1110,6 +1110,51 @@ fn rows_dragged_onto_the_path_out_of_the_window_or_dropped_from_outside() {
     assert!(run.tree_text.contains("8 items, 4 hidden"), "it landed in the folder on screen");
 }
 
+#[test]
+fn files_peek_a_file_places_ticks_picture_sizes_and_the_copy_dialog_as_in_0_10() {
+    let files = tap(0.3, "tab-2");
+    // → on shop looks inside, beside its »; ↑ goes to its last row, a file, and Return opens it
+    // beside the list while the tab stays in deploy.
+    let script = json!([
+        files.clone(),
+        { "t": 0.8, "type": "tap", "x": 300.0, "y": 205.0 },
+        press(1.0, "Right", false, false, false),
+        press(1.3, "Up", false, false, false),
+        press(1.6, "Enter", false, false, false),
+        end(2.4)
+    ]);
+    let Some(run) = run("files-peek-file", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-preview").is_some(), "the file didn't open");
+    assert!(run.tree_text.contains("package.json"), "not the file picked");
+    assert!(run.element("crumb-3").is_none(), "the tab went into shop");
+    // The list of places, right-clicked: a tick for each place and for recent folders.
+    let script = json!([files.clone(), tap(0.8, "files-places"), { "t": 1.2, "type": "tap", "key": "place-1", "button": "secondary" }, end(1.8)]);
+    let Some(run) = self::run("files-places-menu", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-place-menu").is_some(), "no menu");
+    for said in ["Hide Disk", "Recent folders", "Logs", "Config"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    // A picture: its size in pixels and in bytes under it, and drawn no bigger than it is.
+    let script = json!([files.clone(), { "t": 0.8, "type": "double-click", "x": 300.0, "y": 257.0 }, end(1.8)]);
+    let Some(run) = self::run("files-picture", &["--demo"], Some(script)) else { return };
+    assert!(run.tree_text.contains("48 × 48 · 6.9 KB"), "no size under the picture");
+    let [_, _, w, h] = run.rect("preview-picture-box");
+    assert!(w <= 48.0 && h <= 48.0, "drawn bigger than it is: {w}×{h}");
+    // Copy to another folder or server: from where, which server is this one, and never into
+    // the folder they're in.
+    let script = json!([
+        files,
+        { "t": 0.8, "type": "secondary-click", "x": 300.0, "y": 231.0 },
+        tap(1.2, "menu-5"),
+        tap(1.7, "copy-to-host-demo-web"),
+        end(2.3)
+    ]);
+    let Some(run) = self::run("files-copy-here", &["--demo"], Some(script)) else { return };
+    for said in ["From web-7731", "this one", "They're already in this folder. Pick another one.", "Folder on the server"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+}
+
 // ---- Open in your own editor (the demo starts no editor: it plays a session's news)
 
 /// The Files tab, then "Open in VS Code" from the menu of the row at `y`, and Return on the

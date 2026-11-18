@@ -41,8 +41,9 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 tar = { version = "0.4", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # A server's picture: a file made into a small PNG icon, and the icon decoded for the window
-# (the version and decoders Rune already locks).
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+# (the version and decoders Rune already locks). TIFF too: turned on here, Rune's own decoder
+# reads it as well, so Files shows a .tif (the version of `tiff` the lock already has).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
 # Taking macOS's quarantine mark off a staged build (`update::swap`).
 [target.'cfg(target_os = "macos")'.dependencies]

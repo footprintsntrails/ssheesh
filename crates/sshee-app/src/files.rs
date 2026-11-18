@@ -33,8 +33,9 @@ pub use protocol::{Answer, Ask, Reply, SaveFailure, Want};
 pub const MAX_EDIT: u64 = 128 * 1024;
 /// The biggest text shown at all: sshee-core's `MAX_TEXT`.
 pub const MAX_TEXT: u64 = 2 * 1024 * 1024;
-/// The biggest picture read to be shown. Bigger ones are for downloading.
-pub const MAX_IMAGE: u64 = 16 * 1024 * 1024;
+/// The biggest picture read to be shown, as in 0.10 (`MAX_PICTURE`). Bigger ones are for
+/// downloading.
+pub const MAX_IMAGE: u64 = 128 * 1024 * 1024;
 
 /// What an entry of a folder is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

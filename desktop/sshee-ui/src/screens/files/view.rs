@@ -72,6 +72,9 @@ pub enum Naming {
 pub enum After {
     Close,
     Open(String),
+    /// A file of another folder (picked in », the folder looked into) opens beside the list;
+    /// the tab stays where it is.
+    OpenFrom { dir: String, name: String },
     Go(String),
     Back,
     Forward,
@@ -164,10 +167,16 @@ pub struct Ui {
     drop_row: Option<usize>,
     /// The bookmarks are open.
     places: bool,
+    /// Their right-click menu, where it opened and the row it opened on.
+    place_menu: Option<([f32; 2], Option<PlaceRow>)>,
     /// Where the last context menu opened: "Open in…" lists the editors there.
     last_menu_at: [f32; 2],
     /// The open picture, decoded by Rune on its own thread.
     picture: Option<(u64, rune::image::Image)>,
+    /// The squares under a picture's see-through parts, at the size the picture is drawn.
+    checker: Option<([u32; 2], rune::image::Image)>,
+    /// The open picture was decoded when last looked.
+    decoded: bool,
     pictures: Option<rune::ImageCache>,
     /// The address bar as a field: a path being typed.
     pub(super) path_edit: Option<TextEdit>,
@@ -177,6 +186,10 @@ pub struct Ui {
     pub(super) source: bool,
     /// The row of the list of places the keys are on.
     pub(super) place_at: Option<usize>,
+    /// The row of the folder looked into with » that the keys are on.
+    pub(super) peek_at: Option<usize>,
+    /// "Copy to another folder or server": the folder there, as typed.
+    pub(super) copy_typed: TextEdit,
     /// Files from another app are dragged over the list.
     pub(super) drop_over: bool,
     /// The open file's width when its edge was taken, and now, while it's dragged.
@@ -199,13 +212,18 @@ impl Default for Ui {
             dragging: None,
             drop_row: None,
             places: false,
+            place_menu: None,
             last_menu_at: [0.0, 0.0],
             picture: None,
+            checker: None,
+            decoded: false,
             pictures: None,
             path_edit: None,
             filter: TextEdit::new(""),
             source: false,
             place_at: None,
+            peek_at: None,
+            copy_typed: TextEdit::new(""),
             drop_over: false,
             grip: None,
             width: 0.0,
@@ -232,6 +250,14 @@ impl Ui {
     /// again, as a browser's address bar does when it loses focus.
     pub(super) fn typing_path(&self) -> Option<&TextEdit> {
         self.path_edit.as_ref().filter(|e| e.focused)
+    }
+
+    /// The open picture was decoded since the last look: it's drawn again, now with its size.
+    pub(super) fn picture_decoded(&mut self) -> bool {
+        let ready = self.picture.as_ref().is_some_and(|(_, p)| p.is_ready());
+        let news = ready && !self.decoded;
+        self.decoded = ready;
+        news
     }
 
     /// What a yes to the question on screen would do.
@@ -314,6 +340,7 @@ fn run_after(s: &mut Shell, tab: TabId, after: After) {
     match after {
         After::Close => super::close_file(s, tab),
         After::Open(name) => super::open(s, tab, &name),
+        After::OpenFrom { dir, name } => super::open_from(s, tab, &dir, &name),
         After::Go(to) => super::go_now(s, tab, &to),
         After::Back => super::back_now(s, tab),
         After::Forward => super::forward_now(s, tab),
@@ -748,14 +775,7 @@ pub fn key(s: &mut Shell, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return places_key(s, tab, ev, tx);
     }
     if state.peek.is_some() {
-        if matches!(ev.key, Key::Escape | Key::Left) {
-            if let Some(st) = s.screens.files.get_mut(&tab) {
-                st.peek = None;
-            }
-            tx.instant();
-            return true;
-        }
-        return false;
+        return peek_key(s, tab, ev, tx);
     }
     let selected = state.browser.selected().to_vec();
     // → on a folder looks inside it.
@@ -1195,7 +1215,7 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
     // », after a folder's name: what's inside, without going there. It follows the name, so
     // every name sits right by its icon and they all start in one line.
     let peeking = state.peek.as_ref().is_some_and(|(p, _)| *p == state.browser.path_of(&e.name));
-    let mut arrow = el().key("peek").size(16.0, 16.0).ml(2.0).radius(4.0).items_center().justify_center();
+    let mut arrow = el().key(peek_arrow(id, i)).size(16.0, 16.0).ml(2.0).radius(4.0).items_center().justify_center();
     if e.is_dir() {
         let n = name.clone();
         arrow = arrow
@@ -1303,6 +1323,7 @@ fn toggle_peek(s: &mut Shell, tab: TabId, name: &str, _at: Option<[f32; 2]>, ind
     } else {
         state.browser.select_only(name);
         state.peek = Some((path.clone(), index));
+        state.ui.peek_at = None;
         let server = state.browser.server().to_owned();
         super::peek_into(s, tab, &server, &path);
     }
@@ -1586,9 +1607,9 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         }));
     }
     if on_server {
-        let n = name.clone();
+        let n = editor.path();
         head = head.child(toolbar_button(t, "preview-download", Icon::Download, "Download").on_press_tx(move |s: &mut Shell, tx| {
-            super::download(s, id, std::slice::from_ref(&n));
+            super::download_file(s, id, &n);
             tx.instant();
         }));
     }
@@ -1631,13 +1652,30 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         }
         pane = pane.child(line);
     }
-    // A picture, or an SVG drawn.
+    // A picture, or an SVG drawn: on squares where it's see-through, with its size in pixels
+    // and bytes under it (0.10's MediaPreview).
     let picture = || match &state.ui.picture {
         Some((_, picture)) => {
+            let natural = picture.size();
             // Never bigger than it is: a small icon stays sharp instead of filling the pane.
-            let [w, h] = picture.size().map_or([f32::MAX, f32::MAX], |[w, h]| [w as f32, h as f32]);
-            el().key("preview-picture").w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(
-                el().w_full().h_full().max_w(w).max_h(h).pixels_fit(picture.pixels(), SurfaceFit::Fit).label(format!("Picture {}", s.text_shown(&name))),
+            let [w, h] = natural.map_or([f32::MAX, f32::MAX], |[w, h]| [w as f32, h as f32]);
+            let mut drawn = el().key("preview-picture-box").max_w(w).max_h(h).label(format!("Picture {}", s.text_shown(&name)));
+            drawn = match natural {
+                Some([nw, nh]) if nw > 0 && nh > 0 => drawn.aspect_fit(nw as f32 / nh as f32).on_layout(move |s: &mut Shell, rect: [f32; 4]| checker_at(s, id, t, rect)),
+                _ => drawn.w_full().h_full(),
+            };
+            if let Some((_, squares)) = &state.ui.checker {
+                drawn = drawn.pixels_fit(squares.pixels(), SurfaceFit::Fill);
+            }
+            let drawn = drawn.child(el().w_full().h_full().pixels_fit(picture.pixels(), SurfaceFit::Fit));
+            // A drawing has no size of its own: only its bytes.
+            let size = editor.size().map(bytes).unwrap_or_default();
+            let said = match natural {
+                Some([w, h]) if !svg => format!("{w} × {h} · {size}"),
+                _ => size,
+            };
+            col().key("preview-picture").w_full().grow(1.0).min_h(0.0).child(row().w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(drawn)).child(
+                row().key("preview-picture-foot").w_full().h(24.0).px(12.0).items_center().border_sides([1.0, 0.0, 0.0, 0.0], t.hair2).child(text(said).font(theme::LIST_NUMBER).color(t.l2).single_line()),
             )
         }
         None => centered(vec![text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
@@ -1700,9 +1738,9 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                 }));
             }
             if on_server {
-                let n = name.clone();
+                let n = editor.path();
                 buttons = buttons.child(push_button(t, "Download", Push::Quiet, true).key("preview-get").on_press_tx(move |s: &mut Shell, tx| {
-                    super::download(s, id, std::slice::from_ref(&n));
+                    super::download_file(s, id, &n);
                     tx.instant();
                 }));
             }
@@ -1711,6 +1749,34 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         }
     };
     Some(pane.child(body))
+}
+
+/// Points of one square under a see-through picture.
+const SQUARE: u32 = 8;
+
+/// The squares under a picture, made for the box it's drawn in once its size is known (and
+/// again when it changes): one pixel a point, so they stay square at any size. Theme-coloured.
+fn checker_at(s: &mut Shell, id: TabId, t: &'static Theme, rect: [f32; 4]) {
+    let size = [rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32];
+    let Some(ui) = ui(s, id) else { return };
+    if ui.checker.as_ref().is_some_and(|(at, _)| *at == size) || size[0] > 4096 || size[1] > 4096 {
+        return;
+    }
+    let Some(cache) = ui.pictures.as_ref() else { return };
+    ui.checker = Some((size, cache.rgba(size[0], size[1], checker_pixels(t, size))));
+}
+
+/// Straight-alpha RGBA: every other square the interface's text colour, faintly.
+fn checker_pixels(t: &Theme, [w, h]: [u32; 2]) -> Vec<u8> {
+    let ink = t.l1;
+    let dark = [(ink.r * 255.0) as u8, (ink.g * 255.0) as u8, (ink.b * 255.0) as u8, (0.07 * 255.0) as u8];
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            out.extend_from_slice(if (x / SQUARE + y / SQUARE).is_multiple_of(2) { &[0, 0, 0, 0] } else { &dark });
+        }
+    }
+    out
 }
 
 fn save(s: &mut Shell, tab: TabId) {
@@ -1746,6 +1812,7 @@ fn close_menu(s: &mut Shell, id: TabId, tx: &mut Tx) {
     if let Some(ui) = ui(s, id) {
         ui.menu = None;
         ui.places = false;
+        ui.place_menu = None;
     }
     tx.instant();
 }
@@ -1872,7 +1939,11 @@ fn tab_overlay(s: &Shell, id: TabId, t: &'static Theme, cx: &mut Cx<Shell>) -> O
         return Some(card.modal_tx(true, move |s: &mut Shell, tx| close_menu(s, id, tx)));
     }
     if state.ui.places {
-        return Some(places(s, id, t));
+        let list = places(s, id, t);
+        return Some(match place_menu(s, id, t, cx) {
+            Some(menu) => el().key("files-places-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).child(list).child(menu),
+            None => list,
+        });
     }
     if state.peek.is_some() {
         return peek(s, id, t);
@@ -2079,7 +2150,13 @@ fn places(s: &Shell, id: TabId, t: &'static Theme) -> El {
                     tx.instant();
                 }
             });
-            card = card.child(line.on_press_tx(move |s: &mut Shell, tx| pick_place(s, id, pick.clone(), tx)));
+            let menu_row = r.clone();
+            card = card.child(line.on_press_tx(move |s: &mut Shell, tx| pick_place(s, id, pick.clone(), tx)).on_secondary_press(move |s: &mut Shell, at, tx| {
+                if let Some(ui) = ui(s, id) {
+                    ui.place_menu = Some(([at.x, at.y], Some(menu_row.clone())));
+                }
+                tx.instant();
+            }));
         }
     }
     if !s.settings.get().hidden_places.is_empty() {
@@ -2088,59 +2165,222 @@ fn places(s: &Shell, id: TabId, t: &'static Theme) -> El {
             tx.instant();
         }));
     }
-    card.modal_tx(true, move |s: &mut Shell, tx| close_menu(s, id, tx))
+    // A right-click on the list: what it shows, ticked (0.10's PlacesPopover).
+    card.on_secondary_press(move |s: &mut Shell, at, tx| {
+        if let Some(ui) = ui(s, id) {
+            ui.place_menu = Some(([at.x, at.y], None));
+        }
+        tx.instant();
+    })
+    .modal_tx(true, move |s: &mut Shell, tx| close_menu(s, id, tx))
 }
 
-/// What's in the folder looked into with », beside its row: a click on a folder goes there,
-/// on a file opens it there.
-fn peek(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
-    const SHOWN: usize = 200;
+/// A row of the right-click menu over the list of places: a tick when it's shown.
+fn check_row(t: &Theme, key: String, label: &str, checked: bool) -> El {
+    row()
+        .key(key)
+        .w_full()
+        .h(crate::kit::menu::ROW)
+        .px(8.0)
+        .gap(8.0)
+        .radius(theme::RADIUS_ROW)
+        .items_center()
+        .hover(t.hov2)
+        .press(t.down)
+        .role("menuitemcheckbox")
+        .checked(checked)
+        .label(label.to_owned())
+        .child(el().size(14.0, 14.0).items_center().justify_center().child(if checked { icon(Icon::Check, 12.0, t.l1) } else { el() }))
+        .child(text(label).font(theme::TEXT).color(t.l1).single_line().truncate().grow(1.0).shrink())
+}
+
+/// The right-click menu over the list of places (0.10's `PlacesPopover`): the row's own way
+/// out, then a tick for each place and for recent folders, to show or hide them there.
+fn place_menu(s: &Shell, id: TabId, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let state = s.screens.files.get(&id)?;
-    let (path, index) = state.peek.clone()?;
+    let (at, clicked) = state.ui.place_menu.clone()?;
+    let hidden = &s.settings.get().hidden_places;
     let server = state.browser.server();
-    let mut card = popover(t, 300.0).key("files-peek").anchored(format!("row-{index}"), Side::Right, Align::Start, 6.0).padding(4.0).role("menu").label(format!("What's in {}", s.text_shown(&path)));
+    let home = super::home_of(s, server);
     let close = move |s: &mut Shell, tx: &mut Tx| {
-        if let Some(st) = s.screens.files.get_mut(&id) {
-            st.peek = None;
+        if let Some(ui) = ui(s, id) {
+            ui.place_menu = None;
         }
         tx.instant();
     };
-    let Some(cached) = s.screens.dirs.get(server, &path) else {
-        return Some(card.child(row().h(28.0).px(10.0).items_center().child(text("Looking inside…").font(theme::NOTE).color(t.l2).single_line())).modal_tx(true, close));
-    };
+    let mut rows = Vec::new();
+    let (mut n_rows, mut n_seps) = (0.0, 0.0);
+    if let Some(r) = clicked.filter(|r| r.kind != PlaceKind::Add) {
+        let what = match r.kind {
+            PlaceKind::Pin => "Remove bookmark".to_owned(),
+            PlaceKind::Recent => "Remove from recent".to_owned(),
+            _ => format!("Hide {}", r.label),
+        };
+        rows.push(menu_row(t, &s.text_shown(&what), None, RowState::Rest).key("place-menu-out").on_press_tx(move |s: &mut Shell, tx| {
+            close(s, tx);
+            take_out(s, id, &r, tx);
+        }));
+        rows.push(crate::kit::menu::menu_separator(t));
+        n_rows += 1.0;
+        n_seps += 1.0;
+    }
+    for p in bookmarks::places(server != "local", home.as_deref()) {
+        let shown = !hidden.iter().any(|h| h == p.id);
+        let place = p.id;
+        rows.push(check_row(t, format!("place-menu-{}", p.id.replace('/', "-")), p.label, shown).on_press_tx(move |s: &mut Shell, tx| {
+            super::toggle_place(s, place, tx);
+            tx.instant();
+        }));
+        n_rows += 1.0;
+    }
+    rows.push(crate::kit::menu::menu_separator(t));
+    let recent = !hidden.iter().any(|h| h == bookmarks::RECENT_ID);
+    rows.push(check_row(t, "place-menu-recent".into(), "Recent folders", recent).on_press_tx(|s: &mut Shell, tx| {
+        super::toggle_place(s, bookmarks::RECENT_ID, tx);
+        tx.instant();
+    }));
+    n_rows += 1.0;
+    n_seps += 1.0;
+    if !hidden.is_empty() {
+        rows.push(crate::kit::menu::menu_separator(t));
+        rows.push(menu_row(t, "Show everything", None, RowState::Rest).key("place-menu-all").on_press_tx(|s: &mut Shell, tx| {
+            super::show_every_place(s, tx);
+            tx.instant();
+        }));
+        n_rows += 1.0;
+        n_seps += 1.0;
+    }
+    let [_, _, w, h] = cx.layout("window").unwrap_or([0.0, 0.0, 1280.0, 800.0]);
+    let height = n_rows * crate::kit::menu::ROW + n_seps * crate::kit::menu::SEPARATOR;
+    Some(crate::kit::menu::context_menu(t, at, [w, h], 220.0, height, rows).key("files-place-menu").modal_tx(true, close))
+}
+
+/// The key of the » on row `i` of Files tab `id`, which the folder looked into hangs from.
+fn peek_arrow(id: TabId, i: usize) -> String {
+    format!("peek-arrow-{}-{i}", id.0)
+}
+
+/// The most rows the folder looked into with » lists: enough to see what's there; a folder of
+/// 10,000 files is better opened.
+const PEEK_SHOWN: usize = 200;
+
+/// The folder looked into with », and its rows as listed, at most
+/// [`PEEK_SHOWN`], with how many there are in all. `None` until it's listed.
+fn peek_rows(s: &Shell, id: TabId) -> Option<(String, Vec<sshee_app::files::Entry>, usize)> {
+    let state = s.screens.files.get(&id)?;
+    let (path, _) = state.peek.clone()?;
+    let cached = s.screens.dirs.get(state.browser.server(), &path)?;
     let entries = &cached.listing.entries;
     let order = sshee_app::files::browser::sorted(entries, sshee_app::files::Sort::default());
     let shown: Vec<usize> = order.into_iter().filter(|&i| state.browser.show_hidden() || !entries[i].is_hidden()).collect();
-    if shown.is_empty() {
-        card = card.child(row().h(28.0).px(10.0).items_center().child(text("This folder is empty").font(theme::NOTE).color(t.l2).single_line()));
+    let all = shown.len();
+    let rows = shown.into_iter().take(PEEK_SHOWN).map(|i| entries[i].clone()).collect();
+    Some((path, rows, all))
+}
+
+/// A row of the folder looked into picked: a folder goes there, a file opens beside the list
+/// while the tab stays where it is (0.10).
+fn pick_peek(s: &mut Shell, id: TabId, dir: &str, name: &str, is_dir: bool) {
+    if let Some(st) = s.screens.files.get_mut(&id) {
+        st.peek = None;
+        st.ui.peek_at = None;
     }
-    let mut list = col().w_full().max_h(380.0).scroll(ScrollSpec { stick_bottom: false });
-    for (n, &i) in shown.iter().take(SHOWN).enumerate() {
-        let e = &entries[i];
-        let full = paths::join(&path, &e.name);
-        let dir = e.is_dir();
-        let mut line = row().key(format!("peek-{n}")).w_full().h(28.0).px(8.0).gap(8.0).radius(7.0).items_center().hover(t.hov).role("menuitem").help(s.text_shown(&e.name).into_owned());
-        line = line.child(icon(glyph_icon(glyph(e)), 14.0, t.l2on)).child(text(s.text_shown(&e.name).into_owned()).font(theme::TEXT).color(if e.is_hidden() { t.l2on } else { t.l1 }).single_line().truncate().shrink().min_w(0.0)).child(spacer());
-        if !dir {
-            line = line.child(text(bytes(e.size)).font(theme::LIST_NUMBER).color(t.l2).single_line());
+    let full = paths::join(dir, name);
+    if is_dir {
+        guarded(s, id, After::Go(full));
+    } else {
+        guarded(s, id, After::OpenFrom { dir: dir.to_owned(), name: name.to_owned() });
+    }
+}
+
+/// Keys while a folder is looked into (0.10's `FolderPeek`): ↑ and ↓ move, Return opens, Tab,
+/// Esc and ← close it.
+fn peek_key(s: &mut Shell, tab: TabId, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    let close = |s: &mut Shell, tx: &mut Tx| {
+        if let Some(st) = s.screens.files.get_mut(&tab) {
+            st.peek = None;
+            st.ui.peek_at = None;
         }
-        list = list.child(line.on_press_tx(move |s: &mut Shell, tx| {
-            if let Some(st) = s.screens.files.get_mut(&id) {
-                st.peek = None;
-            }
-            if dir {
-                guarded(s, id, After::Go(full.clone()));
-            } else {
-                // The file opens, in its folder.
-                super::show_path(s, id, &full);
+        tx.instant();
+        true
+    };
+    if matches!(ev.key, Key::Escape | Key::Left | Key::Tab) {
+        return close(s, tx);
+    }
+    let Some((dir, rows, _)) = peek_rows(s, tab) else { return false };
+    let n = rows.len();
+    let at = s.screens.files.get(&tab).and_then(|st| st.ui.peek_at).filter(|i| *i < n);
+    let to = match ev.key {
+        Key::Down if n > 0 => at.map_or(0, |i| (i + 1) % n),
+        Key::Up if n > 0 => at.map_or(n - 1, |i| (i + n - 1) % n),
+        Key::Enter => {
+            if let Some(e) = at.and_then(|i| rows.get(i)).cloned() {
+                pick_peek(s, tab, &dir, &e.name, e.is_dir());
                 sync(s);
             }
             tx.instant();
-        }));
+            return true;
+        }
+        _ => return false,
+    };
+    if let Some(ui) = ui(s, tab) {
+        ui.peek_at = Some(to);
     }
-    if shown.len() > SHOWN {
+    tx.scroll_into_view(format!("peek-{to}"));
+    tx.instant();
+    true
+}
+
+/// What's in the folder looked into with », beside its row: a click on a folder goes there,
+/// on a file opens it beside the list.
+fn peek(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
+    let state = s.screens.files.get(&id)?;
+    let (path, index) = state.peek.clone()?;
+    // Beside the » it hangs from (the row is the pane's width: beside it is off the window).
+    let mut card = popover(t, 300.0).key("files-peek").anchored(peek_arrow(id, index), Side::Right, Align::Start, 6.0).padding(4.0).role("menu").label(format!("What's in {}", s.text_shown(&path)));
+    let close = move |s: &mut Shell, tx: &mut Tx| {
+        if let Some(st) = s.screens.files.get_mut(&id) {
+            st.peek = None;
+            st.ui.peek_at = None;
+        }
+        tx.instant();
+    };
+    let Some((dir, rows, all)) = peek_rows(s, id) else {
+        return Some(card.child(row().h(28.0).px(10.0).items_center().child(text("Looking inside…").font(theme::NOTE).color(t.l2).single_line())).modal_tx(true, close));
+    };
+    if rows.is_empty() {
+        card = card.child(row().h(28.0).px(10.0).items_center().child(text("This folder is empty").font(theme::NOTE).color(t.l2).single_line()));
+    }
+    let at = state.ui.peek_at;
+    let mut list = col().w_full().max_h(380.0).scroll(ScrollSpec { stick_bottom: false });
+    for (n, e) in rows.into_iter().enumerate() {
+        let (name, is_dir) = (e.name.clone(), e.is_dir());
+        let mut line = row().key(format!("peek-{n}")).w_full().h(28.0).px(8.0).gap(8.0).radius(7.0).items_center().role("menuitem").help(s.text_shown(&name).into_owned());
+        line = if at == Some(n) { line.fill(t.hov2) } else { line.hover(t.hov) };
+        line = line.child(icon(glyph_icon(glyph(&e)), 14.0, t.l2on)).child(text(s.text_shown(&name).into_owned()).font(theme::TEXT).color(if e.is_hidden() { t.l2on } else { t.l1 }).single_line().truncate().shrink().min_w(0.0)).child(spacer());
+        if !is_dir {
+            line = line.child(text(bytes(e.size)).font(theme::LIST_NUMBER).color(t.l2).single_line());
+        }
+        let dir = dir.clone();
+        list = list.child(
+            line.on_hover_change(move |s: &mut Shell, inside, tx| {
+                if inside {
+                    if let Some(ui) = ui(s, id) {
+                        ui.peek_at = Some(n);
+                    }
+                    tx.instant();
+                }
+            })
+            .on_press_tx(move |s: &mut Shell, tx| {
+                pick_peek(s, id, &dir, &name, is_dir);
+                sync(s);
+                tx.instant();
+            }),
+        );
+    }
+    if all > PEEK_SHOWN {
         let to = path.clone();
-        list = list.child(menu_row(t, &format!("And {} more: open the folder", shown.len() - SHOWN), None, RowState::Rest).key("peek-more").on_press_tx(move |s: &mut Shell, tx| {
+        list = list.child(menu_row(t, &format!("And {} more: open the folder", all - PEEK_SHOWN), None, RowState::Rest).key("peek-more").on_press_tx(move |s: &mut Shell, tx| {
             if let Some(st) = s.screens.files.get_mut(&id) {
                 st.peek = None;
             }
@@ -2151,10 +2391,42 @@ fn peek(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
     Some(card.child(list).modal_tx(true, close))
 }
 
+/// Return in the copy's path field: a path typed there is looked into first; once the dialog
+/// shows it, Return copies (0.10).
+fn copy_typed_go(s: &mut Shell, id: TabId, tx: &mut Tx) {
+    let Some(state) = s.screens.files.get(&id) else { return };
+    let typed = state.ui.copy_typed.text.trim().to_owned();
+    let place = state.copy.as_ref().and_then(|c| c.place.as_ref()).map(|(p, _)| p.clone());
+    if !typed.is_empty() && Some(&typed) != place.as_ref() {
+        super::copy_go(s, id, &typed);
+    } else if copy_ready(s, id) {
+        super::copy_here(s, id);
+    }
+    tx.instant();
+}
+
+/// "Copy here" can be pressed: a server and a folder there, listed, the path field showing it,
+/// and nothing against copying into it.
+fn copy_ready(s: &Shell, id: TabId) -> bool {
+    let Some(state) = s.screens.files.get(&id) else { return false };
+    let Some(copy) = &state.copy else { return false };
+    let shown = copy.place.as_ref().is_some_and(|(p, _)| state.ui.copy_typed.text.trim() == p);
+    shown && copy.asked.is_none() && copy.to.is_some() && super::copy_blocked(s, id).is_none()
+}
+
+fn copy_typed(s: &mut Shell, tab: TabId) -> &mut TextEdit {
+    match ui(s, tab) {
+        Some(ui) => &mut ui.copy_typed,
+        None => spare(),
+    }
+}
+
 /// "Copy to a folder or server": the server to copy to, the folder there, and Copy.
 fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
-    let Some(copy) = s.screens.files.get(&id).and_then(|st| st.copy.as_ref()) else { return el() };
+    let Some(state) = s.screens.files.get(&id) else { return el() };
+    let Some(copy) = state.copy.as_ref() else { return el() };
     let on_server = super::on_server(s, id);
+    let here = state.browser.server().to_owned();
     let names: Vec<String> = copy.paths.iter().map(|p| s.text_shown(paths::name(p)).into_owned()).collect();
     let close = move |s: &mut Shell, tx: &mut Tx| {
         if let Some(st) = s.screens.files.get_mut(&id) {
@@ -2162,15 +2434,22 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
         tx.instant();
     };
+    // "From web-7731", and what goes when it's more than one (0.10).
+    let mut from = format!("From {}", server_name(s, &here));
+    if names.len() > 1 {
+        from.push_str(&format!(": {}", names.iter().take(4).cloned().collect::<Vec<_>>().join(", ")));
+        if names.len() > 4 {
+            from.push_str(&format!(" and {} more", names.len() - 4));
+        }
+    }
     let mut card = popover(t, 480.0).key("files-copy").padding(18.0).gap(8.0).role("dialog").label_static("Copy to a folder or server").child(
         row().gap(10.0).items_center().child(el().size(30.0, 30.0).radius(15.0).fill(t.blue.alpha(0.15)).items_center().justify_center().child(icon(Icon::Copy, 14.0, t.blue))).child(
-            col().grow(1.0).min_w(0.0).gap(2.0).child(text(ops::copy_title(&names, on_server)).font(theme::TITLE).color(t.l1).single_line().truncate()).child(
-                text(if names.len() > 1 { names.iter().take(4).cloned().collect::<Vec<_>>().join(", ") + if names.len() > 4 { "…" } else { "" } } else { s.text_shown(&paths::parent(&copy.paths[0])).into_owned() })
-                    .font(theme::NOTE)
-                    .color(t.l2)
-                    .single_line()
-                    .truncate(),
-            ),
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(2.0)
+                .child(text(ops::copy_title(&names, on_server)).font(theme::TITLE).color(t.l1).single_line().truncate())
+                .child(text(from).key("copy-from").font(theme::NOTE).color(t.l2).single_line().truncate()),
         ),
     );
     let targets = super::copy_targets(s);
@@ -2180,18 +2459,22 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
         card = card.child(text("To").font(theme::GROUP_TITLE).color(t.l2on).single_line().mt(6.0));
         let mut chips = row().w_full().gap(6.0).flex_wrap().role("radiogroup").label_static("Server");
         for key in targets {
-            let name = s.bench.server(&key).map(|sv| s.server_shown(&key, &sv.name).into_owned()).unwrap_or_else(|| key.clone());
+            let name = server_name(s, &key);
             let on = copy.to.as_deref() == Some(&*key);
             let k = key.clone();
             let mut chip = row().key(format!("copy-to-{}", key.replace(':', "-"))).h(28.0).px(10.0).gap(6.0).radius(8.0).items_center().role("radio").label(name.clone());
             chip = if on { chip.fill(t.blue.alpha(0.14)).border(1.0, t.blue) } else { chip.fill(t.code).border(1.0, t.hair).hover(t.hov) };
-            chips = chips.child(chip.child(icon(Icon::Server, 13.0, if on { t.blue } else { t.l2on })).child(text(name).font(theme::CONTROL_TEXT).color(t.l1).single_line().max_w(180.0).truncate()).on_press_tx(move |s: &mut Shell, tx| {
+            chip = chip.child(icon(Icon::Server, 13.0, if on { t.blue } else { t.l2on })).child(text(name).font(theme::CONTROL_TEXT).color(t.l1).single_line().max_w(180.0).truncate());
+            // The server the files are on: a copy there goes to another folder.
+            if key == here {
+                chip = chip.child(text("this one").font(theme::NOTE).color(t.l2).single_line());
+            }
+            chips = chips.child(chip.on_press_tx(move |s: &mut Shell, tx| {
                 super::copy_server(s, id, &k);
                 tx.instant();
             }));
         }
         card = card.child(chips).child(text("Into this folder").font(theme::GROUP_TITLE).color(t.l2on).single_line().mt(6.0));
-        let shown_path = copy.place.as_ref().map(|(p, _)| p.clone()).or_else(|| copy.asked.clone()).unwrap_or_default();
         let above = copy.place.as_ref().map(|(p, _)| p.clone()).filter(|p| paths::has_parent(p)).map(|p| paths::parent(&p));
         let mut up = el().key("copy-up").size(28.0, 28.0).radius(7.0).items_center().justify_center().fill(t.code).role("button").label_static("Folder above").help("Folder above").child(icon(Icon::ArrowUp, 14.0, t.l2on));
         up = match above {
@@ -2201,20 +2484,32 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
             }),
             None => up.opacity(0.4),
         };
-        card = card.child(
-            row().w_full().gap(6.0).items_center().child(up).child(
-                row().grow(1.0).min_w(0.0).h(28.0).px(10.0).radius(7.0).fill(t.code).items_center().child(text(s.text_shown(&shown_path).into_owned()).font(theme::CODE).color(t.l1).single_line().truncate().grow(1.0).min_w(0.0)).child(if copy.asked.is_some() {
-                    text("Looking…").font(theme::NOTE).color(t.l2).single_line()
-                } else {
-                    el()
-                }),
-            ),
-        );
+        // The folder there, as a path that can be typed or pasted; Return goes there. While
+        // streaming it's only shown, dotted, as 0.10 did.
+        let input = if s.streaming() {
+            text(s.text_shown(&state.ui.copy_typed.text).into_owned()).key("copy-path").font(theme::CODE).color(t.l1).single_line().truncate()
+        } else {
+            text_input(&state.ui.copy_typed, theme::CODE)
+                .key("copy-path")
+                .single_line()
+                .color(t.l1)
+                .placeholder("/path/on/the/server", t.l2)
+                .label_static("Folder on the server")
+                .on_edit(move |s: &mut Shell| copy_typed(s, id))
+                .on_submit(move |s: &mut Shell, tx| copy_typed_go(s, id, tx))
+        };
+        let mut field = row().grow(1.0).min_w(0.0).h(28.0).px(10.0).gap(6.0).radius(7.0).fill(t.code).items_center().focus_within_ring(2.0, 0.0, t.ring).child(input.grow(1.0).min_w(0.0));
+        if copy.asked.is_some() {
+            field = field.child(text("Looking…").font(theme::NOTE).color(t.l2).single_line());
+        }
+        card = card.child(row().w_full().gap(6.0).items_center().child(up).child(field));
+        if let Some(why) = super::copy_blocked(s, id).filter(|_| copy.error.is_none()) {
+            card = card.child(text(s.text_shown(&why).into_owned()).key("copy-blocked").font(theme::NOTE).color(t.l2).wrap().w_full());
+        }
         let mut folders = col().key("copy-folders").w_full().h(168.0).padding(4.0).radius(8.0).fill(t.code).scroll(ScrollSpec { stick_bottom: false });
         match (&copy.error, &copy.place) {
             (Some(error), _) => folders = folders.child(text(s.text_shown(error).into_owned()).font(theme::NOTE).color(t.red).wrap().w_full().padding(6.0)),
-            (None, Some((place, dirs))) if dirs.is_empty() && copy.asked.is_none() => {
-                let _ = place;
+            (None, Some((_, dirs))) if dirs.is_empty() && copy.asked.is_none() => {
                 folders = folders.child(text("No folders inside. The files go right here.").font(theme::NOTE).color(t.l2).single_line().padding(6.0));
             }
             (None, Some((place, dirs))) => {
@@ -2234,7 +2529,7 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
         card = card.child(folders);
     }
-    let ready = copy.place.is_some() && copy.asked.is_none() && copy.to.is_some();
+    let ready = copy_ready(s, id);
     let card = card.child(
         row().w_full().gap(8.0).mt(8.0).child(spacer()).child(push_button(t, "Cancel", Push::Quiet, true).key("copy-cancel").on_press_tx(close)).child({
             let b = push_button(t, "Copy here", Push::Primary, ready).key("copy-go");

@@ -28,8 +28,9 @@ const ARCHIVE: &[&str] = &["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", 
 const SCRIPT: &[&str] = &["sh", "bash", "zsh", "fish"];
 const IMAGE: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif", "heic", "tif", "tiff"];
 const VIDEO: &[&str] = &["mp4", "m4v", "mov", "webm", "ogv", "mkv", "avi"];
-/// The pictures Rune decodes itself.
-const SHOWN: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"];
+/// The pictures Rune decodes itself (TIFF with the image crate's TIFF decoder, which the
+/// program turns on). AVIF and HEIC have no decoder here without a native library.
+const SHOWN: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff"];
 
 /// What follows the last dot, in lower case: "tar.GZ" → "gz", ".env" → "env". `None` without a
 /// dot.
@@ -243,10 +244,10 @@ mod tests {
         assert_eq!(media_kind("a.heic"), Some(MediaKind::Image));
         assert_eq!(media_kind("a.mkv"), Some(MediaKind::Video));
         assert_eq!(media_kind("a.txt"), None);
-        for name in ["a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "A.PNG"] {
+        for name in ["a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "A.PNG", "scan.tif", "scan.TIFF"] {
             assert_eq!(opens_as(name), Opens::Image, "{name}");
         }
-        for name in ["a.avif", "a.heic", "a.tiff", "a.mp4", "a.webm"] {
+        for name in ["a.avif", "a.heic", "a.mp4", "a.webm"] {
             assert_eq!(opens_as(name), Opens::Nothing, "{name}");
         }
         // An SVG is text, drawn in its preview, edited as its source.

@@ -121,6 +121,22 @@ pub fn may_move_into(dir: &str, dragged: &[String], folder: &str) -> bool {
     !dragged.iter().map(|p| trimmed(p)).any(|p| folder == p || folder.starts_with(&format!("{}/", p.trim_end_matches('/'))))
 }
 
+/// Why "Copy to another folder or server" can't copy rows of `from_dir` (their full paths,
+/// `paths`) into `dest` on the same server: they're in it already, or a folder would go into
+/// itself (0.10's `CopyToServer`). `None`: it can. Another server takes anything.
+pub fn copy_blocked(same_server: bool, from_dir: &str, paths: &[String], dest: &str) -> Option<String> {
+    if !same_server {
+        return None;
+    }
+    let trimmed = |p: &str| if p.len() > 1 { p.trim_end_matches('/').to_owned() } else { p.to_owned() };
+    let dest = trimmed(dest);
+    if dest == trimmed(from_dir) {
+        return Some("They're already in this folder. Pick another one.".into());
+    }
+    let inside = paths.iter().map(|p| trimmed(p)).find(|p| dest == *p || dest.starts_with(&format!("{}/", p.trim_end_matches('/'))))?;
+    Some(format!("Can't copy {} into itself. Pick a folder outside it.", paths::name(&inside)))
+}
+
 /// Before rows dragged out of the window download (0.10.14): letting go out there is easy to do
 /// by accident, so it asks, naming where they'll land. `into` is the folder under the pointer
 /// when the system said (the desktop, a folder's window), else they go to Downloads. A folder
@@ -536,6 +552,16 @@ mod tests {
         assert!(!may_move_into("/home/deploy", &dragged, "/home/deploy/shop/assets"), "into its own folder");
         assert!(may_move_into("/home/deploy", &dragged, "/home/deploy/shopping"), "only a whole name is the same folder");
         assert!(!may_move_into("/home/deploy", &[], "/srv"));
+    }
+
+    #[test]
+    fn a_copy_on_its_own_server_goes_elsewhere_and_never_into_itself() {
+        let paths = names(&["/home/deploy/shop", "/home/deploy/notes.md"]);
+        assert_eq!(copy_blocked(true, "/home/deploy", &paths, "/home/deploy/").as_deref(), Some("They're already in this folder. Pick another one."));
+        assert_eq!(copy_blocked(true, "/home/deploy", &paths, "/home/deploy/shop/assets").as_deref(), Some("Can't copy shop into itself. Pick a folder outside it."));
+        assert_eq!(copy_blocked(true, "/home/deploy", &paths, "/home/deploy/logs"), None);
+        assert_eq!(copy_blocked(true, "/home/deploy", &paths, "/home/deploy/shopping"), None);
+        assert_eq!(copy_blocked(false, "/home/deploy", &paths, "/home/deploy"), None, "another server takes anything");
     }
 
     #[test]

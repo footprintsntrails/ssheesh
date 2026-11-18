@@ -914,8 +914,8 @@ impl Shell {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // The screens' own clockwork: who started to wait, a server's card coming up.
         let ticked = crate::screens::home::tick(self, clock, tx);
-        // A folder pointed at in Files is listed ahead.
-        crate::screens::files::tick(self, clock, tx);
+        // A folder pointed at in Files is listed ahead; a picture it opened is decoded.
+        let pictured = crate::screens::files::tick(self, clock, tx);
         // A hint whose moment came; "Add a server" opened from the welcome, at its list.
         let ticked = crate::screens::tour::tick(self, clock) | crate::screens::welcome::tick(self) | ticked;
         let winked = crate::looks::tick_logo(self, clock, tx);
@@ -955,7 +955,7 @@ impl Shell {
         // Toasts whose time is up (`notes.rs`), and the tray's list of who needs you.
         let notes = super::notes::tick(self, clock, tx);
         self.sync_waiting();
-        changed || ticked || agents || winked || notes
+        changed || ticked || agents || winked || notes || pictured
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.
