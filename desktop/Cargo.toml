@@ -24,7 +24,7 @@ publish = false
 # image thread, at most 4096 px; vendor/rune.patch keeps it from reading this computer's files
 # through an SVG's <image href>: hostile SVGs, Rune #587/#888). Off on purpose:
 # `embedded-fonts` (we register our own, sshee-ui/fonts) and `ogg-audio`.
-rune = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095", default-features = false, features = ["accessibility", "dbus", "metal-backend", "native-file-dialog", "svg", "tooling"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "10a39584cc1ff739477be52e333a742a024ac956", default-features = false, features = ["accessibility", "dbus", "metal-backend", "native-file-dialog", "svg", "tooling"] }
 sshee-core = { path = "../crates/sshee-core" }
 sshee-term = { path = "../crates/sshee-term" }
 sshee-app = { path = "../crates/sshee-app" }
@@ -41,11 +41,12 @@ saturating-time = { path = "../crates/saturating-time" }
 # Rune's, from the same rev as `rune` above: the [patch.crates-io] table of Rune's root
 # Cargo.toml at that rev. A dependency's [patch] doesn't reach us; without these we'd build
 # against stock crates (winit without its macOS input-method and Windows window fixes,
-# parley_engine without its bidi and shaping fixes).
-winit = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
-parley_engine = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
-wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
-accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "c8d77a3f8559dcb52deb71c62f56cd92698b1095" }
+# parley_engine without its bidi and shaping fixes, accesskit_macos without VoiceOver's headings).
+winit = { git = "https://github.com/anomalyco/rune", rev = "10a39584cc1ff739477be52e333a742a024ac956" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "10a39584cc1ff739477be52e333a742a024ac956" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "10a39584cc1ff739477be52e333a742a024ac956" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "10a39584cc1ff739477be52e333a742a024ac956" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "10a39584cc1ff739477be52e333a742a024ac956" }
 
 # Rune's own crate, with the fixes it doesn't have yet at the rev above (Rune #225's redraw loop,
 # frames for input that changes nothing, the layout's letter for keys taken before Rune's): a
