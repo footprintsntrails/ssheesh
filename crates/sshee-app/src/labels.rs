@@ -266,7 +266,7 @@ impl Looks {
     /// Picks an icon; the colour stays as it is (one you picked, or none) and a picture goes
     /// (0.10's look picker: picking an icon or a colour drops the picture).
     pub fn set_icon(&mut self, host_id: &str, icon: &str) {
-        let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
+        let look = self.labels.looks.entry(host_id.to_owned()).or_default();
         look.icon = icon.to_owned();
         look.image = None;
     }
@@ -276,7 +276,7 @@ impl Looks {
     pub fn set_color(&mut self, host_id: &str, color: &str) {
         let Some(color) = parse_color(color) else { return };
         let shown = self.look(host_id);
-        let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
+        let look = self.labels.looks.entry(host_id.to_owned()).or_default();
         look.color = color;
         look.image = None;
         if look.icon.is_empty() {
@@ -291,7 +291,7 @@ impl Looks {
         let shown = self.look(host_id);
         match image {
             Some(image) => {
-                let look = self.labels.looks.entry(host_id.to_owned()).or_insert_with(HostLook::default);
+                let look = self.labels.looks.entry(host_id.to_owned()).or_default();
                 look.icon = shown.icon;
                 // A colour you picked stays; the server's own isn't made yours.
                 look.color = if shown.own_color { shown.color } else { String::new() };

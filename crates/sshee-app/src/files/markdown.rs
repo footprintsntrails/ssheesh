@@ -226,7 +226,7 @@ pub fn parse_lines(source: &str) -> Vec<(Block, [u32; 2])> {
             while i < lines.len() {
                 let l = lines[i];
                 i += 1;
-                if l.trim_start().starts_with(&close) && l.trim().chars().all(|c| Some(c) == close.chars().next()) {
+                if l.trim_start().starts_with(&close) && l.trim().chars().all(|c| close.starts_with(c)) {
                     break;
                 }
                 body.push(l);
@@ -384,7 +384,7 @@ fn destination(chars: &[char], at: usize) -> Option<(String, usize)> {
     }
     let end = (at + 1..chars.len()).find(|&j| chars[j] == ')')?;
     let inside: String = chars[at + 1..end].iter().collect();
-    let url = inside.trim().split_whitespace().next().unwrap_or("").trim_start_matches('<').trim_end_matches('>').to_owned();
+    let url = inside.split_whitespace().next().unwrap_or("").trim_start_matches('<').trim_end_matches('>').to_owned();
     Some((url, end + 1))
 }
 
