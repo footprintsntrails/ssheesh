@@ -418,48 +418,15 @@ fn build() -> Vec<Row> {
     const POP: ChoiceLook = ChoiceLook::Popup;
     vec![
         // ------------------------------------------------------------------ Layout
-        Row::new(
-            "layout-tabs",
-            Layout,
-            "Tabs",
-            Choice {
-                look: SEG,
-                options: &[("sidebar", "Under each server"), ("top", "Along the top")],
-                get: |st| st.get().tabs_placement.as_str().to_owned(),
-                set: |st, v| st.set(|s| s.tabs_placement = TabsPlacement::from(v)),
-            },
-        )
-        .hint("Under each server in the sidebar, or in a strip along the top. Never both.")
-        .later("Tabs run along the top. Tabs under each server aren't built yet.")
-        .saves(&["tabsPlacement"])
-        .words("tab strip bar sidebar top"),
-        Row::new(
-            "layout-tab-server",
-            Layout,
-            "Name the server on every tab",
-            Switch { get: |st| st.more().tabs_name_server, set: |st, v| st.set_more(|m| m.tabs_name_server = v) },
-        )
-        .hint("Off, a server is named once, before its group of tabs.")
-        .adds(&["tabsNameServer"])
-        .words("tab title host name group"),
-        Row::new(
-            "layout-view",
-            Layout,
-            "Tabs on screen",
-            Choice {
-                look: SEG,
-                options: &[("tabs", "One at a time"), ("split", "Side by side")],
-                get: |st| st.get().view_mode.as_str().to_owned(),
-                set: |st, v| st.set(|s| s.view_mode = ViewMode::from(v)),
-            },
-        )
-        .hint("Side by side, a machine's tabs share its page and new ones open beside you. Split, drag a tab onto the page, or arrange them from the palette (Arrange…).")
-        .saves(&["viewMode"])
-        .words("split panes side by side"),
+        Row::new("layout-sidebar-shown", Layout, "Show sidebar", Control::Special(Special::SidebarShown))
+            .group("Sidebar")
+            .hint_by(|st, on| format!("Show or hide with {}.", keymap::shortcut_label("sidebar", on, &st.get().shortcuts)))
+            .saves(&["sidebarVisible"])
+            .words("hide show server list"),
         Row::new(
             "layout-sidebar-side",
             Layout,
-            "Sidebar",
+            "Side",
             Choice {
                 look: SEG,
                 options: &[("left", "Left"), ("right", "Right")],
@@ -467,26 +434,9 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.sidebar_side = Side::from(v)),
             },
         )
+        .group("Sidebar")
         .saves(&["sidebarSide"])
         .words("left right server list"),
-        Row::new("layout-sidebar-shown", Layout, "Show sidebar", Control::Special(Special::SidebarShown))
-            .hint_by(|st, on| format!("Show or hide with {}.", keymap::shortcut_label("sidebar", on, &st.get().shortcuts)))
-            .saves(&["sidebarVisible"])
-            .words("hide show server list"),
-        Row::new(
-            "layout-compact",
-            Layout,
-            "Compact mode",
-            Choice {
-                look: SEG,
-                options: &[("off", "Off"), ("sidebar", "Sidebar"), ("tabbar", "Tab bar"), ("both", "Both")],
-                get: |st| st.get().compact_mode.as_str().to_owned(),
-                set: |st, v| st.set(|s| s.compact_mode = CompactMode::from(v)),
-            },
-        )
-        .hint("What slides away until you point at the window's edge. Both also hides the vitals.")
-        .saves(&["compactMode"])
-        .words("zen focus hide toolbar tab bar sidebar minimal"),
         Row::new(
             "layout-server-list",
             Layout,
@@ -498,7 +448,8 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.sidebar_mode = SidebarMode::from(v)),
             },
         )
-        .hint("Names, or just icons to save room. Drag the sidebar's edge to make it wider or fold it.")
+        .group("Sidebar")
+        .hint("Names, or just icons to save room.")
         .saves(&["sidebarMode"])
         .words("sidebar narrow icons names rail"),
         Row::new(
@@ -512,57 +463,110 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.icon_pack = IconPack::from(v)),
             },
         )
+        .group("Sidebar")
         .hint("Clean lines, or pixels like the >_< logo.")
         .later("Lines only. Pixel icons aren't drawn yet.")
         .saves(&["iconPack"])
         .words("icon pack pixel line style look"),
         Row::new(
-            "layout-server-load",
+            "layout-view",
             Layout,
-            "Server load",
+            "Tabs on screen",
             Choice {
                 look: SEG,
-                options: &[("off", "Off"), ("frame", "Frame"), ("bars", "Bars"), ("pulse", "Pulse"), ("count", "Count")],
-                get: |st| st.get().rail_status.as_str().to_owned(),
-                set: |st, v| st.set(|s| s.rail_status = RailStatus::from(v)),
+                options: &[("tabs", "One at a time"), ("split", "Side by side")],
+                get: |st| st.get().view_mode.as_str().to_owned(),
+                set: |st, v| st.set(|s| s.view_mode = ViewMode::from(v)),
             },
         )
-        .hint("How busy each open server is, shown on its icon. Amber means a disk or memory is nearly full.")
-        .later("Not shown on the icons yet. The status bar shows the load of the server on screen.")
-        .saves(&["railStatus"])
-        .words("cpu memory busy meter stats"),
-        Row::new("layout-ssh-config", Layout, "Servers from ~/.ssh/config", Buttons(&[("Choose…", Action::AddServer)]))
-            .hint("Choose which of them show up in the sidebar, in Add a server. Your config file isn't changed.")
-            .words("hidden hosts import config bring over 0.10"),
+        .group("Tabs")
+        .hint("Side by side, a server's tabs share its page. Drag a tab onto the page to split it.")
+        .saves(&["viewMode"])
+        .words("split panes side by side"),
         Row::new(
-            "layout-env-line",
+            "layout-tab-server",
             Layout,
-            "A line for Production and Staging",
-            Switch { get: |st| st.get().env_stripe, set: |st, v| st.set(|s| s.env_stripe = v) },
+            "Name the server on every tab",
+            Switch { get: |st| st.more().tabs_name_server, set: |st, v| st.set_more(|m| m.tabs_name_server = v) },
         )
-        .hint("Servers you label Production or Staging always show the word. This adds a thin red or orange line along the top of the window while one is on screen.")
-        .saves(&["envStripe"])
-        .words("prod staging stripe label red"),
+        .group("Tabs")
+        .hint("Off, a server is named once, before its group of tabs.")
+        .adds(&["tabsNameServer"])
+        .words("tab title host name group"),
+        Row::new(
+            "layout-tabs",
+            Layout,
+            "Where tabs go",
+            Choice {
+                look: SEG,
+                options: &[("sidebar", "Under each server"), ("top", "Along the top")],
+                get: |st| st.get().tabs_placement.as_str().to_owned(),
+                set: |st, v| st.set(|s| s.tabs_placement = TabsPlacement::from(v)),
+            },
+        )
+        .group("Tabs")
+        .hint("Under each server in the sidebar, or in a strip along the top.")
+        .later("Tabs run along the top. Tabs under each server aren't built yet.")
+        .saves(&["tabsPlacement"])
+        .words("tab strip bar sidebar top"),
+        Row::new(
+            "layout-compact",
+            Layout,
+            "Compact mode",
+            Choice {
+                look: POP,
+                options: &[("off", "Off"), ("sidebar", "Sidebar"), ("tabbar", "Tab bar"), ("both", "Both")],
+                get: |st| st.get().compact_mode.as_str().to_owned(),
+                set: |st, v| st.set(|s| s.compact_mode = CompactMode::from(v)),
+            },
+        )
+        .group("Window")
+        .hint("What hides until you point at the window's edge. Both hides the vitals too.")
+        .saves(&["compactMode"])
+        .words("zen focus hide toolbar tab bar sidebar minimal"),
         Row::new(
             "layout-vitals",
             Layout,
             "Server vitals",
             Switch { get: |st| st.get().show_vitals, set: |st, v| st.set(|s| s.show_vitals = v) },
         )
+        .group("Window")
         .hint_by(|st, on| {
             format!(
-                "A one-line CPU, memory, network and disk readout under your tabs. {} shows and hides it.",
+                "CPU, memory, network and disk under your tabs. {} shows and hides it.",
                 keymap::shortcut_label("vitals", on, &st.get().shortcuts)
             )
         })
         .saves(&["showVitals"])
         .words("stats cpu memory bar metrics status"),
         Row::new(
+            "layout-env-line",
+            Layout,
+            "A line for Production and Staging",
+            Switch { get: |st| st.get().env_stripe, set: |st, v| st.set(|s| s.env_stripe = v) },
+        )
+        .group("Window")
+        .hint("A thin red or orange line along the top while a Production or Staging server is on screen.")
+        .saves(&["envStripe"])
+        .words("prod staging stripe label red"),
+        Row::new(
+            "layout-title-bar",
+            Layout,
+            "Use the Windows title bar",
+            Switch { get: |st| st.get().native_title_bar, set: |st, v| st.set(|s| s.native_title_bar = v) },
+        )
+        .group("Window")
+        .hint("For when dragging, snapping or the window buttons misbehave. Takes effect after a restart.")
+        .saves(&["nativeTitleBar"])
+        .words("title bar window frame decorations native snap drag minimize maximize close buttons")
+        .only(Platform::Windows),
+        Row::new(
             "layout-gap",
             Layout,
             "Space between panes",
             Slider { min: 0.0, max: 16.0, step: 1.0, get: |st| st.get().pane_gap, set: |st, v| st.set(|s| s.pane_gap = v), show: px },
         )
+        .group("Window")
         .saves(&["paneGap"])
         .words("gap spacing"),
         Row::new(
@@ -571,19 +575,30 @@ fn build() -> Vec<Row> {
             "Corner roundness",
             Slider { min: 0.0, max: 18.0, step: 1.0, get: |st| st.get().pane_radius, set: |st, v| st.set(|s| s.pane_radius = v), show: px },
         )
+        .group("Window")
         .hint("The page's corner where it meets the sidebar.")
         .saves(&["paneRadius"])
         .words("radius rounded corners"),
+        Row::new("layout-ssh-config", Layout, "Servers from ~/.ssh/config", Buttons(&[("Choose…", Action::AddServer)]))
+            .group("Servers")
+            .hint("Pick which show up in the sidebar. Your config file isn't changed.")
+            .words("hidden hosts import config bring over 0.10"),
         Row::new(
-            "layout-title-bar",
+            "layout-server-load",
             Layout,
-            "Use the Windows title bar",
-            Switch { get: |st| st.get().native_title_bar, set: |st, v| st.set(|s| s.native_title_bar = v) },
+            "Server load",
+            Choice {
+                look: POP,
+                options: &[("off", "Off"), ("frame", "Frame"), ("bars", "Bars"), ("pulse", "Pulse"), ("count", "Count")],
+                get: |st| st.get().rail_status.as_str().to_owned(),
+                set: |st, v| st.set(|s| s.rail_status = RailStatus::from(v)),
+            },
         )
-        .hint("SSHeesh draws its own title bar to save room. Switch this on if dragging, snapping or the window buttons misbehave. Takes effect when SSHeesh starts again.")
-        .saves(&["nativeTitleBar"])
-        .words("title bar window frame decorations native snap drag minimize maximize close buttons")
-        .only(Platform::Windows),
+        .group("Servers")
+        .hint("How busy each open server is, on its icon.")
+        .later("Not shown on the icons yet. The status bar shows the load of the server on screen.")
+        .saves(&["railStatus"])
+        .words("cpu memory busy meter stats"),
         // ------------------------------------------------------------------ Appearance
         Row::new(
             "look-appearance",
@@ -600,11 +615,11 @@ fn build() -> Vec<Row> {
                 },
             },
         )
-        .hint("Match my system is light by day and dark by night, switching when your system does.")
+        .hint("Match my system switches when your system does.")
         .saves(&["themeFollowsSystem", "theme", "lightTheme", "darkTheme"])
         .words("auto dark mode light mode night day schedule theme colors look"),
         Row::new("look-theme", Look, "Theme", Control::Special(Special::Theme))
-            .hint("Use the arrow keys to flip through them. Duplicate one to change any of its colors, transparency included.")
+            .hint("Arrow keys flip through them. Duplicate one to change its colors.")
             .saves(&["customThemes"])
             .words("midnight graphite oled daylight custom own edit editor hex palette transparency import export share"),
         Row::new("look-light-dark", Look, "Light and dark", Control::Special(Special::LightDark))
@@ -612,7 +627,7 @@ fn build() -> Vec<Row> {
             .words("theme light dark day night system")
             .when(|st| st.get().theme_follows_system),
         Row::new("look-accent", Look, "Accent color", Control::Special(Special::Accent))
-            .hint("What is picked, the button Return presses, and the keyboard's focus.")
+            .hint("What is picked, the button Return presses, and the focus ring.")
             .saves(&["accent"])
             .words("highlight color blue green"),
         Row::new(
@@ -643,7 +658,8 @@ fn build() -> Vec<Row> {
                 },
             },
         )
-        .hint("Everything but the terminal text, which has its own size under Terminal.")
+        .group("Interface")
+        .hint("Everything but the terminal's text, which is sized under Terminal.")
         .saves(&["uiZoom"])
         .words("zoom scale bigger smaller ui text"),
         Row::new(
@@ -659,10 +675,12 @@ fn build() -> Vec<Row> {
                 show: |v| if v > 0.0 { percent(v) } else { "Off".into() },
             },
         )
-        .hint("With two tabs side by side, the one you're not typing in fades, so it's obvious where you are.")
+        .group("Interface")
+        .hint("With tabs side by side, the one you're not typing in fades.")
         .saves(&["dimInactive"])
         .words("dim inactive focus opacity"),
         Row::new("look-animations", Look, "Animations", Switch { get: |st| st.get().animations, set: |st, v| st.set(|s| s.animations = v) })
+            .group("Interface")
             .saves(&["animations"])
             .words("motion reduce effects"),
         Row::new(
@@ -676,21 +694,20 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.logo = Logo::from(v)),
             },
         )
-        .hint("On the main menu's button. Now and then the winking one blinks at you; hidden, the button shows a house.")
+        .group("Interface")
+        .hint("On the main menu's button. Hidden, the button shows a house.")
         .saves(&["logo"])
         .words("icon wink animated mascot face"),
         // ------------------------------------------------------------------ Terminal
         Row::new("term-preview", Terminal, "", Control::Special(Special::TerminalPreview)),
-        Row::new("term-scheme", Terminal, "Color scheme", Control::Special(Special::Schemes))
-            .saves(&["terminalScheme", "terminalColors"])
-            .words("terminal theme dracula nord tokyo catppuccin solarized gruvbox colors"),
         Row::new(
             "term-font",
             Terminal,
             "Font",
             Choice { look: POP, options: &TERMINAL_FONTS, get: |st| st.get().terminal_font.clone(), set: |st, v| st.set(|s| s.terminal_font = v.to_owned()) },
         )
-        .hint("A font this computer doesn't have shows as JetBrains Mono, which comes with SSHeesh.")
+        .group("Text and cursor")
+        .hint("A font this computer lacks shows as JetBrains Mono.")
         .on_mac(&["SF Mono", "JetBrains Mono", "Menlo", "Cascadia Mono", "Consolas"])
         .saves(&["terminalFont"])
         .words("typeface mono jetbrains menlo cascadia sf"),
@@ -700,6 +717,7 @@ fn build() -> Vec<Row> {
             "Font size",
             Slider { min: 10.0, max: 20.0, step: 1.0, get: |st| st.get().terminal_font_size, set: |st, v| st.set(|s| s.terminal_font_size = v), show: px },
         )
+        .group("Text and cursor")
         .saves(&["terminalFontSize"])
         .words("text bigger smaller"),
         Row::new(
@@ -715,6 +733,7 @@ fn build() -> Vec<Row> {
                 show: |v| format!("{v:.2}"),
             },
         )
+        .group("Text and cursor")
         .saves(&["terminalLineHeight"])
         .words("spacing lines"),
         Row::new(
@@ -723,6 +742,7 @@ fn build() -> Vec<Row> {
             "Padding",
             Slider { min: 0.0, max: 28.0, step: 1.0, get: |st| st.get().terminal_padding, set: |st, v| st.set(|s| s.terminal_padding = v), show: px },
         )
+        .group("Text and cursor")
         .hint("The space between the terminal's edge and its text.")
         .saves(&["terminalPadding"])
         .words("margin space terminal edge"),
@@ -737,11 +757,16 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.cursor_style = CursorStyle::from(v)),
             },
         )
+        .group("Text and cursor")
         .saves(&["cursorStyle"])
         .words("bar block underline caret"),
         Row::new("term-blink", Terminal, "Blinking cursor", Switch { get: |st| st.get().cursor_blink, set: |st, v| st.set(|s| s.cursor_blink = v) })
+            .group("Text and cursor")
             .saves(&["cursorBlink"])
             .words("blink caret"),
+        Row::new("term-scheme", Terminal, "Color scheme", Control::Special(Special::Schemes))
+            .saves(&["terminalScheme", "terminalColors"])
+            .words("terminal theme dracula nord tokyo catppuccin solarized gruvbox colors"),
         Row::new(
             "term-reconnect",
             Terminal,
@@ -753,6 +778,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.reconnect_mode = ReconnectMode::from(v)),
             },
         )
+        .group("Connection")
         .hint_by(|st, _| {
             let text = match st.get().reconnect_mode {
                 ReconnectMode::Auto => "Reconnects on its own and lands you back in the same session.",
@@ -768,7 +794,7 @@ fn build() -> Vec<Row> {
             Terminal,
             "Disconnect unused terminals",
             Choice {
-                look: SEG,
+                look: POP,
                 options: &[("0", "Off"), ("15", "15 min"), ("20", "20 min"), ("30", "30 min"), ("60", "1 h")],
                 get: |st| format!("{}", st.get().idle_sleep),
                 set: |st, v| {
@@ -778,11 +804,12 @@ fn build() -> Vec<Row> {
                 },
             },
         )
+        .group("Connection")
         .hint_by(|st, _| {
             let minutes = st.get().idle_sleep;
             if minutes > 0.0 {
                 let after = if minutes < 60.0 { format!("{minutes} min") } else { "an hour".into() };
-                format!("A server terminal with no typing and no output for {after} lets go of its connection. Only where tmux keeps the shell running on the server. Any key brings it back.")
+                format!("A terminal unused for {after} lets go of its connection where tmux keeps the shell. Any key reconnects.")
             } else {
                 "Terminals stay connected for as long as they're open.".into()
             }
@@ -795,7 +822,8 @@ fn build() -> Vec<Row> {
             "Count how much typing could appear instantly",
             Switch { get: |st| st.get().count_typing, set: |st, v| st.set(|s| s.count_typing = v) },
         )
-        .hint("A test for a possible feature: letters showing before the server answers. It only keeps counts, not what you type.")
+        .group("Connection")
+        .hint("A test for a possible feature. It keeps counts only, never what you type.")
         .saves(&["countTyping"])
         .words("local echo predict latency lag slow tor delay test measure statistics"),
         Row::new(
@@ -816,7 +844,7 @@ fn build() -> Vec<Row> {
             },
         )
         .group("Welcome")
-        .hint("What a new terminal on a server shows first. The server's notices, like updates waiting or a restart needed, always show.")
+        .hint("What a new terminal shows first. The server's own notices always show.")
         .saves(&["welcomeMode"])
         .words("motd welcome banner logo login message greeting"),
         Row::new(
@@ -836,7 +864,7 @@ fn build() -> Vec<Row> {
             },
         )
         .group("Welcome")
-        .hint("Facts come from the server each time, in a blink: no waiting on the network.")
+        .hint("Read from the server each time, without waiting on the network.")
         .saves(&["welcomeParts"])
         .words("motd welcome banner logo system memory disk containers updates")
         .when(welcome_is_ours),
@@ -918,14 +946,14 @@ fn build() -> Vec<Row> {
         Row::new("privacy-streamer", Privacy, "Streamer mode", Switch { get: |st| st.get().streamer_mode, set: |st, v| st.set(|s| s.streamer_mode = v) })
             .hint_by(|st, on| {
                 format!(
-                    "Hides server names, addresses, IPs and user names in the sidebar, titles and terminal output. For streams, screen shares and screenshots. {} turns it on and off.",
+                    "Hides server names, addresses and user names everywhere, terminal output included. {} turns it on and off.",
                     keymap::shortcut_label("streamer", on, &st.get().shortcuts)
                 )
             })
             .saves(&["streamerMode"])
             .words("hide names ip addresses screen share recording obs twitch"),
         Row::new("privacy-secrets", Privacy, "Hide secrets", Switch { get: |st| st.get().hide_secrets, set: |st, v| st.set(|s| s.hide_secrets = v) })
-            .hint("Tokens, keys and passwords in the output show as dots: GitHub and API tokens, private keys, PASSWORD=… and the like. Click one to see it. Always on in streamer mode.")
+            .hint("Tokens, keys and passwords in the output show as dots until clicked. Always on in streamer mode.")
             .saves(&["hideSecrets"])
             .words("tokens keys passwords api redact mask privacy streamer env"),
         Row::new(
@@ -934,13 +962,13 @@ fn build() -> Vec<Row> {
             "Clean files before uploading",
             Switch { get: |st| st.get().clean_uploads, set: |st, v| st.set(|s| s.clean_uploads = v) },
         )
-        .hint("Photos lose where and with what they were taken; PDFs and Word, Excel and PowerPoint files lose author, company and the app that made them. A cleaned copy goes to the server, yours stays as it is. Other kinds of files, and files inside folders, go as they are.")
+        .hint("Photos lose place and camera, documents their author and company. Only the server's copy is cleaned; files inside folders go as they are.")
         .saves(&["cleanUploads"])
         .words("metadata exif gps location camera author strip remove photos pdf word upload"),
         Row::new("privacy-network", Privacy, "What SSHeesh connects to", Control::Special(Special::Network)).words("network telemetry tracking internet"),
         // ------------------------------------------------------------------ Files
         Row::new("files-editor", Files, "Open files in", Control::Special(Special::ExternalEditor))
-            .hint("Files' “Open in” starts this editor on a copy of a server's file, and every save goes back to the server.")
+            .hint("“Open in” edits a copy of a server's file here; every save goes back.")
             .adds(&["externalEditor"])
             .words("editor external vs code vscode zed sublime open in app"),
         // ------------------------------------------------------------------ Agents and notifications
@@ -950,12 +978,12 @@ fn build() -> Vec<Row> {
             "Tell me when a terminal needs me",
             Switch { get: |st| st.get().notify_attention, set: |st, v| st.set(|s| s.notify_attention = v) },
         )
-        .hint("When a program rings the bell or asks for you (AI coding agents do). Its tab says Needs you and its server gets a dot. While SSHeesh is in the background a system notification says so too; clicking it brings you to that terminal.")
+        .hint("When a program rings the bell or asks for you, as coding agents do. In the background, a system notification says so too.")
         .saves(&["notifyAttention"])
         .words("notification bell alert agent claude codex done attention"),
         // ------------------------------------------------------------------ Tor
         Row::new("tor-switch", Tor, "Connect through Tor", Control::Special(Special::TorSwitch))
-            .hint("Servers and their logs see a Tor address instead of yours, and your internet provider doesn't see which servers you use. Everything goes through it; if Tor can't carry a connection, it isn't made. SSHeesh runs Tor itself. Servers on your own network connect directly; one reached through a jump host doesn't connect. An ssh you type yourself in This computer's terminal goes as you type it.")
+            .hint("Servers see a Tor address, not yours, and your provider can't see which servers you use. If Tor can't carry a connection, it isn't made. Servers on your own network connect directly; one behind a jump host doesn't connect; an ssh you type in This computer's terminal goes as typed.")
             .words("onion anonymous proxy hide ip address"),
         Row::new(
             "tor-typing",
@@ -963,7 +991,7 @@ fn build() -> Vec<Row> {
             "Hide my typing rhythm",
             Switch { get: |st| st.get().tor_hide_typing, set: |st, v| st.set(|s| s.tor_hide_typing = v) },
         )
-        .hint("Your provider, Tor's relays and the server's network can see when you press keys. That can show how long a typed password is and hint at what you typed, but they can't read it. ssh can hide it by sending keys on a steady beat with fake ones between, but through Tor each key then takes about twice as long. For terminals you open from now on.")
+        .hint("Sends keys on a steady beat, so the network can't time your typing. Keys take about twice as long through Tor. For terminals opened from now on.")
         .saves(&["torHideTyping"])
         .words("keystroke timing obfuscation rhythm password"),
         // ------------------------------------------------------------------ Updates
@@ -974,7 +1002,7 @@ fn build() -> Vec<Row> {
             "Check for test builds",
             Switch { get: |st| st.canary_updates(), set: |st, v| st.set_more(|m| m.canary_updates = v) },
         )
-        .hint("A test build looks for a newer one when it starts and every few hours, downloads it in the background and asks before restarting. Builds made on your own computer never look.")
+        .hint("At start and every few hours; asks before restarting. Builds made on your own computer never look.")
         .adds(&["canaryUpdates"])
         .words("canary test build preview update nightly"),
         Row::new(
@@ -988,7 +1016,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.update_mode = UpdateMode::from(v)),
             },
         )
-        .hint("Updates are checked when the app starts and every few hours. Restarting reconnects your terminals. A test build downloads a newer one and asks before restarting; Never check stops it looking.")
+        .hint("At start and every few hours. Restarting reconnects your terminals.")
         .saves(&["updateMode"])
         .words("auto update version check"),
         // ------------------------------------------------------------------ About

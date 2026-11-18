@@ -65,6 +65,12 @@ pub fn form_heading(t: &Theme, title: &str, help: Option<&str>) -> El {
     heading
 }
 
+/// A box of rows under its heading, the heading close to the box it names (`form_group`'s
+/// output, or anything as wide).
+pub fn form_titled(t: &Theme, title: &str, group: El) -> El {
+    rune::col().w_full().gap(6.0).child(form_heading(t, title, None).pt(0.0)).child(group)
+}
+
 /// A quiet box with a line of text: a notice inside a section ("Names are hidden as well as
 /// SSHeesh can spot them…").
 pub fn form_note(t: &Theme, note: &str) -> El {
