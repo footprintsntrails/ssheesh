@@ -225,6 +225,7 @@ impl TermPane {
             ..EngineConfig::default()
         };
         let model = Arc::new(Model::new(size, &config));
+        let count_typing = options.count_typing;
         model.set_answer_colors(Palette::of(options.scheme, true).answer_colors());
         let mut view = PaneView::new(size, Look { hide_secrets: true, ..Look::default() });
         view.set_scheme(options.scheme);
@@ -266,7 +267,7 @@ impl TermPane {
             said: None,
             shown: true,
             hidden_pull: f64::NEG_INFINITY,
-            echo: None,
+            echo: count_typing.then(super::echo::Counter::new),
         }
     }
 
@@ -1217,6 +1218,16 @@ mod tests {
         let copied = ClipboardContent::default().with_html(r#"<a href="https://status.shop.example/incidents/42">incident</a>"#);
         let html = copied.html().unwrap_or_default();
         assert_eq!(pasted_text(copied.text(), &uri_list(&copied, html), html), "https://status.shop.example/incidents/42");
+    }
+
+    /// "Count how much typing could appear instantly" counts in a terminal opened while it's
+    /// on, not only in those open when it was turned on.
+    #[test]
+    fn a_new_terminal_counts_typing_when_settings_ask() {
+        let status: super::super::StatusSink = std::sync::Arc::new(|_| {});
+        let new = |count_typing| TermPane::new(Box::new(super::super::NoLink), status.clone(), PaneOptions { count_typing, ..PaneOptions::default() });
+        assert!(new(true).echo.is_some());
+        assert!(new(false).echo.is_none());
     }
 
     #[test]

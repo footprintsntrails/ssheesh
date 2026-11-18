@@ -158,6 +158,15 @@ impl Shared {
         self.wake_cv.notify_all();
     }
 
+    /// Forgets a wake that came while a try was still running: turning
+    /// automatic reconnecting on (it wakes every session) or Reconnect
+    /// pressed while connecting. Left set, it would make the next wait for
+    /// Reconnect return at once, and "Ask" would reconnect by itself. Done
+    /// before the try's end is looked at, so a Close after it still wakes.
+    fn clear_stale_wake(&self) {
+        *self.wake.lock().unwrap() = false;
+    }
+
     /// Waits until someone presses Reconnect, turns automatic reconnecting
     /// on, or closes the pane.
     fn wait_for_wake(&self) {
@@ -372,7 +381,9 @@ fn run_loop(shared: Arc<Shared>, spec: SessionSpec, sink: EventSink) {
             }
         }
         let started = Instant::now();
-        let exit = match run_once(&shared, &spec, &sink) {
+        let exit = run_once(&shared, &spec, &sink);
+        shared.clear_stale_wake();
+        let exit = match exit {
             Ok(exit) => exit,
             Err(message) => {
                 sink(SessionEvent::Status { state: SessionState::Failed { message } });
@@ -1080,6 +1091,47 @@ mod tests {
         assert_eq!(next(), SessionState::Connecting { attempt: 2 });
         assert_eq!(next(), SessionState::Connected { durable: false, tor: false });
         m.close("p");
+    }
+
+    /// Turning automatic reconnecting on wakes every session, connected ones
+    /// too, and Reconnect can be pressed while one connects. Those wakes are
+    /// forgotten when the try ends, so a drop after them in "Ask" mode waits
+    /// for Reconnect instead of reconnecting by itself.
+    #[test]
+    fn a_wake_during_a_try_is_forgotten_when_it_ends() {
+        let m = SessionManager::new();
+        let shared = Arc::new(Shared {
+            writer: Mutex::new(None),
+            master: Mutex::new(None),
+            killer: Mutex::new(None),
+            size: Mutex::new(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }),
+            closed: AtomicBool::new(false),
+            auto_reconnect: AtomicBool::new(false),
+            asleep: AtomicBool::new(false),
+            ssh: AtomicBool::new(true),
+            durable: AtomicBool::new(false),
+            connected: AtomicBool::new(true),
+            rerouting: AtomicBool::new(false),
+            wake: Mutex::new(false),
+            wake_cv: Condvar::new(),
+        });
+        m.sessions.lock().unwrap().insert("p".into(), shared.clone());
+        // Connected: automatic on and off again ("Ask"), and Reconnect pressed meanwhile.
+        m.set_auto_reconnect(true);
+        m.set_auto_reconnect(false);
+        m.reconnect_now("p");
+        assert!(*shared.wake.lock().unwrap());
+        // The connection drops: the try is over.
+        shared.clear_stale_wake();
+        let (tx, rx) = mpsc::channel();
+        let waiting = shared.clone();
+        std::thread::spawn(move || {
+            waiting.wait_for_wake();
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "it waits for Reconnect");
+        m.reconnect_now("p");
+        rx.recv_timeout(Duration::from_secs(5)).expect("Reconnect wakes it");
     }
 
     /// Every event a sink got: what, on which thread, when.

@@ -124,6 +124,22 @@ impl Shell {
     pub(crate) fn push_look(&mut self, tx: &mut Tx) {
         let look = self.look();
         let close_find = std::mem::take(&mut self.streamer.switched_on);
+        // Each pane's server by the name shown now (the host-key card says it): streaming
+        // turned on or off, or the list changed since the pane was made.
+        let machines: Vec<_> = self
+            .panes
+            .keys()
+            .filter_map(|id| {
+                let tab = self.bench.tab(*id)?;
+                let server = self.bench.server(&tab.server)?;
+                Some((*id, !server.is_local(), self.server_shown(&tab.server, &server.name).into_owned()))
+            })
+            .collect();
+        for (id, on_server, name) in machines {
+            if let Some(pane) = self.panes.get_mut(&id) {
+                pane.set_machine(on_server, &name);
+            }
+        }
         for pane in self.panes.values_mut() {
             if close_find {
                 pane.close_find(tx);

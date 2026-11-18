@@ -248,6 +248,23 @@ fn logs_and_a_shell_open_in_new_terminal_tabs_inside_the_container() {
     assert!(w.rt.find("ctr-3-shell").is_none() && w.rt.find("ctr-3-logs").is_some());
 }
 
+/// "Duplicate tab" on a terminal into a container opens another one into it, under its name,
+/// not a shell on the server.
+#[test]
+fn a_duplicated_container_terminal_runs_in_the_container_too() {
+    let mut w = Window::open();
+    w.open_tab(TabKind::Containers, WEB);
+    w.click("ctr-1-shell");
+    let like = w.rt.state.bench.active().cloned().unwrap();
+    w.rt.update(|s, tx| s.duplicate_tab(like.id, tx));
+    w.settle();
+    let copy = w.rt.state.bench.active().cloned().unwrap();
+    assert_ne!(copy.id, like.id);
+    assert_eq!((copy.kind, copy.label(), copy.server.as_str()), (TabKind::Terminal, "shop-db-1".to_owned(), WEB));
+    assert_eq!(copy.container, like.container);
+    assert_eq!(w.world.lock().unwrap().terminals.last().and_then(|t| t.container.clone()), like.container);
+}
+
 #[test]
 fn a_machine_without_docker_says_how_to_install_it() {
     let mut w = Window::open();

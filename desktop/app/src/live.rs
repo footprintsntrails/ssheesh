@@ -352,6 +352,7 @@ impl Backend for LiveBackend {
             signin: server.filter(|s| !s.is_local()).map(Server::key),
             known: self.known.clone(),
             watch: Arc::default(),
+            closed: Mutex::new(false),
         })))
     }
 
@@ -619,6 +620,21 @@ struct Inner {
     run: Option<Vec<String>>,
     /// A container that doesn't read as one: nothing is started.
     refused: bool,
+    /// The tab was closed: nothing starts its session again (a key check that answers after
+    /// the close, "Trust" pressed then). A lock, not a flag: held while a session starts, so a
+    /// close can't slip in between the look and the start.
+    closed: Mutex<bool>,
+}
+
+/// The target a try signs in with: the one the pane was made with, carrying the password
+/// that got a terminal into `signin` this run as it is now (never one forgotten since). A
+/// saved one from the keychain is put over it on the session's thread.
+fn fresh_target(target: Option<&Target>, signin: Option<&str>, known: &Known) -> Option<Target> {
+    let mut target = target?.clone();
+    if let Target::Ssh(t) = &mut target {
+        t.password = signin.and_then(|key| known.get(key));
+    }
+    Some(target)
 }
 
 /// What a terminal's sign-in leaves for the rest of the run: once it's in, the password that
@@ -633,9 +649,12 @@ fn signed_in(
     used: &Mutex<Option<sshee_core::secrets::Secret>>,
     account: &dyn Fn() -> Option<sshee_core::secrets::PasswordFor>,
 ) {
+    // Worked out before the lock: it runs `ssh -G` (and maybe `ssh -V`), and every key typed
+    // in the window waits on this lock (`LiveLink::write`).
+    let asks = if matches!(state, SessionState::Connecting { .. }) { account() } else { None };
     let mut watch = watch.lock().unwrap_or_else(|e| e.into_inner());
     match state {
-        SessionState::Connecting { .. } => watch.connecting(account()),
+        SessionState::Connecting { .. } => watch.connecting(asks),
         SessionState::Connected { .. } => {
             let typed = watch.connected();
             if let Some(password) = typed.or_else(|| used.lock().unwrap_or_else(|e| e.into_inner()).clone()) {
@@ -722,20 +741,43 @@ impl Inner {
         }
         status(LinkStatus::Connecting);
         let me = self.clone();
-        let _ = std::thread::Builder::new().name("host-key".into()).spawn(move || match me.keys.trust(&me.server, &t) {
-            Ok(()) => {
-                me.verified.lock().unwrap_or_else(|e| e.into_inner()).insert(me.server.clone());
-                me.connect();
+        let _ = std::thread::Builder::new().name("host-key".into()).spawn(move || {
+            if me.is_closed() {
+                return;
             }
-            Err(e) => status(LinkStatus::Gone { note: e.message }),
+            match me.keys.trust(&me.server, &t) {
+                Ok(()) => {
+                    me.verified.lock().unwrap_or_else(|e| e.into_inner()).insert(me.server.clone());
+                    me.connect();
+                }
+                Err(e) => status(LinkStatus::Gone { note: e.message }),
+            }
         });
+    }
+
+    fn is_closed(&self) -> bool {
+        *self.closed.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The tab is closed: its session stops, and nothing starts it again.
+    fn shut(&self) {
+        let mut closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        *closed = true;
+        self.manager.close(&self.id);
     }
 
     /// Starts the session (again).
     fn connect(&self) {
+        // Held until the session is started: a close waits for it, then stops it.
+        let closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return;
+        }
         let Some((model, status)) = self.started.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
         let size = *self.size.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(target) = self.target.clone() else {
+        // Each try reads the password a terminal got in with afresh: one typed since is used,
+        // one forgotten since (it was refused) isn't.
+        let Some(target) = fresh_target(self.target.as_ref(), self.signin.as_deref(), &self.known) else {
             status(LinkStatus::Gone { note: "That server isn't in your list anymore.".into() });
             return;
         };
@@ -804,6 +846,7 @@ impl Inner {
             Ok(spec)
         };
         self.manager.open_with(&self.id, size.cols, size.rows, prepare, sink, Delivery::Direct);
+        drop(closed);
     }
 }
 
@@ -844,14 +887,14 @@ impl TermLink for LiveLink {
     }
 
     fn close(&self) {
-        self.0.manager.close(&self.0.id);
+        self.0.shut();
     }
 
     /// The tab was closed on purpose: its tmux session on the server ends too, on a thread of
     /// its own (it's an ssh round trip), as 0.10's `close_session` does.
     fn end(&self) {
-        self.0.manager.close(&self.0.id);
-        if let Some(target @ Target::Ssh(_)) = self.0.target.clone() {
+        self.0.shut();
+        if let Some(target @ Target::Ssh(_)) = fresh_target(self.0.target.as_ref(), self.0.signin.as_deref(), &self.0.known) {
             let (env, key) = (self.0.env.clone(), self.0.key.clone());
             let _ = std::thread::Builder::new().name("session-end".into()).spawn(move || {
                 let _ = sshee_core::session::end_remote(&target, &env, &key);
@@ -1001,6 +1044,66 @@ mod tests {
         assert_eq!(password(&backend), None);
         // This computer has none to keep.
         assert!(matches!(backend.target_of("local"), Some(Target::Local)));
+    }
+
+    /// "Try again" signs in with the password a terminal got in with as it is now: one typed
+    /// since the pane was made, and never one forgotten since (refused, or the server's
+    /// password changed).
+    #[test]
+    fn each_try_reads_the_password_kept_for_the_run_afresh() {
+        use sshee_core::secrets::Secret;
+        let host = Host {
+            id: "saved:1".into(),
+            name: "web-7731".into(),
+            hostname: "203.0.113.17".into(),
+            user: Some("deploy".into()),
+            port: None,
+            identity_file: None,
+            source: HostSource::Saved,
+            remembered_password: false,
+            identity_agent: None,
+        };
+        let backend = LiveBackend::with_env(std::slice::from_ref(&host), None, SshEnv::default());
+        backend.known.keep("host:saved:1", Secret::new("old-one"));
+        // The pane was made while the old password was kept.
+        let made = backend.target_of("host:saved:1");
+        let password = |t: Option<Target>| match t {
+            Some(Target::Ssh(t)) => t.password.map(|p| p.expose().to_owned()),
+            other => panic!("{other:?}"),
+        };
+        let try_now = || fresh_target(made.as_ref(), Some("host:saved:1"), &backend.known);
+        assert_eq!(password(try_now()).as_deref(), Some("old-one"));
+        // Refused since: the next try doesn't send it again.
+        backend.known.forget("host:saved:1");
+        assert_eq!(password(try_now()), None);
+        // Typed in another terminal since: the next try has it.
+        backend.known.keep("host:saved:1", Secret::new("new-one"));
+        assert_eq!(password(try_now()).as_deref(), Some("new-one"));
+        // This computer has none.
+        assert!(matches!(fresh_target(Some(&Target::Local), None, &backend.known), Some(Target::Local)));
+    }
+
+    /// A tab closed before its session started (while its server's key was being checked)
+    /// never starts one: the check's answer, or "Trust", comes to nothing.
+    #[test]
+    fn a_closed_tab_never_starts_its_session() {
+        let mut backend = LiveBackend::with_env(&[], None, SshEnv::default());
+        let here = Server::this_computer();
+        let mut bench = sshee_app::workbench::Workbench::new(vec![here.clone()]);
+        let id = bench.go_to(&here.key());
+        let tab = bench.tab(id).unwrap().clone();
+        let mut link = backend.terminal(Some(&here), &tab);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        let status: StatusSink = Arc::new(move |s| {
+            let _ = tx.lock().unwrap().send(s);
+        });
+        let model = Arc::new(Model::new(Size::new(80, 24), &sshee_term::engine::EngineConfig::default()));
+        link.close();
+        // What the key check does once it has answered.
+        link.open(model, Size::new(80, 24), status);
+        link.restart(false);
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(500)).is_err(), "nothing started");
     }
 
     #[test]
