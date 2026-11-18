@@ -39,7 +39,7 @@ use crate::icons::{icon, Icon};
 use crate::kit::button::toolbar_button;
 use crate::kit::dialog;
 use crate::kit::push::{push_button, Push};
-use crate::kit::menu::{menu, menu_row, menu_row_destructive, RowState};
+use crate::kit::menu::{menu, menu_row, menu_row_destructive, menu_row_more, RowState};
 use crate::kit::popover::popover;
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
@@ -970,6 +970,7 @@ fn tool_menu(s: &mut Shell, tab: TabId, anchor: &'static str, more: bool, tx: &m
         can_back: b.can_go_back(),
         can_forward: b.can_go_forward(),
         paste_key: if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" },
+        delete_key: if cfg!(target_os = "macos") { "⌘⌫" } else { "Del" },
     };
     let rows = if more { sshee_app::files::menu::more_menu(&cx) } else { sshee_app::files::menu::new_menu(&cx) };
     if let Some(ui) = ui(s, tab) {
@@ -1983,9 +1984,17 @@ fn tab_overlay(s: &Shell, id: TabId, t: &'static Theme, cx: &mut Cx<Shell>) -> O
                         Some(true) => format!("✓ {label}"),
                         _ => label.into_owned(),
                     };
-                    width = width.max(menu_width(&label, item.hint));
-                    let draw = if item.destructive { menu_row_destructive } else { menu_row };
-                    let line = draw(t, &label, item.hint, if item.disabled { RowState::Off } else { RowState::Rest }).key(format!("menu-{i}"));
+                    // A chevron takes about a key cap's room.
+                    width = width.max(menu_width(&label, if item.action.opens_more() { Some("›") } else { item.hint }));
+                    let state = if item.disabled { RowState::Off } else { RowState::Rest };
+                    let line = if item.action.opens_more() {
+                        menu_row_more(t, &label, state)
+                    } else if item.destructive {
+                        menu_row_destructive(t, &label, item.hint, state)
+                    } else {
+                        menu_row(t, &label, item.hint, state)
+                    };
+                    let line = line.key(format!("menu-{i}"));
                     rows.push(if item.disabled {
                         line
                     } else {
