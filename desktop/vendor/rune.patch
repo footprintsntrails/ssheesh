@@ -1,4 +1,4 @@
-SSHeesh's fixes to Rune's `rune` crate at c8d77a3f (crates/rune), applied by
+SSHeesh's fixes to Rune's `rune` crate at 10a39584 (crates/rune), applied by
 scripts/vendor-rune.sh to make desktop/vendor/rune. Each goes once Rune has it.
 
 1. Rune #225, the Wayland input-method redraw loop (window/platform_sync.rs, win.rs,
@@ -229,7 +229,7 @@ diff -ruN a/src/file_dialog.rs b/src/file_dialog.rs
 diff -ruN a/src/image.rs b/src/image.rs
 --- a/src/image.rs
 +++ b/src/image.rs
-@@ -462,7 +462,11 @@
+@@ -494,7 +494,11 @@
  pub(crate) fn svg_rgba(bytes: &[u8], px: u32) -> Result<(u32, u32, Vec<u8>), ImageError> {
      use resvg::{tiny_skia, usvg};
      if bytes.len() > 32 << 20 { return Err(ImageError("SVG is too large".into())); }
@@ -348,7 +348,7 @@ diff -ruN a/src/runtime/input/physical.rs b/src/runtime/input/physical.rs
 diff -ruN a/src/window/cpu_frame.rs b/src/window/cpu_frame.rs
 --- a/src/window/cpu_frame.rs
 +++ b/src/window/cpu_frame.rs
-@@ -297,6 +297,7 @@
+@@ -304,6 +304,7 @@
              cursor: crate::cursor::os::OsCursor::new(),
              alpha: None,
              timer_frame: TimerFrame::default(),
@@ -399,7 +399,7 @@ diff -ruN a/src/window/events.rs b/src/window/events.rs
          #[cfg(target_os = "macos")]
          if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
              && let Some(w) = &mut self.win && let Some(pacing) = &mut w.native.pacing {
-@@ -385,6 +393,7 @@
+@@ -386,6 +394,7 @@
                      crate::platform::ime::cancel(&l.window);
                      l.window.set_ime_allowed(false);
                      self.ime_allowed = false;
@@ -407,7 +407,7 @@ diff -ruN a/src/window/events.rs b/src/window/events.rs
                      // A minimized or occluded window skips redraw.
                      l.apply_cursor(rt, false);
                  } else if rt.stale() {
-@@ -401,6 +410,7 @@
+@@ -402,6 +411,7 @@
                              LogicalPosition::new(a[0] as f64, a[1] as f64),
                              LogicalSize::new(a[2] as f64, a[3] as f64),
                          );

@@ -88,7 +88,7 @@ pub struct StartInfo {
 }
 
 /// The Rune revision the prototype is pinned to (desktop/Cargo.toml).
-pub const RUNE_REV: &str = "c8d77a3f";
+pub const RUNE_REV: &str = "10a39584";
 
 /// An input waiting for its echo to be drawn.
 #[derive(Clone, Copy, Debug)]

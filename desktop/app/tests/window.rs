@@ -825,7 +825,10 @@ fn add_a_server_shows_its_form_and_its_sources_in_both_appearances() {
         let script = json!([
             { "t": 0.3, "type": "tap", "key": "add-server" },
             { "t": 0.8, "type": "type", "text": "ssh root@203.0.113.77 -p 2222" },
-            { "t": 2.2, "type": "mark", "name": "end" }
+            // The key file's field shows once "Another key file" is chosen (after the typing:
+            // choosing it moves the keyboard to that field).
+            { "t": 2.2, "type": "tap", "key": "key-other" },
+            { "t": 2.8, "type": "mark", "name": "end" }
         ]);
         let Some(run) = run(&format!("add-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
         let dialog = run.rect("add-dialog");
@@ -878,7 +881,7 @@ fn files_lists_opens_and_asks_in_both_appearances() {
         let Some(run) = run(&format!("files-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
         assert_eq!(run.rect("files-toolbar"), [52.0, 44.0, 1228.0, 40.0], "{theme}");
         assert_eq!(run.rect("files-status")[3], 24.0, "{theme}");
-        for said in ["Folder path", "backups", "logs", "shop", "deploy.sh", "nginx.conf", "README.md", "8 items, 4 hidden", "1 selected, 256 B", "Today 11:02", "Oct 10", "Bookmarks and places", "Upload files"] {
+        for said in ["Folder path", "backups", "logs", "shop", "deploy.sh", "nginx.conf", "README.md", "8 items, 4 hidden", "1 selected, 256 B", "Today 11:02", "Oct 10", "Bookmarks: go to a place", "Upload files"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
         // Dot files stay hidden until asked for.
@@ -895,13 +898,15 @@ fn files_lists_opens_and_asks_in_both_appearances() {
         { "t": 0.8, "type": "double-click", "x": 300.0, "y": 205.0 },
         { "t": 1.3, "type": "type", "text": "ch" },
         press(1.6, "Enter", false, false, false),
-        { "t": 2.0, "type": "tap", "x": 1000.0, "y": 300.0 },
-        { "t": 2.3, "type": "type", "text": "x" },
-        press(2.6, "s", !MAC, MAC, false),
-        { "t": 3.2, "type": "mark", "name": "end" }
+        // Markdown opens formatted: Source, to edit it.
+        tap(1.9, "seg-1"),
+        { "t": 2.2, "type": "tap", "x": 1000.0, "y": 300.0 },
+        { "t": 2.5, "type": "type", "text": "x" },
+        press(2.8, "s", !MAC, MAC, false),
+        { "t": 3.4, "type": "mark", "name": "end" }
     ]);
     let Some(run) = self::run("files-conflict", &["--demo"], Some(script)) else { return };
-    assert_eq!(run.rect("files-preview")[2], 480.0);
+    assert_eq!(run.rect("files-preview")[2], f64::from(sshee_app::files::layout::PREVIEW_DEFAULT));
     for said in ["CHANGELOG.md", "This file changed on the server since you opened it, so it wasn't saved over.", "Save over it", "Load what's there", "Save mine as a copy", "Unsaved changes"] {
         assert!(run.tree_text.contains(said), "{said} isn't in the tree");
     }
@@ -984,7 +989,7 @@ fn files_move_by_dragging_rename_and_upload() {
     // Upload: the system's picker, answered by the script; the file is in the list afterwards.
     let script = json!([
         files,
-        { "t": 0.8, "type": "tap", "x": 1258.0, "y": 64.0 },
+        tap(0.8, "files-upload"),
         { "t": 1.2, "type": "file-dialog", "path": "/home/dev/notes.txt" },
         { "t": 1.8, "type": "mark", "name": "end" }
     ]);
@@ -1072,7 +1077,7 @@ fn toasts_stack_in_the_corner_in_both_appearances() {
             { "t": 0.9, "type": "move", "x": 310.0, "y": 210.0 },
             { "t": 1.0, "type": "move", "x": 320.0, "y": 180.0 },
             { "t": 1.2, "type": "up", "x": 320.0, "y": 180.0 },
-            { "t": 1.6, "type": "tap", "x": 1258.0, "y": 64.0 },
+            tap(1.6, "files-upload"),
             { "t": 1.9, "type": "file-dialog", "path": "/home/dev/notes.txt" },
             { "t": 2.3, "type": "move", "x": 640.0, "y": 400.0 },
             end(2.6)
