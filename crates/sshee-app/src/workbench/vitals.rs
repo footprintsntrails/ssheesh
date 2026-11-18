@@ -154,6 +154,14 @@ impl History {
         self.samples.iter().filter_map(of).collect()
     }
 
+    /// The top of the CPU graph: the smallest of 10, 25, 50 and 100% that holds the busiest
+    /// look with a little room, so a quiet server's line shows its shape instead of lying flat
+    /// on the floor of a 100% graph. The graph says its top (see the Stats page).
+    pub fn cpu_scale(&self) -> f64 {
+        let peak = self.samples.iter().filter_map(|s| s.cpu).fold(0.0, f64::max) * 1.15;
+        [0.1, 0.25, 0.5, 1.0].into_iter().find(|top| peak <= *top).unwrap_or(1.0)
+    }
+
     /// The top of the network graph: the busiest second, with room above it, never under
     /// 64 KB/s, so a quiet line stays low (0.10's `netMax`).
     pub fn net_scale(&self) -> f64 {
@@ -317,6 +325,24 @@ mod tests {
         assert_eq!(h.net_scale(), 64.0 * 1024.0 * 1.15);
         h.push(&Vitals { down: Some(1_000_000.0), ..Vitals::default() });
         assert_eq!(h.net_scale(), 1_000_000.0 * 1.15);
+    }
+
+    #[test]
+    fn the_cpu_graph_scales_to_a_quiet_server() {
+        let at = |cpus: &[f64]| {
+            let mut h = History::default();
+            for c in cpus {
+                h.push(&Vitals { cpu: Some(*c), ..Vitals::default() });
+            }
+            h.cpu_scale()
+        };
+        assert_eq!(at(&[]), 0.1);
+        assert_eq!(at(&[0.01, 0.02]), 0.1);
+        // Room above the busiest look: 9% doesn't touch the top of a 10% graph.
+        assert_eq!(at(&[0.09]), 0.25);
+        assert_eq!(at(&[0.3]), 0.5);
+        assert_eq!(at(&[0.5, 0.95]), 1.0);
+        assert_eq!(at(&[1.0]), 1.0);
     }
 
     #[test]

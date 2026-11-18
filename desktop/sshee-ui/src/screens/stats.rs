@@ -92,6 +92,13 @@ pub(crate) fn tick(s: &mut Shell, clock: f64) -> bool {
     changed
 }
 
+/// A graph with the value at its top written small in its top right corner.
+fn scaled(t: &Theme, line: El, top: &str) -> El {
+    el().w_full()
+        .child(line)
+        .child(text(top.to_owned()).key("graph-top").font(theme::LIST_NUMBER).color(t.l2).single_line().pin(None, Some(-2.0), Some(0.0), None).label(format!("Graph's top: {top}")))
+}
+
 fn line_view(s: &Shell, server: &str, t: &'static Theme, l: &Line) -> El {
     let value = if l.warn {
         row().gap(5.0).items_center().child(icon(Icon::Warning, 12.0, t.orange)).child(text(&l.value).font(theme::STAT_WARN).color(t.l1).single_line())
@@ -103,12 +110,18 @@ fn line_view(s: &Shell, server: &str, t: &'static Theme, l: &Line) -> El {
         middle = middle.child(text(s.text_shown(detail).into_owned()).font(theme::LIST_NUMBER).color(t.l2).single_line().truncate());
     }
     let history = s.bench.history(server);
+    // In the accent with its wash, as 0.10 drew them: a grey line on grey read as a dead graph.
+    // The CPU graph's top follows a quiet server (10, 25, 50 or 100%), and says so in its corner.
     let beside = match (l.graph, history) {
-        (Some(Graph::Cpu), Some(h)) => Some(graph(t, &[Series { values: &h.series(|x| x.cpu), ink: t.l2on, wash: true }], HISTORY, 1.0, GRAPH_H)),
-        (Some(Graph::Memory), Some(h)) => Some(graph(t, &[Series { values: &h.series(|x| Some(x.memory)), ink: t.l2on, wash: true }], HISTORY, 1.0, GRAPH_H)),
+        (Some(Graph::Cpu), Some(h)) => {
+            let top = h.cpu_scale();
+            let line = graph(t, &[Series { values: &h.series(|x| x.cpu), ink: t.blue, wash: true }], HISTORY, top, GRAPH_H);
+            Some(if top < 1.0 { scaled(t, line, &format!("{:.0}%", top * 100.0)) } else { line })
+        }
+        (Some(Graph::Memory), Some(h)) => Some(graph(t, &[Series { values: &h.series(|x| Some(x.memory)), ink: t.blue, wash: true }], HISTORY, 1.0, GRAPH_H)),
         (Some(Graph::Network), Some(h)) => {
             let (down, up) = (h.series(|x| x.down), h.series(|x| x.up));
-            Some(graph(t, &[Series { values: &down, ink: t.l2on, wash: true }, Series { values: &up, ink: t.l2.alpha(0.8), wash: false }], HISTORY, h.net_scale(), GRAPH_H))
+            Some(graph(t, &[Series { values: &down, ink: t.blue, wash: true }, Series { values: &up, ink: t.green, wash: false }], HISTORY, h.net_scale(), GRAPH_H))
         }
         _ => None,
     };
