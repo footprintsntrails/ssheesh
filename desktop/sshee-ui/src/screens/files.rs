@@ -74,6 +74,8 @@ pub struct CopyTo {
 pub struct Paste {
     pub question: ops::PasteQuestion,
     paths: Vec<PathBuf>,
+    /// The folder the question names: a yes copies there, wherever the tab is by then.
+    dir: String,
 }
 
 /// One Files tab's own state.
@@ -279,7 +281,13 @@ fn load(s: &mut Shell, tab: TabId, step: impl FnOnce(&mut Browser, &DirCache, u6
     let now = now_ms(s);
     let screens = &mut s.screens;
     let Some(state) = screens.files.get_mut(&tab) else { return };
+    let was = state.browser.asked().to_owned();
     let load = step(&mut state.browser, &screens.dirs, now);
+    // Another folder: a question about the rows of the last one would act on this one's.
+    if state.browser.asked() != was {
+        state.ui.folder_changed();
+        state.paste = None;
+    }
     // A folder known from the cache is on screen already.
     keep_place(s, tab);
     if let Some(Load { ticket, path }) = load {
@@ -319,7 +327,7 @@ pub fn show_path(s: &mut Shell, tab: TabId, path: &str) {
         return;
     }
     state.reveal = Some((dir.clone(), name.clone()));
-    go(s, tab, &dir);
+    go_now(s, tab, &dir);
     if let Some(state) = s.screens.files.get_mut(&tab) {
         state.browser.select_when_listed(&name);
     }
@@ -343,27 +351,52 @@ fn reveal(s: &mut Shell, tab: TabId) {
 
 // ---- going places
 
-/// Shows another folder (a double click on one, the address bar, a bookmark). The open file
-/// closes: ask first when its draft is dirty.
+/// Shows another folder, from anywhere: the palette, a file dropped on a terminal, a path
+/// clicked in one. The open file closes, so when it has unsaved changes, "Discard your
+/// changes?" comes first and nothing moves until it's answered.
 pub fn go(s: &mut Shell, tab: TabId, to: &str) {
+    let moves = s.screens.files.get(&tab).is_some_and(|st| st.browser.dir() != to);
+    if moves {
+        view::guarded(s, tab, view::After::Go(to.to_owned()));
+    } else {
+        go_now(s, tab, to);
+    }
+}
+
+/// Back, as [`go`]: asks first when the open file has unsaved changes.
+pub fn back(s: &mut Shell, tab: TabId) {
+    view::guarded(s, tab, view::After::Back);
+}
+
+/// Forward, as [`go`]: asks first when the open file has unsaved changes.
+pub fn forward(s: &mut Shell, tab: TabId) {
+    view::guarded(s, tab, view::After::Forward);
+}
+
+/// The folder above, as [`go`]: asks first when the open file has unsaved changes.
+pub fn up(s: &mut Shell, tab: TabId) {
+    view::guarded(s, tab, view::After::Up);
+}
+
+/// Shows another folder now. The open file closes: only once it was asked about.
+fn go_now(s: &mut Shell, tab: TabId, to: &str) {
     if let Some(state) = s.screens.files.get_mut(&tab).filter(|st| st.browser.dir() != to) {
         state.editor = None;
     }
     load(s, tab, |b, cache, now| b.go(to, cache, now));
 }
 
-pub fn back(s: &mut Shell, tab: TabId) {
+fn back_now(s: &mut Shell, tab: TabId) {
     close_file(s, tab);
     load(s, tab, |b, cache, now| b.back(cache, now));
 }
 
-pub fn forward(s: &mut Shell, tab: TabId) {
+fn forward_now(s: &mut Shell, tab: TabId) {
     close_file(s, tab);
     load(s, tab, |b, cache, now| b.forward(cache, now));
 }
 
-/// The folder above (the ".." row, Backspace).
-pub fn up(s: &mut Shell, tab: TabId) {
+fn up_now(s: &mut Shell, tab: TabId) {
     close_file(s, tab);
     load(s, tab, |b, cache, now| b.up(cache, now));
 }
@@ -389,7 +422,7 @@ pub fn open(s: &mut Shell, tab: TabId, name: &str) {
     let Some(entry) = state.browser.entry(name) else { return };
     if entry.is_dir() {
         let to = state.browser.path_of(name);
-        return go(s, tab, &to);
+        return go_now(s, tab, &to);
     }
     let dir = state.browser.dir().to_owned();
     let (editor, want) = Editor::open(&dir, name, &mut state.tickets);
@@ -457,19 +490,24 @@ pub fn rename(s: &mut Shell, tab: TabId, from: &str, to: &str) -> bool {
 }
 
 fn run(s: &mut Shell, tab: TabId, verb: &str, names: &[String], want: impl FnOnce(String, Vec<String>) -> Want) {
+    let Some(dir) = s.screens.files.get(&tab).map(|st| st.browser.dir().to_owned()) else { return };
+    run_in(s, tab, &dir, verb, names, want);
+}
+
+fn run_in(s: &mut Shell, tab: TabId, dir: &str, verb: &str, names: &[String], want: impl FnOnce(String, Vec<String>) -> Want) {
     let Some(state) = s.screens.files.get_mut(&tab) else { return };
     if names.is_empty() {
         return;
     }
     let shown: Vec<&str> = names.iter().map(String::as_str).collect();
     state.busy = Some(ops::busy(verb, &shown));
-    let dir = state.browser.dir().to_owned();
-    ask(s, tab, want(dir, names.to_vec()));
+    ask(s, tab, want(dir.to_owned(), names.to_vec()));
 }
 
-/// Deletes rows of the folder on screen. Ask first: `ops::delete_question`.
-pub fn delete(s: &mut Shell, tab: TabId, names: &[String]) {
-    run(s, tab, "Deleting", names, |dir, names| Want::Delete { dir, names });
+/// Deletes rows of `dir` on the tab's server: the folder the question was asked in, whatever
+/// the tab shows by the time it's answered. Ask first: `ops::delete_question`.
+pub fn delete(s: &mut Shell, tab: TabId, dir: &str, names: &[String]) {
+    run_in(s, tab, dir, "Deleting", names, |dir, names| Want::Delete { dir, names });
 }
 
 /// Unpacks an archive next to itself.
@@ -623,16 +661,17 @@ pub fn paste(s: &mut Shell, content: &rune::ClipboardContent) -> bool {
     let files: Vec<(String, bool)> = paths.iter().map(|p| (s.text_shown(&p.to_string_lossy()).into_owned(), p.is_dir())).collect();
     let question = ops::paste_question(&files, &server, &s.text_shown(state.browser.dir()));
     if let Some(state) = s.screens.files.get_mut(&tab) {
-        state.paste = Some(Paste { question, paths });
+        let dir = state.browser.dir().to_owned();
+        state.paste = Some(Paste { question, paths, dir });
     }
     true
 }
 
 /// The answer to [`State::paste`].
 pub fn answer_paste(s: &mut Shell, tab: TabId, yes: bool) {
-    let Some(Paste { paths, .. }) = s.screens.files.get_mut(&tab).and_then(|st| st.paste.take()) else { return };
+    let Some(Paste { paths, dir, .. }) = s.screens.files.get_mut(&tab).and_then(|st| st.paste.take()) else { return };
     if yes {
-        upload(s, tab, paths);
+        send(s, tab, paths, dir, false);
     }
 }
 
@@ -1223,7 +1262,7 @@ mod tests {
     #[test]
     fn deleting_moving_and_unpacking_say_they_run_and_then_how_they_ended() {
         let mut w = Window::at_home();
-        delete(&mut w.s, w.tab, &["notes.md".into(), "shop".into()]);
+        delete(&mut w.s, w.tab, "/home/deploy", &["notes.md".into(), "shop".into()]);
         assert_eq!(w.state().busy.as_deref(), Some("Deleting 2 items…"));
         assert_eq!(w.wants(), [Want::Delete { dir: "/home/deploy".into(), names: vec!["notes.md".into(), "shop".into()] }]);
         w.answer(Answer::Deleted { dir: "/home/deploy".into(), deleted: vec!["notes.md".into()], failed: vec![("shop".into(), Failure::new(FailureKind::Failed, "Permission denied"))] });
@@ -1440,6 +1479,75 @@ mod tests {
         let wants = w.wants();
         assert!(matches!(&wants[..], [Want::List { path, .. }] if path == "/etc/shop/old"), "{wants:?}");
         assert!(w.state().editor.is_none(), "a folder opened as a file");
+    }
+
+    /// notes.md open beside the list, with "mine" typed and not saved.
+    fn with_unsaved_changes() -> Window {
+        let mut w = Window::at_home();
+        open(&mut w.s, w.tab, "notes.md");
+        let wants = w.wants();
+        let [Want::Read { ticket, ref path }] = wants[..] else { panic!("{wants:?}") };
+        let file = TextFile { path: path.clone(), content: Some("one\n".into()), binary: false, size: 4, lossy: false, crlf: false };
+        w.answer(Answer::Read { ticket, path: path.clone(), result: Ok((file, stamp(1))) });
+        view::sync(&mut w.s);
+        w.s.screens.files.get_mut(&w.tab).unwrap().ui.type_draft("mine\n");
+        w
+    }
+
+    #[test]
+    fn moving_the_tab_from_outside_asks_before_unsaved_changes_are_lost() {
+        let mut w = with_unsaved_changes();
+        let mut tx = rune::Tx::default();
+        // The palette's folder row, a file dropped on a terminal, a clicked path: all of them
+        // reach `go` through `open_files_on`.
+        assert_eq!(w.s.open_files_on(WEB, Some("/srv/www"), &mut tx), w.tab);
+        assert!(w.state().editor.is_some(), "the draft was dropped");
+        assert!(w.wants().is_empty(), "the tab moved before asking");
+        assert_eq!(w.state().ui.pending(), Some(&view::Pending::Discard(view::After::Go("/srv/www".into()))));
+        // The mouse's side buttons and the folder above ask too.
+        for (step, after) in [(back as fn(&mut Shell, TabId), view::After::Back), (forward, view::After::Forward), (up, view::After::Up)] {
+            step(&mut w.s, w.tab);
+            assert!(w.state().editor.is_some() && w.wants().is_empty());
+            assert_eq!(w.state().ui.pending(), Some(&view::Pending::Discard(after)));
+        }
+        // No: the file and what was typed stay, and so does the folder.
+        view::answer_confirm(&mut w.s, w.tab, false);
+        assert_eq!(w.state().ui.draft_text(), "mine\n");
+        assert_eq!(w.state().browser.dir(), "/home/deploy");
+        // Yes: then it goes.
+        go(&mut w.s, w.tab, "/srv/www");
+        view::answer_confirm(&mut w.s, w.tab, true);
+        assert!(w.state().editor.is_none());
+        assert!(matches!(&w.wants()[..], [Want::List { path, .. }] if path == "/srv/www"));
+        // Nothing typed: no question.
+        go(&mut w.s, w.tab, "/etc");
+        assert!(w.state().ui.pending().is_none());
+        assert!(matches!(&w.wants()[..], [Want::List { path, .. }] if path == "/etc"));
+    }
+
+    #[test]
+    fn a_delete_question_deletes_where_it_was_asked_and_closes_when_the_tab_moves() {
+        let mut w = Window::at_home();
+        // Asked while another folder is being listed: the rows on screen are still home's.
+        go(&mut w.s, w.tab, "/srv/www");
+        let wants = w.wants();
+        let [Want::List { ticket, .. }] = wants[..] else { panic!("{wants:?}") };
+        view::ask_delete(&mut w.s, w.tab, vec!["notes.md".into()]);
+        assert!(w.state().ui.pending().is_some());
+        w.answer(Answer::Listed {
+            ticket,
+            asked: "/srv/www".into(),
+            result: Ok((Listing { path: "/srv/www".into(), entries: vec![entry("notes.md", EntryKind::File)] }, Clock { now: 1_700_000_500, utc_offset: 0 })),
+        });
+        assert_eq!(w.state().browser.dir(), "/srv/www");
+        view::answer_confirm(&mut w.s, w.tab, true);
+        let wants = w.wants();
+        assert!(matches!(&wants[..], [Want::Delete { dir, names }] if dir == "/home/deploy" && names == &["notes.md"]), "{wants:?}");
+        // A question about one folder's rows closes when the tab goes to another.
+        view::ask_delete(&mut w.s, w.tab, vec!["notes.md".into()]);
+        assert!(w.state().ui.pending().is_some());
+        up(&mut w.s, w.tab);
+        assert!(w.state().ui.pending().is_none(), "the question stayed in another folder");
     }
 
     /// What the edit bridge was asked since the last look.

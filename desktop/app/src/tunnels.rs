@@ -5,7 +5,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use sshee_app::model::{ForwardKind, SavedTunnels};
 use sshee_app::tunnels::{remote_host, Ask, Reply, State};
@@ -24,11 +25,45 @@ pub struct Tunnels {
     /// This copy's folder; `None`: nothing is kept.
     dir: Option<PathBuf>,
     remote: Option<Remote>,
+    turns: Turns,
+}
+
+/// Which ask about each tunnel is the latest. A start reads the keychain on a thread first; a
+/// Stop, or a newer start, that came meanwhile wins, and the older start then does nothing.
+#[derive(Clone, Default)]
+struct Turns(Arc<Mutex<HashMap<String, u64>>>);
+
+impl Turns {
+    /// A new ask about `id`: its turn, which ends every earlier one.
+    fn take(&self, id: &str) -> u64 {
+        let mut all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let turn = all.entry(id.to_owned()).or_default();
+        *turn += 1;
+        *turn
+    }
+
+    /// Runs `f` if `turn` is still the latest about `id`, with no other ask about it meanwhile
+    /// (a Stop waits for the start it would otherwise miss). Whether it ran.
+    fn if_latest(&self, id: &str, turn: u64, f: impl FnOnce()) -> bool {
+        let all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let latest = all.get(id) == Some(&turn);
+        if latest {
+            f();
+        }
+        latest
+    }
+
+    /// Ends every earlier turn about `id` and runs `f` while no start can slip in.
+    fn end(&self, id: &str, f: impl FnOnce()) {
+        let mut all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        *all.entry(id.to_owned()).or_default() += 1;
+        f();
+    }
 }
 
 impl Tunnels {
     pub fn new(env: SshEnv, dir: Option<PathBuf>) -> Tunnels {
-        Tunnels { manager: Arc::new(TunnelManager::new()), env, dir, remote: None }
+        Tunnels { manager: Arc::new(TunnelManager::new()), env, dir, remote: None, turns: Turns::default() }
     }
 
     /// Reads the list kept last time and tells the window. What to ask next: a start for
@@ -56,7 +91,8 @@ impl Tunnels {
                 let Some(mut target) = target else {
                     return remote.tunnels(Reply::State { id, state: Some(State::Failed { message: "This server isn't in the list anymore.".into() }) });
                 };
-                let (manager, env) = (self.manager.clone(), self.env.clone());
+                let (manager, env, turns) = (self.manager.clone(), self.env.clone(), self.turns.clone());
+                let turn = turns.take(&id);
                 // The saved password is read from the keychain, which may wait: on a thread.
                 let spawned = std::thread::Builder::new().name("tunnel-start".into()).spawn({
                     let (remote, id) = (remote.clone(), id.clone());
@@ -68,7 +104,11 @@ impl Tunnels {
                         let sink_remote = remote.clone();
                         let sink_id = id.clone();
                         let sink = Arc::new(move |state: TunnelState| sink_remote.tunnels(Reply::State { id: sink_id.clone(), state: Some(state_of(state)) }));
-                        if let Err(e) = manager.start(&id, &target, &env, forward, sink) {
+                        // Stopped, removed or started again while the keychain answered: not
+                        // this start's to do anymore.
+                        let mut started = Ok(());
+                        turns.if_latest(&id, turn, || started = manager.start(&id, &target, &env, forward, sink));
+                        if let Err(e) = started {
                             remote.tunnels(Reply::State { id, state: Some(State::Failed { message: e.message }) });
                         }
                     }
@@ -78,7 +118,7 @@ impl Tunnels {
                 }
             }
             Ask::Stop { id } => {
-                self.manager.stop(&id);
+                self.turns.end(&id, || self.manager.stop(&id));
                 remote.tunnels(Reply::State { id, state: None });
             }
             Ask::Save(list) => {
@@ -120,9 +160,10 @@ pub fn state_of(s: TunnelState) -> State {
     }
 }
 
-/// The list kept in `dir`; empty when there's none or it doesn't read (left where it is).
+/// The list kept in `dir`; empty when there's none or it doesn't read. One that doesn't read is
+/// moved aside to a `.damaged` name first, so the next save can't write over it.
 pub fn load(dir: &Path) -> SavedTunnels {
-    std::fs::read_to_string(dir.join(FILE)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    sshee_app::settings_store::read_json_or_set_aside(&dir.join(FILE)).unwrap_or_default()
 }
 
 /// Writes the list to `dir`, whole or not at all.
@@ -165,6 +206,22 @@ mod tests {
     }
 
     #[test]
+    fn a_start_waiting_on_the_keychain_loses_to_a_later_stop_or_start() {
+        let turns = Turns::default();
+        // Start, then Stop before the keychain answers: the start does nothing.
+        let first = turns.take("tun-1");
+        turns.end("tun-1", || {});
+        assert!(!turns.if_latest("tun-1", first, || panic!("a stopped tunnel started")));
+        // Two quick starts: only the later one runs, whichever thread is first.
+        let (a, b) = (turns.take("tun-1"), turns.take("tun-1"));
+        assert!(turns.if_latest("tun-1", b, || {}));
+        assert!(!turns.if_latest("tun-1", a, || panic!("an older start ran")));
+        // Another tunnel's turns are its own.
+        let other = turns.take("tun-2");
+        assert!(turns.if_latest("tun-2", other, || {}));
+    }
+
+    #[test]
     fn the_list_is_kept_in_the_copys_folder_and_read_back() {
         let dir = std::env::temp_dir().join(format!("sshee-preview-tunnels-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -176,6 +233,11 @@ mod tests {
         // 0.10's shape: byHost, and camelCase forwards.
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(text.contains("\"byHost\"") && text.contains("\"localPort\": 3000"), "{text}");
+        // One that doesn't read is moved aside, not written over by the next save.
+        std::fs::write(dir.join(FILE), "{ not json").unwrap();
+        assert_eq!(load(&dir), SavedTunnels::default());
+        save(&dir, &list).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(FILE.replace(".json", ".damaged.json"))).unwrap(), "{ not json");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

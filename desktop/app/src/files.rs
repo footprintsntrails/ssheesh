@@ -113,7 +113,44 @@ pub fn clean_uploads() -> bool {
 // ---- the work
 
 /// The transfers that can still be stopped.
-type Running = Arc<Mutex<HashMap<TransferId, Arc<core::Transfer>>>>;
+type Running = Arc<Mutex<Transfers>>;
+
+/// The transfers going, and the Stops that came before theirs began: a transfer reads the
+/// keychain before it registers, and a Stop pressed meanwhile still counts.
+#[derive(Default)]
+struct Transfers {
+    live: HashMap<TransferId, Arc<core::Transfer>>,
+    stopped_early: std::collections::HashSet<TransferId>,
+}
+
+impl Transfers {
+    /// Stops `id` now, or as it begins.
+    fn stop(&mut self, id: TransferId) {
+        match self.live.get(&id) {
+            Some(xfer) => xfer.cancel(),
+            None => {
+                self.stopped_early.insert(id);
+            }
+        }
+    }
+
+    /// `xfer` can be stopped by its id from now on; already stopped if its Stop came first.
+    fn begin(&mut self, id: TransferId, xfer: Arc<core::Transfer>) {
+        if self.stopped_early.remove(&id) {
+            xfer.cancel();
+        }
+        self.live.insert(id, xfer);
+    }
+
+    fn end(&mut self, id: TransferId) {
+        self.live.remove(&id);
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.live.is_empty()
+    }
+}
 
 /// What one request's thread needs.
 #[derive(Clone)]
@@ -173,9 +210,7 @@ impl Files {
     pub fn ask_to(&self, ask: Ask, target: Option<Target>, prepare: Prepare, to: Option<(Option<Target>, Prepare)>) {
         // Stopping is a flag the transfer's own thread sees; its end is that thread's answer.
         if let Want::CancelTransfer { id } = ask.want {
-            if let Some(xfer) = self.work.running.lock().unwrap().get(&id) {
-                xfer.cancel();
-            }
+            self.work.running.lock().unwrap().stop(id);
             return;
         }
         let Some(remote) = self.remote.clone() else { return };
@@ -247,9 +282,9 @@ fn gone() -> OpError {
 fn transfer<T>(id: TransferId, work: &Work, report: &(impl Fn(Answer) + Clone + Send + Sync + 'static), run: impl FnOnce(&Arc<core::Transfer>) -> Result<T, OpError>) -> Result<T, Failure> {
     let (started, tell) = (work.started, report.clone());
     let xfer = core::Transfer::new(move |p| tell(Answer::Progress { id, progress: progress(p, started.elapsed().as_millis() as u64) }));
-    work.running.lock().unwrap().insert(id, xfer.clone());
+    work.running.lock().unwrap().begin(id, xfer.clone());
     let result = run(&xfer);
-    work.running.lock().unwrap().remove(&id);
+    work.running.lock().unwrap().end(id);
     result.map_err(failure)
 }
 
@@ -452,6 +487,20 @@ mod tests {
         assert_eq!(f.kind, FailureKind::NotFound);
         assert!(work.running.lock().unwrap().is_empty(), "a transfer that ended can't be stopped anymore");
         let Answer::Saved { result: Err(SaveFailure::Failed(_)), .. } = answer(&Want::Save { ticket: 1, path: "/a".into(), text: String::new(), expected: None }, None, &work, &quiet) else { panic!() };
+    }
+
+    #[test]
+    fn a_stop_pressed_before_the_transfer_began_still_stops_it() {
+        let work = Work { env: SshEnv::default(), running: Arc::default(), started: Instant::now(), downloads: PathBuf::from("/nowhere"), to: None };
+        // The Stop comes while the keychain is still being read.
+        work.running.lock().unwrap().stop(TransferId(7));
+        let quiet = |_: Answer| {};
+        let saw = transfer(TransferId(7), &work, &quiet, |xfer| Ok(xfer.is_cancelled())).unwrap();
+        assert!(saw, "the transfer began already stopped");
+        // The next one with another id isn't.
+        let saw = transfer(TransferId(8), &work, &quiet, |xfer| Ok(xfer.is_cancelled())).unwrap();
+        assert!(!saw);
+        assert!(work.running.lock().unwrap().is_empty());
     }
 
     #[test]

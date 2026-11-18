@@ -10,16 +10,17 @@ use sshee_app::model::Bookmarks;
 
 const FILE: &str = "bookmarks.json";
 
-/// The bookmarks kept in `dir`, if there's a file and it reads. One that doesn't read is left
-/// where it is, and the window starts without bookmarks.
+/// The bookmarks kept in `dir`, if there's a file and it reads. One that doesn't read is moved
+/// aside to `bookmarks.damaged.json` (the next save would write over it), and the window starts
+/// without bookmarks.
 pub fn load(dir: &Path) -> Option<Bookmarks> {
-    let text = std::fs::read_to_string(dir.join(FILE)).ok()?;
-    serde_json::from_str(&text).ok()
+    sshee_app::settings_store::read_json_or_set_aside(&dir.join(FILE))
 }
 
-/// Whether this copy keeps bookmarks of its own yet.
+/// Whether this copy keeps bookmarks of its own yet: a file that reads. One that doesn't is
+/// moved aside, so 0.10's are brought over instead.
 pub fn has(dir: &Path) -> bool {
-    dir.join(FILE).exists()
+    load(dir).is_some()
 }
 
 /// Writes the bookmarks to `dir`, whole or not at all, private to you: folder names say a lot.
@@ -75,6 +76,19 @@ mod tests {
         assert_eq!(load(&dir), Some(b));
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(text.contains("\"pins\"") && text.contains("\"recent\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_doesnt_read_is_moved_aside_not_written_over() {
+        let dir = std::env::temp_dir().join(format!("sshee-preview-bookmarks-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "{ not json").unwrap();
+        // Not "has": 0.10's bookmarks may come over.
+        assert!(!has(&dir) && load(&dir).is_none());
+        save(&dir, &Bookmarks::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("bookmarks.damaged.json")).unwrap(), "{ not json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

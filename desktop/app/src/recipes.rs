@@ -130,16 +130,17 @@ pub fn answer(ask: Ask, target: Option<Target>, prepare: crate::files::Prepare, 
     }
 }
 
-/// The snippets kept in `dir`, if there's a file and it reads. One that doesn't read is left
-/// where it is, and the window starts with the starters.
+/// The snippets kept in `dir`, if there's a file and it reads. One that doesn't read is moved
+/// aside to a `.damaged` name (the next save would write over it), and the window starts with
+/// the starters.
 pub fn load_snippets(dir: &Path) -> Option<Snippets> {
-    let text = std::fs::read_to_string(dir.join(SNIPPETS)).ok()?;
-    serde_json::from_str(&text).ok()
+    sshee_app::settings_store::read_json_or_set_aside(&dir.join(SNIPPETS))
 }
 
-/// Whether this copy keeps snippets of its own yet.
+/// Whether this copy keeps snippets of its own yet: a file that reads. One that doesn't is
+/// moved aside, so 0.10's are brought over instead.
 pub fn has_snippets(dir: &Path) -> bool {
-    dir.join(SNIPPETS).exists()
+    load_snippets(dir).is_some()
 }
 
 /// One thread that writes the snippets file, in the order saves came.
@@ -199,7 +200,11 @@ mod tests {
         save_snippets(&dir, &list).unwrap();
         assert_eq!(load_snippets(&dir), Some(list));
         std::fs::write(dir.join(SNIPPETS), "{ not json").unwrap();
-        assert!(load_snippets(&dir).is_none());
+        assert!(load_snippets(&dir).is_none() && !has_snippets(&dir));
+        // Moved aside, so a save doesn't write over it.
+        save_snippets(&dir, &Snippets::default()).unwrap();
+        let aside = dir.join(SNIPPETS.replace(".json", ".damaged.json"));
+        assert_eq!(std::fs::read_to_string(aside).unwrap(), "{ not json");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
