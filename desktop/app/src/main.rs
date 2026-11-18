@@ -306,6 +306,8 @@ fn main() {
 mod tests {
     /// The names of the `fn`s in the block that starts at `head`, up to its closing brace.
     fn fns_of(source: &str, head: &str) -> Vec<String> {
+        // Windows checks the source out with \r\n line ends.
+        let source = source.replace("\r\n", "\n");
         let block = source.split_once(head).map(|(_, rest)| rest).unwrap_or_else(|| panic!("no {head}"));
         let block = &block[..block.find("\n}\n").unwrap_or(block.len())];
         block.lines().filter_map(|l| l.trim().strip_prefix("fn ")).map(|f| f.split(['(', '<']).next().unwrap_or_default().to_owned()).collect()
