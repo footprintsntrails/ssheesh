@@ -30,6 +30,7 @@ use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
 use sshee_app::prompts::{Fingerprint, HostKey};
 use sshee_ui::terminal::overlays::{Answer, Ask, Looked, Reply};
+use sshee_ui::terminal::connecting::Phase;
 use sshee_ui::terminal::{LinkStatus, StatusSink, TermLink};
 
 use crate::servers::{ServerStore, Shown};
@@ -353,6 +354,7 @@ impl Backend for LiveBackend {
             known: self.known.clone(),
             watch: Arc::default(),
             closed: Mutex::new(false),
+            phase: Arc::default(),
         })))
     }
 
@@ -628,6 +630,9 @@ struct Inner {
     run: Option<Vec<String>>,
     /// A container that doesn't read as one: nothing is started.
     refused: bool,
+    /// What the session is doing while it connects, for "Connecting to …" (its key looked
+    /// up, or through Tor).
+    phase: Arc<Mutex<Option<Phase>>>,
     /// The tab was closed: nothing starts its session again (a key check that answers after
     /// the close, "Trust" pressed then). A lock, not a flag: held while a session starts, so a
     /// close can't slip in between the look and the start.
@@ -641,6 +646,22 @@ fn fresh_target(target: Option<&Target>, signin: Option<&str>, known: &Known) ->
     let mut target = target?.clone();
     if let Target::Ssh(t) = &mut target {
         t.password = signin.and_then(|key| known.get(key));
+    }
+    Some(target)
+}
+
+/// Where the app's own ssh checks on a terminal's server go (what it runs, its tmux, a path,
+/// its agents, ending its session there), signing in as the terminal does: the server's
+/// saved password, else the one that got a terminal in this run, as it is now (never one
+/// forgotten since), through askpass and never on the command line. With the pane's target
+/// as it was made, they went without one: Windows' ssh, which shares no connection, was
+/// refused by a server that takes passwords only, and found no agents there.
+fn side_target(target: Option<&Target>, signin: Option<&str>, known: &Known, saved: Option<&(Arc<Mutex<ServerStore>>, String)>) -> Option<Target> {
+    let mut target = fresh_target(target, signin, known)?;
+    if let (Target::Ssh(t), Some((store, host_id))) = (&mut target, saved) {
+        if let Some(password) = store.lock().unwrap_or_else(|e| e.into_inner()).password(host_id) {
+            t.password = Some(password);
+        }
     }
     Some(target)
 }
@@ -711,9 +732,17 @@ impl Inner {
     /// that can't be asked connects anyway: ssh says why it can't.
     fn begin(self: &Arc<Self>, review: bool) {
         let Some(Target::Ssh(t)) = self.target.clone() else { return self.connect() };
+        // Who the server's password prompt names (`ssh -G`, once a run for each server): the
+        // session asks as it starts, before ssh does. Looked up meanwhile, beside the key's
+        // check, so it isn't one more wait on the way in.
+        let ahead = t.clone();
+        let _ = std::thread::Builder::new().name("password-for".into()).spawn(move || {
+            sshee_core::ssh::password_for(&ahead);
+        });
         if !review && self.verified.lock().unwrap_or_else(|e| e.into_inner()).contains(&self.server) {
             return self.connect();
         }
+        self.set_phase(Some(Phase::Key));
         if let Some(status) = self.status() {
             status(LinkStatus::Connecting);
         }
@@ -763,6 +792,16 @@ impl Inner {
         });
     }
 
+    fn set_phase(&self, phase: Option<Phase>) {
+        *self.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
+    }
+
+    /// Where the app's own ssh checks on this terminal's server go ([`side_target`]). Run on
+    /// the check's own thread: the keychain may wait.
+    fn side_target(&self) -> Option<Target> {
+        side_target(self.target.as_ref(), self.signin.as_deref(), &self.known, self.saved.as_ref())
+    }
+
     fn is_closed(&self) -> bool {
         *self.closed.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -794,6 +833,10 @@ impl Inner {
             return;
         }
         let saved = self.saved.clone();
+        // The key is looked up: what's left to say is whether it goes through Tor (asked on
+        // the session's thread, as `tor::carries` may read your config).
+        self.set_phase(None);
+        let phase = self.phase.clone();
         let mut spec = SessionSpec { target, key: self.key.clone(), env: self.env.clone(), run: self.run.clone(), welcome: self.welcome.clone() };
         // On the reader thread (output, a server's Connected) or the session's (the rest): the
         // model locks what it shares.
@@ -852,6 +895,9 @@ impl Inner {
             }
             if let Target::Ssh(target) = &spec.target {
                 started_with.lock().unwrap_or_else(|e| e.into_inner()).clone_from(&target.password);
+                if sshee_core::tor::carries(target) {
+                    *phase.lock().unwrap_or_else(|e| e.into_inner()) = Some(Phase::Tor);
+                }
             }
             Ok(spec)
         };
@@ -904,10 +950,12 @@ impl TermLink for LiveLink {
     /// its own (it's an ssh round trip), as 0.10's `close_session` does.
     fn end(&self) {
         self.0.shut();
-        if let Some(target @ Target::Ssh(_)) = fresh_target(self.0.target.as_ref(), self.0.signin.as_deref(), &self.0.known) {
-            let (env, key) = (self.0.env.clone(), self.0.key.clone());
+        if matches!(self.0.target, Some(Target::Ssh(_))) {
+            let inner = self.0.clone();
             let _ = std::thread::Builder::new().name("session-end".into()).spawn(move || {
-                let _ = sshee_core::session::end_remote(&target, &env, &key);
+                if let Some(target) = inner.side_target() {
+                    let _ = sshee_core::session::end_remote(&target, &inner.env, &inner.key);
+                }
             });
         }
     }
@@ -928,21 +976,28 @@ impl TermLink for LiveLink {
         self.0.bytes.load(Ordering::Relaxed)
     }
 
+    fn phase(&self) -> Option<Phase> {
+        *self.0.phase.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// tmux's rows, history, scroll position or folder (only for a shell in tmux), what is at
     /// a path, where a relative path is, which agents the server has: each an ssh round trip
     /// (or a folder listing here), on a thread of its own.
     fn ask(&self, ask: Ask, done: Answer) -> bool {
-        let Some(target) = self.0.target.clone() else { return false };
-        let ssh = matches!(target, Target::Ssh(_));
+        let ssh = match &self.0.target {
+            Some(target) => matches!(target, Target::Ssh(_)),
+            None => return false,
+        };
         let durable = ssh && self.0.durable.load(Ordering::Relaxed);
         let needs_tmux = matches!(ask, Ask::Rows | Ask::History { .. } | Ask::Scroll { .. } | Ask::Cwd | Ask::PaneInfo);
         let needs_server = matches!(ask, Ask::FindPath { .. } | Ask::Agents);
         if (needs_tmux && !durable) || (needs_server && !ssh) {
             return false;
         }
-        let (env, key) = (self.0.env.clone(), self.0.key.clone());
+        let (env, key, inner) = (self.0.env.clone(), self.0.key.clone(), self.0.clone());
         let work = move || {
             use sshee_core::session;
+            let Some(target) = inner.side_target() else { return done(None) };
             let reply = match ask {
                 Ask::Rows => session::rows(&target, &env, &key).ok().map(Reply::Rows),
                 Ask::History { lines } => session::history(&target, &env, &key, lines).ok().map(|text| Reply::History { text, away_ms: None }),
@@ -1091,6 +1146,90 @@ mod tests {
         assert_eq!(password(try_now()).as_deref(), Some("new-one"));
         // This computer has none.
         assert!(matches!(fresh_target(Some(&Target::Local), None, &backend.known), Some(Target::Local)));
+    }
+
+    /// A keychain in memory.
+    #[derive(Default)]
+    struct MemoryKeychain(Mutex<HashMap<String, sshee_core::secrets::Secret>>);
+
+    impl crate::servers::Keychain for MemoryKeychain {
+        fn set(&self, host_id: &str, password: sshee_core::secrets::Secret, _: bool) -> Result<(), String> {
+            self.0.lock().unwrap().insert(host_id.to_owned(), password);
+            Ok(())
+        }
+        fn get(&self, host_id: &str, _: bool) -> Option<sshee_core::secrets::Secret> {
+            self.0.lock().unwrap().get(host_id).cloned()
+        }
+        fn forget(&self, host_id: &str) {
+            self.0.lock().unwrap().remove(host_id);
+        }
+        fn old(&self, _: &str) -> Option<sshee_core::secrets::Secret> {
+            None
+        }
+    }
+
+    /// The app's own ssh checks on a terminal's server (its agents, its tmux, a path, closing
+    /// its session there) sign in as the terminal does: with the server's saved password, else
+    /// the one that got a terminal in this run, though the pane was made before it was known.
+    /// It goes to ssh through askpass: never on the command line, and without BatchMode, so
+    /// ssh asks askpass for it.
+    #[test]
+    fn a_terminals_side_checks_sign_in_with_its_password() {
+        use sshee_core::secrets::Secret;
+        let root = std::env::temp_dir().join(format!("sshee-preview-side-checks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("ssh_config"), "").unwrap();
+        let places = crate::servers::Places {
+            dir: root.join("copy"),
+            ssh_config: Some(root.join("ssh_config")),
+            old_dir: None,
+            xpipe: vec![],
+            apps: sshee_core::other_apps::Places::under(&root.join("home")),
+            old_labels: Box::new(|| None),
+        };
+        let store = Arc::new(Mutex::new(ServerStore::open(places, Arc::new(MemoryKeychain::default()))));
+        let add = |address: &str, password: Option<&str>| {
+            let new = sshee_app::servers::NewServer { address: address.into(), password: password.map(sshee_app::servers::Password::new), ..sshee_app::servers::NewServer::default() };
+            match store.lock().unwrap().handle(sshee_app::servers::Ask::Add(new)) {
+                sshee_app::servers::Answer::Added { server, .. } => server,
+                other => panic!("{other:?}"),
+            }
+        };
+        // One server signed in to by typing at ssh's prompt, one with a saved password.
+        let (typed, saved) = (add("deploy@203.0.113.17", None), add("postgres@203.0.113.31", Some("saved-pw")));
+        let hosts = store.lock().unwrap().shown().hosts;
+        let env = SshEnv { askpass: Some(PathBuf::from("/opt/ssheesh/ssheesh")), ..SshEnv::default() };
+        let backend = LiveBackend::with_env(&hosts, None, env.clone()).with_store(store.clone());
+        let side = |key: &str, made: Option<&Target>| {
+            let saved = (store.clone(), sshee_app::servers::host_id(key).unwrap().to_owned());
+            side_target(made, Some(key), &backend.known, Some(&saved))
+        };
+        let password = |t: Option<Target>| match t {
+            Some(Target::Ssh(t)) => t.password.map(|p| p.expose().to_owned()),
+            other => panic!("{other:?}"),
+        };
+        // The panes' targets, as they were made: before anything signed in.
+        let (made_typed, made_saved) = (backend.target_of(&typed), backend.target_of(&saved));
+        assert_eq!(password(side(&typed, made_typed.as_ref())), None);
+        // The terminals got in.
+        backend.known.keep(&typed, Secret::new("typed-pw"));
+        backend.known.keep(&saved, Secret::new("older-pw"));
+        assert_eq!(password(side(&typed, made_typed.as_ref())).as_deref(), Some("typed-pw"));
+        // A saved one wins, as it does for the terminal.
+        let Some(Target::Ssh(t)) = side(&saved, made_saved.as_ref()) else { panic!("a server") };
+        assert_eq!(t.password.as_ref().map(|p| p.expose()), Some("saved-pw"));
+        // What `agents::detect` and the others run: askpass answers, nothing is on the line.
+        let cmd = sshee_core::ssh::remote_command(&t, &env, "true");
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(!args.iter().any(|a| a.contains("saved-pw")), "{args:?}");
+        assert!(!args.iter().any(|a| a == "BatchMode=yes"), "{args:?}");
+        let envs: Vec<String> = cmd.get_envs().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+        assert!(envs.iter().any(|k| k == "SSH_ASKPASS"), "{envs:?}");
+        // Refused since: forgotten, and the checks don't send it again.
+        backend.known.forget(&typed);
+        assert_eq!(password(side(&typed, made_typed.as_ref())), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A tab closed before its session started (while its server's key was being checked)
