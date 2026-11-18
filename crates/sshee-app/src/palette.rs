@@ -124,6 +124,8 @@ pub enum Action {
     Settings(Option<&'static str>),
     /// The security check of a server.
     Checkup { server: ServerKey },
+    /// "Free up disk space": what takes a server's disks, and safe cleanups.
+    Disk { server: ServerKey },
     /// The recipes, for a server.
     Recipes { server: ServerKey },
     /// The list of snippets, and a new one with this command in it.
@@ -178,6 +180,8 @@ pub enum Glyph {
     Reopen,
     Gear,
     Shield,
+    /// A disk drive: "Free up disk space".
+    Drive,
     Recipe,
     News,
     Help,
@@ -379,6 +383,7 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         rows.push(row(Group::OnServer, Glyph::Stats, "Stats", Action::Stats { server: key.clone() }).words("stats metrics cpu memory traffic"));
         if !server.is_local() {
             rows.push(row(Group::OnServer, Glyph::Shield, "Security check", Action::Checkup { server: key.clone() }).words("security checkup audit firewall ports login updates safe"));
+            rows.push(row(Group::OnServer, Glyph::Drive, "Free up disk space", Action::Disk { server: key.clone() }).words("disk space usage full clean up docker logs biggest folders"));
             rows.push(row(Group::OnServer, Glyph::Recipe, "Recipes", Action::Recipes { server: key.clone() }).words("recipes guide how to firewall fail2ban docker swap https caddy key sudo"));
         }
         rows.push(row(Group::OnServer, Glyph::Containers, "Containers", Action::Containers { server: key.clone() }).words("docker podman containers compose logs"));
@@ -837,12 +842,13 @@ mod tests {
         assert_eq!(rows[0].action, Action::Checkup { server: WEB.into() });
         assert_eq!(first_choice(&rows), Some(0));
         assert_eq!(list(&w, &[], "fail2ban")[0].action, Action::Recipes { server: WEB.into() });
+        assert_eq!(list(&w, &[], "disk space")[0].action, Action::Disk { server: WEB.into() });
         assert!(list(&w, &[], "snippets").iter().any(|r| r.action == Action::Snippets));
         assert!(list(&w, &[], "changelog").iter().any(|r| r.action == Action::WhatsNew));
         assert!(list(&w, &[], "tour").iter().any(|r| r.action == Action::Tour));
         // This computer has no security check: it's for servers.
         w.go_to("local");
-        assert!(!list(&w, &[], "").iter().any(|r| matches!(r.action, Action::Checkup { .. } | Action::Recipes { .. })));
+        assert!(!list(&w, &[], "").iter().any(|r| matches!(r.action, Action::Checkup { .. } | Action::Recipes { .. } | Action::Disk { .. })));
     }
 
     #[test]

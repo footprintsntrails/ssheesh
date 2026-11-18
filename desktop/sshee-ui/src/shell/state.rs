@@ -96,6 +96,12 @@ impl Remote {
         self.update(move |s| crate::screens::checkup::deliver(s, reply));
     }
 
+    /// "Free up disk space": a look, a folder's biggest entries, how a cleanup went
+    /// (`screens::disk::deliver`).
+    pub fn disk(&self, reply: sshee_app::disk::Reply) {
+        self.update(move |s| crate::screens::disk::deliver(s, reply));
+    }
+
     /// A Containers tab's answer: a look, or how a start, stop or restart went
     /// (`screens::containers::deliver`, which times the next look).
     pub fn containers(&self, reply: sshee_app::containers::Reply) {
@@ -256,6 +262,13 @@ pub trait Backend {
     /// `screens::recipes`): each waits on a server or a file, so the backend does it on a
     /// thread of its own and answers through [`Remote::recipes`].
     fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
+        let _ = ask;
+    }
+
+    /// "Free up disk space" (`screens::disk`): a look at the disks, a folder's biggest
+    /// entries, a cleanup you said yes to. Each waits on a server, so the backend does it on
+    /// a thread of its own and answers through [`Remote::disk`].
+    fn disk(&mut self, ask: sshee_app::disk::Ask) {
         let _ = ask;
     }
 

@@ -16,6 +16,7 @@ mod bookmarks;
 mod containers;
 mod demo;
 mod desktop;
+mod disk;
 mod edit;
 mod files;
 mod live;

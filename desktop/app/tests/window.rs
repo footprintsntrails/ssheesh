@@ -1320,6 +1320,20 @@ fn logs_open_in_a_new_tab_inside_the_container() {
     assert!(run.element("term").is_some(), "the logs' terminal isn't on screen");
 }
 
+/// "Free up disk space" from the sidebar's drive on web-7731 (Production): the disks, the
+/// cleanups with their commands, and a cleanup that ran after both yeses saying what it freed.
+#[test]
+fn free_up_disk_space_in_both_appearances() {
+    for theme in ["dark", "light"] {
+        let script = json!([tap(0.3, "disk"), tap(1.0, "clean-run-1"), tap(1.3, "clean-yes-1"), tap(1.6, "clean-prod-1"), end(2.4)]);
+        let Some(run) = run(&format!("disk-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        for said in ["Free up disk space", "/: 68 GB of 80 GB · 85%", "Unused Docker images", "docker image prune -a -f", "Docker build cache", "Done. Freed 3.7 GB.", "Biggest here"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
+        assert!(run.rect("disk-vol-0")[1] < run.rect("disk-cleanups")[1]);
+    }
+}
+
 #[test]
 fn stats_has_graphs_meters_and_programs_in_both_appearances() {
     for (theme, _, page) in LOOKS {
@@ -1336,6 +1350,7 @@ fn stats_has_graphs_meters_and_programs_in_both_appearances() {
             "Network",
             "November: ↓ 96 GB  ↑ 31 GB",
             "/srv/shop: 211 GB of 500 GB",
+            "Free up space…",
             "web-7731, Linux 6.8.0-45-generic, up 37 d 5 h",
             "Busiest programs",
             "node",

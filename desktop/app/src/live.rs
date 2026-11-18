@@ -536,6 +536,14 @@ impl Backend for LiveBackend {
         crate::recipes::answer(ask, target, prepare, host, self.env.clone(), remote);
     }
 
+    /// "Free up disk space": a look, a folder's biggest entries, a cleanup you said yes to,
+    /// on a thread of its own (`crate::disk`), with the server's saved password read there.
+    fn disk(&mut self, ask: sshee_app::disk::Ask) {
+        let Some(remote) = self.remote.clone() else { return };
+        let (target, prepare) = self.reach(ask.server());
+        crate::disk::answer(ask, target, prepare, self.env.clone(), remote);
+    }
+
     fn snippets(&mut self) -> Option<sshee_app::model::Snippets> {
         sshee_core::app_identity::current().dir().and_then(crate::recipes::load_snippets)
     }

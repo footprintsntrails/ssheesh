@@ -9,6 +9,7 @@
 //! ├── table      CPU       38%           ╱╲__╱╲___╱‾‾╲_____
 //! │              Memory    60%           ███████████░░░░░░░
 //! │              …
+//! │              stats-disk-tools: "Free up space…" under the disks (a server's)
 //! ├── about      web-7731, Linux 6.8.0, up 37 d 5 h
 //! └── programs   Busiest programs: name, CPU, memory
 //! ```
@@ -218,6 +219,18 @@ pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
     let mut table = col().key("stats-table").w_full().role("table").label_static("Stats");
     for l in rules::lines(v, facts) {
         table = table.child(line_view(s, &server, t, &l));
+    }
+    // Under the disks, as in 0.10's tools: what takes the space, and safe cleanups.
+    if s.bench.server(&server).is_some_and(|sv| !sv.is_local()) {
+        let there = server.clone();
+        table = table.child(
+            row().key("stats-disk-tools").w_full().py(10.0).pl(16.0 + LABEL_W + 16.0).pr(16.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(
+                push_button(t, "Free up space…", Push::Quiet, true)
+                    .key("stats-free-space")
+                    .help("What takes up the disks, and what's safe to clean up")
+                    .on_press_tx(move |s: &mut Shell, tx| s.open_disk(&there, tx)),
+            ),
+        );
     }
     let name = s.bench.server(&server).map_or_else(|| "This machine".to_owned(), |sv| s.server_shown(&server, &sv.name).into_owned());
     let about = rules::about(v, facts, &name, !s.streaming());

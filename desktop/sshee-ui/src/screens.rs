@@ -13,6 +13,7 @@ pub mod add_server;
 pub mod canary;
 pub mod checkup;
 pub mod containers;
+pub mod disk;
 pub mod files;
 pub mod home;
 pub mod palette;
@@ -32,6 +33,8 @@ pub mod tunnels;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod disk_tests;
 #[cfg(test)]
 mod tools_tests;
 
@@ -79,6 +82,8 @@ pub struct States {
     /// The security check, recipes and snippets; the welcome, the tour (and hints), and
     /// "What's new".
     pub checkup: checkup::State,
+    /// "Free up disk space".
+    pub disk: disk::State,
     pub recipes: recipes::State,
     pub snippets: snippets::State,
     pub welcome: welcome::State,
@@ -108,7 +113,7 @@ impl States {
 
     /// The security check, recipes, snippets, the welcome, the tour or "What's new" is open.
     fn tools_open(&self) -> bool {
-        self.checkup.is_open() || self.recipes.is_open() || self.snippets.is_open() || self.welcome.open || self.tour.open || !self.whats_new.releases.is_empty()
+        self.checkup.is_open() || self.disk.is_open() || self.recipes.is_open() || self.snippets.is_open() || self.welcome.open || self.tour.open || !self.whats_new.releases.is_empty()
     }
 
     /// Closes what is open over the window, before something else opens there: one at a time.
@@ -120,6 +125,7 @@ impl States {
         self.agent.close();
         self.notes.close();
         self.checkup = checkup::State::default();
+        self.disk = disk::State::default();
         // A recipe stepped aside stays aside: its bar brings the steps back.
         if !self.recipes.aside {
             self.recipes.close();
@@ -144,7 +150,7 @@ pub fn overlays(s: &crate::shell::Shell, t: &'static Theme, cx: &mut Cx<crate::s
     out.extend([recipes::aside(s, t), tour::hint(s, t)].into_iter().flatten());
     out.extend([palette::view(s, t, cx), server_menu::view(s, t, cx), add_server::view(s, t, cx), tor::view(s, t, cx), tunnels::view(s, t)].into_iter().flatten());
     // The security check, recipes, snippets; the welcome, the tour and "What's new".
-    out.extend([checkup::view(s, t), recipes::view(s, t), snippets::view(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
+    out.extend([checkup::view(s, t), disk::view(s, t), recipes::view(s, t), snippets::view(s, t), welcome::view(s, t), tour::view(s, t), whats_new::view(s, t)].into_iter().flatten());
     out
 }
 

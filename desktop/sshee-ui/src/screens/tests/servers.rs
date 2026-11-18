@@ -142,11 +142,11 @@ fn the_address_is_copied_except_in_streamer_mode_and_a_saved_password_forgotten(
     w.key(Key::Escape, "");
     w.right_click("server-2");
     assert!(!w.tree().contains("Forget saved password"));
-    w.click("sm-6");
+    w.click("sm-7");
     assert!(w.rt.state.screens.notes.titles().contains(&"Copied the address"));
     // Forgetting it: asked of the backend, said in a toast, and the row is gone.
     w.right_click("server-1");
-    w.click("sm-12");
+    w.click("sm-13");
     assert!(w.asks().contains(&Ask::ForgetPassword { server: WEB.into() }));
     assert!(w.rt.state.screens.notes.titles().iter().any(|t| t.starts_with("Forgot the saved password")));
     w.right_click("server-1");
@@ -163,7 +163,7 @@ fn the_address_is_copied_except_in_streamer_mode_and_a_saved_password_forgotten(
 fn a_look_can_be_automatic_any_colour_or_a_picture_and_a_failure_says_so() {
     let mut w = Window::open(false);
     w.right_click("server-2");
-    w.click("sm-8");
+    w.click("sm-9");
     assert!(w.tree().contains("Automatic: not checked yet"));
     // Any colour, typed.
     let typed = |w: &mut Window, text: &'static str| {
@@ -211,7 +211,7 @@ fn the_first_connect_guesses_the_icon_once_and_new_config_hosts_are_noted_in_the
     let detects = |w: &Window| w.asks().iter().filter(|a| matches!(a, Ask::Detect { first: true, .. })).count();
     assert_eq!(detects(&w), 0, "db-main has a look picked");
     w.right_click("server-2");
-    w.click("sm-8");
+    w.click("sm-9");
     w.click("sm-auto");
     w.click("sm-done");
     // Back on "Automatic", with nothing guessed yet: the next connect looks.
