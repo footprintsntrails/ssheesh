@@ -6012,6 +6012,7 @@ dependencies = [
  "minisign-verify",
  "png 0.18.1",
  "rustls",
+ "semver",
  "serde_json",
  "sha2",
  "sshee-app",

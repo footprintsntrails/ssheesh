@@ -142,7 +142,7 @@ fn fetch(url: &Url, most: u64, route: Route) -> Result<Reply, String> {
     let conn = rustls::ClientConnection::new(tls(), name).map_err(|e| e.to_string())?;
     let mut stream = rustls::StreamOwned::new(conn, sock);
     // A plain name for the program, as GitHub asks of every client; nothing about this computer.
-    let request = format!("GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: SSHeesh-canary\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n", url.path, url.host);
+    let request = format!("GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: SSHeesh-update\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n", url.path, url.host);
     stream.write_all(request.as_bytes()).and_then(|_| stream.flush()).map_err(|e| format!("{}: {e}", url.host))?;
     read_reply(&mut BufReader::new(stream), most)
 }

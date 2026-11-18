@@ -1,11 +1,12 @@
-//! A newer test build: one quiet line across the top of the page, as the privacy notice is
-//! drawn ("A new test build is ready" — Restart to update, Later). The program finds, checks
-//! and stages the build (`desktop/app/src/update.rs`) and hands the window a
-//! [`Notice`](sshee_app::canary::Notice) through `Remote` ([`show`]); the words and buttons
-//! are `sshee_app::canary`'s. Settings → Updates → "Check for test builds" off hides offers.
+//! A newer build: one quiet line across the top of the page, as the privacy notice is drawn
+//! ("SSHeesh 1.0.1 is ready", "A new test build is ready" — Restart to update, Later). The
+//! program finds, checks and stages the build (`desktop/app/src/update.rs`) and hands the
+//! window a [`Notice`](sshee_app::canary::Notice) through `Remote` ([`show`]); the words and
+//! buttons are `sshee_app::canary`'s. Settings → Updates → "Never check" hides offers, and
+//! "Check for test builds" off hides offers of test builds.
 
 use rune::{row, text, El};
-use sshee_app::canary::{Button, ByHand, Notice, RELEASE_PAGE};
+use sshee_app::canary::{Button, ByHand, Notice};
 
 use crate::icons::{icon, Icon};
 use crate::kit::push::{push_button, Push};
@@ -34,7 +35,7 @@ fn press(s: &mut Shell, button: Button, tx: &mut rune::Tx) {
             Err(why) => s.screens.canary.notice = Some(Notice::ByHand { version: notice.version().to_owned(), why: ByHand::Failed(why) }),
         },
         Button::Download => {
-            let _ = tx.open_url(RELEASE_PAGE);
+            let _ = tx.open_url(&notice.page());
             s.screens.canary.later = Some(notice.version().to_owned());
         }
         Button::Later => s.screens.canary.later = Some(notice.version().to_owned()),
@@ -47,7 +48,7 @@ fn press(s: &mut Shell, button: Button, tx: &mut rune::Tx) {
 pub fn bar(s: &Shell, t: &'static Theme) -> Option<El> {
     let notice = s.screens.canary.notice.as_ref()?;
     let offer = !matches!(notice, Notice::RolledBack { .. });
-    let off = !s.settings.canary_updates() || s.settings.update_mode() == sshee_app::model::UpdateMode::Manual;
+    let off = s.settings.update_mode() == sshee_app::model::UpdateMode::Manual || (notice.is_test() && !s.settings.canary_updates());
     if offer && (off || s.screens.canary.later.as_deref() == Some(notice.version())) {
         return None;
     }

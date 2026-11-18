@@ -1002,7 +1002,7 @@ fn build() -> Vec<Row> {
             "Check for test builds",
             Switch { get: |st| st.canary_updates(), set: |st, v| st.set_more(|m| m.canary_updates = v) },
         )
-        .hint("At start and every few hours; asks before restarting. Builds made on your own computer never look.")
+        .hint("For a test build: at start and every few hours; asks before restarting. Off, it looks for releases instead. Releases never take test builds; builds made on your own computer never look.")
         .adds(&["canaryUpdates"])
         .words("canary test build preview update nightly"),
         Row::new(
@@ -1016,7 +1016,7 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.update_mode = UpdateMode::from(v)),
             },
         )
-        .hint("At start and every few hours. Restarting reconnects your terminals.")
+        .hint("At start and every few hours. Ask me: only says a new version is out, with a link. Restarting reconnects your terminals.")
         .saves(&["updateMode"])
         .words("auto update version check"),
         // ------------------------------------------------------------------ About
