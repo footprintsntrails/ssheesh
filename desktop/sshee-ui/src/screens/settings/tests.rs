@@ -223,8 +223,12 @@ fn the_gear_opens_settings_as_a_page_and_esc_goes_back_to_the_terminal() {
     // No tab is the one on screen meanwhile; the gear is.
     assert_ne!(w.fill("tab-1"), Theme::of(true).sel.hex());
     assert_eq!(w.fill("settings-gear"), Theme::of(true).selrail.hex());
-    // Nothing typed reaches the terminal nobody sees.
+    // The keyboard is in the search: nothing typed reaches the terminal nobody sees.
     w.key(Key::Text("x".into()), "");
+    assert_eq!(w.rt.state.screens.settings.search.text, "x");
+    // Esc empties the search first.
+    w.key(Key::Escape, "");
+    assert!(w.rt.state.screens.settings.open && w.rt.state.screens.settings.search.text.is_empty());
     w.key(Key::Enter, "");
     assert_eq!(w.told.lock().unwrap().written, b"a");
     // Esc: back to the tab, which has the keyboard again.
@@ -421,7 +425,7 @@ fn a_row_that_comes_later_is_shown_and_cannot_be_changed() {
     // Tabs under each server: there, dimmed, with why. (Compact mode and the server list work.)
     w.click("layout-tabs-control/seg-0");
     assert_eq!(*w.settings(), before);
-    assert!(w.says("Tabs run along the top for now."));
+    assert!(w.says("Tabs run along the top."));
     // Install updates works now: Never check stops the looking for test builds too.
     w.go(Section::Updates);
     w.click("updates-mode-control/seg-2");

@@ -610,7 +610,7 @@ fn a_right_click_on_a_server_opens_its_menu() {
     let mut w = Window::busy();
     w.right_click("server-2");
     let tree = w.tree();
-    for said in ["New terminal", "Files", "Terminal and files side by side", "Stats", "Containers", "Tunnels…", "Copy address", "Rename…", "Icon and colour…", "Production", "Staging", "Development", "Remove server…"] {
+    for said in ["New terminal", "Files", "Terminal and files side by side", "Stats", "Containers", "Tunnels…", "Copy address", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
         assert!(tree.contains(said), "{said} isn't in the menu: {tree}");
     }
     // Arrows and Return: the second row is Files.
@@ -651,7 +651,7 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     // Icon and colour.
     w.right_click("server-2");
     w.click("sm-8");
-    assert!(w.tree().contains("Icon and colour for Main database"));
+    assert!(w.tree().contains("Icon and color for Main database"));
     w.click("icon-rocket");
     assert_eq!(w.rt.state.bench.server(DB).unwrap().icon, "rocket");
     w.click("color-5");

@@ -22,7 +22,7 @@ use rune::{col, el, row, spacer, text, text_input, El, TextEdit, Tx};
 use sshee_app::model::{Snippet, Snippets};
 use sshee_app::snippets::{self, blanks, complete, fill, only_on};
 
-use super::checkup::{body, close_button, command_block, dialog, header, note};
+use super::checkup::{body, close_button, command_block, dialog, header, headed, note};
 use crate::icons::Icon;
 use crate::kit::chip::chip;
 use crate::kit::field::{code_input, field, input, labelled};
@@ -247,7 +247,8 @@ fn list_page(t: &Theme, s: &Shell) -> El {
         Some(name) => format!("Run in the terminal of {name}. In the palette too: type cmd:"),
         None => "Commands you keep. Open a server to run one there.".to_owned(),
     };
-    let mut page = body("snip-body").child(header(t, Icon::Terminal, "Snippets", &sub, vec![close_button(t, "snip-close").on_press_tx(|s: &mut Shell, tx| s.close_snippets(tx))]));
+    let head = header(t, Icon::Terminal, "Snippets", &sub, vec![close_button(t, "snip-close").on_press_tx(|s: &mut Shell, tx| s.close_snippets(tx))]);
+    let mut page = body("snip-body");
     let mut list = col().key("snip-list").w_full().gap(2.0).mx(-8.0);
     let shown = snippets::for_server(&state.list.snippets, here);
     for (i, sn) in shown.iter().enumerate() {
@@ -284,20 +285,21 @@ fn list_page(t: &Theme, s: &Shell) -> El {
     if let Some(why) = &state.note {
         page = page.child(note(t, why, false).key("snip-note"));
     }
-    page.child(row().w_full().child(spacer()).child(push_button(t, "New snippet", Push::Primary, true).key("snip-new").on_press_tx(|s: &mut Shell, _| s.snippet_edit(None))))
+    headed(head, page.child(row().w_full().child(spacer()).child(push_button(t, "New snippet", Push::Primary, true).key("snip-new").on_press_tx(|s: &mut Shell, _| s.snippet_edit(None)))), 14.0)
 }
 
 fn edit_page(t: &Theme, s: &Shell, id: Option<&str>) -> El {
     let state = &s.screens.snippets;
     let found = blanks(&state.command.text);
     let ready = snippets::check(&state.name.text, &state.command.text).is_none();
-    let mut page = body("snip-body").child(header(
+    let head = header(
         t,
         Icon::Pencil,
         if id.is_some() { "Edit snippet" } else { "New snippet" },
         "Leave blanks to fill in each time it runs",
         vec![close_button(t, "snip-close").on_press_tx(|s: &mut Shell, tx| s.close_snippets(tx))],
-    ));
+    );
+    let mut page = body("snip-body");
     let name = input(t, &state.name, "Restart the web app").key("snip-name").on_edit(|s: &mut Shell| &mut s.screens.snippets.name);
     page = page.child(labelled(t, "Name", field(t, name, state.error == Some("Give it a name."))));
     let command = text_input(&state.command, theme::CODE)
@@ -349,14 +351,15 @@ fn edit_page(t: &Theme, s: &Shell, id: Option<&str>) -> El {
     if ready {
         save = save.on_press_tx(|s: &mut Shell, _| s.snippet_save());
     }
-    page.child(
+    let page = page.child(
         row()
             .w_full()
             .gap(8.0)
             .child(spacer())
             .child(push_button(t, "Cancel", Push::Quiet, true).key("snip-cancel").on_press_tx(|s: &mut Shell, _| s.screens.snippets.page = Some(Page::List)))
             .child(save),
-    )
+    );
+    headed(head, page, 14.0)
 }
 
 fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
@@ -364,7 +367,8 @@ fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
     let Some(sn) = state.list.snippets.iter().find(|x| x.id == id) else { return body("snip-body") };
     let name = server_name(s, server);
     let prod = s.bench.server(server).is_some_and(|sv| sv.is_prod());
-    let mut page = body("snip-body").child(header(t, Icon::Terminal, &sn.name, &format!("Into the terminal of {name}"), vec![close_button(t, "snip-close").on_press_tx(|s: &mut Shell, tx| s.close_snippets(tx))]));
+    let head = header(t, Icon::Terminal, &sn.name, &format!("Into the terminal of {name}"), vec![close_button(t, "snip-close").on_press_tx(|s: &mut Shell, tx| s.close_snippets(tx))]);
+    let mut page = body("snip-body");
     if prod {
         page = page.child(row().gap(6.0).items_center().child(chip(t, "Prod", t.red)).child(text("Run asks once more before it goes in with Return.").font(theme::SMALL).color(t.l2).single_line()));
     }
@@ -386,14 +390,15 @@ fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
     if ready && state.asking.is_none() {
         go = go.default_button().on_press_tx(|s: &mut Shell, tx| s.snippet_fill_go(true, tx));
     }
-    page.child(
+    let page = page.child(
         row()
             .w_full()
             .gap(8.0)
             .child(spacer())
             .child(push_button(t, "Paste", Push::Quiet, ready).key("snip-paste").help("Type it into the terminal without pressing Return").on_press_tx(|s: &mut Shell, tx| s.snippet_fill_go(false, tx)))
             .child(go),
-    )
+    );
+    headed(head, page, 14.0)
 }
 
 /// The dialog, when it's open.

@@ -935,7 +935,7 @@ impl Book {
                     self.looks.set_color(id, &color);
                     Answer::Changed
                 }
-                _ => Answer::failed(&ask, "That isn't a colour. Type it as #2389e2."),
+                _ => Answer::failed(&ask, "That isn't a color. Type it as #2389e2."),
             },
             Ask::SetImage { ref server, ref path } => match host_id(server) {
                 // Nothing is read here: the picture is made of the file's name.

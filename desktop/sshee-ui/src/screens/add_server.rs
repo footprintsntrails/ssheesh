@@ -440,7 +440,7 @@ fn sign_in(state: &State, t: &Theme) -> El {
             list
         }
     };
-    section(t, "Sign in with", col().w_full().gap(8.0).items_start().child(choices(t, ways)).child(how))
+    section(t, "Sign in with", col().w_full().gap(8.0).items_start().child(choices(t, ways).label_static("Sign in with")).child(how))
 }
 
 /// "In your list": the icon (its picker opens in place), the colour, the label, the name.
@@ -492,7 +492,7 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
         }
         body = body.child(icons);
     }
-    let mut colors = row().gap(6.0).items_center().role("radiogroup").label_static("Icon colour");
+    let mut colors = row().gap(6.0).items_center().role("radiogroup").label_static("Icon color");
     for (i, hex) in HOST_COLORS.into_iter().enumerate() {
         let chosen = state.look.as_ref().is_some_and(|l| l.color.eq_ignore_ascii_case(hex));
         let mut b = rune::el()
@@ -504,7 +504,7 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
             .focusable(true)
             .role("radio")
             .checked(chosen)
-            .label(format!("Colour {}", i + 1))
+            .label(format!("Color {}", i + 1))
             .on_press_tx(move |s: &mut Shell, _| {
                 let st = &mut s.screens.add_server;
                 let icon = st.look.as_ref().map(|l| l.icon.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| "server".into());
@@ -528,7 +528,8 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
                 st.env = if st.env.as_ref() == Some(&env) { None } else { Some(env.clone()) };
             })
         }),
-    );
+    )
+    .label_static("Label");
     body = body.child(row().w_full().gap(12.0).items_center().flex_wrap().child(colors).child(rune::spacer()).child(labels));
     section(t, "In your list", body)
 }
@@ -594,7 +595,7 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
     }
 
     // Where.
-    let address = input(t, &state.address, "203.0.113.10, or paste: ssh root@host -p 2222").key("add-address").on_edit(|s: &mut Shell| &mut s.screens.add_server.address);
+    let address = input(t, &state.address, "203.0.113.10").key("add-address").on_edit(|s: &mut Shell| &mut s.screens.add_server.address);
     let port = input(t, &state.port, "22").key("add-port").on_edit(|s: &mut Shell| &mut s.screens.add_server.port);
     let user = input(t, &state.user, "root").key("add-user").on_edit(|s: &mut Shell| &mut s.screens.add_server.user);
     let bad_address = state.error.as_deref().is_some_and(|e| e == sshee_app::servers::NO_ADDRESS || e == sshee_app::servers::BAD_ADDRESS);
@@ -607,12 +608,17 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
             .child(labelled(t, "Port", field(t, port, bad_port)).w(76.0))
             .child(labelled(t, "User", field(t, user, false)).w(120.0)),
     );
-    // A pasted ssh command, read back: what the box means.
+    // A pasted ssh command, read back: what the box means. Until then, that one can be pasted.
+    let mut read_back = false;
     if let Ok(reads) = form.check() {
         if reads.address != state.address.text.trim() && state.user.text.is_empty() && state.port.text.is_empty() {
             let key = reads.identity_file.as_deref().map(|k| format!(", key {k}")).unwrap_or_default();
             place = place.child(text(format!("Reads as {}{key}", reads.address)).key("add-reads").font(theme::SMALL).color(t.l2).single_line().truncate());
+            read_back = true;
         }
+    }
+    if !read_back && state.address.text.trim().is_empty() {
+        place = place.child(text("Or paste a whole ssh command, like ssh root@host -p 2222.").key("add-paste-hint").font(theme::SMALL).color(t.l2).wrap());
     }
     page = page.child(section(t, "Where", place));
     page = page.child(sign_in(state, t));

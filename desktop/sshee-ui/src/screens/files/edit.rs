@@ -278,8 +278,8 @@ pub fn overlay(s: &Shell, t: &'static Theme) -> Option<El> {
     None
 }
 
-fn layer(card: El) -> El {
-    el().key("edit-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).items_center().justify_center().child(card)
+fn layer(t: &Theme, card: El) -> El {
+    el().key("edit-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(card)
 }
 
 fn conflict(s: &Shell, session: &Session, t: &'static Theme) -> El {
@@ -326,7 +326,7 @@ fn conflict(s: &Shell, session: &Session, t: &'static Theme) -> El {
             s.screens.edits.show_conflict(None);
             tx.instant();
         });
-    layer(card)
+    layer(t, card)
 }
 
 /// The two versions, line by line: what only yours has, what only theirs has, the rest quiet.
@@ -411,5 +411,5 @@ fn leftovers(s: &Shell, t: &'static Theme) -> El {
             s.screens.edits.leftovers_done();
             tx.instant();
         });
-    layer(card)
+    layer(t, card)
 }

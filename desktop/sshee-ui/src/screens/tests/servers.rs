@@ -174,7 +174,7 @@ fn a_look_can_be_automatic_any_colour_or_a_picture_and_a_failure_says_so() {
     assert_eq!(w.rt.state.screens.server_menu.faces[DB].look.color, "#aabbcc");
     // One that isn't a colour is said on the page.
     typed(&mut w, "blue");
-    assert!(w.tree().contains("That isn't a colour."));
+    assert!(w.tree().contains("That isn't a color."));
     // One of the more colours.
     w.click("more-3");
     assert_eq!(w.rt.state.screens.server_menu.faces[DB].look.color, sshee_app::labels::MORE_COLORS[3]);

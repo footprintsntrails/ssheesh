@@ -17,7 +17,7 @@ use rune::{col, row, spacer, text, El, Tx};
 use sshee_app::servers::Source;
 use sshee_app::tour;
 
-use super::checkup::{body, dialog};
+use super::checkup::{body, dialog, headed};
 use crate::icons::{logo, Icon};
 use crate::kit::list::{list_row, ListRow};
 use crate::kit::push::{push_button, Push};
@@ -108,7 +108,6 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(text("Welcome to SSHeesh").font(theme::TAB_NAME).color(t.l2on).single_line());
     let mut page = body("welcome-body")
         .gap(16.0)
-        .child(head)
         .child(
             col()
                 .w_full()
@@ -142,5 +141,5 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
                 .child(spacer())
                 .child(push_button(t, "Take the one-minute tour", Push::Primary, true).key("welcome-tour").default_button().on_press_tx(|s: &mut Shell, tx| s.welcome_tour(tx))),
         );
-    Some(dialog(t, "welcome-scrim", "welcome", "Welcome to SSHeesh", WIDTH, page, |s: &mut Shell, tx| s.skip_welcome(tx)))
+    Some(dialog(t, "welcome-scrim", "welcome", "Welcome to SSHeesh", WIDTH, headed(head, page, 16.0), |s: &mut Shell, tx| s.skip_welcome(tx)))
 }

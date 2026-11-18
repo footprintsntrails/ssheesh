@@ -111,7 +111,8 @@ fn host_key<S: 'static>(q: &HostKey, name: &str, t: &'static Theme, get: impl Fn
     } else {
         (push_button(t, yes, Push::Primary, true), push_button(t, no, Push::Quiet, true))
     };
-    let mut card = popover(t, 460.0)
+    // Wide enough for a SHA256 fingerprint on one line beside its kind, in a 900 point window.
+    let mut card = popover(t, 500.0)
         .key("hostkey-card")
         .padding(18.0)
         .gap(12.0)

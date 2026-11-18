@@ -14,7 +14,7 @@ use super::{keyboard, TorCommand};
 use crate::icons::{icon, logo, Icon};
 use crate::kit::field::{code_input, field, input};
 use crate::kit::form::{form_group, form_heading, form_note, form_row, form_row_stacked, RowText};
-use crate::kit::popup::popup_button;
+use crate::kit::popup::{popup_button, popup_button_max};
 use crate::kit::push::{icon_button, push_button, toggle_button, Push};
 use crate::kit::segmented::segmented;
 use crate::kit::slider::{slider, Range};
@@ -41,6 +41,24 @@ const WORD_COLORS: [(HighlightColor, &str, u8); 6] = [
 /// The palette the terminals draw with now, in a window that is dark or isn't.
 fn palette(s: &Shell, t: &Theme) -> Palette {
     Palette::of(s.options.pane.scheme, t.dark)
+}
+
+/// About how wide `r`'s control is drawn, from its words: the segments, the chips, the
+/// buttons, a pop-up's whole value. `None` for one that is narrow whatever it says.
+fn control_width(s: &Shell, r: &'static Row) -> Option<f32> {
+    let words = |labels: &[&str], font, pad: f32, gap: f32| labels.iter().map(|l| rune::text::advance(l, font) + pad).sum::<f32>() + gap * labels.len().saturating_sub(1) as f32;
+    match r.control {
+        Control::Choice { look: ChoiceLook::Segmented, .. } => Some(words(&r.choice_labels(keyboard(s)), theme::CONTROL_TEXT, 20.0, 0.0) + 4.0),
+        Control::Choice { look: ChoiceLook::Popup, options, get, .. } => {
+            let now = get(&s.settings);
+            let labels = r.choice_labels(keyboard(s));
+            let shown = options.iter().position(|(value, _)| *value == now).and_then(|at| labels.get(at).copied()).unwrap_or(now.as_str());
+            Some(rune::text::advance(shown, theme::TEXT) + 32.0)
+        }
+        Control::Toggles { options, .. } => Some(words(&options.iter().map(|(_, l)| *l).collect::<Vec<_>>(), theme::CONTROL_TEXT, 20.0, 6.0)),
+        Control::Buttons(buttons) => Some(words(&buttons.iter().map(|(l, _)| *l).collect::<Vec<_>>(), theme::CONTROL_TEXT, 24.0, 6.0)),
+        _ => None,
+    }
 }
 
 /// The control of a row whose value is the store's.
@@ -70,7 +88,8 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
             let labels = r.choice_labels(keyboard(s));
             let shown = options.iter().position(|(value, _)| *value == now).and_then(|at| labels.get(at).copied()).unwrap_or(now.as_str());
             let row_key = r.key;
-            let button = popup_button(t, r.label, shown, on).key(key);
+            // A long value is drawn whole: its row puts it under the words, at the row's width.
+            let button = popup_button_max(t, r.label, shown, on, s.screens.settings.row_width() - 24.0 - 32.0).key(key);
             if on {
                 button.on_press_tx(move |s: &mut Shell, tx| {
                     s.screens.settings.menu = Some(row_key);
@@ -241,17 +260,49 @@ fn schemes_grid(s: &Shell, t: &'static Theme) -> El {
                 Resolved::Fixed(fixed) => Scheme::Fixed(fixed.colors),
                 Resolved::Own { background, foreground } => Scheme::Own { background, foreground },
             };
-            // "Your own" needs its two colours: picking them comes with the colour picker.
+            // "Your own" needs its two colours: picked under the cards.
             let enabled = *id != schemes::OWN || own != Resolved::MatchApp;
             let card = scheme_card(t, line * 3 + at, id, name, &Palette::of(scheme, t.dark), st.terminal_scheme == *id, enabled);
             cards = cards.child(card);
         }
         grid = grid.child(cards);
     }
-    if own == Resolved::MatchApp {
-        grid = grid.child(text("Your own background and text colors come with the color picker.").font(theme::HELP).color(t.l2).wrap());
+    grid.child(own_colors(s, t))
+}
+
+/// "Your own": its background and text, each a swatch that opens the color picker under them.
+/// Picking a color picks the scheme too.
+fn own_colors(s: &Shell, t: &'static Theme) -> El {
+    use super::looks::{own_terminal, picker, toggle_picker, TERM_BG, TERM_FG};
+    let (bg, fg) = own_terminal(s);
+    let mut line = row().key("term-own").w_full().gap(8.0).items_center().child(text("Your own:").font(theme::HELP).color(t.l2).single_line());
+    for (key, name, c) in [(TERM_BG, "Background", bg), (TERM_FG, "Text", fg)] {
+        line = line.child(
+            row()
+                .key(format!("color-{key}"))
+                .h(26.0)
+                .pl(4.0)
+                .pr(9.0)
+                .gap(6.0)
+                .radius(theme::RADIUS_ROW)
+                .fill(t.control)
+                .items_center()
+                .hover(t.control_hover)
+                .role("button")
+                .label(format!("Pick your own {}", name.to_lowercase()))
+                .focusable(true)
+                .on_press_tx(move |s: &mut Shell, tx| toggle_picker(s, key, tx))
+                .child(rune::el().size(18.0, 18.0).radius(5.0).fill(crate::looks::color(c)).border(1.0, t.hair).a11y_hidden())
+                .child(text(name).font(theme::CONTROL_TEXT).color(t.l1).single_line().a11y_hidden()),
+        );
     }
-    grid
+    let mut out = col().w_full().gap(8.0).child(line);
+    for key in [TERM_BG, TERM_FG] {
+        if let Some(open) = picker(s, t, key) {
+            out = out.child(open);
+        }
+    }
+    out
 }
 
 /// A few lines of a terminal in the colours, size, line height and cursor chosen.
@@ -485,7 +536,8 @@ fn alone(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
             .gap(10.0)
             .child(version_card(t, "about-card", 56.0, ("SSHeesh", &format!("Preview {version} · early preview, expect rough edges")), None))
             .child(
-                text("Servers, terminals and files that don't fall over. Free, with open source code under the CC BY-NC-SA 4.0 license.")
+                // The license's name never breaks inside: non-breaking hyphens and spaces.
+                text("Servers, terminals and files that don't fall over. Free, with open source code under the CC\u{a0}BY\u{2011}NC\u{2011}SA\u{a0}4.0 license.")
                     .font(theme::NOTE)
                     .color(t.l2on)
                     .wrap()
@@ -505,6 +557,11 @@ fn boxed(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
     let words = RowText { label: r.label, help: help.as_deref(), later };
     let mut e = match wide(s, t, r) {
         Some(control) => form_row_stacked(t, words, control),
+        // A control wider than about half the row goes under the words, which then have the
+        // row's whole width; a pop-up there shows its whole value.
+        None if control_width(s, r).is_some_and(|w| w > s.screens.settings.row_width() / 2.0 - 40.0) => {
+            form_row_stacked(t, words, row().w_full().child(control(s, t, r)))
+        }
         None => form_row(t, words, control(s, t, r)),
     };
     if s.screens.settings.found.as_deref() == Some(r.key) {

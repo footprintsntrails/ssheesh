@@ -336,7 +336,7 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
         }
         assert_eq!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
         // Rows with their words and controls; one that comes later says so.
-        for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Comes later.", "Search"] {
+        for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Tabs run along the top. Tabs under each server aren't built yet.", "Search"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
         // The picture: the page's colour, a box of rows on it, the picked section's blue, and
@@ -862,7 +862,7 @@ fn a_servers_menu_and_card_open_beside_its_icon_in_both_appearances() {
         let Some(run) = self::run(&format!("menu-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
         assert_eq!(run.fill("server-menu"), format!("{pop}ff"), "{theme}");
         assert_eq!(run.fill("sm-0"), "#0071e3ff", "{theme}: the arrow didn't highlight the first row");
-        for said in ["New terminal", "Files", "Rename…", "Icon and colour…", "Production", "Staging", "Development", "Remove server…"] {
+        for said in ["New terminal", "Files", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the menu");
         }
         assert!(run.element("server-card").is_none(), "{theme}: the card stayed under the menu");
@@ -921,6 +921,22 @@ fn files_lists_opens_and_asks_in_both_appearances() {
     for said in ["Delete “deploy.sh”?", "It's deleted on the server right away. This can't be undone.", "Cancel"] {
         assert!(run.tree_text.contains(said), "{said} isn't in the tree");
     }
+}
+
+#[test]
+fn return_on_the_delete_question_deletes_nothing() {
+    // Delete asks; Return then means Cancel: the question goes, and the file stays.
+    let script = json!([
+        { "t": 0.3, "type": "tap", "key": "tab-2" },
+        { "t": 0.8, "type": "tap", "x": 300.0, "y": 231.0 },
+        press(1.0, "Delete", false, false, false),
+        press(1.5, "Enter", false, false, false),
+        { "t": 2.2, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = self::run("files-delete-return", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-question").is_none(), "the question is still open");
+    assert!(run.tree_text.contains("deploy.sh"), "deploy.sh was deleted");
+    assert!(!run.tree_text.contains("Deleting"), "a delete started");
 }
 
 #[test]

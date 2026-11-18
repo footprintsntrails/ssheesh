@@ -18,6 +18,12 @@ const VALUE_MAX: f32 = 260.0;
 /// The button named `name`, showing `value`. `enabled` false: it shows its value and opens
 /// nothing. The caller adds the key (the menu's anchor) and `.on_press_tx(..)` to open it.
 pub fn popup_button(t: &Theme, name: &str, value: &str, enabled: bool) -> El {
+    popup_button_max(t, name, value, enabled, VALUE_MAX)
+}
+
+/// [`popup_button`] whose value may be drawn up to `max` wide (never narrower than usual): one
+/// with a row's width to itself.
+pub fn popup_button_max(t: &Theme, name: &str, value: &str, enabled: bool, max: f32) -> El {
     let e = rune::row()
         .h(theme::FORM_CONTROL)
         .pl(9.0)
@@ -31,7 +37,7 @@ pub fn popup_button(t: &Theme, name: &str, value: &str, enabled: bool) -> El {
         .a11y_value(value)
         .focusable(enabled)
         .disabled(!enabled)
-        .child(text(value).font(theme::TEXT).color(t.l1).single_line().truncate().max_w(VALUE_MAX).a11y_hidden())
+        .child(text(value).font(theme::TEXT).color(t.l1).single_line().truncate().max_w(max.max(VALUE_MAX)).a11y_hidden())
         .child(icon(Icon::UpDown, 14.0, t.l2on));
     if enabled {
         e.hover(t.control_hover).press(t.control_down)

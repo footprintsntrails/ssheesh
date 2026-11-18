@@ -139,15 +139,16 @@ fn shortcut_row(s: &Shell, t: &'static Theme, id: &'static str, on: Keyboard) ->
     let is_changed = ids.iter().any(|i| changed.contains_key(*i));
     let why = state.problem.as_ref().filter(|(at, _)| ids.contains(at)).map(|(_, why)| why.as_str());
 
-    let mut keys = row().gap(6.0).items_center().child(cap(s, t, id, entry.name, on));
+    let mut keys = row().gap(6.0).items_center();
+    let mut caps = row().gap(6.0).items_center().child(cap(s, t, id, entry.name, on));
     if id == "palette" {
         let second = keymap::current_keys("paletteAlt", on.mac(), changed);
         if second.is_some() || state.id == Some("paletteAlt") {
-            keys = keys.child(text("or").font(theme::NOTE).color(t.l2).single_line()).child(cap(s, t, "paletteAlt", "Command bar, second key", on));
+            caps = caps.child(text("or").font(theme::NOTE).color(t.l2).single_line()).child(cap(s, t, "paletteAlt", "Command bar, second key", on));
         }
     }
-    // Back to its own keys: there only when they were changed, and keeping its room otherwise
-    // so the caps stay in one column.
+    // Back to its own keys: there only when they were changed, before the caps, and keeping its
+    // room otherwise, so the caps end where every other control in Settings does.
     let own: Vec<String> = ids.iter().filter_map(|i| keymap::default_keys(i, on.mac()).map(|k| keymap::label_of(i, &k, on))).collect();
     let reset = if is_changed && works {
         icon_button(t, Icon::Reopen, &format!("Back to {}", own.join(" or ")), true).key(format!("reset-{id}")).on_press_tx(move |s: &mut Shell, tx| {
@@ -171,7 +172,8 @@ fn shortcut_row(s: &Shell, t: &'static Theme, id: &'static str, on: Keyboard) ->
     let words = RowText { label: entry.name, help, later: (!works).then_some("Comes later.") };
     // Always the same shape, with or without a refusal under it: the key cap that is
     // recording keeps the keyboard while the refusal comes and goes.
-    let mut e = col().w_full().child(form_row(t, words, keys.child(reset)));
+    keys = keys.child(reset).child(caps);
+    let mut e = col().w_full().child(form_row(t, words, keys));
     if let Some(why) = why {
         // The refusal, in the row's own box, under its name and keys.
         e = e.child(text(why).key(format!("problem-{id}")).font(theme::HELP).color(t.red).wrap().px(12.0).pb(9.0).role("alert"));
@@ -188,7 +190,7 @@ pub(super) fn view(s: &Shell, t: &'static Theme) -> Vec<El> {
     let rule = if on.mac() {
         "They use ⌘, so ⌃ and ⌥ stay with the terminal and with typing."
     } else {
-        "They use Ctrl+Shift, so Ctrl with a letter, Alt and AltGr stay with the terminal."
+        "They use Ctrl+Shift, so Ctrl with a letter, Alt and AltGr stay with the terminal. Two don't: Find is Ctrl+F (vim, less and the like keep it while they're open), and Settings is Ctrl+comma."
     };
     let mut out = vec![text(format!("Click a shortcut and press the new keys; Esc cancels. {rule}")).key("keys-shortcuts").font(theme::NOTE).color(t.l2).wrap().px(12.0)];
     for (title, ids) in keymap::GROUPS {
@@ -207,8 +209,6 @@ pub(super) fn view(s: &Shell, t: &'static Theme) -> Vec<El> {
                 }
                 keys = keys.child(key_cap_button(t, f.name, &keymap::keys_label(k, on), CapState::Fixed));
             }
-            // The room the others' reset button takes, so every cap ends at the same place.
-            keys = keys.child(rune::el().size(theme::FORM_CONTROL, theme::FORM_CONTROL));
             form_row(t, RowText { label: f.name, help: f.note, later: None }, keys).key(format!("fixed-{i}"))
         })
         .collect();
