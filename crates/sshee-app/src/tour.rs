@@ -1,9 +1,13 @@
 //! The hello, the tour and the hints, without a screen (0.10's `Welcome.tsx`, `Tour.tsx`,
 //! `Hints.tsx`).
 //!
-//! - **The welcome** shows once, at 1.0's first start here ([`welcome_due`]): your servers
-//!   first (1.0 keeps a list of its own, so 0.10's are offered to bring over, and the ssh
-//!   config's to pick from), then the tour offered. Skipping it decides nothing for you.
+//! - **The welcome** shows once ([`welcome_due`]), to everyone: a new install, a 0.10 user and
+//!   whoever saw 1.0's first welcome. A few short pages ([`PAGES`]): your servers (1.0 keeps a
+//!   list of its own, so 0.10's are offered to bring over, and the ssh config's to pick from),
+//!   then the few settings that matter most, each with a picture of what it changes, then
+//!   three things people miss. A choice is a row of Settings ([`Page::rows`]), changed through
+//!   that row as Settings does; what's on when it opens stays picked, so clicking through
+//!   changes nothing. Skipping, at any page, decides nothing for you.
 //! - **The tour** is the simple one (plan decision Р7): six cards, a title and a line each,
 //!   with the shortcut that does it. 0.10's animated scenes come later.
 //! - **Hints** are one small note at a time about something on screen, the first time it's
@@ -12,10 +16,13 @@
 //!   keyboard.
 
 use crate::model::Settings;
+use crate::settings_store::catalog::{self, Control, Row};
+use crate::settings_store::SettingsStore;
 use crate::workbench::shortcuts::Shortcut;
 
-/// The welcome's version: 0.10's was 2, so a 0.10 user sees 1.0's once.
-pub const ONBOARDING_VERSION: u32 = 3;
+/// The welcome's version: 0.10's was 2 and 1.0's first (your servers only) 3, so everyone sees
+/// this one once, whichever they saw before.
+pub const ONBOARDING_VERSION: u32 = 4;
 
 /// Whether the welcome opens at this start.
 pub fn welcome_due(settings: &Settings) -> bool {
@@ -27,6 +34,110 @@ pub fn welcomed(settings: &mut Settings) {
     settings.onboarded = true;
     settings.onboarding_version = ONBOARDING_VERSION;
 }
+
+/// A page of the welcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    /// Bring 0.10's servers over, pick from the ssh config, or add one.
+    Servers,
+    /// Light or dark, and the sidebar's side.
+    Look,
+    /// Copying, and what a dropped connection does.
+    Terminal,
+    /// Three things people miss.
+    Tips,
+}
+
+/// The welcome's pages, in order.
+pub const PAGES: [Page; 4] = [Page::Servers, Page::Look, Page::Terminal, Page::Tips];
+
+impl Page {
+    /// A fixed word for its element's key.
+    pub fn id(self) -> &'static str {
+        match self {
+            Page::Servers => "servers",
+            Page::Look => "look",
+            Page::Terminal => "terminal",
+            Page::Tips => "tips",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Page::Servers => "Your servers",
+            Page::Look => "How it looks",
+            Page::Terminal => "In the terminal",
+            Page::Tips => "Three things people miss",
+        }
+    }
+
+    /// The settings it offers, by their rows' keys in Settings (`settings_store::catalog`), in
+    /// the order shown. Where tabs go isn't one yet: tabs under each server aren't built
+    /// (Settings shows that row disabled), and a choice here never pretends.
+    pub fn rows(self) -> &'static [&'static str] {
+        match self {
+            Page::Look => &["look-appearance", "layout-sidebar-side"],
+            Page::Terminal => &["term-copy", "term-reconnect"],
+            Page::Servers | Page::Tips => &[],
+        }
+    }
+
+    /// The rows it shows: those 1.0 acts on, each a choice among a few.
+    pub fn choices(self) -> Vec<&'static Row> {
+        self.rows().iter().filter_map(|key| catalog::row(key)).filter(|r| r.works() && matches!(r.control, Control::Choice { .. })).collect()
+    }
+}
+
+/// The page after `at` going `by`, held at the ends.
+pub fn page(at: usize, by: i32) -> usize {
+    (at as i64 + by as i64).clamp(0, PAGES.len() as i64 - 1) as usize
+}
+
+/// The value a choice row has now.
+pub fn chosen(store: &SettingsStore, key: &str) -> Option<String> {
+    match catalog::row(key)?.control {
+        Control::Choice { get, .. } => Some(get(store)),
+        _ => None,
+    }
+}
+
+/// Picks `value` for the choice row `key` through the row itself, as Settings does. False: no
+/// such row, or no such value of it.
+pub fn pick(store: &mut SettingsStore, key: &str, value: &str) -> bool {
+    let Some(Control::Choice { options, set, .. }) = catalog::row(key).map(|r| r.control) else { return false };
+    if !options.iter().any(|(v, _)| *v == value) {
+        return false;
+    }
+    set(store, value);
+    true
+}
+
+/// The line under the copying choice, for the value picked (`mac`: ⌘C, else Ctrl+Shift+C).
+pub fn copy_line(value: &str, mac: bool) -> String {
+    let keys = if mac { "⌘C" } else { "Ctrl+Shift+C" };
+    match value {
+        "select" => "Select text and it's copied.".into(),
+        _ => format!("Selecting only selects; {keys} copies."),
+    }
+}
+
+/// Something people miss, on the welcome's last page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tip {
+    /// A fixed word for its element's key.
+    pub id: &'static str,
+    pub title: &'static str,
+    pub body: &'static str,
+    /// The shortcut that does it.
+    pub keys: Shortcut,
+}
+
+/// The welcome's last page. Streamer mode isn't one: it's for the few who stream.
+pub const TIPS: [Tip; 3] = [
+    Tip { id: "palette", title: "Find anything", body: "Servers, folders, commands and settings, from one bar.", keys: Shortcut::Palette },
+    Tip { id: "files", title: "Files on the server", body: "Browse and edit them, and drag files in or out.", keys: Shortcut::OpenFiles },
+    Tip { id: "agents", title: "Every agent, in one list", body: "Claude Code, Codex and the rest, on every server, the ones waiting for you first.", keys: Shortcut::Agents },
+];
 
 /// What the welcome says over your servers, by how many the list has (this computer not
 /// counted) and what can be brought in.
@@ -193,6 +304,65 @@ mod tests {
         assert!(welcome_due(&s));
         welcomed(&mut s);
         assert!(!welcome_due(&s) && s.onboarded);
+    }
+
+    #[test]
+    fn whoever_saw_the_first_1_0_welcome_sees_this_one_once() {
+        let mut s = Settings { onboarded: true, onboarding_version: 3, ..Settings::default() };
+        assert!(welcome_due(&s));
+        welcomed(&mut s);
+        assert!(!welcome_due(&s));
+        // A newer version's welcome seen, then back on this one: it doesn't show again.
+        s.onboarding_version = ONBOARDING_VERSION + 1;
+        assert!(!welcome_due(&s));
+    }
+
+    #[test]
+    fn every_choice_is_a_working_row_of_settings() {
+        for page in PAGES {
+            let choices = page.choices();
+            assert_eq!(choices.len(), page.rows().len(), "{page:?}: a row is missing, disabled or not a choice");
+            for row in choices {
+                let Control::Choice { options, .. } = row.control else { unreachable!() };
+                assert!((2..=3).contains(&options.len()), "{}: a few to pick from", row.key);
+            }
+        }
+        assert_eq!(PAGES.map(Page::id), ["servers", "look", "terminal", "tips"]);
+        assert_eq!(page(0, -1), 0);
+        assert_eq!(page(PAGES.len() - 1, 1), PAGES.len() - 1);
+    }
+
+    #[test]
+    fn a_choice_changes_the_setting_as_settings_does_and_nothing_else() {
+        let mut store = SettingsStore::in_memory(Settings::default());
+        let before = store.get().clone();
+        // What's on stays picked: the defaults, and nothing changes by looking.
+        assert_eq!(chosen(&store, "term-copy").as_deref(), Some("select"));
+        assert_eq!(chosen(&store, "term-reconnect").as_deref(), Some("ask"));
+        assert_eq!(chosen(&store, "layout-sidebar-side").as_deref(), Some("left"));
+        assert_eq!(store.get(), &before);
+        assert!(pick(&mut store, "term-copy", "keys"));
+        assert!(!store.get().copy_on_select);
+        assert!(pick(&mut store, "term-reconnect", "auto"));
+        assert_eq!(store.get().reconnect_mode, crate::model::ReconnectMode::Auto);
+        assert!(pick(&mut store, "look-appearance", "light"));
+        assert!(!store.get().theme_follows_system && store.get().theme == "daylight");
+        assert!(pick(&mut store, "layout-sidebar-side", "right"));
+        assert_eq!(store.get().sidebar_side, crate::model::Side::Right);
+        // Nothing it doesn't know: no such value, no such row, a row that isn't a choice.
+        let now = store.get().clone();
+        assert!(!pick(&mut store, "term-copy", "always"));
+        assert!(!pick(&mut store, "no-such-row", "x"));
+        assert!(!pick(&mut store, "term-blink", "true"));
+        assert_eq!(store.get(), &now);
+        assert_eq!(chosen(&store, "term-blink"), None);
+    }
+
+    #[test]
+    fn the_last_page_names_no_streamer_mode() {
+        assert!(TIPS.iter().all(|t| !t.title.contains("Streamer") && !t.body.contains("Streamer")));
+        assert!(copy_line("select", false).starts_with("Select text"));
+        assert_eq!(copy_line("keys", true), "Selecting only selects; ⌘C copies.");
     }
 
     #[test]
