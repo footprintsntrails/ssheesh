@@ -416,6 +416,11 @@ impl Backend for DemoBackend {
         }
     }
 
+    /// Port 5432 is the demo's taken one; the rest are free.
+    fn port_problem(&mut self, port: u16) -> Option<String> {
+        tor::port_problem(port)
+    }
+
     fn terminal(&mut self, server: Option<&Server>, tab: &Tab) -> Box<dyn TermLink> {
         if let Some(inside) = &tab.container {
             return Box::new(ReplayLink::new(container(inside), None));

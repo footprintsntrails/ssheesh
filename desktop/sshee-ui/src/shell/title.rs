@@ -1,8 +1,10 @@
 //! The top row's title and, while the sidebar is hidden, the sidebar's foot in the top row.
 //!
 //! ```text
-//! title           the machine on screen: its name, its address after it in a quieter tone
-//! │               (neither in streamer mode: "Server 2"), "Prod"; a click opens its tools
+//! title           the machine on screen: its name, the onion while Tor is on (green when
+//! │               the tab goes through it, orange when it doesn't), its address after it in a
+//! │               quieter tone (neither in streamer mode: "Server 2"), "Prod"; a click opens
+//! │               its tools
 //! └── title-menu  New terminal, Files, Copy address (0.10's AddressChip)
 //! bar-tools       only while the sidebar is hidden: main menu (a Mac's logo lives in the
 //!                 sidebar), security check, Tor, settings (0.10's top bar did the same)
@@ -151,10 +153,22 @@ fn parts(s: &Shell) -> (std::borrow::Cow<'_, str>, bool, Option<String>) {
 pub(crate) fn widths(s: &Shell) -> (f32, Option<f32>) {
     let (name, prod, address) = parts(s);
     let mut w = 2.0 + 10.0 + 12.0 + rune::text::advance(&name, theme::TEXT_BOLD);
+    if s.bench.active_id().is_some_and(|id| !s.bench.showing_home() && crate::screens::tor::marked(s, id)) {
+        w += 8.0 + MARK;
+    }
     if prod {
         w += 8.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
     }
     (w, address.map(|a| 8.0 + rune::text::advance(&a, theme::TAB_SERVER)))
+}
+
+/// The onion's size beside the title.
+const MARK: f32 = 14.0;
+
+/// The tab on screen's Tor mark (`screens::tor::mark`).
+fn tor_mark(s: &Shell, t: &Theme) -> Option<El> {
+    let id = s.bench.active_id().filter(|_| !s.bench.showing_home())?;
+    crate::screens::tor::mark(s, id, MARK, t)
 }
 
 /// The title: the machine on screen, its address, and "Prod". `with_address`: there's room
@@ -194,7 +208,8 @@ pub(crate) fn title(s: &Shell, t: &'static Theme, active: bool, with_address: bo
                 s.title_pressed(tx);
             }
         })
-        .child(text(name).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line());
+        .child(text(name).key("title-text").font(theme::TEXT_BOLD).color(if active { t.l1 } else { t.l2 }).single_line())
+        .children(tor_mark(s, t));
     e = if s.row.title_menu.is_some() { e.fill(t.hov) } else { e.hover(t.hov2) };
     if let Some(address) = address {
         e = e.child(text(address).key("title-address").font(theme::TAB_SERVER).color(t.l2).single_line().truncate().shrink().min_w(0.0));

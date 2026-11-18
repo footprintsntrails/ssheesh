@@ -5,12 +5,14 @@
 //! Its log is a few made-up lines in Tor's own words. web-7731 has two saved tunnels (Grafana
 //! on, a SOCKS proxy off), db-main one that can't get its port; a tunnel switched on comes on
 //! at once, unless it asks for a port the demo says is taken (5432, as a local database would).
+//! A look at web-7731 finds Grafana, the shop and its admin, and two ports that aren't
+//! websites; db-main runs PostgreSQL only.
 
 use std::time::Duration;
 
 use sshee_app::model::{SavedTunnel, SavedTunnels};
 use sshee_app::tor::Status;
-use sshee_app::tunnels::{local, reverse, socks, Ask, Reply, State};
+use sshee_app::tunnels::{local, reverse, socks, Ask, Reply, Scan, State, WebApp, SERVER};
 use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::Remote;
 
@@ -75,6 +77,40 @@ pub fn saved() -> SavedTunnels {
     list
 }
 
+/// Why a port here can't be a tunnel's, as the demo has it.
+pub fn port_problem(port: u16) -> Option<String> {
+    (port == TAKEN).then(|| format!("Port {TAKEN} on this computer is already in use."))
+}
+
+/// What a look at a server finds in the demo, by host id.
+pub fn scan(host: &str) -> Result<Scan, String> {
+    let app = |port: u16, process: &str, title: Option<&str>, known_as: Option<&str>, web: bool| WebApp {
+        port,
+        remote_host: SERVER.into(),
+        process: Some(process.into()),
+        known_as: known_as.map(str::to_owned),
+        title: title.map(str::to_owned),
+        scheme: web.then(|| "http".to_owned()),
+        status: web.then_some(200),
+        web,
+        public: false,
+    };
+    match host {
+        "demo-web" => Ok(Scan {
+            apps: vec![
+                app(3000, "grafana", Some("Grafana"), None, true),
+                app(8080, "node", Some("Shop: storefront"), None, true),
+                WebApp { status: Some(401), ..app(8081, "node", Some("Shop admin"), None, true) },
+                app(5432, "postgres", None, Some("PostgreSQL"), false),
+                app(6379, "redis-server", None, Some("Redis"), false),
+            ],
+            curl: true,
+        }),
+        "demo-db" => Ok(Scan { apps: vec![app(5432, "postgres", None, Some("PostgreSQL"), false)], curl: true }),
+        _ => Err("Couldn't reach the server.".into()),
+    }
+}
+
 /// What a tunnel switched on becomes in the demo.
 fn started(port: u16) -> State {
     if port == TAKEN {
@@ -104,6 +140,10 @@ pub fn tunnels(remote: &Remote, ask: Ask) {
         }
         Ask::Stop { id } => remote.tunnels(Reply::State { id, state: None }),
         Ask::Save(_) => {}
+        Ask::Scan { host } => {
+            let result = scan(&host);
+            remote.tunnels(Reply::Scanned { host, result });
+        }
     }
 }
 
@@ -118,6 +158,12 @@ mod tests {
         assert!(list.by_host.values().flatten().any(|t| !t.on));
         assert_eq!(started(TAKEN), State::Failed { message: "Port 5432 on this computer is already in use.".into() });
         assert_eq!(started(3000), State::On { warning: None });
+        assert_eq!(port_problem(TAKEN).as_deref(), Some("Port 5432 on this computer is already in use."));
+        assert_eq!(port_problem(3000), None);
+        // web-7731 runs websites and other programs; db-main only a database.
+        let web = scan("demo-web").unwrap();
+        assert!(web.web().count() >= 2 && web.other().count() >= 1);
+        assert_eq!(scan("demo-db").unwrap().web().count(), 0);
         // Nothing in Tor's made-up log names a place.
         assert!(log().iter().all(|l| !l.contains("203.0.113") && !l.contains('@')));
     }

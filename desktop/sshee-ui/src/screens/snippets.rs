@@ -7,7 +7,8 @@
 //! └── snippets
 //!     list     snip-<i>: snip-run-<i>, snip-edit-<i>, snip-delete-<i> · snip-new · snip-close
 //!     edit     snip-name, snip-command, snip-scope-all / snip-scope-here · snip-cancel, snip-save
-//!     fill     blank-<name> … · snip-preview · snip-paste, snip-go
+//!     fill     blank-<name> … · snip-preview · snip-paste, snip-go; a {{container}} blank is a
+//!              pop-up of the server's containers (popup-menu) once they're known
 //!     a Production server: snip-ask (snip-no, snip-yes) before anything runs with Return
 //! ```
 //!
@@ -20,12 +21,13 @@ use std::collections::HashMap;
 
 use rune::{col, el, row, spacer, text, text_input, El, TextEdit, Tx};
 use sshee_app::model::{Snippet, Snippets};
-use sshee_app::snippets::{self, blanks, complete, fill, only_on};
+use sshee_app::snippets::{self, blanks, complete, container_choices, fill, only_on, Choice, FORM_TAB};
 
 use super::checkup::{body, close_button, command_block, dialog, header, headed, note};
 use crate::icons::Icon;
 use crate::kit::chip::chip;
 use crate::kit::field::{code_input, field, input, labelled};
+use crate::kit::popup::{popup_button_max, popup_menu};
 use crate::kit::push::{choice, choices, icon_button, push_button, Push};
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
@@ -58,6 +60,13 @@ pub struct State {
     pub asking: Option<(String, String)>,
     /// Why a run did nothing.
     pub note: Option<String>,
+    /// The containers a `{{container}}` blank offers: `None` while they're looked for; an
+    /// empty list when there are none or they couldn't be listed (the blank is typed then).
+    pub containers: Option<Vec<Choice>>,
+    /// The look at the containers the form waits for.
+    pub ticket: u64,
+    /// The blank whose list of containers is open.
+    pub picking: Option<String>,
 }
 
 
@@ -73,6 +82,19 @@ impl State {
         self.note = None;
         self.error = None;
         self.blanks.clear();
+        self.containers = None;
+        self.picking = None;
+    }
+}
+
+/// The containers the form asked for came back (`Remote::containers`, addressed to
+/// [`FORM_TAB`]). A late answer, or one for a form that closed, is dropped.
+pub fn containers_listed(s: &mut Shell, reply: sshee_app::containers::Reply) {
+    let state = &mut s.screens.snippets;
+    let sshee_app::containers::Answer::Listed { ticket, result } = reply.answer else { return };
+    let waiting = matches!(&state.page, Some(Page::Fill { server, .. }) if *server == reply.server);
+    if waiting && ticket == state.ticket {
+        state.containers = Some(result.map(|list| container_choices(&list)).unwrap_or_default());
     }
 }
 
@@ -162,15 +184,30 @@ impl Shell {
             return;
         };
         if !blanks(&snippet.command).is_empty() {
-            let state = &mut self.screens.snippets;
-            state.blanks = blanks(&snippet.command).into_iter().map(|b| (b.name, TextEdit::default())).collect();
-            if let Some(first) = blanks(&snippet.command).first().and_then(|b| state.blanks.get_mut(&b.name)) {
-                first.focused = true;
-            }
-            state.page = Some(Page::Fill { id: snippet.id, server });
-            return;
+            return self.fill_snippet(&snippet.id, &server, tx);
         }
         self.snippet_send(&server, &snippet.command, true, tx);
+    }
+
+    /// A snippet's form, to fill in its blanks before it goes into a terminal on `server` (the
+    /// list's Run, a snippet picked in the palette). A `{{container}}` blank asks the server
+    /// for its containers.
+    pub fn fill_snippet(&mut self, id: &str, server: &str, tx: &mut Tx) {
+        let Some(snippet) = self.screens.snippets.list.snippets.iter().find(|s| s.id == id).cloned() else { return };
+        self.screens.close_all();
+        let state = &mut self.screens.snippets;
+        let list = blanks(&snippet.command);
+        state.blanks = list.iter().map(|b| (b.name.clone(), TextEdit::default())).collect();
+        if let Some(first) = list.first().and_then(|b| state.blanks.get_mut(&b.name)) {
+            first.focused = true;
+        }
+        state.page = Some(Page::Fill { id: snippet.id, server: server.to_owned() });
+        if list.iter().any(|b| b.wants_container()) {
+            state.ticket += 1;
+            let want = sshee_app::containers::Want::List { ticket: state.ticket };
+            self.backend_mut().containers(sshee_app::containers::Ask { tab: FORM_TAB, server: server.to_owned(), want });
+        }
+        tx.instant();
     }
 
     /// Into the terminal: asked first on Production when it would run.
@@ -375,9 +412,27 @@ fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
     for b in blanks(&sn.command) {
         let blank = b.name.clone();
         let edit = state.blanks.get(&b.name).cloned().unwrap_or_default();
-        let hint = if b.wants_container() { "A container's name".to_owned() } else { b.fallback.clone() };
-        let entry = code_input(t, &edit, &hint).key(format!("blank-{}", b.name)).on_edit(move |s: &mut Shell| s.screens.snippets.blanks.entry(blank.clone()).or_default());
         let label = if b.fallback.is_empty() { b.label() } else { format!("{} · {} if left empty", b.label(), b.fallback) };
+        // The server's containers to pick from, once they're known (0.10's): typed when there
+        // are none.
+        let choices = state.containers.as_deref().filter(|c| b.wants_container() && !c.is_empty());
+        if let Some(choices) = choices {
+            let value = choices.iter().find(|c| c.name == edit.text).map_or("Pick a container…", |c| c.label.as_str());
+            let pick = popup_button_max(t, &label, &s.text_shown(value), true, WIDTH)
+                .key(format!("blank-{}", b.name))
+                .on_press_tx(move |s: &mut Shell, tx| {
+                    s.screens.snippets.picking = Some(blank.clone());
+                    tx.instant();
+                });
+            page = page.child(labelled(t, &label, row().child(pick)));
+            continue;
+        }
+        let hint = match (&state.containers, b.wants_container()) {
+            (None, true) => "Looking for containers…".to_owned(),
+            (Some(_), true) => "A container's name".to_owned(),
+            _ => b.fallback.clone(),
+        };
+        let entry = code_input(t, &edit, &hint).key(format!("blank-{}", b.name)).on_edit(move |s: &mut Shell| s.screens.snippets.blanks.entry(blank.clone()).or_default());
         page = page.child(labelled(t, &label, field(t, entry, false)));
     }
     let values = |n: &str| state.blanks.get(n).map(|e| e.text.clone());
@@ -399,6 +454,37 @@ fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
             .child(go),
     );
     headed(t, head, page, 14.0)
+}
+
+/// The containers a `{{container}}` blank offers, under its button while it's open.
+pub fn menu(s: &Shell, t: &'static Theme) -> Option<El> {
+    let state = &s.screens.snippets;
+    let blank = state.picking.clone()?;
+    let choices = state.containers.clone().filter(|c| !c.is_empty())?;
+    let labels: Vec<String> = choices.iter().map(|c| s.text_shown(&c.label).into_owned()).collect();
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let now = state.blanks.get(&blank).map(|e| e.text.clone()).unwrap_or_default();
+    let selected = choices.iter().position(|c| c.name == now);
+    let anchor = format!("blank-{blank}");
+    Some(popup_menu(
+        t,
+        &anchor,
+        &labels,
+        selected,
+        move |s: &mut Shell, i, tx| {
+            let state = &mut s.screens.snippets;
+            if let Some(choice) = choices.get(i) {
+                state.blanks.insert(blank.clone(), TextEdit::new(&choice.name));
+            }
+            state.picking = None;
+            tx.focus("snip-go", false);
+            tx.instant();
+        },
+        |s: &mut Shell, tx| {
+            s.screens.snippets.picking = None;
+            tx.instant();
+        },
+    ))
 }
 
 /// The dialog, when it's open.

@@ -190,7 +190,7 @@ fn special_control(s: &Shell, t: &'static Theme, r: &'static Row, special: Speci
         Special::TorSwitch => {
             let on = s.bench.tor() != Tor::Off;
             switch(t, r.label, on, true).key(key).on_press_tx(move |s: &mut Shell, tx| {
-                s.backend_mut().tor(if on { TorCommand::Off } else { TorCommand::On });
+                s.tor_command(if on { TorCommand::Off } else { TorCommand::On });
                 tx.instant();
             })
         }
@@ -498,7 +498,7 @@ fn tor_state(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(text(words).font(theme::NOTE).color(t.l1).wrap().grow(1.0).shrink());
     if let Some((label, command)) = button {
         line = line.child(push_button(t, label, Push::Quiet, true).key("tor-action").on_press_tx(move |s: &mut Shell, tx| {
-            s.backend_mut().tor(command);
+            s.tor_command(command);
             tx.instant();
         }));
     }

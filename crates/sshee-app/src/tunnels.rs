@@ -6,10 +6,17 @@
 //! 0.10's own shape): the ones left on start again when the app opens. Each one's ssh runs in
 //! the backend (sshee-core's `tunnels`); its state comes back as a [`State`]. Nothing here
 //! knows about a window or a process: the form, the words, and the list's changes.
+//!
+//! "Web apps on this server" (0.10's `WebApps`): a look at what listens on the server, each
+//! page's title asked for ([`Scan`]). "Open" makes one reachable here through a temporary
+//! tunnel ([`Temp`], never saved) and opens it in the browser once the tunnel is on; "Keep"
+//! saves that tunnel, "Stop" stops it.
 
 use std::collections::HashMap;
 
-use crate::model::{Forward, ForwardKind, SavedTunnel, SavedTunnels};
+use indexmap::IndexMap;
+
+use crate::model::{Forward, ForwardKind, SavedTunnel, SavedTunnels, Scheme};
 
 /// The server itself, as the address a tunnel leads to.
 pub const SERVER: &str = "127.0.0.1";
@@ -38,6 +45,8 @@ pub enum Ask {
     Stop { id: String },
     /// The whole list, to keep for next time.
     Save(SavedTunnels),
+    /// A look at what listens on the server `host` (its host id), with each page's title.
+    Scan { host: String },
 }
 
 /// What the backend tells the window.
@@ -47,13 +56,93 @@ pub enum Reply {
     Loaded(SavedTunnels),
     /// A tunnel's state; `None` when it stopped.
     State { id: String, state: Option<State> },
+    /// What a look at the server `host` found, or why it couldn't look.
+    Scanned { host: String, result: Result<Scan, String> },
 }
 
-/// The tunnels the window knows: the saved ones and how each is doing.
+/// Something listening on TCP on the server (sshee-core's `WebApp`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebApp {
+    pub port: u16,
+    /// Where a tunnel to it connects, as the server sees it: 127.0.0.1 unless it listens on
+    /// one other address only.
+    pub remote_host: String,
+    /// The program listening ("node", "nginx"), when the server says.
+    pub process: Option<String>,
+    /// What the port or program is known as ("PostgreSQL", "Docker").
+    pub known_as: Option<String>,
+    /// The page's `<title>`.
+    pub title: Option<String>,
+    /// "http" or "https", when it answered like a website.
+    pub scheme: Option<String>,
+    /// The HTTP status of its front page.
+    pub status: Option<u16>,
+    /// Likely a website.
+    pub web: bool,
+    /// Also listens on an address other computers can reach.
+    pub public: bool,
+}
+
+/// What a look at a server found (sshee-core's `WebAppScan`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Scan {
+    /// Likely websites first, then by port.
+    pub apps: Vec<WebApp>,
+    /// curl is on the server, so pages could be asked for their titles.
+    pub curl: bool,
+}
+
+impl Scan {
+    /// The websites.
+    pub fn web(&self) -> impl Iterator<Item = &WebApp> {
+        self.apps.iter().filter(|a| a.web)
+    }
+
+    /// Other programs that listen.
+    pub fn other(&self) -> impl Iterator<Item = &WebApp> {
+        self.apps.iter().filter(|a| !a.web)
+    }
+}
+
+/// A look at a server: on its way, and the last one's answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Looking {
+    pub loading: bool,
+    pub result: Option<Result<Scan, String>>,
+}
+
+/// A tunnel "Open" or "Connect" made for a web app: not saved, gone when SSHeesh closes
+/// unless it's kept (0.10's `TempTunnel`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Temp {
+    pub id: String,
+    pub forward: Forward,
+    pub scheme: Option<String>,
+    /// The app's title or program: the name it's kept by.
+    pub label: Option<String>,
+}
+
+/// A tunnel that leads to a web app: a temporary one or a saved one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct To {
+    pub id: String,
+    /// The port here.
+    pub port: u16,
+    pub saved: bool,
+}
+
+/// The tunnels the window knows: the saved ones, the temporary ones, how each is doing, and
+/// the last look at each server.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tunnels {
     pub saved: SavedTunnels,
     pub states: HashMap<String, State>,
+    /// Each server's temporary tunnels, by host id.
+    pub temp: IndexMap<String, Vec<Temp>>,
+    /// Each server's last look, by host id.
+    pub scans: HashMap<String, Looking>,
+    /// Tunnels to open in the browser once they're on: the address, by tunnel id.
+    pub opening: HashMap<String, String>,
 }
 
 impl Tunnels {
@@ -71,9 +160,10 @@ impl Tunnels {
         self.saved.by_host.get_mut(host)?.iter_mut().find(|t| t.id == id)
     }
 
-    /// An id no saved tunnel has.
+    /// An id no saved or temporary tunnel has.
     pub fn new_id(&self) -> String {
-        let taken: Vec<&str> = self.saved.by_host.values().flatten().map(|t| t.id.as_str()).collect();
+        let saved = self.saved.by_host.values().flatten().map(|t| t.id.as_str());
+        let taken: Vec<&str> = saved.chain(self.temp.values().flatten().map(|t| t.id.as_str())).collect();
         (1..).map(|n| format!("tun-{n}")).find(|id| !taken.contains(&id.as_str())).unwrap_or_default()
     }
 
@@ -83,6 +173,119 @@ impl Tunnels {
         let port = listens_here(forward)?;
         let other = self.saved.by_host.values().flatten().any(|t| Some(t.id.as_str()) != id && listens_here(&t.forward) == Some(port));
         other.then(|| format!("Another saved tunnel already uses port {port} on this computer."))
+    }
+
+    /// The port here to check is free before `forward` is saved as tunnel `id` (`None` for a
+    /// new one): none for a reverse tunnel, or when that tunnel is on and holds it already.
+    pub fn port_to_check(&self, host: &str, id: Option<&str>, forward: &Forward) -> Option<u16> {
+        let port = listens_here(forward)?;
+        let saved = id.and_then(|id| self.of(host).iter().find(|t| t.id == id));
+        let holds = saved.is_some_and(|t| t.on && listens_here(&t.forward) == Some(port) && is_active(self.states.get(&t.id)));
+        (!holds).then_some(port)
+    }
+
+    /// Ports here other tunnels have claimed, on or off, so a new one picks another.
+    pub fn claimed(&self) -> Vec<u16> {
+        let saved = self.saved.by_host.values().flatten().filter_map(|t| listens_here(&t.forward));
+        saved.chain(self.temp.values().flatten().filter_map(|t| listens_here(&t.forward))).collect()
+    }
+
+    /// A server's temporary tunnels.
+    pub fn temp_of(&self, host: &str) -> &[Temp] {
+        self.temp.get(host).map_or(&[], Vec::as_slice)
+    }
+
+    /// A look at what listens on `host`: what to ask the backend.
+    pub fn scan(&mut self, host: &str) -> Ask {
+        self.scans.entry(host.to_owned()).or_default().loading = true;
+        Ask::Scan { host: host.to_owned() }
+    }
+
+    /// A tunnel of this server's that already leads to `app`, preferring one that's on.
+    pub fn tunnel_to(&self, host: &str, app: &WebApp) -> Option<To> {
+        let leads = |f: &Forward| f.kind == ForwardKind::Local && f.remote_port == Some(app.port) && remote_host(f) == app.remote_host;
+        let temp = self.temp_of(host).iter().filter(|t| leads(&t.forward)).map(|t| To { id: t.id.clone(), port: t.forward.local_port, saved: false });
+        let saved = self.of(host).iter().filter(|t| leads(&t.forward)).map(|t| To { id: t.id.clone(), port: t.forward.local_port, saved: true });
+        let all: Vec<To> = temp.chain(saved).collect();
+        all.iter().find(|t| is_active(self.states.get(&t.id))).or(all.first()).cloned()
+    }
+
+    /// "Open" (`browse`) or "Connect" on a web app: through a tunnel already leading there,
+    /// else a new temporary one on a free port here (`port` asks the backend for one, given
+    /// the ports other tunnels claim). What the backend is to do, and the address to open now
+    /// when the tunnel is on already; one that is starting opens once it's on
+    /// ([`Tunnels::deliver`]).
+    pub fn open_app(&mut self, host: &str, app: &WebApp, browse: bool, port: impl FnOnce(&[u16]) -> Result<u16, String>) -> Result<(Vec<Ask>, Option<String>), String> {
+        let scheme = app.scheme.clone();
+        if let Some(to) = self.tunnel_to(host, app) {
+            let url = app_url(scheme.as_deref(), to.port);
+            if matches!(self.states.get(&to.id), Some(State::On { .. })) {
+                return Ok((vec![], browse.then_some(url)));
+            }
+            if browse {
+                self.opening.insert(to.id.clone(), url);
+            }
+            if is_active(self.states.get(&to.id)) {
+                return Ok((vec![], None));
+            }
+            if to.saved {
+                return Ok((self.set_on(host, &to.id, true), None));
+            }
+            let forward = self.temp_of(host).iter().find(|t| t.id == to.id).map(|t| t.forward.clone()).unwrap_or_default();
+            self.states.insert(to.id.clone(), State::Starting);
+            return Ok((vec![Ask::Start { id: to.id, host: host.to_owned(), forward }], None));
+        }
+        let port = port(&self.claimed())?;
+        let id = self.new_id();
+        let forward = local(port, &app.remote_host, app.port);
+        let label = app.title.clone().or_else(|| app.known_as.clone()).or_else(|| app.process.clone());
+        self.temp.entry(host.to_owned()).or_default().push(Temp { id: id.clone(), forward: forward.clone(), scheme: scheme.clone(), label });
+        self.states.insert(id.clone(), State::Starting);
+        if browse {
+            self.opening.insert(id.clone(), app_url(scheme.as_deref(), port));
+        }
+        Ok((vec![Ask::Start { id, host: host.to_owned(), forward }], None))
+    }
+
+    /// "Stop" on a web app's tunnel: a temporary one stops and is forgotten, a saved one is
+    /// switched off.
+    pub fn stop_app(&mut self, host: &str, id: &str) -> Vec<Ask> {
+        self.opening.remove(id);
+        if self.of(host).iter().any(|t| t.id == id) {
+            return self.set_on(host, id, false);
+        }
+        if let Some(list) = self.temp.get_mut(host) {
+            list.retain(|t| t.id != id);
+            if list.is_empty() {
+                self.temp.shift_remove(host);
+            }
+        }
+        self.states.remove(id);
+        vec![Ask::Stop { id: id.to_owned() }]
+    }
+
+    /// "Keep": a temporary tunnel becomes a saved one, on, without starting again.
+    pub fn keep(&mut self, host: &str, id: &str) -> Vec<Ask> {
+        let Some(list) = self.temp.get_mut(host) else { return vec![] };
+        let Some(at) = list.iter().position(|t| t.id == id) else { return vec![] };
+        let t = list.remove(at);
+        if list.is_empty() {
+            self.temp.shift_remove(host);
+        }
+        let scheme = t.scheme.as_deref().map(Scheme::from);
+        self.saved.by_host.entry(host.to_owned()).or_default().push(SavedTunnel { id: t.id, name: t.label, forward: t.forward, on: true, scheme, ..SavedTunnel::default() });
+        vec![Ask::Save(self.saved.clone())]
+    }
+
+    /// Temporary tunnels to apps the last look didn't find (the app stopped, say), as apps,
+    /// so they can still be stopped or kept.
+    pub fn orphans(&self, host: &str) -> Vec<WebApp> {
+        let Some(Ok(scan)) = self.scans.get(host).and_then(|l| l.result.as_ref()) else { return vec![] };
+        self.temp_of(host)
+            .iter()
+            .filter(|t| !scan.apps.iter().any(|a| Some(a.port) == t.forward.remote_port && a.remote_host == remote_host(&t.forward)))
+            .map(|t| WebApp { port: t.forward.remote_port.unwrap_or_default(), remote_host: remote_host(&t.forward).to_owned(), title: t.label.clone(), scheme: t.scheme.clone(), web: true, ..WebApp::default() })
+            .collect()
     }
 
     /// Saves a new tunnel, switched on, or changes one. What the backend is to do: start it,
@@ -120,6 +323,7 @@ impl Tunnels {
             Ask::Start { id: id.to_owned(), host: host.to_owned(), forward }
         } else {
             self.states.remove(id);
+            self.opening.remove(id);
             Ask::Stop { id: id.to_owned() }
         };
         vec![first, Ask::Save(self.saved.clone())]
@@ -142,11 +346,13 @@ impl Tunnels {
             }
         }
         self.states.remove(id);
+        self.opening.remove(id);
         vec![Ask::Stop { id: id.to_owned() }, Ask::Save(self.saved.clone())]
     }
 
-    /// The backend's news.
-    pub fn deliver(&mut self, reply: Reply) {
+    /// The backend's news. The address to open in the browser now, when a tunnel waiting to
+    /// be opened came on.
+    pub fn deliver(&mut self, reply: Reply) -> Option<String> {
         match reply {
             Reply::Loaded(saved) => {
                 for t in saved.by_host.values().flatten().filter(|t| t.on) {
@@ -154,16 +360,32 @@ impl Tunnels {
                 }
                 self.saved = saved;
             }
-            // A tunnel switched off meanwhile keeps quiet: its late news isn't shown.
+            // A tunnel switched off or stopped meanwhile keeps quiet: its late news isn't shown.
             Reply::State { id, state: Some(state) } => {
-                if self.saved.by_host.values().flatten().any(|t| t.id == id && t.on) {
-                    self.states.insert(id, state);
+                let saved_on = self.saved.by_host.values().flatten().any(|t| t.id == id && t.on);
+                let temp = self.temp.values().flatten().any(|t| t.id == id);
+                if saved_on || temp {
+                    let (on, failed) = (matches!(state, State::On { .. }), matches!(state, State::Failed { .. }));
+                    self.states.insert(id.clone(), state);
+                    if on {
+                        return self.opening.remove(&id);
+                    }
+                    if failed {
+                        self.opening.remove(&id);
+                    }
                 }
             }
             Reply::State { id, state: None } => {
                 self.states.remove(&id);
+                self.opening.remove(&id);
+            }
+            Reply::Scanned { host, result } => {
+                let look = self.scans.entry(host).or_default();
+                look.loading = false;
+                look.result = Some(result);
             }
         }
+        None
     }
 }
 
@@ -208,6 +430,34 @@ pub fn describe(forward: &Forward) -> String {
             format!("localhost:{port} on this computer opens {there}.")
         }
     }
+}
+
+/// The address a web app opens at here: `http://localhost:3000/`.
+pub fn app_url(scheme: Option<&str>, port: u16) -> String {
+    format!("{}://localhost:{port}/", scheme.unwrap_or("http"))
+}
+
+/// A web app's name: its page's title, else what it's known as, its program, its port.
+pub fn app_title(app: &WebApp) -> String {
+    app.title.clone().or_else(|| app.known_as.clone()).or_else(|| app.process.clone()).unwrap_or_else(|| format!("Port {}", app.port))
+}
+
+/// The line under a web app's name: "port 3000 · node · answers 404 · also open to other
+/// computers".
+pub fn app_facts(app: &WebApp) -> String {
+    let program = if app.title.is_some() { app.known_as.clone().or_else(|| app.process.clone()) } else { app.known_as.as_ref().and(app.process.clone()) };
+    let mut facts = vec![format!("port {}", app.port)];
+    facts.extend(program);
+    if app.remote_host != SERVER {
+        facts.push(format!("at {}", app.remote_host));
+    }
+    if let Some(code) = app.status.filter(|c| *c >= 400) {
+        facts.push(format!("answers {code}"));
+    }
+    if app.public {
+        facts.push("also open to other computers".into());
+    }
+    facts.join(" · ")
 }
 
 /// A short name for a saved tunnel without one.
@@ -434,6 +684,104 @@ mod tests {
         assert_eq!(t.clash(Some("tun-1"), &local(8080, SERVER, 8080)), None, "its own port is its own");
         // A reverse tunnel listens on the server, not here.
         assert_eq!(t.clash(None, &reverse(9000, 8080)), None);
+    }
+
+    fn grafana() -> WebApp {
+        WebApp { port: 3000, remote_host: SERVER.into(), process: Some("grafana".into()), title: Some("Grafana".into()), scheme: Some("http".into()), web: true, ..WebApp::default() }
+    }
+
+    #[test]
+    fn a_web_app_opens_through_a_temporary_tunnel_once_it_is_on() {
+        let mut t = Tunnels::default();
+        t.save("demo-web", None, "", local(3000, SERVER, 3000));
+        let ask = t.scan("demo-web");
+        assert_eq!(ask, Ask::Scan { host: "demo-web".into() });
+        assert!(t.scans["demo-web"].loading);
+        t.deliver(Reply::Scanned { host: "demo-web".into(), result: Ok(Scan { apps: vec![grafana(), WebApp { port: 8080, remote_host: SERVER.into(), web: true, ..WebApp::default() }], curl: true }) });
+        assert!(!t.scans["demo-web"].loading);
+        // Port 8080 has no tunnel: a temporary one, on the port the backend picked, avoiding
+        // the ports saved tunnels claim.
+        let app = WebApp { port: 8080, remote_host: SERVER.into(), web: true, ..WebApp::default() };
+        let (asks, now) = t
+            .open_app("demo-web", &app, true, |claimed| {
+                assert_eq!(claimed, [3000]);
+                Ok(8080)
+            })
+            .unwrap();
+        assert_eq!(now, None, "it opens once it's on");
+        assert!(matches!(&asks[..], [Ask::Start { id, forward, .. }] if id == "tun-2" && forward.local_port == 8080 && forward.remote_port == Some(8080)));
+        assert_eq!(t.temp_of("demo-web").len(), 1);
+        assert_eq!(t.tunnel_to("demo-web", &app).map(|to| (to.port, to.saved)), Some((8080, false)));
+        assert_eq!(t.deliver(Reply::State { id: "tun-2".into(), state: Some(State::On { warning: None }) }), Some("http://localhost:8080/".into()));
+        // Open again: at once, through the same tunnel.
+        let (asks, now) = t.open_app("demo-web", &app, true, |_| panic!("no new port")).unwrap();
+        assert!(asks.is_empty());
+        assert_eq!(now.as_deref(), Some("http://localhost:8080/"));
+        // Grafana goes through the saved tunnel, switched on when it's off.
+        t.set_on("demo-web", "tun-1", false);
+        let (asks, _) = t.open_app("demo-web", &grafana(), true, |_| panic!("no new port")).unwrap();
+        assert!(matches!(&asks[0], Ask::Start { id, .. } if id == "tun-1"));
+        assert!(t.of("demo-web")[0].on);
+        // A failed start opens nothing.
+        assert_eq!(t.deliver(Reply::State { id: "tun-1".into(), state: Some(State::Failed { message: "Port 3000 on this computer is already in use.".into() }) }), None);
+        assert!(t.opening.is_empty());
+    }
+
+    #[test]
+    fn a_temporary_tunnel_is_kept_or_stopped() {
+        let mut t = Tunnels::default();
+        t.open_app("demo-web", &grafana(), false, |_| Ok(13000)).unwrap();
+        assert_eq!(t.claimed(), [13000]);
+        let id = t.temp_of("demo-web")[0].id.clone();
+        // Kept: saved, on, named after the app, with its scheme; nothing starts again.
+        let asks = t.keep("demo-web", &id);
+        assert!(matches!(&asks[..], [Ask::Save(list)] if list.by_host["demo-web"].len() == 1));
+        let kept = &t.of("demo-web")[0];
+        assert_eq!((kept.name.as_deref(), kept.on, kept.scheme.as_ref().map(|s| s.as_str())), (Some("Grafana"), true, Some("http")));
+        assert!(t.temp_of("demo-web").is_empty());
+        // Another, stopped: forgotten.
+        t.open_app("demo-db", &WebApp { port: 5432, remote_host: SERVER.into(), ..WebApp::default() }, false, |_| Ok(15432)).unwrap();
+        let id = t.temp_of("demo-db")[0].id.clone();
+        assert_eq!(t.stop_app("demo-db", &id), vec![Ask::Stop { id: id.clone() }]);
+        assert!(t.temp_of("demo-db").is_empty() && !t.states.contains_key(&id));
+        // A saved one is switched off instead.
+        let kept = t.of("demo-web")[0].id.clone();
+        assert!(matches!(&t.stop_app("demo-web", &kept)[0], Ask::Stop { .. }));
+        assert!(!t.of("demo-web")[0].on);
+    }
+
+    #[test]
+    fn a_temporary_tunnel_whose_app_went_away_still_shows() {
+        let mut t = Tunnels::default();
+        t.open_app("demo-web", &grafana(), false, |_| Ok(3000)).unwrap();
+        t.deliver(Reply::Scanned { host: "demo-web".into(), result: Ok(Scan { apps: vec![], curl: true }) });
+        let orphans = t.orphans("demo-web");
+        assert_eq!((orphans[0].port, orphans[0].title.as_deref(), orphans[0].web), (3000, Some("Grafana"), true));
+    }
+
+    #[test]
+    fn a_port_here_is_checked_unless_its_tunnel_holds_it() {
+        let mut t = Tunnels::default();
+        assert_eq!(t.port_to_check("demo-web", None, &local(3000, SERVER, 3000)), Some(3000));
+        assert_eq!(t.port_to_check("demo-web", None, &reverse(9000, 3000)), None, "a reverse tunnel listens on the server");
+        t.save("demo-web", None, "", local(3000, SERVER, 3000));
+        assert_eq!(t.port_to_check("demo-web", Some("tun-1"), &local(3000, SERVER, 3000)), None, "it's on and holds its port");
+        assert_eq!(t.port_to_check("demo-web", Some("tun-1"), &local(3001, SERVER, 3000)), Some(3001));
+        t.set_on("demo-web", "tun-1", false);
+        assert_eq!(t.port_to_check("demo-web", Some("tun-1"), &local(3000, SERVER, 3000)), Some(3000));
+    }
+
+    #[test]
+    fn web_apps_read_in_plain_words() {
+        assert_eq!(app_title(&grafana()), "Grafana");
+        assert_eq!(app_facts(&grafana()), "port 3000 · grafana");
+        let bare = WebApp { port: 9000, remote_host: "10.0.0.5".into(), status: Some(404), public: true, ..WebApp::default() };
+        assert_eq!(app_title(&bare), "Port 9000");
+        assert_eq!(app_facts(&bare), "port 9000 · at 10.0.0.5 · answers 404 · also open to other computers");
+        let db = WebApp { port: 5432, remote_host: SERVER.into(), process: Some("postgres".into()), known_as: Some("PostgreSQL".into()), ..WebApp::default() };
+        assert_eq!((app_title(&db), app_facts(&db)), ("PostgreSQL".into(), "port 5432 · postgres".into()));
+        assert_eq!(app_url(Some("https"), 8443), "https://localhost:8443/");
+        assert_eq!(app_url(None, 80), "http://localhost:80/");
     }
 
     #[test]

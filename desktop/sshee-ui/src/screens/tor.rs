@@ -14,9 +14,17 @@
 //! The words are `sshee_app::tor`'s. What the backend says comes in through
 //! [`Remote::tor_status`], [`Remote::tor_latency`], [`Remote::tor_log`] and
 //! [`Remote::tor_warning`]; the sidebar and the status bar keep reading `bench.tor()`.
+//!
+//! Toasts say what Tor did (0.10's `src/lib/tor.ts`): on once it is, after you turned it on;
+//! not connected after 25 seconds, or failed, with its log a click away; off, and how many
+//! terminals stayed as they were ([`Remote::tor_switched`]); new routes. Each terminal on a
+//! server shows whether it goes through Tor ([`mark`], [`Remote::through_tor`]).
+
+use std::collections::HashSet;
 
 use rune::{col, row, text, Cx, El, Tx};
-use sshee_app::tor::{body, headline, progress, Ask, Detail, Status};
+use sshee_app::tor::{body, headline, progress, Ask, Detail, Follow, Note, Status};
+use sshee_app::workbench::{TabId, Tor};
 
 use crate::icons::{icon, Icon};
 use crate::kit::popover::popover;
@@ -37,6 +45,11 @@ const LOG_HEIGHT: f32 = 132.0;
 pub struct State {
     pub open: bool,
     pub detail: Detail,
+    /// What has been said about Tor's state.
+    pub follow: Follow,
+    /// Terminals whose connection doesn't go through Tor, as each said when it connected (a
+    /// server on your own network, or one without tmux that connected before Tor was on).
+    pub direct: HashSet<TabId>,
 }
 
 impl Remote {
@@ -63,9 +76,52 @@ impl Remote {
     pub fn tor_warning(&self, warning: Option<String>) {
         self.update(move |s| s.screens.tor.detail.warning = warning);
     }
+
+    /// A switch, or new routes, is done: what moved to the new way at once, and how many
+    /// terminals (on servers without tmux) `stayed` as they were until they reconnect.
+    pub fn tor_switched(&self, command: TorCommand, stayed: usize) {
+        self.update(move |s| {
+            let note = match command {
+                TorCommand::Off => Some(sshee_app::tor::turned_off(stayed)),
+                TorCommand::On => sshee_app::tor::turned_on(stayed),
+                TorCommand::NewRoutes => Some(sshee_app::tor::new_routes(stayed)),
+                TorCommand::StartAfresh => None,
+            };
+            if let Some(note) = note {
+                tell(s, note);
+            }
+        });
+    }
+
+    /// Whether the terminal of `tab` went through Tor when it connected.
+    pub fn through_tor(&self, tab: TabId, tor: bool) {
+        self.update(move |s| {
+            if tor {
+                s.screens.tor.direct.remove(&tab);
+            } else {
+                s.screens.tor.direct.insert(tab);
+            }
+        });
+    }
 }
 
-/// A new state: the sidebar and the status bar follow; an open popover reads the log again.
+/// A note about Tor, as a toast; trouble offers Tor's log.
+fn tell(s: &mut Shell, note: Note) {
+    use crate::kit::toast::Tone;
+    let tone = match note.tone {
+        sshee_app::tor::Tone::Info => Tone::Info,
+        sshee_app::tor::Tone::Success => Tone::Success,
+        sshee_app::tor::Tone::Error => Tone::Error,
+    };
+    let mut toast = crate::shell::Toast::new(tone, note.title).body(note.body);
+    if note.show_log {
+        toast = toast.action("Show log", |s: &mut Shell| s.backend_mut().tor_ask(Ask::ShowLog));
+    }
+    s.toast(toast);
+}
+
+/// A new state: the sidebar and the status bar follow; an open popover reads the log again;
+/// what's worth saying is said.
 pub fn status_changed(s: &mut Shell, status: Status) {
     let d = &mut s.screens.tor.detail;
     if status != Status::On {
@@ -77,6 +133,47 @@ pub fn status_changed(s: &mut Shell, status: Status) {
     if changed && s.screens.tor.open {
         s.backend_mut().tor_ask(Ask::ReadLog);
     }
+    if changed {
+        let status = s.screens.tor.detail.status.clone();
+        if let Some(note) = s.screens.tor.follow.status(&status) {
+            tell(s, note);
+        }
+    }
+}
+
+/// Every frame (`Shell::poll`): a start that takes too long is said. True when it was.
+pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
+    let status = s.screens.tor.detail.status.clone();
+    let (note, wake) = s.screens.tor.follow.tick(&status, clock);
+    if let Some(at) = wake {
+        tx.wake_at(at);
+    }
+    match note {
+        Some(note) => {
+            tell(s, note);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Whether `tab` shows the onion: Tor is on and it's a server's.
+pub fn marked(s: &Shell, tab: TabId) -> bool {
+    s.bench.tor() != Tor::Off && s.bench.tab(tab).and_then(|tab| s.bench.server(&tab.server)).is_some_and(|sv| !sv.is_local())
+}
+
+/// The onion beside a terminal's name while Tor is on (0.10's `TorMark`): green when it goes
+/// through Tor, orange when it doesn't (a server on your own network, or one that connected
+/// before Tor was on and moves when it reconnects). Only for a server's tabs.
+pub fn mark(s: &Shell, tab: TabId, size: f32, t: &Theme) -> Option<El> {
+    let tab = s.bench.tab(tab).filter(|tab| marked(s, tab.id))?;
+    let direct = s.screens.tor.direct.contains(&tab.id);
+    let (ink, help) = if direct {
+        (t.orange, "This terminal doesn't go through Tor: the server is on your own network, or it connected before Tor was on and moves when it reconnects")
+    } else {
+        (t.green, "Through Tor: this server sees a Tor address, not yours")
+    };
+    Some(rune::el().key(format!("tor-mark-{}", tab.id.0)).items_center().justify_center().role("img").label_static(help).help(help).child(icon(Icon::Tor, size, ink)))
 }
 
 impl Shell {
@@ -112,8 +209,19 @@ impl Shell {
     pub fn switch_tor(&mut self, tx: &mut Tx) {
         let on = status(self).switched_on();
         self.screens.tor.detail.warning = None;
-        self.backend_mut().tor(if on { TorCommand::Off } else { TorCommand::On });
+        self.tor_command(if on { TorCommand::Off } else { TorCommand::On });
         tx.instant();
+    }
+
+    /// Asks the backend to switch Tor, start it afresh or pick new routes: turned on, it says
+    /// "Tor is on" once it is.
+    pub fn tor_command(&mut self, command: TorCommand) {
+        match command {
+            TorCommand::On | TorCommand::StartAfresh => self.screens.tor.follow.switching(true),
+            TorCommand::Off => self.screens.tor.follow.switching(false),
+            TorCommand::NewRoutes => {}
+        }
+        self.backend_mut().tor(command);
     }
 }
 
@@ -206,7 +314,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                     .key("tor-new-routes")
                     .help("Each server picks a new way through Tor on its next connection: for when typing turned slow")
                     .on_press_tx(|s: &mut Shell, tx| {
-                        s.backend_mut().tor(TorCommand::NewRoutes);
+                        s.tor_command(TorCommand::NewRoutes);
                         tx.instant();
                     }),
             );
@@ -218,7 +326,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                     .key("tor-afresh")
                     .help("Starts Tor again from nothing: it fetches its lists of relays and picks new entry relays")
                     .on_press_tx(|s: &mut Shell, tx| {
-                        s.backend_mut().tor(TorCommand::StartAfresh);
+                        s.tor_command(TorCommand::StartAfresh);
                         tx.instant();
                     }),
             );

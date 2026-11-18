@@ -120,6 +120,14 @@ impl Backend for Live {
         self.inner.tunnels(ask);
     }
 
+    fn port_problem(&mut self, port: u16) -> Option<String> {
+        self.inner.port_problem(port)
+    }
+
+    fn free_port(&mut self, preferred: u16, avoid: &[u16]) -> Result<u16, String> {
+        self.inner.free_port(preferred, avoid)
+    }
+
     fn terminal(&mut self, server: Option<&Server>, tab: &sshee_app::workbench::Tab) -> Box<dyn TermLink> {
         self.inner.terminal(server, tab)
     }

@@ -106,7 +106,12 @@ impl Remote {
     /// (`screens::containers::deliver`, which times the next look).
     pub fn containers(&self, reply: sshee_app::containers::Reply) {
         (self.post)(Box::new(move |s, tx| {
-            crate::screens::containers::deliver(s, reply, tx);
+            // The snippet form's look, for a `{{container}}` blank.
+            if reply.tab == sshee_app::snippets::FORM_TAB {
+                crate::screens::snippets::containers_listed(s, reply);
+            } else {
+                crate::screens::containers::deliver(s, reply, tx);
+            }
             true
         }));
     }
@@ -237,11 +242,30 @@ pub trait Backend {
         let _ = ask;
     }
 
-    /// Tunnels: start one, stop one, keep the list. Each tunnel's state comes back through
-    /// [`Remote::tunnels`], as does the list kept from last time, at the start.
+    /// Tunnels: start one, stop one, keep the list, look at what a server runs. Each tunnel's
+    /// state comes back through [`Remote::tunnels`], as do the list kept from last time, at
+    /// the start, and what a look found.
     fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
         let _ = ask;
     }
+
+    /// Why a tunnel can't listen on `port` on this computer (taken, or one only an
+    /// administrator may use), checked before a tunnel is saved. Quick: a bind and a close.
+    fn port_problem(&mut self, port: u16) -> Option<String> {
+        let _ = port;
+        None
+    }
+
+    /// A free port on this computer for a server's `preferred` port: the same number when it's
+    /// free, else a look-alike (80 → 8080, 3000 → 13000), never one of `avoid` (claimed by
+    /// other tunnels). For "Open" on a web app.
+    fn free_port(&mut self, preferred: u16, avoid: &[u16]) -> Result<u16, String> {
+        if !avoid.contains(&preferred) {
+            return Ok(preferred);
+        }
+        [preferred.checked_add(8000).filter(|_| preferred < 1024), preferred.checked_add(10000)].into_iter().flatten().find(|p| !avoid.contains(p)).ok_or_else(|| "Couldn't find a free port on this computer.".to_owned())
+    }
+
 
     /// Adding and managing servers (`screens::add_server`, `screens::server_menu`): saving,
     /// the keychain and reading other programs' files wait, so the backend does what is
@@ -945,10 +969,12 @@ impl Shell {
         }
         // Agents: who works, who went quiet, and the card of the one being answered.
         let agents = crate::screens::agent::poll(self, clock, tx);
+        // Tor that takes too long to start says so.
+        let tor = crate::screens::tor::tick(self, clock, tx);
         // Toasts whose time is up (`notes.rs`), and the tray's list of who needs you.
         let notes = super::notes::tick(self, clock, tx);
         self.sync_waiting();
-        changed || ticked || agents || winked || notes
+        changed || ticked || agents || winked || notes || tor
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

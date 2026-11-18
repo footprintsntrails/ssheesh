@@ -109,6 +109,8 @@ pub enum Action {
     Server(ServerKey),
     /// Type `command` into a terminal on `server`; with `enter`, run it.
     Run { server: ServerKey, command: String, enter: bool },
+    /// A snippet with blanks: its form, to fill them in before it goes to `server`.
+    FillSnippet { server: ServerKey, id: String },
     NewTerminal,
     CloseTab,
     ReopenTab,
@@ -126,8 +128,10 @@ pub enum Action {
     Checkup { server: ServerKey },
     /// "Free up disk space": what takes a server's disks, and safe cleanups.
     Disk { server: ServerKey },
-    /// The recipes, for a server.
-    Recipes { server: ServerKey },
+    /// The recipes, for a server: at one of them (its id), or the list.
+    Recipes { server: ServerKey, recipe: Option<&'static str> },
+    /// "Web apps and tunnels": a server's web apps, and its tunnels.
+    Tunnels { server: ServerKey },
     /// The list of snippets, and a new one with this command in it.
     Snippets,
     NewSnippet(String),
@@ -183,6 +187,8 @@ pub enum Glyph {
     /// A disk drive: "Free up disk space".
     Drive,
     Recipe,
+    /// A tunnel: "Web apps and tunnels".
+    Link,
     News,
     Help,
     SplitRight,
@@ -384,15 +390,33 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
         if !server.is_local() {
             rows.push(row(Group::OnServer, Glyph::Shield, "Security check", Action::Checkup { server: key.clone() }).words("security checkup audit firewall ports login updates safe"));
             rows.push(row(Group::OnServer, Glyph::Drive, "Free up disk space", Action::Disk { server: key.clone() }).words("disk space usage full clean up docker logs biggest folders"));
-            rows.push(row(Group::OnServer, Glyph::Recipe, "Recipes", Action::Recipes { server: key.clone() }).words("recipes guide how to firewall fail2ban docker swap https caddy key sudo"));
+            rows.push(
+                row(Group::OnServer, Glyph::Link, "Web apps and tunnels", Action::Tunnels { server: key.clone() })
+                    .words("web apps tunnels port forward forwarding socks proxy open in browser localhost"),
+            );
+            rows.push(row(Group::OnServer, Glyph::Recipe, "Recipes", Action::Recipes { server: key.clone(), recipe: None }).words("recipes guide how to firewall fail2ban docker swap https caddy key sudo"));
+            // Each recipe on its own row, once there's something to look for (0.10 listed them
+            // under cmd:).
+            if !query.is_empty() || query.scope == Some(Scope::Commands) {
+                for r in crate::recipes::book::all() {
+                    rows.push(
+                        row(Group::OnServer, Glyph::Recipe, r.title, Action::Recipes { server: key.clone(), recipe: Some(r.id) })
+                            .note("step by step")
+                            .words(&format!("recipe guide how to {}", r.summary)),
+                    );
+                }
+            }
         }
         rows.push(row(Group::OnServer, Glyph::Containers, "Containers", Action::Containers { server: key.clone() }).words("docker podman containers compose logs"));
+        // Each snippet by its name, its command beside it (0.10's). One with blanks opens its
+        // form; one without runs.
         for snippet in ctx.snippets {
-            let blanks = has_blanks(&snippet.command);
-            let mut r = row(Group::OnServer, Glyph::Terminal, &snippet.command, Action::Run { server: key.clone(), command: snippet.command.clone(), enter: !blanks })
-                .note(if blanks { "snippet with blanks" } else { "snippet" })
-                .words(&format!("{} snippet command run", snippet.name));
-            r.mono = true;
+            let action = if crate::snippets::blanks(&snippet.command).is_empty() {
+                Action::Run { server: key.clone(), command: snippet.command.clone(), enter: true }
+            } else {
+                Action::FillSnippet { server: key.clone(), id: snippet.id.clone() }
+            };
+            let mut r = row(Group::OnServer, Glyph::Terminal, &snippet.name, action).note(snippet.command.as_str()).words("snippet command run");
             r.prod = prod;
             rows.push(r);
         }
@@ -565,7 +589,7 @@ fn in_scope(row: &Row, scope: Scope) -> bool {
         Scope::Servers => {
             matches!(row.action, Action::Tab(_) | Action::Server(_) | Action::Workspace(_)) || (row.group == Group::GoTo && matches!(row.action, Action::Stats { .. }))
         }
-        Scope::Commands => row.runs() || row.group == Group::Window,
+        Scope::Commands => row.runs() || row.group == Group::Window || matches!(row.action, Action::FillSnippet { .. } | Action::Recipes { .. } | Action::Tunnels { .. }),
         Scope::Folders => matches!(row.action, Action::Files { .. }),
         Scope::Settings => row.group == Group::Settings,
     }
@@ -704,8 +728,8 @@ mod tests {
         let mut w = bench();
         w.go_to(WEB);
         let snippets = snippets();
-        // Every row "disk" finds runs something on web-7731 (the snippet, and the text itself).
-        let rows = list(&w, &snippets, "cmd: disk");
+        // Every row "tmpfs" finds runs something on web-7731 (the snippet, and the text itself).
+        let rows = list(&w, &snippets, "cmd: tmpfs");
         assert!(!rows.is_empty());
         assert!(rows.iter().all(Row::runs), "{:?}", labels(&rows));
         assert_eq!(first_choice(&rows), None);
@@ -734,10 +758,22 @@ mod tests {
         w.go_to("host:staging");
         let rows = list(&w, &[], "uptime");
         assert!(!rows.iter().find(|r| r.runs()).unwrap().prod);
-        // A snippet with blanks is typed, not run.
+        // A snippet is listed by its name, its command beside it. One with blanks opens its
+        // form; one without runs.
+        w.go_to(WEB);
         let rows = list(&w, &snippets(), "follow log");
-        let follow = rows.iter().find(|r| r.label.starts_with("docker logs")).unwrap();
-        assert!(matches!(&follow.action, Action::Run { enter: false, .. }));
+        let follow = rows.iter().find(|r| r.label == "Follow a container's log").unwrap();
+        assert_eq!(follow.action, Action::FillSnippet { server: WEB.into(), id: "s-logs".into() });
+        assert_eq!(follow.note, "docker logs -f --tail {{lines:100}} {{container}}");
+        assert!(!follow.runs() && follow.prod);
+        let disk = list(&w, &snippets(), "full disks");
+        let disk = disk.iter().find(|r| r.label == "How full the disks are").unwrap();
+        assert_eq!(disk.action, Action::Run { server: WEB.into(), command: "df -h -x tmpfs -x devtmpfs".into(), enter: true });
+        // Found by its command too.
+        assert!(list(&w, &snippets(), "devtmpfs").iter().any(|r| r.label == "How full the disks are"));
+        // Go templates' words aren't blanks: such a snippet runs.
+        let go = vec![Snippet { id: "go".into(), name: "Container IPs".into(), command: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web".into(), extra: Default::default() }];
+        assert!(matches!(list(&w, &go, "container ips").iter().find(|r| r.label == "Container IPs").unwrap().action, Action::Run { .. }));
         assert!(has_blanks("docker logs {{container}}") && !has_blanks("echo }} {{") && !has_blanks("df -h"));
         // Nothing can be run from the main menu, or under a prefix that isn't commands.
         w.show_home();
@@ -804,7 +840,7 @@ mod tests {
         assert!(set.iter().filter(|r| matches!(r.action, Action::SettingsRow { .. })).count() > 60);
         assert!(!of("").iter().any(|r| matches!(r.action, Action::SettingsRow { .. })), "the empty list keeps to the sections");
         let commands = of("cmd:");
-        assert_eq!(commands.iter().filter(|r| r.runs()).count(), snippets.len());
+        assert_eq!(commands.iter().filter(|r| matches!(r.action, Action::Run { .. } | Action::FillSnippet { .. })).count(), snippets.len());
         assert!(commands.iter().any(|r| r.action == Action::NewTerminal));
         assert!(!commands.iter().any(|r| matches!(r.action, Action::Server(_) | Action::Settings(_))));
         // With no prefix everything is listed.
@@ -841,14 +877,25 @@ mod tests {
         let rows = list(&w, &[], "security");
         assert_eq!(rows[0].action, Action::Checkup { server: WEB.into() });
         assert_eq!(first_choice(&rows), Some(0));
-        assert_eq!(list(&w, &[], "fail2ban")[0].action, Action::Recipes { server: WEB.into() });
+        // Each recipe is a row of its own, opening at itself; the list is one too.
+        assert_eq!(list(&w, &[], "fail2ban")[0].action, Action::Recipes { server: WEB.into(), recipe: Some("fail2ban") });
+        assert_eq!(list(&w, &[], "fail2ban")[0].label, "Stop password guessing with fail2ban");
+        assert!(list(&w, &[], "recipes").iter().any(|r| r.action == Action::Recipes { server: WEB.into(), recipe: None }));
+        assert!(list(&w, &[], "cmd: swap").iter().any(|r| r.action == Action::Recipes { server: WEB.into(), recipe: Some("swap") }));
+        // The empty list keeps to the one row.
+        assert_eq!(list(&w, &[], "").iter().filter(|r| matches!(r.action, Action::Recipes { .. })).count(), 1);
+        // "Web apps and tunnels", for the server on screen.
+        for typed in ["", "tunnel", "port forward", "web apps"] {
+            assert!(list(&w, &[], typed).iter().any(|r| r.action == Action::Tunnels { server: WEB.into() } && r.label == "Web apps and tunnels"), "{typed}");
+        }
         assert_eq!(list(&w, &[], "disk space")[0].action, Action::Disk { server: WEB.into() });
         assert!(list(&w, &[], "snippets").iter().any(|r| r.action == Action::Snippets));
         assert!(list(&w, &[], "changelog").iter().any(|r| r.action == Action::WhatsNew));
         assert!(list(&w, &[], "tour").iter().any(|r| r.action == Action::Tour));
         // This computer has no security check: it's for servers.
         w.go_to("local");
-        assert!(!list(&w, &[], "").iter().any(|r| matches!(r.action, Action::Checkup { .. } | Action::Recipes { .. } | Action::Disk { .. })));
+        assert!(!list(&w, &[], "").iter().any(|r| matches!(r.action, Action::Checkup { .. } | Action::Recipes { .. } | Action::Disk { .. } | Action::Tunnels { .. })));
+        assert!(!list(&w, &[], "fail2ban").iter().any(|r| matches!(r.action, Action::Recipes { .. })));
     }
 
     #[test]
