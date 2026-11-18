@@ -522,8 +522,11 @@ fn find_marks_what_it_finds_and_goes_to_it() {
         // The match the bar is on is a block in the text's colour (the others are quieter).
         let ink = if dark { [0xeb, 0xeb, 0xf0] } else { [0x1d, 0x1d, 0x1f] };
         assert!(longest_run(&run.pixels(), whole_terminal(run), ink) >= 30, "the current match isn't marked");
-        // The shell said which folder it is in: the tab is named after it.
-        assert_eq!(run.label("tab-4"), "~/shop, web-staging");
+        // The shell said which folder it is in: the tab is named after it. (Its server follows
+        // in the name unless the row is crowded, as it is on Windows with its window buttons,
+        // where the server is named once before its tabs.)
+        let name = run.label("tab-4");
+        assert!(name == "~/shop" || name == "~/shop, web-staging", "{name}");
     });
 }
 
