@@ -36,7 +36,7 @@ pub struct Tab<'a> {
     pub active: bool,
     /// The window is in front.
     pub window_active: bool,
-    /// The row is crowded: the tab may shrink, and "Needs you" is only its dot.
+    /// The row is crowded: the tab may shrink, and what it has to say is only its dot or ring.
     pub compact: bool,
 }
 
@@ -71,14 +71,20 @@ fn close_button<S: 'static>(t: &Theme, on_close: impl Fn(&mut S, &mut Tx) + 'sta
         .child(icon(Icon::Close, 14.0, t.l2on))
 }
 
-/// What a tab has to say after its name.
+/// What a tab has to say after its name. In a crowded row only its mark (the dot, the ring),
+/// named for a screen reader: the words can't shrink, and would push the tab's cross out
+/// over its neighbour.
 fn badge(t: &Theme, b: Badge, compact: bool) -> El {
     let row = rune::row().key("badge").gap(6.0).items_center();
-    match b {
-        Badge::NeedsYou if compact => row.child(dot(7.0, t.orange_dot)).label_static("Needs you"),
-        Badge::NeedsYou => row.child(dot(7.0, t.orange_dot)).child(text(b.label()).font(theme::NEEDS).color(t.orange).single_line()),
-        Badge::Reconnecting => row.child(progress_ring(10.0, 1.5, t.l2)).child(text(b.label()).font(theme::TAB_STATE).color(t.l2on).single_line()),
-        Badge::Disconnected | Badge::Ended => row.child(hollow_dot(8.0, 1.5, t.l2)).child(text(b.label()).font(theme::TAB_STATE).color(t.l2on).single_line()),
+    let (mark, words) = match b {
+        Badge::NeedsYou => (dot(7.0, t.orange_dot), text(b.label()).font(theme::NEEDS).color(t.orange)),
+        Badge::Reconnecting => (progress_ring(10.0, 1.5, t.l2), text(b.label()).font(theme::TAB_STATE).color(t.l2on)),
+        Badge::Disconnected | Badge::Ended | Badge::Failed => (hollow_dot(8.0, 1.5, t.l2), text(b.label()).font(theme::TAB_STATE).color(t.l2on)),
+    };
+    if compact {
+        row.child(mark).label_static(b.label())
+    } else {
+        row.child(mark).child(words.single_line())
     }
 }
 
@@ -92,7 +98,7 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     let name_ink = match spec.badge {
         _ if quiet => t.l2,
         Some(Badge::NeedsYou) => t.l1,
-        Some(Badge::Reconnecting | Badge::Disconnected | Badge::Ended) if !active => t.l2,
+        Some(Badge::Reconnecting | Badge::Disconnected | Badge::Ended | Badge::Failed) if !active => t.l2,
         _ if active => t.l1,
         _ => t.l2,
     };

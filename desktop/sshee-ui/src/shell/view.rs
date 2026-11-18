@@ -3,7 +3,7 @@
 //! ```text
 //! root   column, the frame's colour
 //! ├── bar      44 pt, moves the window: [window buttons' room | logo] [sidebar toggle]
-//! │            [title: name, address, Prod] [tabs … +] [streamer mode] [the sidebar's foot,
+//! │            [bar-middle: title (name, address, Prod), tabs … +] [streamer mode] [the sidebar's foot,
 //! │            while it is hidden] [room for Windows' buttons]
 //! └── body     row
 //!     ├── rail     52 pt of icons: [logo] search ─ this computer, servers, + … check, Tor, settings
@@ -117,6 +117,8 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
                     .role("button")
                     .label_static("Main menu")
                     .help("Main menu")
+                    // Beside it: under it, it would cover the sidebar's first button.
+                    .help_side(rune::Side::Right)
                     .on_press_tx(|s: &mut Shell, tx| s.show_home(tx))
                     .child(s.app_logo(24.0, t)),
             ),
@@ -127,14 +129,21 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             .on_press_tx(|s: &mut Shell, tx| s.toggle_sidebar(tx)),
     );
     // The machine on screen is the window's title, with its address (`title.rs`); a click
-    // opens its tools.
-    bar = bar.child(super::title::title(s, t, active));
-
-    // The tabs: every machine's, in one row (`tabs.rs`); then streamer mode's switch, and
-    // while the sidebar is hidden, its foot.
-    let tabs = super::tabs::strip(s, t, active);
-    // What's left of the row moves the window, and Windows' buttons take its end.
-    bar.child(tabs).child(super::streamer::eye(s, t)).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
+    // opens its tools. Then the tabs: every machine's, in one row (`tabs.rs`). The two share
+    // the room between the buttons, measured as one, and decide together who gives way.
+    let fit = super::tabs::fit(s);
+    let middle = row()
+        .key("bar-middle")
+        .grow(1.0)
+        .min_w(0.0)
+        .h_full()
+        .items_center()
+        .on_layout(|s: &mut Shell, [_, _, w, _]| s.bar_room = Some(w))
+        .child(super::title::title(s, t, active, fit.address))
+        .child(super::tabs::strip(s, t, active, fit));
+    // Then streamer mode's switch, and while the sidebar is hidden, its foot. What's left of
+    // the row moves the window, and Windows' buttons take its end.
+    bar.child(middle).child(super::streamer::eye(s, t)).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }
 
 /// The page: darker than the frame, its top-left corner rounded where it meets the sidebar.
@@ -228,6 +237,20 @@ fn env_stripe(s: &Shell, t: &'static Theme) -> Option<El> {
     Some(el().key("env-stripe").pin(Some(0.0), Some(0.0), Some(0.0), None).h(2.0).fill(color).a11y_hidden())
 }
 
+/// How wide a vital sign is in the status bar (`kit::status::status_item`).
+fn status_item_width(label: &str, value: &str, warn: bool) -> f32 {
+    if warn {
+        12.0 + 5.0 + rune::text::advance(&format!("{label} {value}"), theme::STATUS_WARN)
+    } else {
+        rune::text::advance(label, theme::STATUS) + 5.0 + rune::text::advance(value, theme::STATUS_VALUE)
+    }
+}
+
+/// How wide Tor's readout is (`kit::status::status_tor`).
+fn status_tor_width(latency_ms: Option<u32>) -> f32 {
+    13.0 + 6.0 + rune::text::advance("Tor", theme::STATUS) + latency_ms.map_or(0.0, |ms| 6.0 + rune::text::advance(&format!("{ms} ms"), theme::STATUS_VALUE))
+}
+
 /// The status bar: the machine on screen's vital signs, and Tor at the right while it's on.
 fn status_bar(s: &Shell, t: &'static Theme) -> El {
     let mut bar = row()
@@ -238,20 +261,34 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         .gap(20.0)
         .px(18.0)
         .fill(t.page)
-        .border_sides([1.0, 0.0, 0.0, 0.0], t.hair2);
+        .border_sides([1.0, 0.0, 0.0, 0.0], t.hair2)
+        .on_layout(|s: &mut Shell, [_, _, w, _]| s.status_room = Some(w));
     if s.bench.sidebar_shown() && !s.sidebar_away() {
         // The page's edge against the sidebar runs on down the status bar.
         let edge = el().key("status-edge").w(1.0).fill(t.edge);
         bar = bar.child(if s.sidebar_at_right() { edge.pin(None, Some(0.0), Some(0.0), Some(0.0)) } else { edge.pin(Some(0.0), Some(0.0), None, Some(0.0)) });
     }
-    // Settings' "Server vitals" hides the numbers; Tor's stays.
+    let tor = match s.bench.tor() {
+        Tor::On { latency_ms } => Some(latency_ms),
+        _ => None,
+    };
+    // Settings' "Server vitals" hides the numbers; Tor's stays. Where the bar is too narrow
+    // for all of them, the last go first, and Tor's readout stays whole.
     if let Some(vitals) = s.bench.current_vitals().filter(|_| s.settings.get().show_vitals) {
+        let mut room = s.status_room.map_or(f32::INFINITY, |w| w - 2.0 * 18.0);
+        if let Some(latency) = tor {
+            room -= status_tor_width(latency) + 2.0 * 20.0;
+        }
         for (i, v) in vitals.items().iter().enumerate() {
+            room -= status_item_width(&v.label, &v.value, v.warn) + if i > 0 { 20.0 } else { 0.0 };
+            if room < 0.0 {
+                break;
+            }
             bar = bar.child(status_item(t, &v.label, &v.value, v.warn).key(format!("vital-{i}")));
         }
     }
     bar = bar.child(spacer());
-    if let Tor::On { latency_ms } = s.bench.tor() {
+    if let Some(latency_ms) = tor {
         bar = bar.child(status_tor(t, latency_ms).cursor(rune::Cursor::Pointer).on_press_tx(|s: &mut Shell, tx| s.toggle_tor(tx)));
     }
     bar

@@ -17,7 +17,7 @@
 //! ```text
 //! new-tab-menu
 //! ├── nt-terminal  New terminal   ⌃⇧T     on the machine on screen
-//! ├── nt-files     Files
+//! ├── nt-files     Files          ⌃⇧O
 //! ├── ──────
 //! └── nt-server-N  db-main  ›             every other machine, in the sidebar's order
 //!     ├── nt-back      ‹ Back
@@ -32,8 +32,12 @@
 //!   closed with the cross, doesn't move the next cross away from the pointer;
 //! - a tab is dragged by moving it in the row itself (no ghost): it lands where the pointer is.
 //!
-//! When even crowded tabs don't fit, the row shows a run of them that holds the tab on screen
-//! (`layout::in_sight`), and the rest are in the list.
+//! The title and the row share the bar's middle (`fit`), decided together each frame from one
+//! measurement: first the title's address gives way, then the tabs crowd. A crowded row
+//! squeezes the other tabs before the one you're on, which keeps its name up to
+//! [`ACTIVE_TAB`]. When even crowded tabs don't fit, the row shows a run of them that holds the
+//! tab on screen (`layout::in_sight`), and the rest are in the list. "+" is always in the
+//! window.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -43,7 +47,7 @@ use sshee_app::palette::shortcut_label;
 use sshee_app::workbench::shortcuts::Shortcut;
 use sshee_app::workbench::layout::{self, Layout};
 use sshee_app::workbench::titles::{self, Home};
-use sshee_app::workbench::{Open, ServerKey, StripTab, TabId, TabKind};
+use sshee_app::workbench::{Badge, Open, ServerKey, StripTab, TabId, TabKind};
 
 use super::state::Shell;
 use crate::icons::{icon, Icon};
@@ -59,6 +63,14 @@ use crate::theme::{self, Theme};
 /// The narrowest a crowded tab gets before tabs start going out of sight (the design's).
 pub const MIN_TAB: f32 = 76.0;
 
+/// The widest the tab you're on gets in a crowded row: it keeps its name, up to this, and the
+/// others are squeezed first.
+pub const ACTIVE_TAB: f32 = 180.0;
+
+/// How much room must come free before the row loosens again (crowded tabs grow back, the
+/// title's address comes back): a name a few letters longer doesn't flip it back and forth.
+const SLACK: f32 = 16.0;
+
 /// How far the pointer travels before a press on a tab is a drag.
 const DRAG_START: f32 = 4.0;
 
@@ -71,6 +83,8 @@ const NEW_WIDTH: f32 = 260.0;
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Held {
     compact: bool,
+    /// The title showed the machine's address.
+    address: bool,
     widths: HashMap<TabId, f32>,
 }
 
@@ -100,9 +114,11 @@ pub struct Row {
     pub(crate) new_tab: Option<NewTabMenu>,
     /// The title's menu is open (`title.rs`).
     pub(crate) title_menu: Option<super::title::TitleMenu>,
-    /// What the view last drew: whether the row was crowded, the tabs in sight, and the first
-    /// of them. (The view only reads the window's state; these are its own notes.)
+    /// What the view last drew: whether the row was crowded, whether the title showed the
+    /// address, the tabs in sight, and the first of them. (The view only reads the window's
+    /// state; these are its own notes.)
     compact: Cell<bool>,
+    address: Cell<bool>,
     shown: RefCell<Vec<TabId>>,
     first: Cell<usize>,
 }
@@ -117,6 +133,7 @@ impl Row {
     }
 
     /// The row was crowded when it was last drawn.
+    #[cfg(test)]
     pub(crate) fn crowded(&self) -> bool {
         self.compact.get()
     }
@@ -172,7 +189,7 @@ impl Shell {
     pub(crate) fn row_hover(&mut self, over: bool, tx: &mut Tx) {
         if over {
             let widths = self.row.shown.borrow().iter().filter_map(|id| Some((*id, self.row.rects.get(id)?[2]))).collect();
-            self.row.held = Some(Held { compact: self.row.compact.get(), widths });
+            self.row.held = Some(Held { compact: self.row.compact.get(), address: self.row.address.get(), widths });
             tx.live_only();
         } else if self.row.drag.is_none() {
             self.row.held = None;
@@ -533,7 +550,8 @@ fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working:
         w += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
     }
     if let Some(badge) = st.tab.badge() {
-        w += 7.0 + 14.0 + rune::text::advance(badge.label(), theme::NEEDS);
+        let font = if badge == Badge::NeedsYou { theme::NEEDS } else { theme::TAB_STATE };
+        w += 7.0 + 16.0 + rune::text::advance(badge.label(), font);
     } else if working {
         w += 7.0 + 10.0;
     }
@@ -544,7 +562,8 @@ fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working:
 }
 
 /// How wide a crowded tab is at its narrowest, and what leads it (the divider and its
-/// machine's name, when it starts a group or the run in sight).
+/// machine's name, when it starts a group or the run in sight). What it has to say is only
+/// its mark there (`kit::tab`), counted at its widest.
 fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bool, working: bool) -> (f32, f32) {
     let mut own = 8.0 + theme::ICON + 6.0 + rune::text::advance(label, theme::TAB_NAME) + 8.0;
     if st.tab.badge().is_some() {
@@ -562,43 +581,111 @@ fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bo
             lead += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
         }
     }
-    (own.min(MIN_TAB) + 2.0, lead)
+    // The tab you're on keeps its name (up to a cap); the others give way first.
+    (own.min(if st.active { ACTIVE_TAB } else { MIN_TAB }) + 2.0, lead)
 }
 
-/// The row of tabs. `window_active`: the window is in front.
-pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
-    let strip = s.bench.strip();
-    let row = &s.row;
-    // Every name as it may be drawn (streamer mode), an agent in front named after it
-    // ("Terminal 2 (Claude Code)", as in 0.10).
-    let names: Vec<(String, String)> = strip
-        .iter()
-        .map(|st| (s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned()))
-        .collect();
-    let working = |st: &StripTab| s.screens.agent.working(st.tab.id);
-    let connecting = |st: &StripTab| st.tab.link == sshee_app::workbench::Link::Connecting;
-    let went_quiet = |st: &StripTab| s.screens.agent.agents.attention(st.tab.id).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done);
-    // A mark after the name (working, connecting, went quiet): the room one takes.
-    let marked = |st: &StripTab| working(st) || connecting(st) || went_quiet(st);
+/// How the top row shares its room between the title and the tabs, decided once a frame from
+/// one measurement (the room the two share), so neither reacts to the other a frame late.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Fit {
+    /// The tabs are crowded: squeezed, each machine named once.
+    pub(crate) crowded: bool,
+    /// The title shows the machine's address.
+    pub(crate) address: bool,
+    /// The width the row of tabs gets; `None` before the first layout.
+    pub(crate) room: Option<f32>,
+}
+
+/// Crowded, and the title's address, for tabs `needed` points wide beside a title `title`
+/// points wide (and `address` more with its address) in `middle` points. `was`: crowded and
+/// with the address last frame; loosening again waits for [`SLACK`] points to spare.
+pub(crate) fn decide(middle: f32, title: f32, address: Option<f32>, needed: f32, was: (bool, bool)) -> (bool, bool) {
+    let (was_crowded, had_address) = was;
+    let fits = |w: f32, loosen: bool| w + if loosen { SLACK } else { 0.0 } <= middle;
+    let address = address.is_some_and(|a| fits(needed + title + a, !had_address));
+    let crowded = !address && !fits(needed + title, was_crowded);
+    (crowded, address)
+}
+
+/// Every tab's name and its machine's, as they may be drawn (streamer mode), an agent in front
+/// named after it ("Terminal 2 (Claude Code)", as in 0.10).
+fn tab_names(s: &Shell, strip: &[StripTab]) -> Vec<(String, String)> {
+    strip.iter().map(|st| (s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned())).collect()
+}
+
+fn working(s: &Shell, st: &StripTab) -> bool {
+    s.screens.agent.working(st.tab.id)
+}
+
+fn connecting(st: &StripTab) -> bool {
+    st.tab.link == sshee_app::workbench::Link::Connecting
+}
+
+fn went_quiet(s: &Shell, st: &StripTab) -> bool {
+    s.screens.agent.agents.attention(st.tab.id).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done)
+}
+
+/// A mark after the name (working, connecting, went quiet): the room one takes.
+fn marked(s: &Shell, st: &StripTab) -> bool {
+    working(s, st) || connecting(st) || went_quiet(s, st)
+}
+
+/// How wide the row is with nothing squeezed, "+" included.
+fn needed_width(s: &Shell, strip: &[StripTab], names: &[(String, String)]) -> f32 {
     // Settings: every tab names its server (the default), or a server is named once, before
     // its group, as in a crowded row.
     let named = s.settings.more().tabs_name_server;
-    let needed: f32 = strip
+    strip
         .iter()
-        .zip(&names)
+        .zip(names)
         .enumerate()
         .map(|(i, (st, (label, server)))| {
             // A group's name before its first tab, where tabs don't name their server.
             let lead = if !named && (i == 0 || st.starts_group) { 12.0 + rune::text::advance(server, theme::GROUP) } else { 0.0 };
-            natural_width(st, label, server, named, marked(st)) + lead
+            natural_width(st, label, server, named, marked(s, st)) + lead
         })
         .sum::<f32>()
         + theme::CONTROL
-        + 2.0;
-    // Crowded or roomy: as the widths say, but not changing under the pointer.
-    let crowded = s.strip_width.is_some_and(|w| needed > w);
-    let compact = row.held.as_ref().map_or(crowded, |h| h.compact) && !strip.is_empty();
-    row.compact.set(compact);
+        + 2.0
+}
+
+/// This frame's [`Fit`]: as the widths say, but not changing under the pointer while what the
+/// row held still keeps "+" in the window.
+pub(crate) fn fit(s: &Shell) -> Fit {
+    let strip = s.bench.strip();
+    let row = &s.row;
+    let (title, address) = super::title::widths(s);
+    let Some(middle) = s.bar_room else {
+        row.compact.set(false);
+        row.address.set(address.is_some());
+        return Fit { crowded: false, address: address.is_some(), room: None };
+    };
+    let needed = if strip.is_empty() { 0.0 } else { needed_width(s, &strip, &tab_names(s, &strip)) };
+    let held = row.held.as_ref().map(|h| (h.compact, h.address && address.is_some()));
+    let keeps = |(crowded, shown): (bool, bool)| crowded || needed + title + if shown { address.unwrap_or(0.0) } else { 0.0 } <= middle;
+    let (crowded, shown) = match held.filter(|h| keeps(*h)) {
+        Some(h) => h,
+        None => decide(middle, title, address, needed, (row.compact.get(), row.address.get())),
+    };
+    let crowded = crowded && !strip.is_empty();
+    row.compact.set(crowded);
+    row.address.set(shown);
+    let room = middle - title - if shown { address.unwrap_or(0.0) } else { 0.0 };
+    Fit { crowded, address: shown, room: Some(room.max(0.0)) }
+}
+
+/// The row of tabs, as `fit` shares the bar. `window_active`: the window is in front.
+pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit) -> El {
+    let strip = s.bench.strip();
+    let row = &s.row;
+    let names = tab_names(s, &strip);
+    let working = |st: &StripTab| working(s, st);
+    let connecting = |st: &StripTab| connecting(st);
+    let went_quiet = |st: &StripTab| went_quiet(s, st);
+    let marked = |st: &StripTab| marked(s, st);
+    let named = s.settings.more().tabs_name_server;
+    let compact = fit.crowded;
     let grouped = compact || !named;
     // While Settings is over the page, no tab is the one on screen.
     let in_settings = s.screens.settings.open;
@@ -609,22 +696,21 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
 
     // The tabs in sight.
     let prod_of = |st: &StripTab| s.bench.server(&st.tab.server).is_some_and(|sv| sv.is_prod());
+    let plus = theme::CONTROL + 2.0;
+    let widths = |from: usize| -> Vec<f32> {
+        strip
+            .iter()
+            .zip(&names)
+            .enumerate()
+            .map(|(i, (st, (label, server)))| {
+                let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st), marked(st));
+                own + lead
+            })
+            .collect()
+    };
     let mut sight = 0..strip.len();
-    if let (true, Some(room)) = (compact, s.strip_width) {
-        let widths = |from: usize| -> Vec<f32> {
-            strip
-                .iter()
-                .zip(&names)
-                .enumerate()
-                .map(|(i, (st, (label, server)))| {
-                    let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st), marked(st));
-                    own + lead
-                })
-                .collect()
-        };
-        let all = widths(0);
-        let plus = theme::CONTROL + 2.0;
-        if all.iter().sum::<f32>() + plus > room {
+    if let (true, Some(room)) = (compact, fit.room) {
+        if widths(0).iter().sum::<f32>() + plus > room {
             // Not even crowded: a run of them, and the list for the rest.
             let first = row.first.get().min(strip.len().saturating_sub(1));
             sight = layout::in_sight(&widths(first), room - 2.0 * plus, first, active_at);
@@ -635,6 +721,39 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
     row.first.set(sight.start);
     *row.shown.borrow_mut() = strip[sight.clone()].iter().map(|st| st.tab.id).collect();
     let hidden = sight.len() < strip.len();
+    // The narrowest each tab in sight may be: crowded, its own crowded width; roomy, its
+    // natural one.
+    let least = |st: &StripTab, label: &str, server: &str| {
+        if compact {
+            crowded_width(st, label, server, false, false, marked(st)).0 - 2.0
+        } else {
+            natural_width(st, label, server, !grouped, marked(st)) - 2.0 - if st.starts_group { 11.0 } else { 0.0 }
+        }
+    };
+    // Held still under the pointer, as wide as each tab was; the tab you're on at least wide
+    // enough for its cross. In a crowded row only while that still fits: "+" never leaves the
+    // window (a roomy row was checked by `fit`).
+    let mut held: HashMap<TabId, f32> = HashMap::new();
+    if let Some(h) = &row.held {
+        for i in sight.clone() {
+            let (st, (label, server)) = (&strip[i], &names[i]);
+            if let Some(width) = h.widths.get(&st.tab.id) {
+                held.insert(st.tab.id, if st.active { width.max(least(st, label, server)) } else { *width });
+            }
+        }
+    }
+    if let (true, Some(room)) = (compact, fit.room) {
+        let widths = widths(sight.start);
+        let mut used = if hidden { 2.0 * plus } else { plus };
+        for i in sight.clone() {
+            let st = &strip[i];
+            let (own, _) = crowded_width(st, &names[i].0, &names[i].1, false, false, marked(st));
+            used += held.get(&st.tab.id).map_or(widths[i], |w| widths[i] - own + w + 2.0);
+        }
+        if used > room {
+            held.clear();
+        }
+    }
 
     let mut tabs = rune::row()
         .key("tabs")
@@ -644,7 +763,6 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
         .items_center()
         .gap(2.0)
         .role("tablist")
-        .on_layout(|s: &mut Shell, [_, _, w, _]| s.strip_width = Some(w))
         .on_hover_change(|s: &mut Shell, over, tx| s.row_hover(over, tx));
     for (i, (st, (label, server))) in strip.iter().zip(&names).enumerate() {
         if !sight.contains(&i) {
@@ -671,8 +789,10 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             window_active,
             compact,
         };
-        // The whole name, which a crowded tab cuts, and what else a tab can be asked to do.
-        let tip = format!("{label} on {server}. Right-click for more, middle-click to close");
+        // The whole name, which a crowded tab cuts, what a crowded tab's mark means, and what
+        // else a tab can be asked to do.
+        let state = st.tab.badge().filter(|_| compact).map(|b| format!(" ({})", b.label())).unwrap_or_default();
+        let tip = format!("{label} on {server}{state}. Right-click for more, middle-click to close");
         let mut e = tab(t, &spec, move |s: &mut Shell, tx| s.close_tab(id, tx))
             .key(format!("tab-{}", id.0))
             .on_press_tx(move |s: &mut Shell, tx| s.focus_tab(id, tx))
@@ -693,10 +813,10 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool) -> El {
             e = e.fill(t.hov);
         }
         if compact {
-            let (own, _) = crowded_width(st, label, server, false, false, marked(st));
-            e = e.min_w(own - 2.0);
+            // The others squeeze before the tab you're on does (`crowded_width`).
+            e = e.min_w(least(st, label, server));
         }
-        if let Some(width) = row.held.as_ref().and_then(|h| h.widths.get(&id)) {
+        if let Some(width) = held.get(&id) {
             // Under the pointer the row keeps still: this tab is as wide as it was.
             e = e.w(*width).min_w(*width);
         }
@@ -743,6 +863,7 @@ pub(crate) fn overlays(s: &Shell, t: &'static Theme) -> Vec<El> {
 fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
     let named = |key: &str| s.bench.server(key).map(|sv| s.server_shown(key, &sv.name).into_owned()).unwrap_or_default();
     let keys = shortcut_label(Shortcut::NewTerminal, s.options.mac_keys, &s.options.shortcuts);
+    let files_keys = shortcut_label(Shortcut::OpenFiles, s.options.mac_keys, &s.options.shortcuts);
     let on = menu.on.as_deref().map(named);
     let mut rows = rune::col().w_full().padding(crate::kit::menu::PAD).role("menu");
     let mut n = 0;
@@ -757,7 +878,10 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
                     Some(name) => ("nt-terminal".to_owned(), format!("New terminal on {name}"), Icon::Terminal, "", None),
                     None => ("nt-terminal".to_owned(), "New terminal".to_owned(), Icon::Terminal, "", keys.clone()),
                 },
-                NewPick::Files(_) => ("nt-files".to_owned(), on.as_ref().map_or_else(|| "Files".to_owned(), |name| format!("Files on {name}")), Icon::Folder, "", None),
+                NewPick::Files(_) => match &on {
+                    Some(name) => ("nt-files".to_owned(), format!("Files on {name}"), Icon::Folder, "", None),
+                    None => ("nt-files".to_owned(), "Files".to_owned(), Icon::Folder, "", files_keys.clone()),
+                },
                 NewPick::Machine(server) => {
                     let at = s.bench.servers().iter().position(|sv| sv.key() == *server).unwrap_or_default();
                     let glyph = s.bench.server(server).map_or(Icon::Server, |sv| Icon::for_server(&sv.icon));
