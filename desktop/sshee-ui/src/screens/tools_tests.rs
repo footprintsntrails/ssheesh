@@ -527,3 +527,19 @@ fn whats_new_shows_once_after_an_update() {
     let fresh = Window::open_with(Start { version: Some("1.0.0".into()), welcome: true, ..Start::default() });
     assert!(fresh.has("welcome") && !fresh.has("news"));
 }
+
+#[test]
+fn the_snippet_editor_explains_blanks_behind_a_question_mark() {
+    let mut w = Window::open();
+    w.click("server-2");
+    w.rt.update(|s, tx| s.open_snippets(tx));
+    w.settle();
+    w.click("snip-new");
+    assert!(w.has("snip-blanks-about"));
+    assert_eq!(crate::screens::help::heard(&w.rt, "blanks").as_deref(), Some(crate::screens::help::SNIPPET_BLANKS));
+    // A click opens it over the dialog; a second closes it.
+    w.click("snip-blanks-about");
+    assert!(w.has("help-card"));
+    w.click("snip-blanks-about");
+    assert!(!w.has("help-card"));
+}

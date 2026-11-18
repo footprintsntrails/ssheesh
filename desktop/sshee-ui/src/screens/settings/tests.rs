@@ -865,3 +865,43 @@ fn the_mouses_side_buttons_walk_back_and_forward_through_the_sections_visited() 
     side(&mut w, "settings-title", Back);
     assert_eq!(at(&w), first);
 }
+
+#[test]
+fn a_question_mark_after_a_rows_name_explains_it_and_esc_closes_it_before_settings() {
+    let mut w = Window::defaults();
+    let rows: Vec<_> = catalog::rows().iter().filter(|r| r.about.is_some()).collect();
+    assert_eq!(rows.len(), 8);
+    for r in rows {
+        w.go(r.section);
+        let key = super::rows::about_key(r.key);
+        w.show(&key);
+        assert!(w.has(&key), "{key}");
+        let about = r.about.unwrap();
+        assert_eq!(crate::screens::help::heard(&w.rt, about.name).as_deref(), Some(about.text), "{key}");
+        // Right after the name, on its line.
+        let mark = w.rect(&key);
+        let label = w.rt.elements().into_iter().find(|e| !e.exiting && e.text.as_deref() == Some(r.label)).map(|e| e.rect).expect("the name");
+        assert!(mark[0] >= label[0] + label[2] && mark[0] < label[0] + label[2] + 8.0, "{key}: {mark:?} after {label:?}");
+        assert!((mark[1] + mark[3] / 2.0 - (label[1] + 9.0)).abs() < 4.0, "{key}: {mark:?} beside {label:?}");
+    }
+    // A click opens its card beside it, saying it: under it, or above it near the window's foot.
+    w.go(Section::Terminal);
+    w.click("term-idle-about");
+    assert!(w.has("help-card") && w.says("An idle terminal still holds a login"));
+    let (mark, card) = (w.rect("term-idle-about"), w.rect("help-card"));
+    let under = card[1] >= mark[1] + mark[3] && card[1] < mark[1] + mark[3] + 8.0;
+    let above = card[1] + card[3] <= mark[1] && card[1] + card[3] > mark[1] - 8.0;
+    assert!(under || above, "{card:?} beside {mark:?}");
+    // Esc closes the card, not Settings.
+    w.key(Key::Escape, "");
+    assert!(!w.has("help-card") && w.rt.state.screens.settings.open);
+    // The pointer resting on another opens it; moving away closes it.
+    w.show("term-reconnect-about");
+    let (x, y) = w.rt.find("term-reconnect-about").unwrap();
+    w.rt.pointer_move(x, y);
+    w.settle();
+    assert_eq!(w.rt.state.screens.tip.as_ref().map(|t| t.key.as_str()), Some("term-reconnect-about"));
+    w.rt.pointer_move(x + 300.0, y + 200.0);
+    w.settle();
+    assert!(w.rt.state.screens.tip.is_none() && !w.has("help-card"));
+}

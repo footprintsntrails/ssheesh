@@ -17,10 +17,15 @@ pub struct RowText<'a> {
     pub later: Option<&'a str>,
 }
 
-fn words(t: &Theme, row: &RowText) -> El {
+fn words(t: &Theme, row: &RowText, tip: Option<El>) -> El {
     let mut words = rune::col().key("words").grow(1.0).shrink().min_w(0.0).gap(2.0);
     if !row.label.is_empty() {
-        words = words.child(text(row.label).key("label").font(theme::TEXT).color(if row.later.is_some() { t.l2 } else { t.l1 }).wrap());
+        let label = text(row.label).key("label").font(theme::TEXT).color(if row.later.is_some() { t.l2 } else { t.l1 }).wrap();
+        words = words.child(match tip {
+            // The "?" right after the name, centred on its first line.
+            Some(tip) => rune::row().w_full().gap(2.0).items_start().child(label.shrink().min_w(0.0)).child(tip.mt(-2.0).mb(-2.0)),
+            None => label,
+        });
     }
     if let Some(help) = row.help {
         words = words.child(text(help).key("help").font(theme::HELP).color(t.l2).wrap());
@@ -33,13 +38,23 @@ fn words(t: &Theme, row: &RowText) -> El {
 
 /// A row: its words at the left, `control` at the right. The caller adds the key.
 pub fn form_row(t: &Theme, row: RowText, control: El) -> El {
-    rune::row().w_full().min_h(40.0).px(12.0).py(8.0).gap(16.0).items_center().role("group").label(row.label).child(words(t, &row)).child(control)
+    form_row_with(t, row, None, control)
+}
+
+/// [`form_row`] with `tip` (a [`crate::kit::help::help_mark`]) right after the row's name.
+pub fn form_row_with(t: &Theme, row: RowText, tip: Option<El>, control: El) -> El {
+    rune::row().w_full().min_h(40.0).px(12.0).py(8.0).gap(16.0).items_center().role("group").label(row.label).child(words(t, &row, tip)).child(control)
 }
 
 /// A row whose control is too wide to sit beside its name: the words, then `control` under
 /// them at full width.
 pub fn form_row_stacked(t: &Theme, row: RowText, control: El) -> El {
-    rune::col().w_full().px(12.0).py(10.0).gap(8.0).role("group").label(row.label).child(words(t, &row)).child(control)
+    form_row_stacked_with(t, row, None, control)
+}
+
+/// [`form_row_stacked`] with `tip` right after the row's name.
+pub fn form_row_stacked_with(t: &Theme, row: RowText, tip: Option<El>, control: El) -> El {
+    rune::col().w_full().px(12.0).py(10.0).gap(8.0).role("group").label(row.label).child(words(t, &row, tip)).child(control)
 }
 
 /// A box of rows, a hairline between each two.

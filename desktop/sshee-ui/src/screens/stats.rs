@@ -100,6 +100,15 @@ fn scaled(t: &Theme, line: El, top: &str) -> El {
         .child(text(top.to_owned()).key("graph-top").font(theme::LIST_NUMBER).color(t.l2).single_line().pin(None, Some(-2.0), Some(0.0), None).label(format!("Graph's top: {top}")))
 }
 
+/// A line's name at its left; Load's with a "?" after it.
+fn label_view(s: &Shell, t: &Theme, l: &Line) -> El {
+    let label = text(&l.label).font(theme::NOTE).color(t.l2).single_line();
+    if l.key != "load" {
+        return label.w(LABEL_W);
+    }
+    row().w(LABEL_W).gap(2.0).items_center().child(label).child(super::help::tip(s, t, "stat-load-about", "load", super::help::LOAD))
+}
+
 fn line_view(s: &Shell, server: &str, t: &'static Theme, l: &Line) -> El {
     let value = if l.warn {
         row().gap(5.0).items_center().child(icon(Icon::Warning, 12.0, t.orange)).child(text(&l.value).font(theme::STAT_WARN).color(t.l1).single_line())
@@ -137,7 +146,7 @@ fn line_view(s: &Shell, server: &str, t: &'static Theme, l: &Line) -> El {
         .border_sides([0.0, 0.0, 1.0, 0.0], t.hair2)
         .role("row")
         .label(format!("{} {}", l.label, l.value))
-        .child(text(&l.label).font(theme::NOTE).color(t.l2).w(LABEL_W).single_line())
+        .child(label_view(s, t, l))
         .child(middle)
         .child(el().grow(1.0).min_w(0.0).children(beside))
 }

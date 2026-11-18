@@ -195,6 +195,15 @@ pub enum Hint {
     By(fn(&SettingsStore, Keyboard) -> String),
 }
 
+/// What a row's "?" explains: what the thing is, why you'd want it, what happens when it's
+/// on, in a few plain sentences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct About {
+    /// What it is about, for its name: "About Tor".
+    pub name: &'static str,
+    pub text: &'static str,
+}
+
 /// One row of a section.
 #[derive(Debug, Clone, Copy)]
 pub struct Row {
@@ -205,6 +214,8 @@ pub struct Row {
     pub group: Option<&'static str>,
     pub label: &'static str,
     pub hint: Hint,
+    /// What a newcomer may not know, behind a quiet "?" after the name.
+    pub about: Option<About>,
     pub control: Control,
     pub status: Status,
     /// The 0.10 settings it owns, by their names in the store.
@@ -229,6 +240,7 @@ impl Row {
             group: None,
             label,
             hint: Hint::None,
+            about: None,
             control,
             status: Status::Works,
             saves: &[],
@@ -247,6 +259,11 @@ impl Row {
 
     const fn hint_by(mut self, hint: fn(&SettingsStore, Keyboard) -> String) -> Row {
         self.hint = Hint::By(hint);
+        self
+    }
+
+    const fn about(mut self, name: &'static str, text: &'static str) -> Row {
+        self.about = Some(About { name, text });
         self
     }
 
@@ -332,6 +349,17 @@ fn percent(v: f64) -> String {
 fn welcome_is_ours(store: &SettingsStore) -> bool {
     !matches!(store.get().welcome_mode, WelcomeMode::Off | WelcomeMode::Server)
 }
+
+// What the "?" after a row's name says (`Row::about`).
+
+const ABOUT_RECONNECT: &str = "Your terminal is a program running on the server. If the server has tmux, a program that keeps terminals running while nobody is connected, SSHeesh takes you back into the same one and nothing is lost. Without tmux, a dropped connection ends what was running, and you start a fresh terminal.";
+const ABOUT_IDLE: &str = "An idle terminal still holds a login on the server. With tmux on the server, a program that keeps terminals running while nobody is connected, SSHeesh can let that login go: your programs carry on there, and any key takes you back to them. Terminals on servers without tmux stay connected.";
+const ABOUT_COUNT_TYPING: &str = "On a slow connection, each letter you type travels to the server and back before it shows. This counts how often SSHeesh could have shown it at once instead, to learn whether that's worth building. It counts keys, never which ones.";
+const ABOUT_WELCOME: &str = "Many servers greet you with a message when you log in (often called the MOTD): notices from whoever runs it, updates waiting. SSHeesh's own welcome is a short look at the server instead: its system, memory and disk.";
+const ABOUT_PROGRAM_CLIPBOARD: &str = "Programs on the server can ask to put text on this computer's clipboard, as tmux and coding agents do when you copy inside them. Off, only what you copy yourself gets there.";
+const ABOUT_SSH_CONFIG: &str = "~/.ssh/config is a file on this computer where ssh keeps shortcuts to servers: a short name, the address, the user and the key to sign in with. SSHeesh reads it to list those servers, and never writes to it.";
+const ABOUT_TOR: &str = "Tor is a free network run by volunteers: each connection hops through three of its computers, so none of them sees both you and the server, and it's slower than going direct. Servers on your own network still connect directly. One reached through another server (a jump host) doesn't connect, and an ssh you type in This computer's terminal goes as typed.";
+const ABOUT_TOR_TYPING: &str = "Even encrypted, the gaps between your keystrokes can hint at what you type, a password included. Sending keys on an even beat leaves the network nothing to time.";
 
 const REPO: &str = "https://github.com/footprintsntrails/ssheesh";
 
@@ -581,6 +609,7 @@ fn build() -> Vec<Row> {
         Row::new("layout-ssh-config", Layout, "Servers from ~/.ssh/config", Buttons(&[("Choose…", Action::AddServer)]))
             .group("Servers")
             .hint("Pick which show up in the sidebar. Your config file isn't changed.")
+            .about("~/.ssh/config", ABOUT_SSH_CONFIG)
             .words("hidden hosts import config bring over 0.10"),
         Row::new(
             "layout-server-load",
@@ -785,6 +814,7 @@ fn build() -> Vec<Row> {
             };
             text.into()
         })
+        .about("reconnecting", ABOUT_RECONNECT)
         .saves(&["reconnectMode"])
         .words("reconnect disconnect auto ask network"),
         Row::new(
@@ -812,6 +842,7 @@ fn build() -> Vec<Row> {
                 "Terminals stay connected for as long as they're open.".into()
             }
         })
+        .about("disconnecting unused terminals", ABOUT_IDLE)
         .saves(&["idleSleep"])
         .words("idle afk sleep disconnect unused away tmux timeout"),
         Row::new(
@@ -822,6 +853,7 @@ fn build() -> Vec<Row> {
         )
         .group("Connection")
         .hint("A test for a possible feature. It keeps counts only, never what you type.")
+        .about("counting typing", ABOUT_COUNT_TYPING)
         .saves(&["countTyping"])
         .words("local echo predict latency lag slow tor delay test measure statistics"),
         Row::new(
@@ -843,6 +875,7 @@ fn build() -> Vec<Row> {
         )
         .group("Welcome")
         .hint("What a new terminal shows first. The server's own notices always show.")
+        .about("the welcome", ABOUT_WELCOME)
         .saves(&["welcomeMode"])
         .words("motd welcome banner logo login message greeting"),
         Row::new(
@@ -904,6 +937,7 @@ fn build() -> Vec<Row> {
             let keys = if on.mac() { "⌘C" } else { "Ctrl+Shift+C" };
             format!("Agents like OpenCode copy what you select inside them. If that fights with SSHeesh's own copying, choose 'Only with {keys}' above.")
         })
+        .about("programs copying", ABOUT_PROGRAM_CLIPBOARD)
         .adds(&["programClipboard"])
         .words("clipboard osc 52 tmux agent opencode claude copy program"),
         Row::new("term-hl-errors", Terminal, "Errors", Switch { get: |st| st.get().highlight_errors, set: |st, v| st.set(|s| s.highlight_errors = v) })
@@ -981,7 +1015,8 @@ fn build() -> Vec<Row> {
         .words("notification bell alert agent claude codex done attention"),
         // ------------------------------------------------------------------ Tor
         Row::new("tor-switch", Tor, "Connect through Tor", Control::Special(Special::TorSwitch))
-            .hint("Servers see a Tor address, not yours, and your provider can't see which servers you use. If Tor can't carry a connection, it isn't made. Servers on your own network connect directly; one behind a jump host doesn't connect; an ssh you type in This computer's terminal goes as typed.")
+            .hint("Servers see a Tor address, not yours, and your provider can't see which servers you use. If Tor can't carry a connection, it isn't made.")
+            .about("Tor", ABOUT_TOR)
             .words("onion anonymous proxy hide ip address"),
         Row::new(
             "tor-typing",
@@ -990,6 +1025,7 @@ fn build() -> Vec<Row> {
             Switch { get: |st| st.get().tor_hide_typing, set: |st, v| st.set(|s| s.tor_hide_typing = v) },
         )
         .hint("Sends keys on a steady beat, so the network can't time your typing. Keys take about twice as long through Tor. For terminals opened from now on.")
+        .about("hiding your typing rhythm", ABOUT_TOR_TYPING)
         .saves(&["torHideTyping"])
         .words("keystroke timing obfuscation rhythm password"),
         // ------------------------------------------------------------------ Updates
@@ -1074,6 +1110,22 @@ mod tests {
             assert_eq!(added.iter().filter(|k| **k == key).count(), 1, "{key}");
         }
         assert_eq!(added.len(), more.len());
+    }
+
+    #[test]
+    fn a_rows_about_is_a_few_plain_sentences_where_a_newcomer_would_stop() {
+        let with: Vec<&str> = rows().iter().filter(|r| r.about.is_some()).map(|r| r.key).collect();
+        assert_eq!(with, ["layout-ssh-config", "term-reconnect", "term-idle", "term-count-typing", "term-welcome", "term-program-clipboard", "tor-switch", "tor-typing"]);
+        for r in rows() {
+            let Some(About { text: about, .. }) = r.about else { continue };
+            let sentences = about.matches(". ").count() + 1;
+            assert!(sentences <= 3 && about.len() <= 360 && about.ends_with('.'), "{}: {sentences} sentences, {} bytes", r.key, about.len());
+            // It explains; it doesn't repeat the line under the name.
+            assert!(r.help(&store(), Keyboard::Other).is_none_or(|h| h != about), "{}", r.key);
+        }
+        // Tor's row is shorter for it: what Tor is and where it doesn't reach went behind the "?".
+        assert!(row("tor-switch").unwrap().help(&store(), Keyboard::Other).unwrap().len() < 160);
+        assert!(row("tor-switch").unwrap().about.unwrap().text.contains("jump host"));
     }
 
     #[test]

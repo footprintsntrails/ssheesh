@@ -1529,3 +1529,22 @@ fn stats_has_graphs_meters_and_programs_in_both_appearances() {
         assert_eq!(at(&px, 1270, 790), page, "{theme}");
     }
 }
+
+#[test]
+fn a_question_mark_opens_its_explanation_under_it_in_both_appearances() {
+    for (theme, pop, _) in LOOKS {
+        // Settings → Tor, and the pointer resting on the "?" after "Connect through Tor".
+        let script = json!([tap(0.3, "settings-gear"), tap(0.8, "nav-tor"), { "t": 1.3, "type": "move", "key": "tor-switch-about" }, end(2.4)]);
+        let Some(run) = run(&format!("help-tip-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
+        assert_eq!(run.label("tor-switch-about"), "About Tor", "{theme}");
+        assert!(run.tree_text.contains("Tor is a free network run by volunteers"), "{theme}: the card's words aren't in the tree");
+        // The card hangs under its "?", in the popover's colour, inside the window.
+        let ([mx, my, mw, mh], [cx, cy, cw, ch]) = (run.rect("tor-switch-about"), run.rect("help-card"));
+        assert!(cy >= my + mh && cy <= my + mh + 8.0, "{theme}: the card at {cy}, the ? ends at {}", my + mh);
+        assert!(cx <= mx + mw / 2.0 && cx + cw >= mx + mw / 2.0, "{theme}: the card isn't under the ?");
+        assert!(cx >= 8.0 && cx + cw <= 1272.0 && cy + ch <= 792.0, "{theme}");
+        assert!(cw <= 300.0, "{theme}: {cw} wide");
+        let px = run.pixels();
+        assert_eq!(at(&px, (cx + 6.0) as u32, (cy + ch / 2.0) as u32), pop, "{theme}: the card's fill");
+    }
+}

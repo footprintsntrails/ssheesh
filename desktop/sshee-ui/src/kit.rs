@@ -20,6 +20,7 @@ pub mod dialog;
 pub mod field;
 pub mod form;
 pub mod graph;
+pub mod help;
 pub mod keycap;
 pub mod list;
 pub mod menu;

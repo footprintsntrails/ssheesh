@@ -306,7 +306,13 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
     // The saved ones.
     let list = st.tunnels.of(&host);
     let adding = st.editing == Some(Editing::New);
-    let mut heading = row().w_full().items_center().child(text("Saved tunnels").font(theme::GROUP).color(t.l2).single_line()).child(rune::spacer());
+    let mut heading = row()
+        .w_full()
+        .gap(2.0)
+        .items_center()
+        .child(text("Saved tunnels").font(theme::GROUP).color(t.l2).single_line())
+        .child(super::help::tip(s, t, "tunnels-saved-about", "saved tunnels", super::help::SAVED_TUNNELS))
+        .child(rune::spacer());
     if !adding {
         heading = heading.child(
             row()
@@ -664,15 +670,15 @@ fn form_view(s: &Shell, t: &'static Theme) -> El {
     let form = st.form();
     let kinds: Vec<&str> = Kind::ALL.iter().map(|k| k.label()).collect();
     let picked = Kind::ALL.iter().position(|k| *k == st.kind);
-    let mut body = col().key("tunnels-form").w_full().px(14.0).py(14.0).gap(12.0).radius(theme::RADIUS_GROUP).fill(t.group).border(1.0, t.ring.alpha(0.5)).child(
-        segmented(t, "What it does", &kinds, picked, true, |s: &mut Shell, i, tx: &mut Tx| {
-            let st = &mut s.screens.tunnels;
-            st.kind = Kind::ALL[i];
-            st.error = None;
-            tx.instant();
-        })
-        .key("tun-kind"),
-    );
+    let kind = segmented(t, "What it does", &kinds, picked, true, |s: &mut Shell, i, tx: &mut Tx| {
+        let st = &mut s.screens.tunnels;
+        st.kind = Kind::ALL[i];
+        st.error = None;
+        tx.instant();
+    })
+    .key("tun-kind");
+    let kind = row().w_full().gap(4.0).items_center().child(kind).child(super::help::tip(s, t, "tun-kind-about", "the kinds of tunnel", super::help::TUNNEL_KINDS));
+    let mut body = col().key("tunnels-form").w_full().px(14.0).py(14.0).gap(12.0).radius(theme::RADIUS_GROUP).fill(t.group).border(1.0, t.ring.alpha(0.5)).child(kind);
     let follows = form.local_text();
     let remote_port = code_input(t, &st.remote_port, "3000").key("tun-remote-port").on_edit(|s: &mut Shell| &mut s.screens.tunnels.remote_port).on_submit(|s: &mut Shell, tx| s.tunnel_save(tx));
     let local_hint = if follows.is_empty() { if st.kind == Kind::Socks { "1080".to_owned() } else { "3000".to_owned() } } else { follows.clone() };

@@ -570,6 +570,26 @@ fn the_window_closing_closes_connections_but_ends_no_shell() {
     }
 }
 
+#[test]
+fn the_tunnels_dialog_explains_saved_tunnels_and_the_kinds_behind_question_marks() {
+    use crate::screens::help::{heard, SAVED_TUNNELS, TUNNEL_KINDS};
+    let mut w = linux();
+    w.click("server-1");
+    w.rt.update(|s, tx| s.open_tunnels(WEB, tx));
+    w.settle();
+    assert!(w.rt.find("tunnels-saved-about").is_some());
+    assert_eq!(heard(&w.rt, "saved tunnels").as_deref(), Some(SAVED_TUNNELS));
+    w.click("tunnels-add");
+    assert!(w.rt.find("tun-kind-about").is_some());
+    assert_eq!(heard(&w.rt, "the kinds of tunnel").as_deref(), Some(TUNNEL_KINDS));
+    // Over the dialog, its card opens under it and Esc closes the card, not the dialog.
+    w.click("tun-kind-about");
+    let ([_, my, _, mh], [_, cy, ..]) = (w.rect("tun-kind-about").unwrap(), w.rect("help-card").expect("the card opened"));
+    assert!(cy >= my + mh, "{cy} under {my}+{mh}");
+    w.key(Key::Escape, "");
+    assert!(w.rt.find("help-card").is_none() && w.rt.find("tunnels-dialog").is_some());
+}
+
 /// What came after the first window: find, links, scrolling, the row of tabs, side by side.
 mod more;
 

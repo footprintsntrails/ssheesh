@@ -13,7 +13,7 @@ use sshee_term::engine::Color as TermColor;
 use super::{keyboard, TorCommand};
 use crate::icons::{icon, logo, Icon};
 use crate::kit::field::{code_input, field, input};
-use crate::kit::form::{form_group, form_heading, form_note, form_row, form_row_stacked, form_titled, RowText};
+use crate::kit::form::{form_group, form_heading, form_note, form_row_stacked_with, form_row_with, form_titled, RowText};
 use crate::kit::popup::{popup_button, popup_button_max};
 use crate::kit::push::{icon_button, push_button, toggle_button, Push};
 use crate::kit::segmented::segmented;
@@ -26,6 +26,11 @@ use crate::theme::{self, Theme};
 /// The key of a row's control: what a pop-up menu hangs under, and what a test clicks.
 pub(super) fn control_key(row: &str) -> String {
     format!("{row}-control")
+}
+
+/// The key of the "?" after a row's name.
+pub(crate) fn about_key(row: &str) -> String {
+    format!("{row}-about")
 }
 
 /// The six highlight colours, in 0.10's order, with their place in a terminal's palette.
@@ -551,14 +556,16 @@ fn boxed(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
         Status::Later(why) => Some(why),
     };
     let words = RowText { label: r.label, help: help.as_deref(), later };
+    // What a newcomer may not know: a "?" after the name.
+    let tip = r.about.map(|about| crate::screens::help::tip(s, t, about_key(r.key), about.name, about.text));
     let mut e = match wide(s, t, r) {
-        Some(control) => form_row_stacked(t, words, control),
+        Some(control) => form_row_stacked_with(t, words, tip, control),
         // A control wider than two fifths of the row goes under the words, which then have the
         // row's whole width; a pop-up there shows its whole value.
         None if control_width(s, r).is_some_and(|w| w > s.screens.settings.row_width() * 0.4) => {
-            form_row_stacked(t, words, row().w_full().child(control(s, t, r)))
+            form_row_stacked_with(t, words, tip, row().w_full().child(control(s, t, r)))
         }
-        None => form_row(t, words, control(s, t, r)),
+        None => form_row_with(t, words, tip, control(s, t, r)),
     };
     if s.screens.settings.found.as_deref() == Some(r.key) {
         // Where a search led.

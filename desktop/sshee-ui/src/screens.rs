@@ -15,6 +15,7 @@ pub mod checkup;
 pub mod containers;
 pub mod disk;
 pub mod files;
+pub mod help;
 pub mod home;
 pub mod palette;
 pub mod recipes;
@@ -98,6 +99,8 @@ pub struct States {
     pub vitals_menu: Option<[f32; 2]>,
     /// Containers under the servers in the sidebar's list, and a container's menu there.
     pub rail_tree: rail_tree::State,
+    /// The card a "?" opened (`help`).
+    pub tip: Option<crate::kit::help::Tip>,
 }
 
 impl States {
@@ -143,6 +146,7 @@ impl States {
         self.tunnels.open = None;
         self.vitals_menu = None;
         self.rail_tree.menu = None;
+        self.tip = None;
     }
 }
 
