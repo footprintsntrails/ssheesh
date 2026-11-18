@@ -322,6 +322,10 @@ pub struct Options {
     pub native_title_bar: bool,
     /// Where the window was when it last closed (`place.rs`): it opens there.
     pub place: Option<sshee_app::windows::Placement>,
+    /// The system the terminal's "System" font is picked for (SF Mono on a Mac, Cascadia
+    /// Mono on Windows). Not `frame`: the Windows title bar draws a Linux frame. The crate's
+    /// own tests lay terminals out with the bundled font on every system.
+    pub platform: sshee_app::model::Platform,
 }
 
 impl Default for Options {
@@ -335,6 +339,7 @@ impl Default for Options {
             build: Default::default(),
             native_title_bar: false,
             place: None,
+            platform: if cfg!(test) { sshee_app::model::Platform::Linux } else { sshee_app::model::Platform::current() },
         }
     }
 }

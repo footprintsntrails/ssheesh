@@ -714,10 +714,12 @@ fn in_the_palettes_field_ctrl_shift_z_redoes_and_reopens_no_tab() {
     let closed = w.rt.state.bench.closed().len();
     w.key(Key::Command('l'), "cs");
     w.type_text("uptime");
-    w.key(Key::Command('z'), "c");
+    // A text field's undo is the system's: ⌘Z on a Mac, Ctrl+Z elsewhere.
+    let undo = if cfg!(target_os = "macos") { "m" } else { "c" };
+    w.key(Key::Command('z'), undo);
     let undone = w.rt.state.screens.palette.query.text.clone();
     assert_ne!(undone, "uptime", "Ctrl+Z undid nothing");
-    w.key(Key::Command('z'), "cs");
+    w.key(Key::Command('z'), &format!("{undo}s"));
     assert_eq!(w.rt.state.screens.palette.query.text, "uptime");
     assert!(w.rt.state.screens.palette.open);
     assert_eq!(w.rt.state.bench.closed().len(), closed);

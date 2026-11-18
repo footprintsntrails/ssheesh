@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use rune::Tx;
-use sshee_app::model::{CursorStyle, EnvLabel, HighlightColor, HighlightRule, Platform, Side};
+use sshee_app::model::{CursorStyle, EnvLabel, HighlightColor, HighlightRule, Side};
 use sshee_app::settings_store::catalog::Section;
 use sshee_app::settings_store::looks;
 use sshee_app::settings_store::schemes::{self, Appearance, Resolved};
@@ -72,7 +72,7 @@ impl Shell {
         let zoom = ui_zoom(&self.settings);
         pane.font_size = (s.terminal_font_size as f32).clamp(6.0, 40.0) / zoom;
         pane.padding = (s.terminal_padding as f32).clamp(0.0, 28.0) / zoom;
-        pane.family = schemes::terminal_family(&s.terminal_font, Platform::current());
+        pane.family = schemes::terminal_family(&s.terminal_font, self.options.platform);
         pane.line_height = (s.terminal_line_height as f32).clamp(1.0, 2.0);
         pane.cursor_shape = match s.cursor_style {
             CursorStyle::Block => CursorShape::Block,
