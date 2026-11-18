@@ -648,7 +648,7 @@ fn a_right_click_on_a_server_opens_its_menu() {
     let mut w = Window::busy();
     w.right_click("server-2");
     let tree = w.tree();
-    for said in ["New terminal", "Files", "Terminal and files side by side", "Stats", "Containers", "Tunnels…", "Free up disk space…", "Copy address", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
+    for said in ["New terminal", "Files", "Terminal and files side by side", "Stats", "Containers", "Web apps and tunnels…", "Free up disk space…", "Copy address", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
         assert!(tree.contains(said), "{said} isn't in the menu: {tree}");
     }
     // Arrows and Return: the second row is Files.

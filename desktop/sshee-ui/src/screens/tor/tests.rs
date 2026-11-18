@@ -251,7 +251,7 @@ fn a_tor_that_cant_start_says_why_and_offers_a_fresh_start() {
 fn a_servers_tunnels_are_added_switched_and_removed() {
     let mut w = Window::open();
     w.right_click("server-1");
-    assert!(w.tree().contains("Tunnels…"));
+    assert!(w.tree().contains("Web apps and tunnels…"));
     w.click("sm-5");
     assert!(w.has("tunnels-dialog"));
     // It looks at what the server runs; nothing saved yet.

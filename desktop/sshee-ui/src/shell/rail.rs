@@ -236,7 +236,10 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
     if new > 0 {
         let words = format!("{new} new in ~/.ssh/config · Review");
         let note = if wide {
-            list_row(t, icon(Icon::Doc, theme::ICON_RAIL, list_ink(t, false)), &words, false)
+            // The count and "Review" apart, so a narrow sidebar cuts the count's words, never "Review".
+            list_row(t, icon(Icon::Doc, theme::ICON_RAIL, list_ink(t, false)), &format!("{new} new in ~/.ssh/config"), false)
+                .label(words.clone())
+                .child(text("Review").font(theme::NOTE).color(t.l2).single_line())
         } else {
             rail_button(t, Icon::Doc, &words, RailState::Plain, false).child(
                 el().absolute(theme::RAIL_BUTTON - 15.0, 1.0).h(14.0).min_w(14.0).px(3.0).radius(7.0).fill(t.blue).items_center().justify_center().a11y_hidden().child(
