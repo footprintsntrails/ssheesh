@@ -511,7 +511,7 @@ fn all_rows(ctx: &Context, query: &Query) -> Vec<Row> {
     let tor = if bench.tor() == Tor::Off { "Connect through Tor" } else { "Turn off Tor" };
     rows.push(row(Group::Window, Glyph::Tor, tor, Action::Tor).words("tor onion anonymous hide ip address vpn proxy privacy"));
     rows.push(row(Group::Window, Glyph::Agent, "Agents at work", Action::Agents).keys(label(Shortcut::Agents)).words("agents claude codex opencode waiting needs you"));
-    rows.push(row(Group::Window, Glyph::Plus, "Add server…", Action::AddServer).keys(label(Shortcut::AddServer)).words("new host import xpipe ssh config"));
+    rows.push(row(Group::Window, Glyph::Plus, "Add server…", Action::AddServer).keys(label(Shortcut::AddServer)).words("new host import xpipe ssh config putty kitty winscp mobaxterm filezilla securecrt remmina"));
     rows.push(row(Group::Window, Glyph::Terminal, "Snippets", Action::Snippets).words("snippets saved commands"));
     rows.push(row(Group::Window, Glyph::Plus, "New snippet…", Action::NewSnippet(String::new())).words("save command snippet add"));
 

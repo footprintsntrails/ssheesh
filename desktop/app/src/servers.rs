@@ -6,8 +6,9 @@
 //! 0.10's list is never written and never used as this copy's own. It is read to offer
 //! "Bring over your servers from 0.10": each server you tick is added here under a new id,
 //! with the label, icon and colour 0.10 kept for it. 0.10's saved passwords stay in 0.10's
-//! keychain; a server that needs one asks the first time. XPipe's vault and `~/.ssh/config`
-//! are read the same way: read, offered, never changed.
+//! keychain; a server that needs one asks the first time. XPipe's vault, other SSH apps' saved
+//! sessions (PuTTY, WinSCP… `sshee_core::other_apps`) and `~/.ssh/config` are read the same
+//! way: read, offered, never changed.
 //!
 //! Everything here reads files or asks the keychain, so the window never calls it: the
 //! backend runs [`ServerStore::handle`] on a thread and sends the answer through `Remote`.
@@ -20,7 +21,8 @@ use indexmap::IndexMap;
 use sshee_app::labels::{Listed, Looks};
 use sshee_app::legacy::APP_IDENTIFIER;
 use sshee_app::model::Labels;
-use sshee_app::servers::{forgot_note, host_id, imported_note, old_passwords_note, Answer, Ask, Candidate, NewServer, Source, Sources};
+use sshee_app::servers::{forgot_note, host_id, imported_note, old_passwords_note, Answer, App, AppOffer, Ask, Candidate, NewServer, Source, Sources};
+use sshee_core::other_apps;
 use sshee_app::workbench::{Server, ServerKey};
 use sshee_core::secrets::{PasswordStore, Secret};
 use sshee_core::{AppIdentity, Host, HostSource, HostStore, NewHost};
@@ -70,6 +72,8 @@ pub struct Places {
     pub old_dir: Option<PathBuf>,
     /// XPipe's vaults. Only ever read.
     pub xpipe: Vec<PathBuf>,
+    /// Where other SSH apps keep their sessions (and the registry, on Windows). Only ever read.
+    pub apps: other_apps::Places,
     /// The labels 0.10 kept (slow: it copies a database to read it).
     pub old_labels: Box<dyn Fn() -> Option<Labels> + Send>,
 }
@@ -79,7 +83,7 @@ impl Places {
     /// own (no home folder) keeps its list for this run only, in a folder that goes with it.
     pub fn of(identity: &AppIdentity, ssh_config: Option<PathBuf>) -> Places {
         let dir = identity.dir().map(Path::to_owned).unwrap_or_else(|| std::env::temp_dir().join(format!("sshee-preview-{}", std::process::id())));
-        Places { dir, ssh_config, old_dir: dirs::data_dir().map(|d| d.join(APP_IDENTIFIER)), xpipe: sshee_core::xpipe::vaults(), old_labels: Box::new(labels_of_0_10) }
+        Places { dir, ssh_config, old_dir: dirs::data_dir().map(|d| d.join(APP_IDENTIFIER)), xpipe: sshee_core::xpipe::vaults(), apps: other_apps::Places::here(), old_labels: Box::new(labels_of_0_10) }
     }
 }
 
@@ -134,6 +138,19 @@ pub struct ServerStore {
 }
 
 /// `user@host`, and `:port` when it isn't 22 (0.10's `hostAddress`).
+/// The window's name for an app core reads.
+fn app_of(app: other_apps::App) -> App {
+    match app {
+        other_apps::App::Putty => App::Putty,
+        other_apps::App::Kitty => App::Kitty,
+        other_apps::App::WinScp => App::WinScp,
+        other_apps::App::MobaXterm => App::MobaXterm,
+        other_apps::App::FileZilla => App::FileZilla,
+        other_apps::App::SecureCrt => App::SecureCrt,
+        other_apps::App::Remmina => App::Remmina,
+    }
+}
+
 fn address(h: &Host) -> String {
     let user = h.user.as_deref().map(|u| format!("{u}@")).unwrap_or_default();
     let port = h.port.filter(|p| *p != 22).map(|p| format!(":{p}")).unwrap_or_default();
@@ -298,8 +315,26 @@ impl ServerStore {
             xpipe_locked: scan.locked,
             xpipe_through_jump: scan.through_jump,
             old: self.old_candidates(&mine),
+            apps: self.app_offers(&mine),
             old_passwords: self.old_passwords().len(),
         }
+    }
+
+    /// What the other SSH apps hold that isn't here yet (by address).
+    fn app_offers(&self, mine: &[Host]) -> Vec<AppOffer> {
+        other_apps::scan_all(&self.places.apps)
+            .into_iter()
+            .map(|(app, scan)| {
+                let found = scan.servers.len();
+                let servers: Vec<Candidate> = scan
+                    .servers
+                    .into_iter()
+                    .filter(|x| !mine.iter().any(|m| address(m) == x.address))
+                    .map(|x| Candidate { id: x.address.clone(), name: x.name, address: x.address, identity_file: x.identity_file, had_password: x.had_password, picked: true })
+                    .collect();
+                AppOffer { app: app_of(app), here: found - servers.len(), servers, through_jump: scan.through_jump, ppk_keys: scan.ppk_keys }
+            })
+            .collect()
     }
 
     /// Adds one server to this copy's list.
@@ -344,6 +379,22 @@ impl ServerStore {
             Source::Xpipe => {
                 let (mut added, mut failed, mut with_password) = (0, Vec::new(), 0);
                 for x in sshee_core::xpipe::scan(&self.places.xpipe).servers.into_iter().filter(|x| picks.contains(&x.address)) {
+                    let new = NewServer { name: Some(x.name.clone()), address: x.address, identity_file: x.identity_file, ..NewServer::default() };
+                    match self.add(new, None) {
+                        Ok(_) => {
+                            added += 1;
+                            with_password += usize::from(x.had_password);
+                        }
+                        Err(_) => failed.push(x.name),
+                    }
+                }
+                Ok((imported_note(source, added, &failed, with_password), 0))
+            }
+            Source::App(app) => {
+                let (mut added, mut failed, mut with_password) = (0, Vec::new(), 0);
+                let theirs = other_apps::App::ALL.into_iter().find(|&a| app_of(a) == app).ok_or("That app isn't one SSHeesh reads.")?;
+                for x in other_apps::scan(theirs, &self.places.apps).servers.into_iter().filter(|x| picks.contains(&x.address)) {
+                    // Never a password: a server that needs one asks the first time.
                     let new = NewServer { name: Some(x.name.clone()), address: x.address, identity_file: x.identity_file, ..NewServer::default() };
                     match self.add(new, None) {
                         Ok(_) => {
@@ -629,6 +680,7 @@ mod tests {
                 ssh_config: Some(self.root.join("ssh_config")),
                 old_dir: Some(self.root.join("old")),
                 xpipe: vec![self.root.join("xpipe")],
+                apps: other_apps::Places::under(&self.root.join("home")),
                 old_labels: Box::new(|| {
                     let mut labels = Labels::default();
                     labels.env.insert("saved:old-db".into(), EnvLabel::Prod);
@@ -789,6 +841,35 @@ mod tests {
         assert_eq!(w.names(&mut store), ["mail"]);
         let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
         assert_eq!((sources.xpipe.len(), sources.xpipe_here), (0, 1));
+    }
+
+    #[test]
+    fn other_apps_servers_are_offered_once_and_added_without_their_passwords() {
+        let w = World::new("apps");
+        let put = |rel: &str, text: &str| {
+            let path = w.root.join("home").join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        // web-7731 is in the ssh config already, by the same address.
+        put(".putty/sessions/web-7731", "HostName=203.0.113.17\nUserName=deploy\n");
+        put(".putty/sessions/mail-7731", "HostName=203.0.113.25\nUserName=root\nPortNumber=2222\n");
+        put(".config/WinSCP.ini", "[Sessions\\files-7731]\nHostName=198.51.100.25\nUserName=ops\nPassword=A35C\n");
+        let mut store = w.store();
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        let putty = sources.app(App::Putty).unwrap();
+        assert_eq!((putty.servers.len(), putty.here), (1, 1));
+        assert_eq!(sources.offers().iter().filter(|(s, _)| matches!(s, Source::App(_))).count(), 2);
+        let picks = vec!["ops@198.51.100.25".to_owned()];
+        let answer = store.handle(Ask::Import { source: Source::App(App::WinScp), picks: picks.clone(), offered: picks });
+        assert_eq!(
+            answer,
+            Answer::Imported { source: Source::App(App::WinScp), note: "Added 1 server from WinSCP. 1 server will ask for a password the first time.".into(), old_passwords: 0 }
+        );
+        // Its password stayed in WinSCP: nothing in the keychain.
+        assert!(w.keychain.kept.lock().unwrap().is_empty());
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        assert!(sources.app(App::WinScp).is_some_and(|o| o.servers.is_empty() && o.here == 1));
     }
 
     #[test]

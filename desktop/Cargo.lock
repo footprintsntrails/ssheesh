@@ -5945,6 +5945,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows",
+ "windows-registry",
  "zeroize",
  "zip",
  "zstd",

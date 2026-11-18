@@ -20,6 +20,7 @@ pub mod identity;
 pub mod keys;
 pub mod media;
 pub mod metrics;
+pub mod other_apps;
 pub mod scrub;
 pub mod secrets;
 pub mod session;

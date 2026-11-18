@@ -49,3 +49,6 @@ libc = "0.2"
 # window; free disk space for the edit folder.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem"] }
+# Other apps' saved sessions (PuTTY, KiTTY, WinSCP), read from the registry to import them
+# (other_apps). Already in both lock files through the Windows crates.
+windows-registry = "0.6"

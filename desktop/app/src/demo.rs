@@ -20,7 +20,7 @@ use serde_json::Value;
 use sshee_app::labels::{Listed, Looks};
 use sshee_app::model::{EnvLabel, Settings};
 use sshee_app::settings_store::SettingsStore;
-use sshee_app::servers::{Ask, Book, Candidate, KeyAgent, LocalAuth, LocalKey, Sources};
+use sshee_app::servers::{App, AppOffer, Ask, Book, Candidate, KeyAgent, LocalAuth, LocalKey, Sources};
 use sshee_app::workbench::{Open, Server, Tab, TabKind, Tor, Vitals, Workbench};
 use sshee_ui::screens::settings::TorCommand;
 use sshee_ui::shell::{Backend, Remote};
@@ -40,7 +40,7 @@ const SHOP: &str = include_str!("../fixtures/shop.json");
 const AGENT: &str = include_str!("../fixtures/agent.json");
 
 /// The made-up list of servers: four in the sidebar, two more in a made-up `~/.ssh/config`
-/// not picked yet, two XPipe would offer and one 0.10 would. All in memory.
+/// not picked yet, two XPipe would offer, two PuTTY would and one 0.10 would. All in memory.
 pub fn book() -> Book {
     let host = |id: &str, name: &str, address: &str, from_config: bool| Listed { id: id.into(), name: name.into(), address: address.into(), from_config };
     let hosts = vec![
@@ -61,6 +61,13 @@ pub fn book() -> Book {
         xpipe: vec![offer("mail-7731", "root@203.0.113.25", true), offer("git-7731", "git@203.0.113.26:2200", false)],
         xpipe_through_jump: 1,
         old: vec![offer("metrics", "ops@203.0.113.60", false)],
+        apps: vec![AppOffer {
+            app: App::Putty,
+            servers: vec![offer("files-7731", "ops@198.51.100.70", false), offer("vpn-7731", "admin@198.51.100.71:2222", true)],
+            here: 1,
+            through_jump: 0,
+            ppk_keys: 1,
+        }],
         ..Sources::default()
     };
     let mut book = Book::new(hosts, looks, sources);
