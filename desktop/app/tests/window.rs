@@ -1583,3 +1583,145 @@ fn a_question_mark_opens_its_explanation_under_it_in_both_appearances() {
         assert_eq!(at(&px, (cx + 6.0) as u32, (cy + ch / 2.0) as u32), pop, "{theme}: the card's fill");
     }
 }
+
+/// A real display of its own (Xvfb), driven with xdotool and seen with ImageMagick's `import`:
+/// for what a headless run can't show, as Rune opens no second window there. `None` (after
+/// saying why) where those aren't installed or there's nothing to draw with.
+struct Display {
+    xvfb: std::process::Child,
+    name: String,
+}
+
+impl Display {
+    fn start(test: &str) -> Option<Display> {
+        let have = |tool: &str| Command::new("sh").arg("-c").arg(format!("command -v {tool}")).output().is_ok_and(|o| o.status.success());
+        if !cfg!(target_os = "linux") || !vulkan() || !have("Xvfb") || !have("xdotool") || !have("import") {
+            eprintln!("{test}: skipped, needs Linux with Xvfb, xdotool, ImageMagick and Vulkan");
+            return None;
+        }
+        // Xvfb picks a free display and says which on the pipe.
+        let mut xvfb = Command::new("Xvfb")
+            .args(["-displayfd", "1", "-screen", "0", "1600x1000x24", "-nolisten", "tcp"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        let mut out = xvfb.stdout.take()?;
+        let (mut number, mut byte) = (String::new(), [0u8; 1]);
+        while std::io::Read::read(&mut out, &mut byte).ok()? == 1 && byte[0] != b'\n' {
+            number.push(byte[0] as char);
+        }
+        Some(Display { xvfb, name: format!(":{}", number.trim()) })
+    }
+
+    fn xdotool(&self, args: &[&str]) -> String {
+        let out = Command::new("xdotool").env("DISPLAY", &self.name).args(args).output().expect("xdotool runs");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Waits up to `secs` for `n` of the app's windows on screen; them, oldest first.
+    fn windows(&self, n: usize, secs: u64) -> Vec<String> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            let found: Vec<String> = self.xdotool(&["search", "--onlyvisible", "--name", "^SSHeesh Preview$"]).split_whitespace().map(str::to_owned).collect();
+            if found.len() >= n || std::time::Instant::now() > until {
+                return found;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
+
+    /// What a window shows, as RGBA bytes.
+    fn picture(&self, window: &str, path: &Path) -> (u32, u32, Vec<u8>) {
+        let done = Command::new("import").env("DISPLAY", &self.name).args(["-window", window]).arg(format!("png32:{}", path.display())).status().expect("import runs");
+        assert!(done.success(), "no picture of {window}");
+        let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        buf.truncate(info.buffer_size());
+        (info.width, info.height, buf)
+    }
+}
+
+impl Drop for Display {
+    fn drop(&mut self) {
+        let _ = self.xvfb.kill();
+        let _ = self.xvfb.wait();
+    }
+}
+
+/// The app on that display, ended with its test.
+struct Running(std::process::Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn shift_click_on_a_server_opens_it_in_a_window_of_its_own() {
+    // Where the sidebar's servers and the terminal are: the same window drawn headless.
+    let Some(layout) = run("new-window-layout", &["--demo"], None) else { return };
+    assert_eq!((layout.label("server-1"), layout.label("server-4")), ("web-7731".into(), "db-main".into()));
+    let Some(display) = Display::start("shift_click_on_a_server_opens_it_in_a_window_of_its_own") else { return };
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("window").join("new-window");
+    let _ = std::fs::remove_dir_all(&dir);
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_ssheesh-preview"));
+    cmd.arg("--demo").env("DISPLAY", &display.name).env_remove("WAYLAND_DISPLAY");
+    cmd.env("HOME", &home).env("XDG_DATA_HOME", home.join("data")).env("XDG_CONFIG_HOME", home.join("config")).env("SSHEE_PREVIEW_DIR", home.join(".sshee-preview"));
+    cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if std::env::var_os("VK_ICD_FILENAMES").is_none() && Path::new(LVP).exists() {
+        cmd.env("VK_ICD_FILENAMES", LVP);
+    }
+    let _app = Running(cmd.spawn().expect("the preview starts"));
+    let first = display.windows(1, 90);
+    assert_eq!(first.len(), 1, "the window didn't open");
+    let main = first[0].clone();
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    // A server's button, a little inside its corner (its fill, away from its icon).
+    let fill = |picture: &(u32, u32, Vec<u8>), key: &str| {
+        let [x, y, _, _] = layout.rect(key);
+        at(picture, x as u32 + 3, y as u32 + 3)
+    };
+    let before = display.picture(&main, &dir.join("main-before.png"));
+    assert_ne!(fill(&before, "server-1"), fill(&before, "server-4"), "web-7731 is the server on screen");
+
+    // Shift+click on db-main, Shift held as a hand holds it: the window takes a change of the
+    // keys held at its next frame, and a frame drawn in software can take most of a second.
+    let [x, y, w, h] = layout.rect("server-4");
+    display.xdotool(&["windowfocus", "--sync", &main]);
+    display.xdotool(&["mousemove", "--window", &main, &((x + w / 2.0) as u32).to_string(), &((y + h / 2.0) as u32).to_string()]);
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(500));
+    pause();
+    display.xdotool(&["keydown", "shift"]);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    display.xdotool(&["click", "1"]);
+    pause();
+    display.xdotool(&["keyup", "shift"]);
+    let both = display.windows(2, 60);
+    if both.len() < 2 {
+        let _ = Command::new("import").env("DISPLAY", &display.name).args(["-window", "root"]).arg(dir.join("fail.png")).status();
+    }
+    assert_eq!(both.len(), 2, "no second window opened");
+    let second = both.iter().find(|w| **w != main).unwrap().clone();
+    // Beside the first, clear of its sidebar, and the pointer away from both.
+    display.xdotool(&["windowmove", &second, "320", "200"]);
+    display.xdotool(&["mousemove", "1595", "5"]);
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    let after = display.picture(&main, &dir.join("main-after.png"));
+    let other = display.picture(&second, &dir.join("second.png"));
+    // The first window is still on web-7731; the new one is on db-main, picked as web-7731 is
+    // in the first.
+    assert_eq!((fill(&after, "server-1"), fill(&after, "server-4")), (fill(&before, "server-1"), fill(&before, "server-4")), "the first window changed");
+    assert_eq!(fill(&other, "server-4"), fill(&before, "server-1"), "db-main isn't the server on screen in the new window");
+    assert_eq!(fill(&other, "server-1"), fill(&before, "server-4"), "web-7731 is picked in the new window");
+    // Its terminal isn't the first window's: db-main's prompt, not web-7731's log.
+    let [tx, ty, tw, th] = layout.rect("term");
+    let rows = |p: &(u32, u32, Vec<u8>)| (ty as u32 + 8..(ty + th.min(200.0)) as u32).map(|y| (tx as u32 + 8..(tx + tw.min(600.0)) as u32).map(|x| at(p, x, y)).collect::<String>()).collect::<Vec<_>>();
+    assert_ne!(rows(&other), rows(&after), "the new window shows the first window's terminal");
+}
