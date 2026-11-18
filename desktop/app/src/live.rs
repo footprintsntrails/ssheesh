@@ -209,6 +209,20 @@ pub fn tor_status(status: &TorStatus) -> sshee_app::tor::Status {
     }
 }
 
+/// After Settings' Tor command: whether what's connected moves to the new way, and whether a
+/// toast says so. Connections follow the way ssh now goes (`was_on` → `now_on`), even when
+/// the switch half failed (Tor on but not noted for next time, or Tor broken: nothing then
+/// goes around it); the toast only follows a switch that went through, as the warning tells
+/// the rest.
+fn tor_moved(command: TorCommand, was_on: bool, now_on: bool, ok: bool) -> (bool, bool) {
+    let moved = match command {
+        TorCommand::On | TorCommand::Off => ok || was_on != now_on,
+        TorCommand::NewRoutes => ok,
+        TorCommand::StartAfresh => false,
+    };
+    (moved, moved && ok)
+}
+
 /// How often the round trip through Tor is looked at. Nothing is sent to measure it:
 /// sshee-core times each route as a server picks it.
 const LATENCY_LOOK: std::time::Duration = std::time::Duration::from_secs(2);
@@ -430,7 +444,7 @@ impl Backend for LiveBackend {
         let (manager, env, remote) = (self.manager.clone(), self.env.clone(), self.remote.clone());
         let reroute_tunnels = self.tunnels.rerouter();
         let spawned = std::thread::Builder::new().name("tor-command".into()).spawn(move || {
-            let switched = matches!(command, TorCommand::On | TorCommand::Off | TorCommand::NewRoutes);
+            let was_on = sshee_core::tor::is_on();
             let done = match command {
                 TorCommand::On => sshee_core::tor::set_on(true, ports),
                 TorCommand::Off => sshee_core::tor::set_on(false, ports),
@@ -443,6 +457,7 @@ impl Backend for LiveBackend {
             if let Err(e) = &done {
                 eprintln!("ssheesh-preview: Tor: {e}");
             }
+            let (switched, toast) = tor_moved(command, was_on, sshee_core::tor::is_on(), done.is_ok());
             if let Some(remote) = &remote {
                 remote.tor_warning(done.err());
             }
@@ -457,7 +472,8 @@ impl Backend for LiveBackend {
                     sshee_core::ssh::close_shared(&env, !sshee_core::tor::is_on());
                 }
                 // Said in a toast: off, moving to Tor, new routes, and what stayed as it was.
-                if let Some(remote) = &remote {
+                // Not after a failure, which the warning tells.
+                if let Some(remote) = remote.as_ref().filter(|_| toast) {
                     remote.tor_switched(command, stayed);
                 }
             }
@@ -676,14 +692,27 @@ fn fresh_target(target: Option<&Target>, signin: Option<&str>, known: &Known) ->
 /// forgotten since), through askpass and never on the command line. With the pane's target
 /// as it was made, they went without one: Windows' ssh, which shares no connection, was
 /// refused by a server that takes passwords only, and found no agents there.
+///
+/// None once the server refused one a check sent, until a terminal signs in again
+/// ([`side_refused`]): each check would be another failed login.
 fn side_target(target: Option<&Target>, signin: Option<&str>, known: &Known, saved: Option<&(Arc<Mutex<ServerStore>>, String)>) -> Option<Target> {
     let mut target = fresh_target(target, signin, known)?;
-    if let (Target::Ssh(t), Some((store, host_id))) = (&mut target, saved) {
-        if let Some(password) = store.lock().unwrap_or_else(|e| e.into_inner()).password(host_id) {
-            t.password = Some(password);
+    if let Target::Ssh(t) = &mut target {
+        if signin.is_some_and(|key| known.refused_for_checks(key)) {
+            t.password = None;
+        } else if let Some((store, host_id)) = saved {
+            if let Some(password) = store.lock().unwrap_or_else(|e| e.into_inner()).password(host_id) {
+                t.password = Some(password);
+            }
         }
     }
     Some(target)
+}
+
+/// Whether a check that failed with `error` had its password refused: it sent one, and the
+/// server said "Permission denied". Its server's checks then stop sending it.
+fn side_refused(target: &Target, error: &sshee_core::OpError) -> bool {
+    matches!(target, Target::Ssh(t) if t.password.is_some()) && error.code == sshee_core::ErrorCode::Auth
 }
 
 /// What a terminal's sign-in leaves for the rest of the run: once it's in, the password that
@@ -705,6 +734,7 @@ fn signed_in(
     match state {
         SessionState::Connecting { .. } => watch.connecting(asks),
         SessionState::Connected { .. } => {
+            known.signed_in_again(server);
             let typed = watch.connected();
             if let Some(password) = typed.or_else(|| used.lock().unwrap_or_else(|e| e.into_inner()).clone()) {
                 known.keep(server, password);
@@ -822,6 +852,13 @@ impl Inner {
         side_target(self.target.as_ref(), self.signin.as_deref(), &self.known, self.saved.as_ref())
     }
 
+    /// A check on `target` failed: when its password was refused, the next ones go without.
+    fn side_failed(&self, target: &Target, error: &sshee_core::OpError) {
+        if let Some(key) = self.signin.as_deref().filter(|_| side_refused(target, error)) {
+            self.known.refuse_for_checks(key);
+        }
+    }
+
     fn is_closed(&self) -> bool {
         *self.closed.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -930,8 +967,9 @@ impl Inner {
     }
 }
 
-/// What is at `path` on `target`: its folder is listed (0.10's `look`).
-fn look(target: &Target, env: &SshEnv, path: &str) -> Looked {
+/// What is at `path` on `target`: its folder is listed (0.10's `look`). `failed` hears why
+/// the listing failed.
+fn look(target: &Target, env: &SshEnv, path: &str, failed: &dyn Fn(&sshee_core::OpError)) -> Looked {
     let name = sshee_app::paths::name(path).to_owned();
     let parent = sshee_app::paths::parent(path);
     match sshee_core::files::list(target, env, &parent) {
@@ -941,7 +979,10 @@ fn look(target: &Target, env: &SshEnv, path: &str) -> Looked {
         },
         // A folder that's gone means the file is too.
         Err(e) if e.code == sshee_core::ErrorCode::NotFound => Looked::Missing,
-        Err(e) => Looked::Failed(e.message),
+        Err(e) => {
+            failed(&e);
+            Looked::Failed(e.message)
+        }
     }
 }
 
@@ -978,7 +1019,9 @@ impl TermLink for LiveLink {
             let inner = self.0.clone();
             let _ = std::thread::Builder::new().name("session-end".into()).spawn(move || {
                 if let Some(target) = inner.side_target() {
-                    let _ = sshee_core::session::end_remote(&target, &inner.env, &inner.key);
+                    if let Err(e) = sshee_core::session::end_remote(&target, &inner.env, &inner.key) {
+                        inner.side_failed(&target, &e);
+                    }
                 }
             });
         }
@@ -1022,17 +1065,20 @@ impl TermLink for LiveLink {
         let work = move || {
             use sshee_core::session;
             let Some(target) = inner.side_target() else { return done(None) };
+            // A refused password isn't sent by the next check.
+            let failed = |e: &sshee_core::OpError| inner.side_failed(&target, e);
+            let ok = |e: sshee_core::OpError| failed(&e);
             let reply = match ask {
-                Ask::Rows => session::rows(&target, &env, &key).ok().map(Reply::Rows),
-                Ask::History { lines } => session::history(&target, &env, &key, lines).ok().map(|text| Reply::History { text, away_ms: None }),
-                Ask::Scroll { position } => session::tmux_scroll(&target, &env, &key, position).ok().map(|s| {
+                Ask::Rows => session::rows(&target, &env, &key).map_err(ok).ok().map(Reply::Rows),
+                Ask::History { lines } => session::history(&target, &env, &key, lines).map_err(ok).ok().map(|text| Reply::History { text, away_ms: None }),
+                Ask::Scroll { position } => session::tmux_scroll(&target, &env, &key, position).map_err(ok).ok().map(|s| {
                     Reply::Scroll(sshee_term::scroll::TmuxScroll { in_mode: s.in_mode, position: s.position, history: s.history, height: s.height, limit: s.limit })
                 }),
-                Ask::Cwd => sshee_core::files::session_cwd(&target, &env, &key).ok().map(Reply::Cwd),
-                Ask::Look { path } => Some(Reply::Looked(look(&target, &env, &path))),
-                Ask::FindPath { path, cwd } => sshee_core::files::find_path(&target, &env, &path, &cwd).ok().map(Reply::Found),
-                Ask::PaneInfo => sshee_core::agents::pane_info(&target, &env, &key).ok().map(|i| Reply::PaneInfo { idle: i.idle, cwd: i.cwd }),
-                Ask::Agents => sshee_core::agents::detect(&target, &env).ok().map(Reply::Agents),
+                Ask::Cwd => sshee_core::files::session_cwd(&target, &env, &key).map_err(ok).ok().map(Reply::Cwd),
+                Ask::Look { path } => Some(Reply::Looked(look(&target, &env, &path, &failed))),
+                Ask::FindPath { path, cwd } => sshee_core::files::find_path(&target, &env, &path, &cwd).map_err(ok).ok().map(Reply::Found),
+                Ask::PaneInfo => sshee_core::agents::pane_info(&target, &env, &key).map_err(ok).ok().map(|i| Reply::PaneInfo { idle: i.idle, cwd: i.cwd }),
+                Ask::Agents => sshee_core::agents::detect(&target, &env).map_err(ok).ok().map(Reply::Agents),
             };
             done(reply);
         };
@@ -1045,6 +1091,21 @@ impl TermLink for LiveLink {
 mod tests {
     use super::*;
     use sshee_core::HostSource;
+
+    /// A Tor switch that failed says nothing in a toast (the warning does); connections
+    /// still follow the way ssh goes now, so none stays around Tor once it's on.
+    #[test]
+    fn a_tor_switch_that_failed_has_no_toast() {
+        assert_eq!(tor_moved(TorCommand::On, false, true, true), (true, true));
+        assert_eq!(tor_moved(TorCommand::Off, true, false, true), (true, true));
+        assert_eq!(tor_moved(TorCommand::NewRoutes, true, true, true), (true, true));
+        assert_eq!(tor_moved(TorCommand::StartAfresh, true, true, true), (false, false));
+        // On, but couldn't be noted for next time (or Tor broke): through Tor all the same, quietly.
+        assert_eq!(tor_moved(TorCommand::On, false, true, false), (true, false));
+        // Failed and nothing changed: nothing moves, nothing said.
+        assert_eq!(tor_moved(TorCommand::Off, false, false, false), (false, false));
+        assert_eq!(tor_moved(TorCommand::On, true, true, false), (false, false));
+    }
 
     #[test]
     fn statuses_for_a_tab() {
@@ -1131,6 +1192,12 @@ mod tests {
         // Refused: forgotten, so the next terminal asks again rather than failing.
         at(SessionState::Failed { message: "The server didn't accept your login.".into() });
         assert_eq!(password(&backend), None);
+        // A check's password refused meanwhile: a terminal getting in lets them send one again.
+        backend.known.refuse_for_checks("host:saved:1");
+        at(SessionState::Connecting { attempt: 1 });
+        assert!(backend.known.refused_for_checks("host:saved:1"));
+        at(SessionState::Connected { durable: true, tor: false });
+        assert!(!backend.known.refused_for_checks("host:saved:1"));
         // This computer has none to keep.
         assert!(matches!(backend.target_of("local"), Some(Target::Local)));
     }
@@ -1253,6 +1320,18 @@ mod tests {
         // Refused since: forgotten, and the checks don't send it again.
         backend.known.forget(&typed);
         assert_eq!(password(side(&typed, made_typed.as_ref())), None);
+        // The saved one went stale: the first check it fails stops the next ones sending it
+        // (a failed login each, without a shared connection), until a terminal gets in again.
+        let refused = sshee_core::OpError::from_ssh(Some(255), "postgres@203.0.113.31: Permission denied (publickey,password).");
+        let checked = side(&saved, made_saved.as_ref()).unwrap();
+        assert!(side_refused(&checked, &refused));
+        assert!(!side_refused(&checked, &sshee_core::OpError::from_ssh(Some(255), "ssh: connect to host 203.0.113.31 port 22: Connection timed out")));
+        backend.known.refuse_for_checks(&saved);
+        let unsent = side(&saved, made_saved.as_ref()).unwrap();
+        assert!(!side_refused(&unsent, &refused), "nothing sent, nothing refused");
+        assert_eq!(password(Some(unsent)), None);
+        backend.known.signed_in_again(&saved);
+        assert_eq!(password(side(&saved, made_saved.as_ref())).as_deref(), Some("saved-pw"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

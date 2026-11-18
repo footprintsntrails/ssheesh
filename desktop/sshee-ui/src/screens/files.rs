@@ -66,6 +66,9 @@ pub struct CopyTo {
     pub place: Option<(String, Vec<String>)>,
     /// The folder asked for, while it's being listed.
     pub asked: Option<String>,
+    /// The folder shown from a moment ago while its fresh listing is on its way: that
+    /// listing, or why it failed, takes its place.
+    pub refreshing: Option<String>,
     pub error: Option<String>,
 }
 
@@ -708,7 +711,7 @@ pub fn open_copy(s: &mut Shell, tab: TabId, names: &[String]) {
     // Another server than this one, first: a copy to the same one is to another folder.
     let to = last.or_else(|| servers.iter().find(|k| **k != here).cloned()).or_else(|| servers.first().cloned());
     if let Some(state) = s.screens.files.get_mut(&tab) {
-        state.copy = Some(CopyTo { paths, to: None, place: None, asked: None, error: None });
+        state.copy = Some(CopyTo { paths, to: None, place: None, asked: None, refreshing: None, error: None });
     }
     if let Some(to) = to {
         copy_server(s, tab, &to);
@@ -742,25 +745,30 @@ pub fn copy_go(s: &mut Shell, tab: TabId, path: &str) {
     let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()) else { return };
     let Some(server) = copy.to.clone() else { return };
     copy.asked = Some(path.to_owned());
+    copy.refreshing = None;
     copy.error = None;
     // Seen a moment ago: at once, and asked again all the same.
-    copy_listed(s, tab, &server, path);
+    copy_listed(s, tab, &server, path, false);
     s.files_ask(Ask { tab, server, want: Want::Peek { path: path.to_owned() } });
 }
 
-/// A listing of the copy's server came: the dialog shows it if it waits for it.
-fn copy_listed(s: &mut Shell, tab: TabId, server: &str, asked: &str) {
+/// A listing of the copy's server came (`fresh`), or one from a moment ago is remembered:
+/// the dialog shows it if it waits for it. A fresh one also replaces one shown from memory.
+fn copy_listed(s: &mut Shell, tab: TabId, server: &str, asked: &str, fresh: bool) {
     let Some(cached) = s.screens.dirs.get(server, asked).map(|c| c.listing.clone()) else { return };
-    let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()) else { return };
-    if copy.to.as_deref() != Some(server) || copy.asked.as_deref() != Some(asked) {
+    let Some(state) = s.screens.files.get_mut(&tab) else { return };
+    let Some(copy) = state.copy.as_mut() else { return };
+    let refresh = fresh && copy.refreshing.as_deref() == Some(asked);
+    if copy.to.as_deref() != Some(server) || (copy.asked.as_deref() != Some(asked) && !refresh) {
         return;
     }
     let mut dirs: Vec<String> = cached.entries.iter().filter(|e| e.is_dir() && !e.is_hidden()).map(|e| e.name.clone()).collect();
     dirs.sort_by(|a, b| sshee_app::files::browser::natural_cmp(a, b));
-    copy.place = Some((cached.path.clone(), dirs));
+    let was = copy.place.replace((cached.path.clone(), dirs)).map(|(p, _)| p);
     copy.asked = None;
-    // The path field shows where it is now.
-    if let Some(state) = s.screens.files.get_mut(&tab) {
+    copy.refreshing = (!fresh).then(|| asked.to_owned());
+    // The path field shows where it is now, unless something was typed there meanwhile.
+    if !refresh || was.is_some_and(|p| state.ui.copy_typed.text.trim() == p) {
         state.ui.copy_typed = rune::TextEdit::new(cached.path.clone());
     }
 }
@@ -1047,11 +1055,13 @@ fn apply(s: &mut Shell, reply: Reply) {
             if let Ok((listing, clock)) = result {
                 let now = now_ms(s);
                 s.screens.dirs.remember(&server, &asked, listing, clock, now);
-                copy_listed(s, tab, &server, &asked);
+                copy_listed(s, tab, &server, &asked, true);
             } else if let Err(failure) = result {
-                if let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()).filter(|c| c.to.as_deref() == Some(&*server) && c.asked.as_deref() == Some(&*asked)) {
+                let waits = |c: &CopyTo| c.to.as_deref() == Some(&*server) && (c.asked.as_deref() == Some(&*asked) || c.refreshing.as_deref() == Some(&*asked));
+                if let Some(copy) = s.screens.files.get_mut(&tab).and_then(|st| st.copy.as_mut()).filter(|c| waits(c)) {
                     copy.error = Some(failure.message);
                     copy.asked = None;
+                    copy.refreshing = None;
                 }
             }
         }
@@ -1656,6 +1666,28 @@ mod tests {
         assert!(w.state().replace.is_some());
         answer_replace(&mut w.s, w.tab, true);
         assert!(matches!(w.wants()[..], [Want::CopyTo { overwrite: true, .. }]));
+    }
+
+    /// The dialog shows a folder seen a moment ago at once; the fresh listing, or why it
+    /// failed, then takes its place.
+    #[test]
+    fn a_copy_dialog_shown_from_memory_takes_the_fresh_listing() {
+        let mut w = Window::at_home();
+        open_copy(&mut w.s, w.tab, &["notes.md".into()]);
+        assert_eq!(w.state().copy.as_ref().unwrap().place, Some(("/home/deploy".into(), vec!["shop".into()])), "from memory");
+        assert!(matches!(&w.wants()[..], [.., Want::Peek { path }] if path == "/home/deploy"));
+        let fresh = Listing { path: "/home/deploy".into(), entries: vec![entry("shop", EntryKind::Dir), entry("backups", EntryKind::Dir)] };
+        w.answer(Answer::Peeked { asked: "/home/deploy".into(), result: Ok((fresh, Clock::default())) });
+        assert_eq!(w.state().copy.as_ref().unwrap().place, Some(("/home/deploy".into(), vec!["backups".into(), "shop".into()])));
+        // Looked at again: from memory, then the failure shows.
+        copy_go(&mut w.s, w.tab, "/home/deploy");
+        w.answer(Answer::Peeked { asked: "/home/deploy".into(), result: Err(Failure::new(FailureKind::NotFound, "This folder doesn't exist or you can't open it.")) });
+        assert_eq!(w.state().copy.as_ref().unwrap().error.as_deref(), Some("This folder doesn't exist or you can't open it."));
+        // A late answer for a folder left behind changes nothing.
+        copy_go(&mut w.s, w.tab, "/srv");
+        w.answer(Answer::Peeked { asked: "/home/deploy".into(), result: Ok((home(), Clock::default())) });
+        assert_eq!(w.state().copy.as_ref().unwrap().asked.as_deref(), Some("/srv"));
+        assert_eq!(w.state().copy.as_ref().unwrap().place, Some(("/home/deploy".into(), vec!["backups".into(), "shop".into()])));
     }
 
     #[test]

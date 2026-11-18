@@ -141,8 +141,14 @@ pub fn copy_blocked(same_server: bool, from_dir: &str, paths: &[String], dest: &
 /// by accident, so it asks, naming where they'll land. `into` is the folder under the pointer
 /// when the system said (the desktop, a folder's window), else they go to Downloads. A folder
 /// on this computer may be split by "\" (Windows).
+///
+/// The names are the server's: a control or bidi character in one shows as `�`, so
+/// `invoice\u{202e}txt.exe` can't read as a text file here.
 pub fn download_out_question(names: &[&str], server: &str, into: Option<&str>) -> Confirm {
-    let place = into.map(|p| {
+    let plain: Vec<String> = names.iter().map(|n| crate::paths::shown_plainly(n).into_owned()).collect();
+    let names: Vec<&str> = plain.iter().map(String::as_str).collect();
+    let into = into.map(crate::paths::shown_plainly);
+    let place = into.as_deref().map(|p| {
         let p = p.trim_end_matches(['/', '\\']);
         p.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(p).to_owned()
     });
@@ -150,7 +156,7 @@ pub fn download_out_question(names: &[&str], server: &str, into: Option<&str>) -
         Some(into) => format!("From {server}, into {into}. Nothing there is replaced."),
         None => format!("From {server}, into your Downloads folder."),
     };
-    Confirm { title: format!("Download {} to {}?", what(names), place.as_deref().unwrap_or("Downloads")), body, lines: Vec::new(), confirm_label: "Download", danger: false }
+    Confirm { title: format!("Download {} to {}?", what(&names), place.as_deref().unwrap_or("Downloads")), body, lines: Vec::new(), confirm_label: "Download", danger: false }
 }
 
 /// "Undo" on the note after a move: moves `names` from `from` back into `to`, on the machine
@@ -573,6 +579,10 @@ mod tests {
         let q = download_out_question(&["a", "b"], "web-7731", None);
         assert_eq!((q.title.as_str(), q.body.as_str()), ("Download 2 items to Downloads?", "From web-7731, into your Downloads folder."));
         assert_eq!(download_out_question(&["a"], "web-7731", Some("/home/dev/Desktop/")).title, "Download “a” to Desktop?");
+        // A name that would read as another one shows what it has.
+        let q = download_out_question(&["invoice\u{202e}txt.exe"], "web-7731", Some("/home/dev/Desktop"));
+        assert_eq!(q.title, "Download “invoice\u{fffd}txt.exe” to Desktop?");
+        assert_eq!(download_out_question(&["a\u{1b}[2Jb"], "web-7731", None).title, "Download “a\u{fffd}[2Jb” to Downloads?");
     }
 
     #[test]

@@ -17,7 +17,7 @@
 //! answer for this server's own account (`secrets::answers`): a jump host's "jump@bastion's
 //! password:", or a fake prompt a server prints before it signs you in, is never kept.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use sshee_core::secrets::{answers, PasswordFor, Secret};
@@ -113,20 +113,43 @@ impl Watch {
 
 /// The passwords that got a terminal in this run, by the server's key in the sidebar. In
 /// memory only: never written, gone when the program quits.
+///
+/// And the servers that refused a password one of the app's own checks sent (its tmux, a
+/// folder, its agents): those checks stop sending one there until a terminal signs in again.
+/// Without a shared connection (Windows, Tor) each check signs in on its own, and a stale
+/// saved password would be a failed login every few seconds: enough for fail2ban.
 #[derive(Clone, Default)]
-pub struct Known(Arc<Mutex<HashMap<String, Secret>>>);
+pub struct Known {
+    passwords: Arc<Mutex<HashMap<String, Secret>>>,
+    refused: Arc<Mutex<HashSet<String>>>,
+}
 
 impl Known {
     pub fn get(&self, server: &str) -> Option<Secret> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).get(server).cloned()
+        self.passwords.lock().unwrap_or_else(|e| e.into_inner()).get(server).cloned()
     }
 
     pub fn keep(&self, server: &str, password: Secret) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(server.to_owned(), password);
+        self.passwords.lock().unwrap_or_else(|e| e.into_inner()).insert(server.to_owned(), password);
     }
 
     pub fn forget(&self, server: &str) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(server);
+        self.passwords.lock().unwrap_or_else(|e| e.into_inner()).remove(server);
+    }
+
+    /// A check's password was refused by `server`: the checks there go without one.
+    pub fn refuse_for_checks(&self, server: &str) {
+        self.refused.lock().unwrap_or_else(|e| e.into_inner()).insert(server.to_owned());
+    }
+
+    /// Whether the checks on `server` go without a password.
+    pub fn refused_for_checks(&self, server: &str) -> bool {
+        self.refused.lock().unwrap_or_else(|e| e.into_inner()).contains(server)
+    }
+
+    /// A terminal signed in to `server`: its checks may send a password again.
+    pub fn signed_in_again(&self, server: &str) {
+        self.refused.lock().unwrap_or_else(|e| e.into_inner()).remove(server);
     }
 }
 

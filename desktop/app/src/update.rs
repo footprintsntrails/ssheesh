@@ -53,7 +53,7 @@ use sshee_ui::shell::Remote;
 
 use channel::Source;
 use manifest::{Asset, Manifest, Platform};
-use release::{Offer, Release};
+use release::{Offer, Release, Seen};
 use swap::Places;
 
 /// The canary key's public half, as `tauri signer generate` prints it (base64, one line; the
@@ -279,7 +279,7 @@ impl Updater {
         if !still_staged(&places, &staged) {
             return Err("the new build changed after it was checked".into());
         }
-        swap::install(&places)?;
+        swap::install(&places, &staged.sha256)?;
         let mut helper = Command::new(&places.old);
         helper.arg(WATCH_FLAG).arg(&places.exe).arg(&staged.token).arg("--").args(std::env::args_os().skip(1));
         helper.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -355,9 +355,19 @@ struct Found {
     key: &'static str,
 }
 
+/// Where a channel of releases keeps the newest manifest it took (`release::Seen`).
+fn seen_file(folder: &Path, channel: Channel) -> Option<PathBuf> {
+    match channel {
+        Channel::Stable => Some(folder.join("seen-stable.json")),
+        Channel::Rc => Some(folder.join("seen-rc.json")),
+        Channel::Canary => None,
+    }
+}
+
 /// What `channel` offers a copy of `build` on `platform`, from a manifest already fetched:
-/// `manifest` and, for releases, its signature.
-fn found(channel: Channel, build: &Build, platform: Platform, failed: &[String], manifest: &[u8], signature: Option<&str>) -> Result<Option<Found>, String> {
+/// `manifest` and, for releases, its signature, taken only when no older than what `seen`
+/// says was taken before (which it then notes).
+fn found(channel: Channel, build: &Build, platform: Platform, failed: &[String], manifest: &[u8], signature: Option<&str>, seen: &mut Seen) -> Result<Option<Found>, String> {
     let source = Source::of(channel);
     match channel {
         Channel::Canary => {
@@ -370,6 +380,8 @@ fn found(channel: Channel, build: &Build, platform: Platform, failed: &[String],
         }
         Channel::Stable | Channel::Rc => {
             let release = Release::verified(manifest, signature.unwrap_or_default(), source.key)?;
+            seen.admits(&release)?;
+            seen.note(&release);
             let own = build.full_version();
             let Some(offer) = release::offer(&release, &own, channel, platform, failed) else { return Ok(None) };
             let asset = offer.asset().clone();
@@ -389,7 +401,14 @@ fn look(folder: &Path, places: &Places, build: &Build, channel: Channel, act: Ac
         Some(url) => Some(String::from_utf8(http::get(url, MOST_SIGNATURE, route)?).map_err(|_| "the manifest's signature isn't text")?),
         None => None,
     };
-    let Some(found) = found(channel, build, platform, &failed(folder), &manifest, signature.as_deref())? else { return Ok(None) };
+    let seen_at = seen_file(folder, channel);
+    let mut seen = seen_at.as_ref().and_then(|f| std::fs::read(f).ok()).map(|b| Seen::read(&b)).unwrap_or_default();
+    let before = seen.clone();
+    let found = found(channel, build, platform, &failed(folder), &manifest, signature.as_deref(), &mut seen)?;
+    if let Some(at) = seen_at.filter(|_| seen != before) {
+        std::fs::create_dir_all(folder).and_then(|_| sshee_app::settings_store::write_atomic(&at, &seen.write())).map_err(|e| format!("couldn't note the manifest taken: {e}"))?;
+    }
+    let Some(found) = found else { return Ok(None) };
     let version = found.version.clone();
     if act == Act::Tell {
         return Ok(Some(Notice::Out { version }));
@@ -612,7 +631,7 @@ mod tests {
         assert!(manifest::offer(&m, 124, Platform::MacArm64, &[]).is_none());
         // The same manifest through the channel: a test build of run 124 is offered run 125.
         let test = Build { version: "1.0.0-canary".into(), sha: String::new(), run: Some(124), release: false };
-        let found = found(Channel::Canary, &test, Platform::LinuxX64, &[], include_bytes!("../fixtures/canary.json"), None).unwrap().unwrap();
+        let found = found(Channel::Canary, &test, Platform::LinuxX64, &[], include_bytes!("../fixtures/canary.json"), None, &mut Seen::default()).unwrap().unwrap();
         assert_eq!((found.token.as_str(), found.version.as_str(), found.key), ("125", "1.0.0-canary.125", CANARY_PUBLIC_KEY));
         assert_eq!(found.parts, ["file:ssheesh-1.0.0-canary.125-linux-x64.tar.gz"]);
         // Not after it failed here.
@@ -620,7 +639,7 @@ mod tests {
     }
 
     fn canary_found(channel: Channel, build: &Build, failed: &[String]) -> Option<Found> {
-        super::found(channel, build, Platform::LinuxX64, failed, include_bytes!("../fixtures/canary.json"), None).unwrap()
+        super::found(channel, build, Platform::LinuxX64, failed, include_bytes!("../fixtures/canary.json"), None, &mut Seen::default()).unwrap()
     }
 
     /// From a downloaded archive to the program waiting next to this one: the checks a look
@@ -670,9 +689,9 @@ mod tests {
         let parts = [format!("file:{file}"), "version:1.0.2".to_owned()];
         assert!(matches!(verify::check_with(&archive, offer.asset(), &key.public(), &parts), Err(verify::Refused::Name { .. })));
         // Signed by a key that isn't the release key: the real release key refuses the manifest.
-        let real = found(Channel::Stable, &release_build("1.0.0"), Platform::LinuxX64, &[], manifest.as_bytes(), Some(&minisig));
+        let real = found(Channel::Stable, &release_build("1.0.0"), Platform::LinuxX64, &[], manifest.as_bytes(), Some(&minisig), &mut Seen::default());
         assert!(real.is_err(), "a manifest not signed by the release key is refused");
         // No signature at all: refused too.
-        assert!(found(Channel::Stable, &release_build("1.0.0"), Platform::LinuxX64, &[], manifest.as_bytes(), None).is_err());
+        assert!(found(Channel::Stable, &release_build("1.0.0"), Platform::LinuxX64, &[], manifest.as_bytes(), None, &mut Seen::default()).is_err());
     }
 }

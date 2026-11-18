@@ -107,6 +107,72 @@ impl Release {
     }
 }
 
+/// The newest manifest a channel's looks took here, kept in the updater's folder: an older
+/// manifest, signed as it was, can't be passed off again (a replay) to offer a version since
+/// withdrawn, or to take a copy down a way since closed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Seen {
+    /// The highest version a manifest named.
+    pub version: Option<Version>,
+    /// The latest `pub_date` taken.
+    pub pub_date: String,
+}
+
+impl Seen {
+    /// Whether `release` may be taken after what was seen:
+    /// - a later version;
+    /// - the same version, published no earlier;
+    /// - an earlier version only as the way down from the highest one, which it withdraws
+    ///   (`pulled`), and published no earlier: an older manifest from before that version came
+    ///   back can't withdraw it again.
+    pub fn admits(&self, release: &Release) -> Result<(), String> {
+        let Some(highest) = &self.version else { return Ok(()) };
+        let not_before = || match (date(&release.pub_date), date(&self.pub_date)) {
+            (Some(theirs), Some(seen)) => theirs >= seen,
+            // Without a date to go by, the version alone decides.
+            _ => true,
+        };
+        let ok = match release.version.cmp_precedence(highest) {
+            Ordering::Greater => true,
+            Ordering::Equal => not_before(),
+            Ordering::Less => release.is_pulled(highest) && not_before(),
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(format!("update-v1.json names {}, older than the {highest} it named before: not taken", release.text))
+        }
+    }
+
+    /// Takes `release` in, once [`Seen::admits`] it. True when anything changed.
+    pub fn note(&mut self, release: &Release) -> bool {
+        let before = self.clone();
+        if self.version.as_ref().is_none_or(|v| release.version.cmp_precedence(v) == Ordering::Greater) {
+            self.version = Some(release.version.clone());
+        }
+        if let Some(theirs) = date(&release.pub_date) {
+            if date(&self.pub_date).is_none_or(|seen| theirs > seen) {
+                self.pub_date.clone_from(&release.pub_date);
+            }
+        }
+        *self != before
+    }
+
+    pub fn read(bytes: &[u8]) -> Seen {
+        let v: Value = serde_json::from_slice(bytes).unwrap_or_default();
+        Seen { version: v["version"].as_str().and_then(version), pub_date: v["pub_date"].as_str().unwrap_or_default().to_owned() }
+    }
+
+    pub fn write(&self) -> Vec<u8> {
+        serde_json::json!({ "version": self.version.as_ref().map(Version::to_string), "pub_date": self.pub_date }).to_string().into_bytes()
+    }
+}
+
+/// A manifest's `pub_date` ("2026-12-01T10:00:00Z"), when it reads as one.
+fn date(text: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(text.trim()).ok()
+}
+
 /// What a look found for this copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Offer<'a> {
@@ -262,6 +328,41 @@ pub(crate) mod tests {
         let pulled = release("1.0.2", r#","pulled":["1.0.2"]"#);
         assert_eq!(offer(&pulled, "1.0.0", Channel::Stable, Platform::LinuxX64, &[]), None);
         assert_eq!(offer(&pulled, "1.0.2", Channel::Stable, Platform::LinuxX64, &[]), None);
+    }
+
+    /// An older manifest, signed as it was, isn't taken again after a newer one: it can't
+    /// offer a version since withdrawn, nor take copies down a way since closed.
+    #[test]
+    fn an_older_manifest_is_not_taken_again() {
+        let dated = |version: &str, date: &str, pulled: &str| {
+            let text = sample(version, &format!(r#","pulled":[{pulled}]"#)).replace("2026-12-01T10:00:00Z", date);
+            Release::parse(text.as_bytes()).unwrap()
+        };
+        let mut seen = Seen::default();
+        let first = dated("1.0.1", "2026-12-01T10:00:00Z", "");
+        assert!(seen.admits(&first).is_ok(), "nothing seen yet");
+        assert!(seen.note(&first));
+        // 1.0.2 came out and withdrew 1.0.1; then 1.0.1's own manifest is played back.
+        let next = dated("1.0.2", "2026-12-08T10:00:00Z", r#""1.0.1""#);
+        assert!(seen.admits(&next).is_ok());
+        seen.note(&next);
+        assert!(seen.admits(&first).is_err());
+        // The same manifest again: taken, and nothing changes.
+        assert!(seen.admits(&next).is_ok() && !seen.note(&next));
+        // 1.0.2 is withdrawn in turn: the way down to 1.0.1 is the newer manifest's to say.
+        let down = dated("1.0.1", "2026-12-10T10:00:00Z", r#""1.0.2""#);
+        assert!(seen.admits(&down).is_ok());
+        seen.note(&down);
+        assert_eq!((seen.version.as_ref().map(Version::to_string).as_deref(), seen.pub_date.as_str()), (Some("1.0.2"), "2026-12-10T10:00:00Z"));
+        // 1.0.2 is put back: the manifest that withdrew it can't withdraw it again.
+        let back = dated("1.0.2", "2026-12-12T10:00:00Z", "");
+        assert!(seen.admits(&back).is_ok());
+        seen.note(&back);
+        assert!(seen.admits(&down).is_err());
+        assert!(seen.admits(&next).is_err(), "nor an older 1.0.2");
+        // Kept across starts.
+        assert_eq!(Seen::read(&seen.write()), seen);
+        assert_eq!(Seen::read(b"not json"), Seen::default());
     }
 
     #[test]
