@@ -141,5 +141,5 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
                 .child(spacer())
                 .child(push_button(t, "Take the one-minute tour", Push::Primary, true).key("welcome-tour").default_button().on_press_tx(|s: &mut Shell, tx| s.welcome_tour(tx))),
         );
-    Some(dialog(t, "welcome-scrim", "welcome", "Welcome to SSHeesh", WIDTH, headed(head, page, 16.0), |s: &mut Shell, tx| s.skip_welcome(tx)))
+    Some(dialog(t, "welcome-scrim", "welcome", "Welcome to SSHeesh", WIDTH, headed(t, head, page, 16.0), |s: &mut Shell, tx| s.skip_welcome(tx)))
 }

@@ -145,10 +145,6 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
                     (true, Action::WhatsNew) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_whats_new(tx)),
                     (true, Action::Tour) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_tour(0, tx)),
                     (true, Action::Welcome) => button = button.on_press_tx(|s: &mut Shell, tx: &mut Tx| s.open_welcome(tx)),
-                    (true, Action::Arrange(how)) => {
-                        let how = *how;
-                        button = button.on_press_tx(move |s: &mut Shell, tx: &mut Tx| s.arrange(how, tx));
-                    }
                     _ => {}
                 }
                 all = all.child(button);

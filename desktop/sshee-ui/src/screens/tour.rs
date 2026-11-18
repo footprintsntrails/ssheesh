@@ -165,7 +165,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(push_button(t, "Back", Push::Quiet, state.at > 0).key("tour-back").on_press_tx(|s: &mut Shell, tx| s.tour_step(-1, tx)))
         .child(push_button(t, if last { "Done" } else { "Next" }, Push::Primary, true).key("tour-next").default_button().on_press_tx(|s: &mut Shell, tx| s.tour_step(1, tx)));
     let page = super::checkup::body("tour-body").pb(18.0).gap(16.0).child(art).child(words).child(foot);
-    Some(dialog(t, "tour-scrim", "tour", "Tour", WIDTH, headed(top, page, 16.0), |s: &mut Shell, tx| s.close_tour(tx)))
+    Some(dialog(t, "tour-scrim", "tour", "Tour", WIDTH, headed(t, top, page, 16.0), |s: &mut Shell, tx| s.close_tour(tx)))
 }
 
 /// The hint on screen: at the bottom right, over the page, never taking the keyboard.

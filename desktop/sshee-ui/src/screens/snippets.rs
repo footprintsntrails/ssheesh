@@ -285,7 +285,7 @@ fn list_page(t: &Theme, s: &Shell) -> El {
     if let Some(why) = &state.note {
         page = page.child(note(t, why, false).key("snip-note"));
     }
-    headed(head, page.child(row().w_full().child(spacer()).child(push_button(t, "New snippet", Push::Primary, true).key("snip-new").on_press_tx(|s: &mut Shell, _| s.snippet_edit(None)))), 14.0)
+    headed(t, head, page.child(row().w_full().child(spacer()).child(push_button(t, "New snippet", Push::Primary, true).key("snip-new").on_press_tx(|s: &mut Shell, _| s.snippet_edit(None)))), 14.0)
 }
 
 fn edit_page(t: &Theme, s: &Shell, id: Option<&str>) -> El {
@@ -359,7 +359,7 @@ fn edit_page(t: &Theme, s: &Shell, id: Option<&str>) -> El {
             .child(push_button(t, "Cancel", Push::Quiet, true).key("snip-cancel").on_press_tx(|s: &mut Shell, _| s.screens.snippets.page = Some(Page::List)))
             .child(save),
     );
-    headed(head, page, 14.0)
+    headed(t, head, page, 14.0)
 }
 
 fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
@@ -398,7 +398,7 @@ fn fill_page(t: &Theme, s: &Shell, id: &str, server: &str) -> El {
             .child(push_button(t, "Paste", Push::Quiet, ready).key("snip-paste").help("Type it into the terminal without pressing Return").on_press_tx(|s: &mut Shell, tx| s.snippet_fill_go(false, tx)))
             .child(go),
     );
-    headed(head, page, 14.0)
+    headed(t, head, page, 14.0)
 }
 
 /// The dialog, when it's open.

@@ -117,7 +117,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .gap(16.0)
         .child(notes)
         .child(row().w_full().child(spacer()).child(push_button(t, "Got it", Push::Primary, true).key("news-ok").default_button().on_press_tx(|s: &mut Shell, tx| s.close_whats_new(tx))));
-    Some(dialog(t, "news-scrim", "news", "What's new", WIDTH, headed(head, page, 16.0), |s: &mut Shell, tx| s.close_whats_new(tx)))
+    Some(dialog(t, "news-scrim", "news", "What's new", WIDTH, headed(t, head, page, 16.0), |s: &mut Shell, tx| s.close_whats_new(tx)))
 }
 
 /// "rebuilt from the ground up" → "Rebuilt from the ground up".

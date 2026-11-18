@@ -213,7 +213,9 @@ fn section_icon(section: Section) -> Icon {
 
 /// One section in the list: its icon and name, filled blue when it is the one on screen.
 fn nav_row(t: &Theme, section: Section, on: bool) -> El {
-    let ink = if on { t.on_color } else { t.l1 };
+    // The section you're in is lit as the sidebar's and the menus' picked rows are: a quiet
+    // fill of the theme's own, not a fixed blue that ignores it and outshouts the page.
+    let ink = t.l1;
     let mut e = row()
         .key(format!("nav-{}", section.id()))
         .h(theme::CONTROL)
@@ -231,9 +233,9 @@ fn nav_row(t: &Theme, section: Section, on: bool) -> El {
             s.screens.settings.go_to(section);
             tx.instant();
         })
-        .child(icon(section_icon(section), theme::ICON, if on { t.on_color } else { t.l2 }))
+        .child(icon(section_icon(section), theme::ICON, if on { t.l1 } else { t.l2 }))
         .child(text(section.label()).font(theme::TEXT).color(ink).single_line().truncate().grow(1.0).shrink().a11y_hidden());
-    e = if on { e.fill(t.blue) } else { e.hover(t.hov2).press(t.down) };
+    e = if on { e.fill(t.selrail) } else { e.hover(t.hov2).press(t.down) };
     e
 }
 

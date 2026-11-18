@@ -338,7 +338,7 @@ fn list_page(t: &Theme, s: &Shell, server: &str, server_name: &str) -> El {
         }
         page = page.child(col().w_full().gap(8.0).child(text(group.label()).font(theme::GROUP_TITLE).color(t.l2).single_line().role("heading").level(2)).child(rows));
     }
-    headed(head, page.child(text("Commands that change the system start with sudo, which runs them as root and may ask for your password. Nothing runs until you press Return in the terminal.").font(theme::SMALL).color(t.l2).wrap()), 14.0)
+    headed(t, head, page.child(text("Commands that change the system start with sudo, which runs them as root and may ask for your password. Nothing runs until you press Return in the terminal.").font(theme::SMALL).color(t.l2).wrap()), 14.0)
 }
 
 /// The key field: a key from this computer, or one pasted in.
@@ -596,7 +596,7 @@ fn recipe_page(t: &Theme, s: &Shell, server: &str, server_name: &str, r: &Recipe
     if count > 0 {
         foot = foot.child(spacer()).child(push_button(t, "Start over", Push::Quiet, true).key("recipes-over").on_press_tx(|s: &mut Shell, _| s.recipes_start_over()));
     }
-    headed(head, page.child(foot), 14.0)
+    headed(t, head, page.child(foot), 14.0)
 }
 
 /// The dialog, when it's open and not stepped aside.

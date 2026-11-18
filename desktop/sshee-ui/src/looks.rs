@@ -37,7 +37,7 @@ fn over(top: Color, bottom: Color) -> Color {
 pub fn build(colors: &Colors, dark: bool, accent: Option<u32>) -> Theme {
     let base = Theme::of(dark);
     let c = |i: usize| color(colors[i]);
-    let (window, canvas, raised, ink, fg, fg2, fg3, ok, warn, bad, glass) = (c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10));
+    let (window, canvas, raised, ink, fg, fg2, _hints, ok, warn, bad, glass) = (c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10));
     let solid_canvas = over(canvas, window);
     let faint = |strength: f32| ink.alpha(strength);
     let mut t = Theme {
@@ -50,7 +50,10 @@ pub fn build(colors: &Colors, dark: bool, accent: Option<u32>) -> Theme {
         hair2: over(faint(if dark { 0.05 } else { 0.1 }), solid_canvas),
         l1: fg,
         l2: fg2,
-        l2on: fg3,
+        // Words on a control (an unpicked segment, a quiet button) read a step brighter than
+        // the page's secondary text, as the design's own do: between it and the main text,
+        // never the theme's dimmest hint colour.
+        l2on: over(fg.alpha(if dark { 0.45 } else { 0.25 }), fg2),
         strong: fg,
         orange: warn,
         orange_dot: warn,

@@ -1004,10 +1004,10 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
         }
     }
     line = line.child(icon(glyph_icon(glyph(e)), theme::ICON, if blue { t.on_color } else { t.l2on }));
-    // », on every folder: what's inside, without going there. Files keep the place, so names
-    // stay in line.
+    // », after a folder's name: what's inside, without going there. It follows the name, so
+    // every name sits right by its icon and they all start in one line.
     let peeking = state.peek.as_ref().is_some_and(|(p, _)| *p == state.browser.path_of(&e.name));
-    let mut arrow = el().key("peek").size(16.0, 16.0).ml(-4.0).radius(4.0).items_center().justify_center();
+    let mut arrow = el().key("peek").size(16.0, 16.0).ml(2.0).radius(4.0).items_center().justify_center();
     if e.is_dir() {
         let n = name.clone();
         arrow = arrow
@@ -1021,17 +1021,16 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
             arrow = arrow.fill(if blue { t.on_color.alpha(0.15) } else { t.hov2 });
         }
     }
-    line = line.child(arrow);
     line = match &state.ui.naming {
         Some((Naming::Rename(from), edit)) if *from == e.name => line.child(naming_field(t, edit, id)),
         _ => {
             let name = s.text_shown(&e.name);
             let shown = if e.is_link && !e.name.is_empty() { format!("{name} ↗") } else { name.into_owned() };
             let mut named = row().grow(1.0).min_w(0.0).items_center().child(text(shown).font(theme::TEXT).color(if e.is_hidden() && !blue { t.l2on } else { ink }).single_line().truncate().shrink().min_w(0.0));
-            if !e.is_dir() {
-                if let Some(mark) = super::edit::row_mark(s, state.browser.server(), &state.browser.path_of(&e.name), blue, t) {
-                    named = named.child(mark);
-                }
+            if e.is_dir() {
+                named = named.child(arrow);
+            } else if let Some(mark) = super::edit::row_mark(s, state.browser.server(), &state.browser.path_of(&e.name), blue, t) {
+                named = named.child(mark);
             }
             line.child(named)
         }

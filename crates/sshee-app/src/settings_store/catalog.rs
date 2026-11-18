@@ -180,8 +180,6 @@ pub enum Action {
     Open(&'static str),
     /// Opens "Add a server", where the ssh config's hosts and 0.10's servers are offered.
     AddServer,
-    /// Rearranges the panes on screen ("Arrange open panes").
-    Arrange(crate::workbench::layout::Arrangement),
     /// "What's new", the tour, the welcome again.
     WhatsNew,
     Tour,
@@ -455,22 +453,9 @@ fn build() -> Vec<Row> {
                 set: |st, v| st.set(|s| s.view_mode = ViewMode::from(v)),
             },
         )
-        .hint("Side by side, a machine's tabs share its page and new ones open beside you. Split, drag a tab onto the page, or arrange them below.")
+        .hint("Side by side, a machine's tabs share its page and new ones open beside you. Split, drag a tab onto the page, or arrange them from the palette (Arrange…).")
         .saves(&["viewMode"])
         .words("split panes side by side"),
-        Row::new(
-            "layout-arrange",
-            Layout,
-            "Arrange open panes",
-            Buttons(&[
-                ("Main + stack", Action::Arrange(crate::workbench::layout::Arrangement::Main)),
-                ("Columns", Action::Arrange(crate::workbench::layout::Arrangement::Columns)),
-                ("Rows", Action::Arrange(crate::workbench::layout::Arrangement::Rows)),
-                ("Grid", Action::Arrange(crate::workbench::layout::Arrangement::Grid)),
-            ]),
-        )
-        .hint("Rearranges the panes on screen (a tab alone: every tab of its server), the one you're in first. Nothing gets closed.")
-        .words("layout grid columns rows split"),
         Row::new(
             "layout-sidebar-side",
             Layout,
