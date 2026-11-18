@@ -55,12 +55,12 @@ pub struct State {
 impl Remote {
     /// Tor's state changed (sshee-core's watcher).
     pub fn tor_status(&self, status: Status) {
-        self.update(move |s| status_changed(s, status));
+        self.every(move |s| status_changed(s, status.clone()));
     }
 
     /// The round trip through Tor, measured as a route was picked.
     pub fn tor_latency(&self, latency_ms: Option<u32>) {
-        self.update(move |s| {
+        self.every(move |s| {
             let d = &mut s.screens.tor.detail;
             d.latency_ms = latency_ms.filter(|_| d.status == Status::On);
             s.bench.set_tor(d.status.shown(d.latency_ms));
@@ -69,12 +69,12 @@ impl Remote {
 
     /// The last lines of Tor's log (`sshee_app::tor::log_tail`).
     pub fn tor_log(&self, lines: Vec<String>) {
-        self.update(move |s| s.screens.tor.detail.log = lines);
+        self.every(move |s| s.screens.tor.detail.log.clone_from(&lines));
     }
 
     /// What the switch couldn't do, said in the popover until it's switched again.
     pub fn tor_warning(&self, warning: Option<String>) {
-        self.update(move |s| s.screens.tor.detail.warning = warning);
+        self.every(move |s| s.screens.tor.detail.warning.clone_from(&warning));
     }
 
     /// A switch, or new routes, is done: what moved to the new way at once, and how many
@@ -95,7 +95,7 @@ impl Remote {
 
     /// Whether the terminal of `tab` went through Tor when it connected.
     pub fn through_tor(&self, tab: TabId, tor: bool) {
-        self.update(move |s| {
+        self.update_tab(tab, move |s| {
             if tor {
                 s.screens.tor.direct.remove(&tab);
             } else {

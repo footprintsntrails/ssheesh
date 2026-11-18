@@ -124,13 +124,13 @@ fn the_dialog_scrolls_in_a_low_window() {
 fn the_menu_opens_stats_containers_and_terminal_and_files_side_by_side() {
     let mut w = Window::open(false);
     w.right_click("server-2");
-    w.click("sm-3");
+    w.click("sm-4");
     assert_eq!(w.rt.state.bench.active().map(|t| (t.kind, t.server.as_str())), Some((TabKind::Stats, DB)));
     w.right_click("server-2");
-    w.click("sm-4");
+    w.click("sm-5");
     assert_eq!(w.rt.state.bench.active().map(|t| (t.kind, t.server.as_str())), Some((TabKind::Containers, DB)));
     w.right_click("server-2");
-    w.click("sm-2");
+    w.click("sm-3");
     let active = w.rt.state.bench.active().unwrap().clone();
     assert_eq!((active.kind, active.server.as_str()), (TabKind::Terminal, DB));
     let files = w.rt.state.bench.tabs_on(DB).find(|t| t.kind == TabKind::Files).unwrap().id;
@@ -147,11 +147,11 @@ fn the_address_is_copied_except_in_streamer_mode_and_a_saved_password_forgotten(
     w.key(Key::Escape, "");
     w.right_click("server-2");
     assert!(!w.tree().contains("Forget saved password"));
-    w.click("sm-7");
+    w.click("sm-8");
     assert!(w.rt.state.screens.notes.titles().contains(&"Copied the address"));
     // Forgetting it: asked first, then of the backend, said in a toast, and the row is gone.
     w.right_click("server-1");
-    w.click("sm-13");
+    w.click("sm-14");
     assert!(w.tree().contains("Forget the saved password for web-7731?"), "{}", w.tree());
     w.click("dialog-yes");
     assert!(w.asks().contains(&Ask::ForgetPassword { server: WEB.into() }));
@@ -170,7 +170,7 @@ fn the_address_is_copied_except_in_streamer_mode_and_a_saved_password_forgotten(
 fn a_look_can_be_automatic_any_colour_or_a_picture_and_a_failure_says_so() {
     let mut w = Window::open(false);
     w.right_click("server-2");
-    w.click("sm-9");
+    w.click("sm-10");
     assert!(w.tree().contains("Automatic: not checked yet"));
     // Any colour, typed.
     let typed = |w: &mut Window, text: &'static str| {
@@ -218,7 +218,7 @@ fn the_first_connect_guesses_the_icon_once_and_new_config_hosts_are_noted_in_the
     let detects = |w: &Window| w.asks().iter().filter(|a| matches!(a, Ask::Detect { first: true, .. })).count();
     assert_eq!(detects(&w), 0, "db-main has a look picked");
     w.right_click("server-2");
-    w.click("sm-9");
+    w.click("sm-10");
     w.click("sm-auto");
     w.click("sm-done");
     // Back on "Automatic", with nothing guessed yet: the next connect looks.
@@ -283,7 +283,7 @@ fn removing_a_server_stops_and_forgets_its_tunnels() {
         t.save("web", None, "", local(3000, SERVER, 3000));
     });
     w.right_click("server-2");
-    w.click("sm-13");
+    w.click("sm-14");
     w.click("dialog-yes");
     assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));
     let asked = w.world.lock().unwrap().tunnels.clone();

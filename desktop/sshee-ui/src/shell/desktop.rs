@@ -69,32 +69,60 @@ impl Remote {
     }
 
     /// Asks it of the window; nothing where there's no window to ask (a test, a headless run).
+    /// The backend's: of the window in front.
     pub fn window(&self, ask: WindowAsk) {
         if let Some(window) = &self.window {
             window(ask);
+        } else if let Some(door) = self.hub().and_then(|hub| hub.front_door()) {
+            door.window(ask);
         }
     }
 
-    /// A notification's click, or a tab picked from the tray: the window comes forward on
-    /// `tab`.
+    /// The backend's: each open window, the one in front last (so it stays in front).
+    fn each_window(&self) -> Vec<Remote> {
+        match self.hub() {
+            None => vec![self.clone()],
+            Some(hub) => {
+                let front = hub.front();
+                let mut doors = hub.doors();
+                doors.sort_by_key(|(n, _)| *n == front);
+                doors.into_iter().map(|(_, door)| door).collect()
+            }
+        }
+    }
+
+    /// A notification's click, or a tab picked from the tray: the window that has `tab` comes
+    /// forward on it.
     pub fn open_tab(&self, tab: TabId, token: Option<String>) {
-        self.window(WindowAsk::Raise { token });
-        self.update_tx(move |s, tx| {
+        let window = match self.hub() {
+            None => Some(self.clone()),
+            Some(hub) => hub.door(tab.window()),
+        };
+        let Some(window) = window else { return };
+        window.window(WindowAsk::Raise { token });
+        window.update_tx(move |s, tx| {
             s.window_shown(true);
             s.open_from_outside(tab, tx);
         });
     }
 
-    /// The tray's icon or its Show: the window comes forward as it is.
+    /// The tray's icon or its Show: the windows come forward as they are.
     pub fn show_window(&self, token: Option<String>) {
-        self.window(WindowAsk::Raise { token });
-        self.update(|s| s.window_shown(true));
+        let windows = self.each_window();
+        let last = windows.len().saturating_sub(1);
+        for (i, window) in windows.into_iter().enumerate() {
+            // A Wayland compositor's token is good once: for the window that ends in front.
+            window.window(WindowAsk::Raise { token: token.clone().filter(|_| i == last) });
+            window.update(|s| s.window_shown(true));
+        }
     }
 
-    /// The tray's Hide.
+    /// The tray's Hide: every window.
     pub fn hide_window(&self) {
-        self.window(WindowAsk::Hide);
-        self.update(|s| s.window_shown(false));
+        for window in self.each_window() {
+            window.window(WindowAsk::Hide);
+            window.update(|s| s.window_shown(false));
+        }
     }
 
     /// The tray's Quit.
@@ -119,6 +147,11 @@ impl Shell {
     /// The window comes forward, on the tab the link names when the backend knows it.
     pub fn open_link(&mut self, link: &str, tx: &mut Tx) {
         let tab = self.backend_mut().tab_of_link(link);
+        // Another window's tab: that window comes forward on it.
+        if let Some(tab) = tab.filter(|t| t.window() != self.window_no()) {
+            Remote::routed(self.hub().clone()).open_tab(tab, None);
+            return;
+        }
         if let Some(remote) = &self.remote {
             remote.window(WindowAsk::Raise { token: None });
         }

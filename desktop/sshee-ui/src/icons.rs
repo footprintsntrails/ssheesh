@@ -138,6 +138,8 @@ pub enum Icon {
     UpDown,
     /// Copy: two sheets, one over the other.
     Copy,
+    /// Open in a new window: a window, an arrow leaving it.
+    NewWindow,
     /// Split down: a window cut across.
     SplitDown,
     /// Fill the window with a pane, and back.
@@ -180,7 +182,7 @@ const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 78] = [
+    pub const ALL: [Icon; 79] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -255,6 +257,7 @@ impl Icon {
         Icon::Expand,
         Icon::Shrink,
         Icon::Copy,
+        Icon::NewWindow,
         Icon::More,
         Icon::Peek,
         Icon::FilePlus,
@@ -262,7 +265,7 @@ impl Icon {
     ];
 
     /// The signs that aren't a server's icon, for the component sheet.
-    pub const SIGNS: [Icon; 48] = [
+    pub const SIGNS: [Icon; 49] = [
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -304,6 +307,7 @@ impl Icon {
         Icon::Info,
         Icon::UpDown,
         Icon::Copy,
+        Icon::NewWindow,
         Icon::SplitDown,
         Icon::Expand,
         Icon::Shrink,
@@ -416,6 +420,7 @@ impl Icon {
             Icon::Cube => (16.0, &[Path("M8 1.9l5.4 3v6.2L8 14.1l-5.4-3V4.9zM2.6 4.9 8 8l5.4-3.1M8 8v6.1")]),
             Icon::Check => (16.0, &[Path("M3.4 8.4l3 3 6.2-6.6")]),
             Icon::Copy => (16.0, &[Rect(5.6, 5.6, 8.0, 8.0, 1.6), Path("M10.4 3.6v-.4a1 1 0 0 0-1-1H3.4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.4")]),
+            Icon::NewWindow => (16.0, &[Path("M7.2 3H4a1.6 1.6 0 0 0-1.6 1.6v7.4A1.6 1.6 0 0 0 4 13.6h7.4A1.6 1.6 0 0 0 13 12V8.8M9.4 2.4h4.2v4.2M13.4 2.6 8 8")]),
             Icon::Pencil => (16.0, &[Path("M10.6 2.9l2.5 2.5-7.6 7.6-3 .5.5-3zM9.2 4.3l2.5 2.5")]),
             Icon::Bin => (
                 16.0,

@@ -642,10 +642,11 @@ fn a_right_click_on_a_server_opens_its_menu() {
     let mut w = Window::busy();
     w.right_click("server-2");
     let tree = w.tree();
-    for said in ["New terminal", "Files", "Terminal and files side by side", "Stats", "Containers", "Tunnels…", "Free up disk space…", "Copy address", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
+    for said in ["New terminal", "Open in new window", "Files", "Terminal and files side by side", "Stats", "Containers", "Tunnels…", "Free up disk space…", "Copy address", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
         assert!(tree.contains(said), "{said} isn't in the menu: {tree}");
     }
-    // Arrows and Return: the second row is Files.
+    // Arrows and Return: the third row is Files.
+    w.key(Key::Down, "");
     w.key(Key::Down, "");
     w.key(Key::Down, "");
     w.key(Key::Enter, "");
@@ -653,15 +654,15 @@ fn a_right_click_on_a_server_opens_its_menu() {
     assert_eq!(w.rt.state.bench.active().map(|t| (t.kind, t.server.as_str())), Some((TabKind::Files, DB)));
     // A label: db-main becomes Production, and a second pick takes it off.
     w.right_click("server-2");
-    w.click("sm-10");
+    w.click("sm-11");
     assert!(w.rt.state.bench.server(DB).unwrap().is_prod());
     assert!(w.asks().contains(&Ask::SetEnv { server: DB.into(), env: Some(EnvLabel::Prod) }));
     w.right_click("server-2");
-    w.click("sm-10");
+    w.click("sm-11");
     assert!(!w.rt.state.bench.server(DB).unwrap().is_prod());
-    // This computer has only the first five rows; Esc closes.
+    // This computer has only the first six rows; Esc closes.
     w.right_click("server-0");
-    assert!(w.has("sm-4") && !w.has("sm-5"));
+    assert!(w.has("sm-5") && !w.has("sm-6"));
     w.key(Key::Escape, "");
     assert!(w.rt.state.screens.server_menu.open.is_none());
     // The tile on the main menu has the same menu.
@@ -675,14 +676,14 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     let mut w = Window::open(false);
     // Rename: the name is selected, so typing replaces it.
     w.right_click("server-2");
-    w.click("sm-8");
+    w.click("sm-9");
     assert!(w.tree().contains("Rename db-main"));
     w.type_text("Main database");
     w.key(Key::Enter, "");
     assert_eq!(w.servers(), ["This computer", "web-7731", "Main database"]);
     // Icon and colour.
     w.right_click("server-2");
-    w.click("sm-9");
+    w.click("sm-10");
     assert!(w.tree().contains("Icon and color for Main database"));
     w.click("icon-rocket");
     assert_eq!(w.rt.state.bench.server(DB).unwrap().icon, "rocket");
@@ -693,7 +694,7 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     // Remove: asked by name, in the middle of the window over a dimmed page, the menu gone;
     // Return is Cancel.
     w.right_click("server-2");
-    w.click("sm-13");
+    w.click("sm-14");
     assert!(w.rt.state.screens.server_menu.open.is_none() && w.has("dialog-layer"));
     let tree = w.tree();
     assert!(tree.contains("Remove Main database?") && tree.contains("Only removes it from SSHeesh. Nothing changes on the server."), "{tree}");
@@ -701,7 +702,7 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     assert!(!w.has("dialog-layer"));
     assert_eq!(w.servers().len(), 3);
     w.right_click("server-2");
-    w.click("sm-13");
+    w.click("sm-14");
     w.click("dialog-yes");
     assert_eq!(w.servers(), ["This computer", "web-7731"]);
     assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));

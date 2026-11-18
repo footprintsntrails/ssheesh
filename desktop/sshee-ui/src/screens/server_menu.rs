@@ -1,6 +1,6 @@
 //! A server's menu: a right click on its icon in the sidebar or on its tile on the main menu
 //! (0.10's server menu in `Sidebar.tsx`, with its look picker and its "Remove?" question).
-//! New terminal, Files, the two side by side, Stats, Containers, its tunnels and "Free up disk
+//! New terminal, the server in a window of its own, Files, the two side by side, Stats, Containers, its tunnels and "Free up disk
 //! space"; its address
 //! to copy; a name of your own; its icon, colour or picture; its Production, Staging or
 //! Development label; forgetting its saved password; and taking it out of the list, asked by
@@ -90,6 +90,7 @@ pub struct State {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Item {
     NewTerminal,
+    NewWindow,
     Files,
     SideBySide,
     Stats,
@@ -112,7 +113,7 @@ fn from_config(server: &Server) -> bool {
 /// The rows for a server, in groups (a rule is drawn between two groups). Its address isn't
 /// offered in streamer mode; "Forget saved password" only when one is saved.
 fn groups(server: &Server, saved_password: bool, streaming: bool) -> Vec<Vec<Item>> {
-    let mut groups = vec![vec![Item::NewTerminal, Item::Files, Item::SideBySide, Item::Stats, Item::Containers]];
+    let mut groups = vec![vec![Item::NewTerminal, Item::NewWindow, Item::Files, Item::SideBySide, Item::Stats, Item::Containers]];
     if !server.is_local() {
         groups[0].push(Item::Tunnels);
         groups[0].push(Item::Disk);
@@ -229,6 +230,7 @@ impl Shell {
                 self.bench.open(TabKind::Terminal, &key);
                 self.settle(tx);
             }
+            Item::NewWindow => self.open_in_new_window(&key, tx),
             Item::Files | Item::Stats | Item::Containers => {
                 self.screens.server_menu.open = None;
                 let kind = match item {
@@ -434,6 +436,7 @@ fn menu_page(t: &Theme, server: &Server, saved_password: bool, streaming: bool, 
             let state = if hot == Some(n) { RowState::Hot } else { RowState::Rest };
             let spec = match &item {
                 Item::NewTerminal => ListRow { icon: Some(Icon::Terminal), label: "New terminal", state, ..ListRow::default() },
+                Item::NewWindow => ListRow { icon: Some(Icon::NewWindow), label: "Open in new window", state, ..ListRow::default() },
                 Item::Files => ListRow { icon: Some(Icon::Folder), label: "Files", state, ..ListRow::default() },
                 Item::SideBySide => ListRow { icon: Some(Icon::Sidebar), label: "Terminal and files side by side", state, ..ListRow::default() },
                 Item::Stats => ListRow { icon: Some(Icon::Stats), label: "Stats", state, ..ListRow::default() },

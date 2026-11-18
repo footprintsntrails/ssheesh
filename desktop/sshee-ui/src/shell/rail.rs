@@ -212,7 +212,12 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
             .key(format!("server-{i}"))
             .on_press_tx(move |s: &mut Shell, tx| {
                 s.screens.server_card.hide();
-                s.go_to(&key, tx)
+                // Shift+click: in a window of its own, as a link in a browser.
+                if tx.mods().shift {
+                    s.open_in_new_window(&key, tx);
+                } else {
+                    s.go_to(&key, tx);
+                }
             })
             // Its card (`screens::server_card`) says more than a tooltip; a right click
             // opens its menu (`screens::server_menu`).
