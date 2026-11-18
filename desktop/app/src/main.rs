@@ -152,6 +152,10 @@ impl Backend for Live {
         self.inner.containers(ask);
     }
 
+    fn disk(&mut self, ask: sshee_app::disk::Ask) {
+        self.inner.disk(ask);
+    }
+
     fn stats(&mut self, ask: sshee_app::stats::Ask) {
         self.inner.stats(ask);
     }
