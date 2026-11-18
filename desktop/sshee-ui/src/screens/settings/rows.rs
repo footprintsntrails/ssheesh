@@ -13,7 +13,7 @@ use sshee_term::engine::Color as TermColor;
 use super::{keyboard, TorCommand};
 use crate::icons::{icon, logo, Icon};
 use crate::kit::field::{code_input, field, input};
-use crate::kit::form::{form_group, form_heading, form_note, form_row, form_row_stacked, RowText};
+use crate::kit::form::{form_group, form_heading, form_note, form_row, form_row_stacked, form_titled, RowText};
 use crate::kit::popup::{popup_button, popup_button_max};
 use crate::kit::push::{icon_button, push_button, toggle_button, Push};
 use crate::kit::segmented::segmented;
@@ -553,9 +553,9 @@ fn boxed(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
     let words = RowText { label: r.label, help: help.as_deref(), later };
     let mut e = match wide(s, t, r) {
         Some(control) => form_row_stacked(t, words, control),
-        // A control wider than about half the row goes under the words, which then have the
+        // A control wider than two fifths of the row goes under the words, which then have the
         // row's whole width; a pop-up there shows its whole value.
-        None if control_width(s, r).is_some_and(|w| w > s.screens.settings.row_width() / 2.0 - 40.0) => {
+        None if control_width(s, r).is_some_and(|w| w > s.screens.settings.row_width() * 0.4) => {
             form_row_stacked(t, words, row().w_full().child(control(s, t, r)))
         }
         None => form_row(t, words, control(s, t, r)),
@@ -574,25 +574,43 @@ pub(super) fn section(s: &Shell, t: &'static Theme, section: Section) -> Vec<El>
     if let (Section::Privacy, Some(notice)) = (section, s.settings.notice()) {
         out.push(form_note(t, &notice.headline()).key("privacy-why"));
     }
+    out.extend(draw(s, t, catalog::section_rows(section, &s.settings, Platform::current()), true));
+    out
+}
+
+/// What a search found in one section: its rows in boxes, without the section's own headings
+/// (the section's name is over them).
+pub(super) fn draw_flat(s: &Shell, t: &'static Theme, rows: Vec<&'static Row>) -> Vec<El> {
+    draw(s, t, rows, false)
+}
+
+/// `rows` in their boxes, each box under its quiet heading when `headings`.
+fn draw(s: &Shell, t: &'static Theme, rows: Vec<&'static Row>, headings: bool) -> Vec<El> {
+    let mut out = Vec::new();
     let mut group: Vec<El> = Vec::new();
     let mut heading: Option<&str> = None;
-    let flush = |group: &mut Vec<El>, out: &mut Vec<El>| {
-        if !group.is_empty() {
-            out.push(form_group(t, std::mem::take(group)));
+    // A heading hasn't been drawn yet: it goes with the first box under it, close to it.
+    let mut titled: Option<&str> = None;
+    let flush = |group: &mut Vec<El>, out: &mut Vec<El>, titled: &mut Option<&str>| {
+        if group.is_empty() {
+            return;
         }
+        let rows = form_group(t, std::mem::take(group));
+        out.push(match titled.take() {
+            Some(title) => form_titled(t, title, rows),
+            None => rows,
+        });
     };
-    for r in catalog::section_rows(section, &s.settings, Platform::current()) {
+    for r in rows {
         if let Some(card) = alone(s, t, r) {
-            flush(&mut group, &mut out);
+            flush(&mut group, &mut out, &mut titled);
             out.push(card.key(r.key));
             continue;
         }
-        if r.group != heading {
-            flush(&mut group, &mut out);
+        if headings && r.group != heading {
+            flush(&mut group, &mut out, &mut titled);
             heading = r.group;
-            if let Some(title) = heading {
-                out.push(form_heading(t, title, None));
-            }
+            titled = heading;
         }
         group.push(boxed(s, t, r));
         // What belongs right under a row, outside its box.
@@ -607,10 +625,10 @@ pub(super) fn section(s: &Shell, t: &'static Theme, section: Section) -> Vec<El>
             _ => None,
         };
         if let Some(under) = under {
-            flush(&mut group, &mut out);
+            flush(&mut group, &mut out, &mut titled);
             out.push(under);
         }
     }
-    flush(&mut group, &mut out);
+    flush(&mut group, &mut out, &mut titled);
     out
 }

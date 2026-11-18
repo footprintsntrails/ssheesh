@@ -13,11 +13,16 @@
 //! └── home-column  at most 720 pt, centred
 //!     ├── home-search   the field: a button that opens the palette over itself
 //!     ├── home-tiles    tile-0 … tile-N, tile-add (wraps)
-//!     ├── home-config   "3 servers in ~/.ssh/config to pick from", when there are
-//!     ├── home-running  "Running now": run-0 …
-//!     ├── home-closed   "Recently closed": closed-0 …
+//!     ├── home-config   "3 servers in ~/.ssh/config to pick from", when there are;
+//!     │                 home-first on a first start, when there's nothing else to show
+//!     ├── home-running  "Running now": run-0 … in one quiet box
+//!     ├── home-closed   "Recently closed": closed-0 … in one quiet box
 //!     └── home-hints
 //! ```
+//!
+//! One strong thing, the search, as a browser's new tab is its address bar; the servers in
+//! their own colours and pictures under it; the lists in quiet boxes, as Settings groups its
+//! rows. The logo stays the menu's button: it isn't drawn again here.
 
 use indexmap::IndexMap;
 use rune::{col, row, text, Cx, El, Key, KeyEvent, ScrollSpec, Tx};
@@ -31,12 +36,16 @@ use sshee_app::workbench::{ServerKey, TabKind};
 use crate::icons::{icon, Icon};
 use crate::kit::list::{list_row, ListRow};
 use crate::kit::menu::{key_cap, RowState};
-use crate::kit::tile::{tile, Tile, TILE_WIDTH};
+use crate::kit::tile::{tile, Tile, TILE_ICON, TILE_WIDTH};
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
 
 /// The gap between two tiles.
 const TILE_GAP: f32 = 4.0;
+/// A server's picture or icon on its tile.
+const TILE_GLYPH: f32 = 26.0;
+/// The page's column at its widest.
+const COLUMN_WIDTH: f32 = 720.0;
 /// The search field's width, the palette's.
 pub const SEARCH_WIDTH: f32 = 560.0;
 
@@ -60,12 +69,20 @@ pub struct State {
     pub old_new: usize,
     /// The workbench changed off the screen (a server was added): settle at the next frame.
     pub settle_due: bool,
+    /// The page's height as last laid out (0 before): the column starts lower on a tall one.
+    pub height: f32,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { spot: Spot::Search, keys: false, columns: 6, waits: Waits::default(), now: 0.0, colors: IndexMap::new(), config_new: 0, old_new: 0, settle_due: false }
+        State { spot: Spot::Search, keys: false, columns: 6, waits: Waits::default(), now: 0.0, colors: IndexMap::new(), config_new: 0, old_new: 0, settle_due: false, height: 0.0 }
     }
+}
+
+/// Where the column starts: a little over a tenth of the way down, as a browser's new tab
+/// puts its field, never tight under the bar nor halfway down.
+fn top(height: f32) -> f32 {
+    (height * 0.13).clamp(56.0, 140.0).round()
 }
 
 /// What every frame does for the screens of this file's family, from `Shell::poll`: notes
@@ -178,13 +195,23 @@ fn spot_key(spot: Spot) -> String {
     }
 }
 
-/// A section's heading, with a quiet note at its end.
+/// A list's heading: its name in the page's own ink, a quiet note at its end.
 fn heading(t: &Theme, name: &str, note: &str) -> El {
-    let mut h = row().w_full().px(8.0).pb(4.0).items_center().child(text(name).font(theme::GROUP).color(t.l2).single_line());
+    let mut h = row().w_full().px(4.0).items_center().child(text(name).font(theme::TEXT_BOLD).color(t.l1).single_line().role("heading").level(2));
     if !note.is_empty() {
         h = h.child(rune::spacer()).child(text(note).font(theme::SMALL).color(t.l2).single_line());
     }
     h
+}
+
+/// A list under its heading: its rows in one quiet box, as Settings groups its rows.
+fn list(t: &Theme, key: &str, name: &str, note: &str, rows: Vec<El>) -> El {
+    let mut body = col().w_full().padding(4.0).gap(1.0).radius(theme::RADIUS_GROUP).fill(t.group).border(1.0, t.hair2);
+    for row in rows {
+        body = body.child(row);
+    }
+    // As wide as the search over it: the page keeps one measure.
+    col().key(key.to_owned()).w_full().max_w(SEARCH_WIDTH).gap(8.0).child(heading(t, name, note)).child(body)
 }
 
 /// A key cap and what it does, for the line of hints.
@@ -198,7 +225,8 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     let on = |spot: Spot| state.keys && home.clamp(state.spot) == spot;
     let keys = |shortcut: Shortcut| shortcut_label(shortcut, s.options.mac_keys, &s.options.shortcuts);
 
-    // The search field: the palette's own, at rest.
+    // The search field: the palette's own, at rest. The page's one strong thing, as a
+    // browser's new tab is its address bar.
     let mut search = row()
         .key("home-search")
         .w(SEARCH_WIDTH)
@@ -210,6 +238,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         .radius(theme::RADIUS_POPOVER)
         .fill(t.pop)
         .border(1.0, t.rim)
+        .shadow(2.0, 10.0, rune::Color::BLACK.alpha(if t.dark { 0.28 } else { 0.06 }))
         .items_center()
         .hover(t.hov)
         .role("button")
@@ -241,11 +270,20 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         let label = server.env.as_ref().map(|env| (env_short(env), *env == EnvLabel::Prod));
         let spec = Tile {
             icon: Some(Icon::for_server(&server.icon)),
-            glyph: Some(crate::screens::server_menu::glyph_of(s, &server.server, &server.icon, 22.0, t.l2on)),
+            // A picture fills the square, as an app's icon does; an icon sits in it.
+            glyph: Some(crate::screens::server_menu::glyph_of(
+                s,
+                &server.server,
+                &server.icon,
+                if crate::screens::server_menu::has_picture(s, &server.server) { TILE_ICON } else { TILE_GLYPH },
+                t.l2on,
+            )),
             name: &name,
             label,
             tint: color,
-            key: key.as_deref(),
+            // The digit that opens it shows once the keyboard is in use here; the hints under
+            // the page say the digits are there.
+            key: key.as_deref().filter(|_| state.keys),
             waiting: server.waiting,
             open: server.open,
             focused: on(Spot::Tile(i)),
@@ -262,7 +300,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     let add = Tile { icon: Some(Icon::Plus), name: "Add a server", focused: on(Spot::Add), dashed: true, ..Tile::default() };
     tiles = tiles.child(tile(t, add).key("tile-add").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
 
-    let mut column = col().key("home-column").w_full().max_w(720.0).px(24.0).pt(56.0).pb(40.0).items_center().child(search).child(tiles.mt(32.0));
+    let mut column = col().key("home-column").w_full().max_w(COLUMN_WIDTH).px(24.0).pt(top(state.height)).pb(40.0).items_center().child(search).child(tiles.mt(40.0));
 
     // Servers waiting to be brought in: each line opens "Add a server", where they're listed.
     let plural = |n: usize| if n == 1 { "" } else { "s" };
@@ -270,30 +308,37 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         ("home-old", state.old_new, format!("{} server{} from SSHeesh 0.10 to bring over", state.old_new, plural(state.old_new))),
         ("home-config", state.config_new, format!("{} server{} in ~/.ssh/config to pick from", state.config_new, plural(state.config_new))),
     ];
-    let mut offered = row().key("home-offers").mt(10.0).gap(8.0).flex_wrap().justify_center();
+    let mut offered = row().key("home-offers").mt(14.0).gap(4.0).flex_wrap().justify_center();
     for (key, n, words) in offers {
         if n > 0 {
             offered = offered.child(
                 row()
                     .key(key)
                     .h(26.0)
-                    .px(12.0)
-                    .radius(13.0)
+                    .px(10.0)
+                    .gap(6.0)
+                    .radius(theme::RADIUS_ROW)
                     .items_center()
-                    .fill(t.hov2)
-                    .hover(t.down)
+                    .hover(t.hov2)
+                    .press(t.down)
                     .role("button")
                     .on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx))
-                    .child(text(words).font(theme::NOTE).color(t.l1).single_line()),
+                    .child(icon(Icon::Plus, 12.0, t.l2on))
+                    .child(text(words).font(theme::NOTE).color(t.l2on).single_line()),
             );
         }
     }
     if state.old_new + state.config_new > 0 {
         column = column.child(offered);
+    } else if home.tiles.len() <= 1 && home.running.is_empty() && home.closed.is_empty() {
+        // A first start: only this computer so far. One line on what the page is for.
+        column = column.child(
+            text("Servers you add show here, one click or one digit away.").key("home-first").font(theme::NOTE).color(t.l2).single_line().mt(18.0),
+        );
     }
 
     if !home.running.is_empty() {
-        let mut section = col().key("home-running").w_full().mt(32.0).child(heading(t, "Running now", ""));
+        let mut rows = Vec::new();
         for (i, r) in home.running.iter().enumerate() {
             // Streamer mode: the server as "Server 2", the tab's name with names dotted.
             let server = s.bench.tab(r.tab).map_or_else(|| s.text_shown(&r.server).into_owned(), |tab| s.server_shown(&tab.server, &r.server).into_owned());
@@ -310,14 +355,14 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
                 ..ListRow::default()
             };
             let tab = r.tab;
-            section = section.child(list_row(t, &spec).key(format!("run-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.focus_tab(tab, tx)));
+            rows.push(list_row(t, &spec).key(format!("run-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.focus_tab(tab, tx)));
         }
-        column = column.child(section);
+        column = column.child(list(t, "home-running", "Running now", "", rows).mt(44.0));
     }
 
     if !home.closed.is_empty() {
         let note = keys(Shortcut::ReopenTab).map(|k| format!("{k} brings back the last one")).unwrap_or_default();
-        let mut section = col().key("home-closed").w_full().mt(24.0).child(heading(t, "Recently closed", &note));
+        let mut rows = Vec::new();
         for (i, c) in home.closed.iter().enumerate() {
             let server = s.bench.closed().get(c.index).map_or_else(|| s.text_shown(&c.server).into_owned(), |closed| s.server_shown(&closed.server, &c.server).into_owned());
             let note = match &c.path {
@@ -333,23 +378,23 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
             };
             let spec = ListRow { icon: Some(glyph), label: &label, note: &note, tail: "Reopen", state: if on(Spot::Closed(i)) { RowState::Hot } else { RowState::Rest }, ..ListRow::default() };
             let index = c.index;
-            section = section.child(list_row(t, &spec).key(format!("closed-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.reopen_closed_at(index, tx)));
+            rows.push(list_row(t, &spec).key(format!("closed-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.reopen_closed_at(index, tx)));
         }
-        column = column.child(section);
+        let gap = if home.running.is_empty() { 44.0 } else { 28.0 };
+        column = column.child(list(t, "home-closed", "Recently closed", &note, rows).mt(gap));
     }
 
-    let hints = [hint(t, keys(Shortcut::NewTerminal), "new terminal"), hint(t, keys(Shortcut::ReopenTab), "reopen closed tab")];
-    column = column.child(
-        row()
-            .key("home-hints")
-            .mt(36.0)
-            .gap(20.0)
-            .items_center()
-            .justify_center()
-            .flex_wrap()
-            .children(hints.into_iter().flatten())
-            .child(text("Right-click a server for its tools").font(theme::SMALL).color(t.l2).single_line()),
-    );
+    // A few keys worth knowing, only the ones that do something here: the digits and the
+    // right-click once there are servers. The closed tabs' key is in their list's heading.
+    let numbered = home.tiles.iter().filter(|tile| tile.key.is_some()).count();
+    let servers = home.tiles.len() > 1;
+    let digits = (numbered > 1).then(|| format!("1–{}", numbered.min(9)));
+    let hints = [hint(t, keys(Shortcut::NewTerminal), "new terminal"), hint(t, digits, "open a server")];
+    let mut line = row().key("home-hints").mt(48.0).gap(20.0).items_center().justify_center().flex_wrap().children(hints.into_iter().flatten());
+    if servers {
+        line = line.child(text("Right-click a server for its tools").font(theme::SMALL).color(t.l2).single_line());
+    }
+    column = column.child(line);
 
     col()
         .key("home-page")
@@ -361,5 +406,6 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         .no_focus_ring()
         .on_key(|s: &mut Shell, ev, tx| s.home_key(ev, tx))
         .label_static("Main menu")
+        .on_layout(|s: &mut Shell, [_, _, _, h]| s.screens.home.height = h)
         .child(column)
 }

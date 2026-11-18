@@ -546,7 +546,7 @@ fn search_finds_a_setting_and_goes_to_its_row() {
     w.click("settings-gear");
     w.click("settings-search");
     w.typed("font size");
-    assert!(w.has("nav-results") && !w.has("nav-sections"));
+    assert!(w.has("settings-results") && w.has("term-font-size-control"));
     assert!(w.has("found-0") && !w.has("found-1"));
     w.click("found-0");
     let state = &w.rt.state.screens.settings;
@@ -565,9 +565,24 @@ fn search_finds_a_setting_and_goes_to_its_row() {
     // Nothing found says so; Esc empties the field before it leaves Settings.
     w.click("settings-search");
     w.typed("zebra");
-    assert!(w.has("nav-none") && w.tree().contains("No setting matches “zebra”."));
+    assert!(w.has("settings-none") && w.tree().contains("No setting matches “zebra”."));
     w.key(Key::Escape, "");
     assert!(w.rt.state.screens.settings.search.text.is_empty() && w.rt.state.screens.settings.open);
+}
+
+#[test]
+fn what_a_search_finds_can_be_changed_right_there() {
+    let mut w = Window::defaults();
+    w.click("settings-gear");
+    w.typed("blink");
+    // The row itself, from Terminal, with its switch: no trip to the section.
+    assert!(w.has("settings-results") && w.has("found-in-terminal"));
+    let before = w.settings().cursor_blink;
+    w.click("term-blink-control");
+    assert_eq!(w.settings().cursor_blink, !before);
+    assert_eq!(w.rt.state.screens.settings.search.text, "blink");
+    // A section the search found nothing in is quieter in the list, and none is picked.
+    assert_ne!(w.fill("nav-layout"), Theme::of(true).selrail.hex());
 }
 
 #[test]

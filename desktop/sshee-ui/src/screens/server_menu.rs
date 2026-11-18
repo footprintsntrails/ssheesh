@@ -395,6 +395,11 @@ pub fn glyph_of(s: &Shell, key: &str, icon_id: &str, size: f32, ink: Color) -> E
     icon(Icon::for_server(icon_id), size, own_color(s, key).unwrap_or(ink))
 }
 
+/// Whether [`glyph_of`] draws the server's picture (streamer mode hides it).
+pub fn has_picture(s: &Shell, key: &str) -> bool {
+    s.screens.server_menu.pictures.contains_key(key) && !s.streaming()
+}
+
 /// The colour you picked for a server, if you picked one.
 pub fn own_color(s: &Shell, key: &str) -> Option<Color> {
     s.screens.server_menu.faces.get(key).filter(|f| f.look.own_color).and_then(|f| rune::color::hex(&f.look.color))

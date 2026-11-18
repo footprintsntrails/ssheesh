@@ -1,13 +1,16 @@
 //! Settings: a page inside the window, in the place of the tab on screen, opened by the gear
 //! and by its shortcut (⌘, on a Mac, Ctrl+, elsewhere). A quiet list of sections at the left
 //! with a search field over it, the section's rows at the right, as in a Mac settings window.
+//! The rows keep to a column about as wide as a Mac's settings window, beside the list, so a
+//! control is never far from its name or from the list.
 //!
 //! ```text
 //! settings   row, the page's colour
-//! ├── settings-nav    232 pt: [search] then the sections, or what the search found
+//! ├── settings-nav    232 pt: [search] then the sections, in three bunches
 //! └── settings-main   column
-//!     ├── settings-head   the section's name … Reset, Done
-//!     └── settings-<id>   the rows, scrolling
+//!     ├── settings-head   the section's name … Reset, Close
+//!     └── settings-<id>   the rows under their headings, scrolling; while a search is on,
+//!                         settings-results: what it found, live, by section
 //! ```
 //!
 //! What a row is (its name, its help, its control, whether 1.0 acts on it yet) is data:
@@ -33,6 +36,7 @@ use sshee_app::settings_store::SettingsStore;
 
 use crate::icons::{icon, Icon};
 use crate::kit::field::{input, search_field};
+use crate::kit::form::form_group;
 use crate::kit::popup::popup_menu;
 use crate::kit::push::{icon_button, push_button, Push};
 use crate::shell::Shell;
@@ -40,8 +44,20 @@ use crate::theme::{self, Theme};
 
 /// The list of sections' width.
 const NAV_WIDTH: f32 = 232.0;
-/// The widest the rows get: past this a row's control drifts too far from its name.
-const CONTENT_WIDTH: f32 = 640.0;
+/// The widest the rows get: past this a row's control drifts too far from its name. About
+/// what a Mac settings window gives its rows, so a switch is a short reach from its words.
+const CONTENT_WIDTH: f32 = 560.0;
+/// The rows' column's padding at each side.
+const CONTENT_PAD: f32 = 28.0;
+/// The sections in the list, in the bunches it shows them: what you look at and touch, what
+/// you share and where it goes, this copy of SSHeesh. A little space between bunches.
+const NAV_GROUPS: [&[Section]; 3] = [
+    &[Section::Layout, Section::Appearance, Section::Terminal, Section::Keyboard],
+    &[Section::Privacy, Section::Files, Section::Agents, Section::Tor],
+    &[Section::Updates, Section::About],
+];
+/// The space between two bunches of sections.
+const NAV_GROUP_GAP: f32 = 12.0;
 
 /// What Settings asks of Tor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,8 +133,8 @@ impl State {
     /// How wide a box of rows is: the column less its padding, or the most it can be before
     /// it has been laid out.
     pub(crate) fn row_width(&self) -> f32 {
-        if self.rows_width > 56.0 {
-            self.rows_width - 56.0
+        if self.rows_width > CONTENT_PAD * 2.0 {
+            self.rows_width - CONTENT_PAD * 2.0
         } else {
             CONTENT_WIDTH
         }
@@ -182,6 +198,11 @@ impl State {
         self.looks = looks::Looks::default();
     }
 
+    /// Something is typed in the search field: the page shows what it finds.
+    fn searching(&self) -> bool {
+        !self.search.text.trim().is_empty()
+    }
+
     /// What the search field found.
     fn results(&self, platform: Platform) -> Vec<Found> {
         catalog::search(&self.search.text, platform)
@@ -243,11 +264,12 @@ fn section_icon(section: Section) -> Icon {
     }
 }
 
-/// One section in the list: its icon and name, filled blue when it is the one on screen.
-fn nav_row(t: &Theme, section: Section, on: bool) -> El {
+/// One section in the list: its icon and name, in a quiet fill when it is the one on screen.
+/// `quiet`: a search is on and found nothing in it.
+fn nav_row(t: &Theme, section: Section, on: bool, quiet: bool) -> El {
     // The section you're in is lit as the sidebar's and the menus' picked rows are: a quiet
     // fill of the theme's own, not a fixed blue that ignores it and outshouts the page.
-    let ink = t.l1;
+    let ink = if quiet { t.l2 } else { t.l1 };
     let mut e = row()
         .key(format!("nav-{}", section.id()))
         .h(theme::CONTROL)
@@ -265,7 +287,7 @@ fn nav_row(t: &Theme, section: Section, on: bool) -> El {
             s.screens.settings.go_to(section);
             tx.instant();
         })
-        .child(icon(section_icon(section), theme::ICON, if on { t.l1 } else { t.l2 }))
+        .child(icon(section_icon(section), theme::ICON, if on { t.l1 } else { t.l2on.alpha(if quiet { 0.6 } else { 1.0 }) }))
         .child(text(section.label()).font(theme::TEXT).color(ink).single_line().truncate().grow(1.0).shrink().a11y_hidden());
     e = if on { e.fill(t.selrail) } else { e.hover(t.hov2).press(t.down) };
     e
@@ -300,59 +322,94 @@ fn nav(s: &Shell, t: &'static Theme) -> El {
             }),
     )
     .w_full();
-    let mut list = col().key("settings-nav").w(NAV_WIDTH).h_full().padding(10.0).gap(2.0).border_sides([0.0, 1.0, 0.0, 0.0], t.hair2).child(search.mb(8.0));
-    if state.search.text.trim().is_empty() {
-        let mut sections = col().key("nav-sections").w_full().gap(2.0).role("tablist").focus_group().label_static("Settings");
-        for section in Section::ALL {
-            sections = sections.child(nav_row(t, section, section == state.section));
+    // While a search is on, its results fill the page (`results`); the list stays, the
+    // sections with nothing found quieter and none of them picked.
+    let searching = state.searching();
+    let hits: Vec<Section> = if searching { state.results(Platform::current()).into_iter().map(|f| f.section).collect() } else { Vec::new() };
+    let mut sections = col().key("nav-sections").w_full().gap(NAV_GROUP_GAP).role("tablist").focus_group().label_static("Settings");
+    for bunch in NAV_GROUPS {
+        let mut rows = col().w_full().gap(2.0);
+        for &section in bunch {
+            rows = rows.child(nav_row(t, section, !searching && section == state.section, searching && !hits.contains(&section)));
         }
-        return list.child(sections);
+        sections = sections.child(rows);
     }
-    let results = state.results(Platform::current());
-    if results.is_empty() {
-        let none = format!("No setting matches “{}”.", state.search.text.trim());
-        return list.child(text(none).key("nav-none").font(theme::NOTE).color(t.l2).wrap().px(8.0).py(6.0));
+    col().key("settings-nav").w(NAV_WIDTH).h_full().padding(10.0).border_sides([0.0, 1.0, 0.0, 0.0], t.hair2).child(search.mb(10.0)).child(sections)
+}
+
+/// What a search found, in place of a section's rows: each section's matching rows under the
+/// section's name, as live as in their section, and the way to the section itself.
+fn results(s: &Shell, t: &'static Theme) -> Vec<El> {
+    let state = &s.screens.settings;
+    let found = state.results(Platform::current());
+    let query = state.search.text.trim();
+    if found.is_empty() {
+        let none = format!("No setting matches “{query}”.");
+        return vec![col()
+            .key("settings-none")
+            .w_full()
+            .pt(48.0)
+            .gap(6.0)
+            .items_center()
+            .child(icon(Icon::Search, 28.0, t.l2))
+            .child(text(none).font(theme::TEXT).color(t.l1).single_line().truncate())
+            .child(text("Try another word, like “font”, “dark” or “copy”.").font(theme::NOTE).color(t.l2).single_line())];
     }
-    let mut found = col().key("nav-results").w_full().gap(2.0).grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false });
-    for (i, hit) in results.into_iter().enumerate() {
-        let (label, section) = (hit.label, hit.section);
-        found = found.child(
-            col()
-                .key(format!("found-{i}"))
-                .w_full()
-                .px(8.0)
-                .py(5.0)
-                .gap(1.0)
-                .radius(theme::RADIUS_ROW)
-                .role("button")
-                .label(format!("{label}, {}", section.label()))
-                .focusable(true)
-                .hover(t.hov2)
-                .press(t.down)
-                .on_press_tx(move |s: &mut Shell, tx| jump(s, &hit, tx))
-                .child(text(label).font(theme::TEXT).color(t.l1).wrap().a11y_hidden())
-                .child(text(section.label()).font(theme::SMALL).color(t.l2).single_line().a11y_hidden()),
-        );
+    let on = keyboard(s);
+    let mut out = Vec::new();
+    for (n, section) in Section::ALL.into_iter().filter(|section| found.iter().any(|f| f.section == *section)).enumerate() {
+        let hits: Vec<&Found> = found.iter().filter(|f| f.section == section).collect();
+        let first = hits[0].clone();
+        // The section's name: a click goes there, to the first row found in it.
+        let title = row()
+            .key(format!("found-{n}"))
+            .h(26.0)
+            .px(8.0)
+            .ml(4.0)
+            .gap(7.0)
+            .radius(theme::RADIUS_ROW)
+            .items_center()
+            .role("link")
+            .label(format!("Show in {}", section.label()))
+            .focusable(true)
+            .hover(t.hov2)
+            .press(t.down)
+            .on_press_tx(move |s: &mut Shell, tx| jump(s, &first, tx))
+            .child(icon(section_icon(section), 14.0, t.l2on))
+            .child(text(section.label()).font(theme::GROUP_TITLE).color(t.l2on).single_line().a11y_hidden())
+            .child(icon(Icon::ChevronRight, 12.0, t.l2).a11y_hidden());
+        let mut block = col().key(format!("found-in-{}", section.id())).w_full().gap(6.0).child(row().w_full().child(title));
+        if section == Section::Keyboard {
+            let ids: Vec<&'static str> =
+                hits.iter().filter_map(|f| sshee_app::settings_store::keymap::GROUPS.iter().flat_map(|(_, ids)| ids.iter().copied()).find(|id| f.key == format!("shortcut-{id}"))).collect();
+            block = block.child(form_group(t, ids.into_iter().map(|id| shortcuts::shortcut_row(s, t, id, on)).collect()));
+        } else {
+            let rows: Vec<&'static catalog::Row> = hits.iter().filter_map(|f| catalog::row(&f.key)).filter(|r| r.shows(&s.settings, Platform::current())).collect();
+            // A heading inside a section stays out: the section's name says where these are.
+            block = block.children(rows::draw_flat(s, t, rows));
+        }
+        out.push(block);
     }
-    list = list.child(found);
-    list
+    out
 }
 
 /// The section's name, and at its right what applies to the whole section.
 fn head(s: &Shell, t: &'static Theme) -> El {
-    let section = s.screens.settings.section;
+    let state = &s.screens.settings;
+    let section = state.section;
+    let title = if state.searching() { format!("Results for “{}”", state.search.text.trim()) } else { section.label().to_owned() };
     // As wide as the rows under it, so Reset and Close end where they do.
     let mut head = row()
         .key("settings-head")
         .w_full()
-        .max_w(CONTENT_WIDTH + 56.0)
+        .max_w(CONTENT_WIDTH + CONTENT_PAD * 2.0)
         .h(52.0)
-        .px(28.0)
+        .px(CONTENT_PAD)
         .gap(8.0)
         .items_center()
-        .child(text(section.label()).key("settings-title").font(theme::PAGE_TITLE).color(t.l1).single_line().role("heading").level(1))
+        .child(text(title).key("settings-title").font(theme::PAGE_TITLE).color(t.l1).single_line().truncate().shrink().min_w(0.0).role("heading").level(1))
         .child(rune::spacer());
-    if section.has_reset() {
+    if section.has_reset() && !state.searching() {
         head = head.child(push_button(t, "Reset", Push::Quiet, true).key("settings-reset").help("Put this section back as it comes").on_press_tx(move |s: &mut Shell, tx| {
             s.screens.settings.keys = shortcuts::Recording::default();
             let keys = catalog::reset_keys(section);
@@ -373,22 +430,34 @@ fn head(s: &Shell, t: &'static Theme) -> El {
 pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
     let state = &s.screens.settings;
     state.system_dark.set(cx.env().system_dark);
-    let body = match state.section {
-        Section::Keyboard => shortcuts::view(s, t),
-        Section::Appearance if state.looks.editing.is_some() => looks::editor(s, t),
-        section => rows::section(s, t, section),
+    let (body, scroll_key) = match state.section {
+        _ if state.searching() => (results(s, t), "settings-results".to_owned()),
+        Section::Keyboard => (shortcuts::view(s, t), "settings-keyboard".to_owned()),
+        Section::Appearance if state.looks.editing.is_some() => (looks::editor(s, t), "settings-appearance".to_owned()),
+        section => (rows::section(s, t, section), format!("settings-{}", section.id())),
     };
     // Each section under its own key: a section switched to starts at its top.
     let scroll = col()
-        .key(format!("settings-{}", state.section.id()))
+        .key(scroll_key)
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom: false })
         .scroll_margin(24.0)
-        .child(col().key("settings-rows").w_full().max_w(CONTENT_WIDTH + 56.0).px(28.0).pb(28.0).gap(10.0).children(body).on_layout(|s: &mut Shell, rect: [f32; 4]| {
-            s.screens.settings.rows_width = rect[2];
-        }));
+        .child(
+            col()
+                .key("settings-rows")
+                .w_full()
+                .max_w(CONTENT_WIDTH + CONTENT_PAD * 2.0)
+                .px(CONTENT_PAD)
+                .pt(2.0)
+                .pb(CONTENT_PAD)
+                .gap(18.0)
+                .children(body)
+                .on_layout(|s: &mut Shell, rect: [f32; 4]| {
+                    s.screens.settings.rows_width = rect[2];
+                }),
+        );
     let page = row()
         .key("settings")
         .w_full()

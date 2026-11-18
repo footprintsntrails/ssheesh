@@ -12,7 +12,7 @@ use sshee_app::settings_store::keymap::{self, Keyboard};
 
 use super::keyboard;
 use crate::icons::Icon;
-use crate::kit::form::{form_group, form_heading, form_row, RowText};
+use crate::kit::form::{form_group, form_row, form_titled, RowText};
 use crate::kit::keycap::{key_cap_button, recorded, CapState, Recorded};
 use crate::kit::push::icon_button;
 use crate::shell::Shell;
@@ -129,7 +129,7 @@ fn cap(s: &Shell, t: &'static Theme, id: &'static str, name: &str, on: Keyboard)
 }
 
 /// One shortcut's row: its name, its keys, and the way back to its own.
-fn shortcut_row(s: &Shell, t: &'static Theme, id: &'static str, on: Keyboard) -> El {
+pub(super) fn shortcut_row(s: &Shell, t: &'static Theme, id: &'static str, on: Keyboard) -> El {
     let Some(entry) = keymap::entry(id) else { return rune::el() };
     let changed = &s.settings.get().shortcuts;
     let state = &s.screens.settings.keys;
@@ -194,10 +194,8 @@ pub(super) fn view(s: &Shell, t: &'static Theme) -> Vec<El> {
     };
     let mut out = vec![text(format!("Click a shortcut and press the new keys; Esc cancels. {rule}")).key("keys-shortcuts").font(theme::NOTE).color(t.l2).wrap().px(12.0)];
     for (title, ids) in keymap::GROUPS {
-        out.push(form_heading(t, title, None));
-        out.push(form_group(t, ids.iter().map(|id| shortcut_row(s, t, id, on)).collect::<Vec<El>>()));
+        out.push(form_titled(t, title, form_group(t, ids.iter().map(|id| shortcut_row(s, t, id, on)).collect::<Vec<El>>())));
     }
-    out.push(form_heading(t, "Always the same", None));
     let fixed = keymap::fixed(on)
         .into_iter()
         .enumerate()
@@ -212,6 +210,6 @@ pub(super) fn view(s: &Shell, t: &'static Theme) -> Vec<El> {
             form_row(t, RowText { label: f.name, help: f.note, later: None }, keys).key(format!("fixed-{i}"))
         })
         .collect();
-    out.push(form_group(t, fixed));
+    out.push(form_titled(t, "Always the same", form_group(t, fixed)));
     out
 }

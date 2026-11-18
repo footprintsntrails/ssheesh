@@ -292,9 +292,11 @@ fn the_component_sheet_draws_every_state() {
     }
 }
 
-/// Where Settings' list of sections starts under its search field, and a row's height.
+/// Where Settings' list of sections starts under its search field, a row's height, and the
+/// space more between its bunches (Layout to Keyboard, Privacy to Tor, Updates and About).
 const FIRST_SECTION: f64 = 106.0;
 const SECTION_ROW: f64 = 30.0;
+const SECTION_BUNCH: f64 = 10.0;
 
 /// The centre of the element keyed `key` in `run`.
 fn centre(run: &Run, key: &str) -> (f64, f64) {
@@ -332,7 +334,12 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
         {
             assert_eq!(run.label(&format!("nav-{id}")), *name, "{theme}");
             let (_, y) = centre(&run, &format!("nav-{id}"));
-            assert_eq!(y, FIRST_SECTION + SECTION_ROW * n as f64, "{theme}: {name}");
+            let bunch = match n {
+                0..=3 => 0.0,
+                4..=7 => 1.0,
+                _ => 2.0,
+            };
+            assert_eq!(y, FIRST_SECTION + SECTION_ROW * n as f64 + SECTION_BUNCH * bunch, "{theme}: {name}");
         }
         // The picked section is a quiet fill, not the accent blue, and it differs from the rest.
         assert_ne!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
