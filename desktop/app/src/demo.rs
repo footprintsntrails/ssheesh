@@ -247,8 +247,12 @@ fn log() -> Fixture {
 }
 
 /// backups' first terminal: a prompt in tmux, then the session in `state` (`replay::status_named`).
+/// Connected (`--demo-card connected`), a backup runs and says how far it is (OSC 9;4): its tab
+/// and the line along the terminal's top show it.
 fn card(state: &str) -> Fixture {
-    let out = "\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ls /srv/backups\r\n2026-11-12.tar.zst  2026-11-13.tar.zst  2026-11-14.tar.zst\r\n\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ";
+    let listed = "\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ls /srv/backups\r\n2026-11-12.tar.zst  2026-11-13.tar.zst  2026-11-14.tar.zst\r\n\u{1b}[32mbackup@backups\u{1b}[0m:\u{1b}[34m~\u{1b}[0m$ ";
+    let running = format!("{listed}./backup.sh\r\nDumping shop-db to 2026-11-15.tar.zst… 62%\u{1b}]9;4;1;62\u{7}");
+    let out = if state == "connected" { running.as_str() } else { listed };
     // Nothing is on screen before a server's key is trusted: no session has started.
     let out = if state.starts_with("hostkey") { "" } else { out };
     let value = serde_json::json!({ "durable": true, "events": [ { "t": 0.0, "out": out }, { "t": 0.0, "echo": true }, { "t": 0.0, "status": state } ] });

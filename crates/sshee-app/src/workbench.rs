@@ -151,8 +151,11 @@ pub enum Link {
     Connected { durable: bool },
     /// The connection dropped and is being brought back.
     Reconnecting,
-    /// It didn't come back, or it sleeps: a click or a key tries again.
+    /// It didn't come back: a click or a key tries again.
     Disconnected,
+    /// It let go of its connection while unused (Settings' "Disconnect when unused"): a key
+    /// in it, or a click on its tab, brings it back. Not trouble, so the tab says it quietly.
+    Asleep,
     /// The shell ended.
     Ended,
     /// It never connected: signing in failed ("Couldn't connect"); a click tries again.
@@ -169,6 +172,8 @@ pub enum Badge {
     Ended,
     /// Signing in failed, as the card over the terminal says.
     Failed,
+    /// It let go of its connection while unused: a quiet moon, no words (0.10's).
+    Asleep,
 }
 
 impl Badge {
@@ -179,9 +184,22 @@ impl Badge {
             Badge::Disconnected => "Disconnected",
             Badge::Ended => "Ended",
             Badge::Failed => "Couldn't connect",
+            Badge::Asleep => "Asleep",
+        }
+    }
+
+    /// What a tab's mark says under the pointer, when its label alone says too little.
+    pub fn hint(self) -> Option<&'static str> {
+        match self {
+            Badge::Asleep => Some("Asleep: disconnected while unused. Press any key in it to come back"),
+            _ => None,
         }
     }
 }
+
+/// A terminal on a server whose shell isn't in tmux: it ends if the connection drops. Its
+/// header says so, quietly, with what would keep it (0.10's "not kept").
+pub const NOT_KEPT: (&str, &str) = ("Not kept", "Install tmux on the server to keep sessions alive through disconnects");
 
 /// One tab.
 #[derive(Debug, Clone, PartialEq)]
@@ -228,8 +246,16 @@ impl Tab {
             Link::Disconnected => Some(Badge::Disconnected),
             Link::Ended => Some(Badge::Ended),
             Link::Failed => Some(Badge::Failed),
+            Link::Asleep => Some(Badge::Asleep),
             Link::Idle | Link::Connecting | Link::Connected { .. } => None,
         }
+    }
+
+    /// A terminal on a server, connected, whose shell isn't in tmux: a dropped connection
+    /// ends it ([`NOT_KEPT`]). Never this computer's, nor a container's (it has no tmux to
+    /// offer).
+    pub fn not_kept(&self) -> bool {
+        self.kind == TabKind::Terminal && self.server != "local" && self.container.is_none() && self.link == (Link::Connected { durable: false })
     }
 }
 
@@ -1418,8 +1444,34 @@ mod tests {
         assert_eq!(badge(&mut w, Link::Disconnected), Some("Disconnected"));
         assert_eq!(badge(&mut w, Link::Ended), Some("Ended"));
         assert_eq!(badge(&mut w, Link::Failed), Some("Couldn't connect"));
+        // Asleep isn't trouble: a quiet mark, explained under the pointer.
+        assert_eq!(badge(&mut w, Link::Asleep), Some("Asleep"));
+        assert!(Badge::Asleep.hint().is_some_and(|h| h.contains("Press any key")));
+        assert_eq!(Badge::Disconnected.hint(), None);
         // A tab that's gone is ignored.
         w.set_link(TabId(999), Link::Ended);
+    }
+
+    #[test]
+    fn a_server_terminal_without_tmux_is_not_kept() {
+        let mut w = bench();
+        let t = w.go_to(WEB);
+        w.set_link(t, Link::Connected { durable: false });
+        assert!(w.tab(t).unwrap().not_kept());
+        // In tmux it's kept; before it connects, nobody knows yet.
+        w.set_link(t, Link::Connected { durable: true });
+        assert!(!w.tab(t).unwrap().not_kept());
+        w.set_link(t, Link::Connecting);
+        assert!(!w.tab(t).unwrap().not_kept());
+        // This computer's terminal has nothing to lose to a dropped connection.
+        let here = w.go_to("local");
+        w.set_link(here, Link::Connected { durable: false });
+        assert!(!w.tab(here).unwrap().not_kept());
+        // Files isn't a session.
+        let files = w.open_files(WEB);
+        w.set_link(files, Link::Connected { durable: false });
+        assert!(!w.tab(files).unwrap().not_kept());
+        assert_eq!(NOT_KEPT.0, "Not kept");
     }
 
     #[test]

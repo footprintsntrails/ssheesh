@@ -89,6 +89,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .children(super::tabs::overlays(s, t))
         // Over everything: the palette, a server's card and menu, "Add a server".
         .children(screens::overlays(s, t, cx))
+        // Files dropped on a server's terminal: which folder they go to (`file_drop.rs`).
+        .children(super::file_drop::dialog(s, t))
         // A confirmation, over all of it (`notes.rs`).
         .children(super::notes::dialog_view(s, t))
         // A tab being dragged over the page: where it would land.
@@ -173,12 +175,14 @@ fn page(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             // first layout is told to it (and opens its session).
             Some(pane) => {
                 let id: TabId = tab.id;
-                let pane = col().key(format!("pane-{}", id.0)).w_full().grow(1.0).min_h(0.0).child(pane_view_with(
-                    pane,
-                    cx,
-                    move |s: &mut Shell| s.panes.get_mut(&id),
-                    |s: &mut Shell, ev, tx| s.shortcut(ev, tx),
-                ));
+                let pane = col()
+                    .key(format!("pane-{}", id.0))
+                    .w_full()
+                    .grow(1.0)
+                    .min_h(0.0)
+                    .child(pane_view_with(pane, cx, move |s: &mut Shell| s.panes.get_mut(&id), |s: &mut Shell, ev, tx| s.shortcut(ev, tx)))
+                    // A program's progress, along the top of its terminal (under the top row).
+                    .children(super::pane_marks::progress_line(s, id, t));
                 // Files dropped on it from another app.
                 super::file_drop::terminal(s, t, id, pane)
             }
@@ -279,6 +283,7 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         Tor::On { latency_ms } => Some(latency_ms),
         _ => None,
     };
+    let not_kept = super::pane_marks::status_not_kept(s, t);
     // Settings' "Server vitals" hides the numbers; Tor's stays. Where the bar is too narrow
     // for all of them, the last go first, and Tor's readout stays whole.
     if let Some(vitals) = s.bench.current_vitals().filter(|_| s.settings.get().show_vitals) {
@@ -289,6 +294,9 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         if s.streamer.on {
             room -= super::streamer::STATUS_WIDTH + 20.0;
         }
+        if not_kept.is_some() {
+            room -= super::pane_marks::status_width() + 20.0;
+        }
         for (i, v) in vitals.items().iter().enumerate() {
             room -= status_item_width(&v.label, &v.value, v.warn) + if i > 0 { 20.0 } else { 0.0 };
             if room < 0.0 {
@@ -298,6 +306,9 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         }
     }
     bar = bar.child(spacer());
+    // The terminal on screen's shell isn't in tmux on the server (a pane beside another says
+    // it in its own header).
+    bar = bar.children(not_kept);
     // Streamer mode, while it's on.
     bar = bar.children(super::streamer::status(s, t));
     if let Some(latency_ms) = tor {

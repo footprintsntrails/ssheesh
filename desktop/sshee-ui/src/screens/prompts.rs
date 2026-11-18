@@ -222,13 +222,14 @@ pub(crate) fn trusted(s: &mut crate::shell::Shell, from: sshee_app::workbench::T
 }
 
 /// A clicked path that was found: Files on the same machine shows `dir` beside the terminal,
-/// with `name` picked out and opened (`None`: the folder itself). `lines` aren't marked in the
-/// editor yet: the terminal says which they are.
+/// with `name` picked out and opened (`None`: the folder itself), scrolled to `lines` and
+/// marked there.
 pub(crate) fn show_path(s: &mut crate::shell::Shell, from: sshee_app::workbench::TabId, dir: &str, name: Option<&str>, lines: Option<(u32, u32)>, tx: &mut rune::Tx) {
     let Some(server) = s.bench.tab(from).map(|t| t.server.clone()) else { return };
     let files = s.open_files_on(&server, None, tx);
     match name {
-        Some(name) => crate::screens::files::show_path(s, files, &sshee_app::paths::join(dir, name)),
+        // Opened at the lines it named, marked (`screens::files::show_path_at`).
+        Some(name) => crate::screens::files::show_path_at(s, files, &sshee_app::paths::join(dir, name), lines),
         None => crate::screens::files::go(s, files, dir),
     }
     // Beside the terminal it was clicked in, as 0.10's `placeBeside`.
@@ -236,9 +237,6 @@ pub(crate) fn show_path(s: &mut crate::shell::Shell, from: sshee_app::workbench:
         s.bench.pair(from, files);
     }
     s.settle(tx);
-    if let (Some((first, last)), Some(name), Some(pane)) = (lines, name, s.panes.get_mut(&from)) {
-        pane.say_for(&format!("{name}: {}", prompts::lines_note(first, last)), 4.0, tx);
-    }
 }
 
 // ---- the agents' buttons

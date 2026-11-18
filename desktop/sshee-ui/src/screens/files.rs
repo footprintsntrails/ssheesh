@@ -99,8 +99,14 @@ pub struct State {
     hover: Option<(String, f64)>,
     /// What only the drawing keeps: the text being typed, the menu or question on screen.
     pub(crate) ui: view::Ui,
-    /// A path from a terminal to open once its folder is listed ([`show_path`]).
+    /// A path from a terminal to open once its folder is listed ([`show_path`]), and the
+    /// lines it named.
     reveal: Option<(String, String)>,
+    reveal_lines: Option<(u32, u32)>,
+    /// The open file's lines a path named ("notes.md:12-40"): the file's path, the first and
+    /// the last, marked by a band; and whether the preview still has to scroll to them.
+    pub(crate) marked: Option<(String, (u32, u32))>,
+    pub(crate) scroll_to_marked: bool,
 }
 
 impl State {
@@ -117,6 +123,9 @@ impl State {
             hover: None,
             ui: view::Ui::default(),
             reveal: None,
+            reveal_lines: None,
+            marked: None,
+            scroll_to_marked: false,
         }
     }
 }
@@ -274,6 +283,7 @@ pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut rune::Tx) {
     for (tab, server, path) in due {
         peek_into(s, tab, &server, &path);
     }
+    view::scroll_to_marked(s, tx);
 }
 
 /// Runs one of the browser's moves, and asks the backend for the listing it wants.
@@ -337,6 +347,12 @@ fn hidden_default(s: &mut Shell, tab: TabId) {
 /// then opens it: a file beside the list, a folder in its place. What the open file had
 /// typed and not saved is kept: then the path is only picked out.
 pub fn show_path(s: &mut Shell, tab: TabId, path: &str) {
+    show_path_at(s, tab, path, None);
+}
+
+/// [`show_path`], the file opened at `lines` (first and last, from "notes.md:12-40" or
+/// "#L12-L40"): scrolled to them, marked by a band, "lines 12–40" beside its name (0.10's).
+pub fn show_path_at(s: &mut Shell, tab: TabId, path: &str, lines: Option<(u32, u32)>) {
     let (dir, name) = (paths::parent(path), paths::name(path).to_owned());
     let Some(state) = s.screens.files.get_mut(&tab) else { return };
     if state.editor.as_ref().is_some_and(|e| e.can_edit() && e.is_dirty(state.ui.draft_text())) {
@@ -344,6 +360,7 @@ pub fn show_path(s: &mut Shell, tab: TabId, path: &str) {
         return;
     }
     state.reveal = Some((dir.clone(), name.clone()));
+    state.reveal_lines = lines.filter(|(first, _)| *first > 0);
     go_now(s, tab, &dir);
     if let Some(state) = s.screens.files.get_mut(&tab) {
         state.browser.select_when_listed(&name);
@@ -361,8 +378,13 @@ fn reveal(s: &mut Shell, tab: TabId) {
         return;
     }
     state.reveal = None;
+    let lines = state.reveal_lines.take();
     if state.browser.entry(&name).is_some() {
         open(s, tab, &name);
+        if let (Some((first, last)), Some(state)) = (lines, s.screens.files.get_mut(&tab)) {
+            state.marked = state.editor.as_ref().map(|e| (e.path(), (first, last.max(first))));
+            state.scroll_to_marked = state.marked.is_some();
+        }
     }
 }
 
@@ -444,6 +466,7 @@ pub fn open(s: &mut Shell, tab: TabId, name: &str) {
     let dir = state.browser.dir().to_owned();
     let (editor, want) = Editor::open(&dir, name, &mut state.tickets);
     state.editor = Some(editor);
+    (state.marked, state.scroll_to_marked) = (None, false);
     state.browser.select_only(name);
     if let Some(want) = want {
         ask(s, tab, want);
@@ -710,11 +733,14 @@ fn shell_of(s: &Shell, tab: TabId) -> ops::Shell {
     }
 }
 
-/// "Open new terminal here": a new terminal on the tab's machine, in `folder`.
+/// "Open new terminal here": a new terminal on the tab's machine, in `folder`, beside this
+/// Files tab (0.10 split it off the pane).
 pub fn terminal_here(s: &mut Shell, tab: TabId, folder: &str, tx: &mut rune::Tx) {
     let Some(cmd) = ops::typed_cd(folder, shell_of(s, tab), Some("clear")) else { return note(s, ops::cant_open_terminal()) };
     let Some(server) = s.screens.files.get(&tab).map(|st| st.browser.server().to_owned()) else { return };
+    s.bench.focus(tab);
     let id = s.bench.open(TabKind::Terminal, &server);
+    s.bench.pair(tab, id);
     s.settle(tx);
     s.screens.palette.pending.insert(id, (cmd, true));
 }

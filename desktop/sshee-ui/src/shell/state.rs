@@ -404,6 +404,8 @@ pub struct Shell {
     pub(crate) streamer: super::streamer::Streamer,
     /// The terminal files from another app are dragged over (`file_drop.rs`).
     pub(crate) drop_over: Option<TabId>,
+    /// Files dropped on a server's terminal, asking which folder they go to (`file_drop.rs`).
+    pub(crate) upload: Option<super::file_drop::UploadAsk>,
     /// The native window, once it's made: where it is, for `place.rs`.
     pub(crate) window: Option<rune::WindowHandle>,
     /// Terminal tabs restored from the last run whose pane hasn't been made yet.
@@ -422,7 +424,7 @@ fn link_of(status: &LinkStatus) -> Link {
         LinkStatus::Gone { .. } => Link::Failed,
         LinkStatus::Ended { .. } => Link::Ended,
         LinkStatus::Retrying { .. } | LinkStatus::Rejoining { .. } => Link::Reconnecting,
-        LinkStatus::Asleep => Link::Disconnected,
+        LinkStatus::Asleep => Link::Asleep,
         LinkStatus::HostKey(_) => Link::Connecting,
     }
 }
@@ -459,6 +461,7 @@ impl Shell {
             row: Default::default(),
             streamer: Default::default(),
             drop_over: None,
+            upload: None,
             window: None,
             opened_before: Vec::new(),
         };
@@ -691,7 +694,7 @@ impl Shell {
 
     /// A click on a tab. A tab whose connection is gone tries again.
     pub fn focus_tab(&mut self, id: TabId, tx: &mut Tx) {
-        let again = self.bench.tab(id).is_some_and(|t| matches!(t.link, Link::Disconnected | Link::Ended | Link::Failed));
+        let again = self.bench.tab(id).is_some_and(|t| matches!(t.link, Link::Disconnected | Link::Asleep | Link::Ended | Link::Failed));
         self.bench.focus(id);
         self.settle(tx);
         if again {
@@ -830,7 +833,7 @@ impl Shell {
     pub fn key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         // Behind the palette, a dialog or a menu, keys are theirs alone; streamer mode's
         // shortcut works over all of them (names must hide at once).
-        if self.screens.any_open() {
+        if self.screens.any_open() || self.upload.is_some() {
             return self.streamer_key(ev, tx);
         }
         // Settings, while it is over the page, takes what is left: nothing reaches a terminal

@@ -8,6 +8,7 @@ pub mod desktop;
 pub mod file_drop;
 pub mod keys;
 pub mod notes;
+mod pane_marks;
 mod place;
 pub mod rail;
 pub mod sheet;

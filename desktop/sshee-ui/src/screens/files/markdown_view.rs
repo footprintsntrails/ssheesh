@@ -1,7 +1,8 @@
 //! A Markdown file in the preview, formatted (0.10's `MarkdownView`). The blocks and their
 //! styled ranges are `sshee_app::files::markdown`'s; here they're drawn. Nothing in the file is
 //! trusted: images aren't fetched (their alt text stands in, in a quiet chip), and only web and
-//! mail links open, in the system's browser.
+//! mail links open, in the system's browser. Opened at some lines ("notes.md:12-40"), the
+//! blocks they make up are marked by one band behind them, keyed for the preview to scroll to.
 
 use rune::text::Link;
 use rune::{col, el, rich, row, text, El, ScrollSpec, Span, Tx};
@@ -49,12 +50,20 @@ fn styled(s: &Shell, block: &Styled, base: rune::tok::TextStyle, t: &'static The
     })
 }
 
-/// The formatted file, top to bottom, in a scroll view.
-pub fn view(s: &Shell, source: &str, t: &'static Theme) -> El {
+/// The formatted file, top to bottom, in a scroll view. `lines`: the lines a path named (first
+/// and last), whose blocks get one band, keyed `band_key`.
+pub fn view(s: &Shell, source: &str, lines: Option<(u32, u32)>, band_key: &str, t: &'static Theme) -> El {
+    let blocks = markdown::parse_lines(source);
+    let marked = lines.map_or(0..0, |(first, last)| markdown::blocks_at(&blocks, first, last));
     let mut doc = col().w_full().px(18.0).py(14.0).gap(8.0);
-    for (i, block) in markdown::parse(source).iter().enumerate() {
+    // The marked blocks, gathered in the band as they come.
+    let mut band: Option<El> = None;
+    for (i, (block, _)) in blocks.iter().enumerate() {
+        if i == marked.end {
+            doc = doc.children(band.take());
+        }
         let key = format!("md-{i}");
-        doc = doc.child(match block {
+        let drawn = match block {
             Block::Heading { level, text: words } => {
                 let size = match level {
                     1 => 20.0,
@@ -94,7 +103,17 @@ pub fn view(s: &Shell, source: &str, t: &'static Theme) -> El {
                 }
                 table
             }
-        });
+        };
+        if marked.contains(&i) {
+            // Bleeding past the text a little, so the band holds the blocks with room.
+            let open = band.take().unwrap_or_else(|| {
+                col().key(band_key).w_full().gap(8.0).px(8.0).py(6.0).mx(-8.0).my(-6.0).radius(6.0).fill(t.blue.alpha(0.10)).border_sides([0.0, 0.0, 0.0, 2.0], t.blue.alpha(0.7))
+            });
+            band = Some(open.child(drawn));
+        } else {
+            doc = doc.child(drawn);
+        }
     }
+    doc = doc.children(band);
     col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(doc)
 }

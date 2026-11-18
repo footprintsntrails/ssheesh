@@ -160,33 +160,59 @@ fn is_html(line: &str) -> bool {
 
 /// The file's blocks, top to bottom.
 pub fn parse(source: &str) -> Vec<Block> {
+    parse_lines(source).into_iter().map(|(block, _)| block).collect()
+}
+
+/// The lines (first and last, counted from 1) of the blocks that lines `first` to `last` touch,
+/// by their places in [`parse_lines`]: what a path like "notes.md:12-40" marks in the
+/// formatted file. Empty when none does.
+pub fn blocks_at(blocks: &[(Block, [u32; 2])], first: u32, last: u32) -> std::ops::Range<usize> {
+    let hit = |r: &[u32; 2]| r[1] >= first && r[0] <= last;
+    match blocks.iter().position(|(_, r)| hit(r)) {
+        Some(from) => from..from + blocks[from..].iter().take_while(|(_, r)| hit(r)).count(),
+        None => 0..0,
+    }
+}
+
+/// [`parse`], with the lines each block was made from (first and last, counted from 1).
+pub fn parse_lines(source: &str) -> Vec<(Block, [u32; 2])> {
     let lines: Vec<&str> = source.lines().collect();
-    let mut out = Vec::new();
+    let mut out: Vec<(Block, [u32; 2])> = Vec::new();
+    // The first and the last line of the paragraph, quote or item being gathered.
+    let mut open: Option<[u32; 2]> = None;
+    let at = |i: usize| u32::try_from(i).unwrap_or(u32::MAX);
     // A paragraph (or a quote's) being gathered, line by line.
     let mut para: Vec<&str> = Vec::new();
     let mut quote: Vec<String> = Vec::new();
     // The list item being gathered, and the indents of the open lists.
     let mut item: Option<(u8, Bullet, Vec<&str>)> = None;
     let mut list_indents: Vec<usize> = Vec::new();
-    let flush = |out: &mut Vec<Block>, para: &mut Vec<&str>, quote: &mut Vec<String>, item: &mut Option<(u8, Bullet, Vec<&str>)>| {
+    let flush = |out: &mut Vec<(Block, [u32; 2])>, para: &mut Vec<&str>, quote: &mut Vec<String>, item: &mut Option<(u8, Bullet, Vec<&str>)>, open: &mut Option<[u32; 2]>| {
+        let lines = open.take().unwrap_or_default();
         if !para.is_empty() {
-            out.push(Block::Paragraph(inline(&para.join("\n"))));
+            out.push((Block::Paragraph(inline(&para.join("\n"))), lines));
             para.clear();
         }
         if !quote.is_empty() {
-            out.push(Block::Quote(inline(&quote.join("\n"))));
+            out.push((Block::Quote(inline(&quote.join("\n"))), lines));
             quote.clear();
         }
         if let Some((depth, bullet, text)) = item.take() {
-            out.push(Block::Item { depth, bullet, text: inline(&text.join("\n")) });
+            out.push((Block::Item { depth, bullet, text: inline(&text.join("\n")) }, lines));
         }
+    };
+    // The paragraph, quote or item being gathered goes on to line `n`.
+    let grow = |open: &mut Option<[u32; 2]>, n: u32| {
+        *open = Some(open.map_or([n, n], |[from, _]| [from, n]));
     };
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
         i += 1;
+        // This line's number, counted from 1.
+        let n = at(i);
         if line.trim().is_empty() {
-            flush(&mut out, &mut para, &mut quote, &mut item);
+            flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
             // A list goes on over blank lines while its next line is an item or indented.
             let next = lines[i..].iter().find(|l| !l.trim().is_empty());
             if !next.is_some_and(|l| list_item(l).is_some() || (!list_indents.is_empty() && indent(l) >= 2)) {
@@ -195,7 +221,7 @@ pub fn parse(source: &str) -> Vec<Block> {
             continue;
         }
         if let Some((close, lang)) = fence(line) {
-            flush(&mut out, &mut para, &mut quote, &mut item);
+            flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
             let mut body = Vec::new();
             while i < lines.len() {
                 let l = lines[i];
@@ -205,7 +231,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                 }
                 body.push(l);
             }
-            out.push(Block::Code { lang: lang.to_owned(), text: body.join("\n") });
+            out.push((Block::Code { lang: lang.to_owned(), text: body.join("\n") }, [n, at(i)]));
             continue;
         }
         // Indented code, where it can't be a paragraph's or an item's next line.
@@ -218,7 +244,8 @@ pub fn parse(source: &str) -> Vec<Block> {
             while body.last().is_some_and(|l| l.trim().is_empty()) {
                 body.pop();
             }
-            out.push(Block::Code { lang: String::new(), text: body.join("\n") });
+            let last = n + at(body.len()).saturating_sub(1);
+            out.push((Block::Code { lang: String::new(), text: body.join("\n") }, [n, last]));
             continue;
         }
         // A line of = or - under a paragraph makes it a heading.
@@ -226,26 +253,27 @@ pub fn parse(source: &str) -> Vec<Block> {
             let t = line.trim();
             if !t.is_empty() && (t.chars().all(|c| c == '=') || t.chars().all(|c| c == '-')) {
                 let level = if t.starts_with('=') { 1 } else { 2 };
-                out.push(Block::Heading { level, text: inline(&para.join("\n")) });
+                let from = open.take().map_or(n, |[from, _]| from);
+                out.push((Block::Heading { level, text: inline(&para.join("\n")) }, [from, n]));
                 para.clear();
                 continue;
             }
         }
         if is_rule(line) && indent(line) <= 3 {
-            flush(&mut out, &mut para, &mut quote, &mut item);
+            flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
             list_indents.clear();
-            out.push(Block::Rule);
+            out.push((Block::Rule, [n, n]));
             continue;
         }
         if let Some((level, text)) = heading(line) {
-            flush(&mut out, &mut para, &mut quote, &mut item);
+            flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
             list_indents.clear();
-            out.push(Block::Heading { level, text: inline(text) });
+            out.push((Block::Heading { level, text: inline(text) }, [n, n]));
             continue;
         }
         if let Some(rest) = line.trim_start().strip_prefix('>') {
             if !para.is_empty() || item.is_some() {
-                flush(&mut out, &mut para, &mut quote, &mut item);
+                flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
             }
             list_indents.clear();
             // Nested quotes read as one.
@@ -254,6 +282,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                 rest = r;
             }
             let rest = rest.strip_prefix(' ').unwrap_or(rest);
+            grow(&mut open, n);
             if rest.trim().is_empty() {
                 if !quote.is_empty() {
                     quote.push(String::new());
@@ -264,12 +293,12 @@ pub fn parse(source: &str) -> Vec<Block> {
             continue;
         }
         if !quote.is_empty() {
-            flush(&mut out, &mut para, &mut quote, &mut item);
+            flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
         }
         if let Some((ind, bullet, rest)) = list_item(line) {
             // A numbered item interrupts a paragraph only when it starts at 1.
             if para.is_empty() || !matches!(bullet, Bullet::Number(n) if n != 1) {
-                flush(&mut out, &mut para, &mut quote, &mut item);
+                flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
                 while list_indents.last().is_some_and(|&d| d > ind) {
                     list_indents.pop();
                 }
@@ -278,6 +307,7 @@ pub fn parse(source: &str) -> Vec<Block> {
                 }
                 let depth = (list_indents.len() - 1).min(u8::MAX as usize) as u8;
                 item = Some((depth, bullet, vec![rest]));
+                grow(&mut open, n);
                 continue;
             }
         }
@@ -293,12 +323,13 @@ pub fn parse(source: &str) -> Vec<Block> {
                 rows.push(row);
                 i += 1;
             }
-            out.push(Block::Table { head, rows });
+            out.push((Block::Table { head, rows }, [n, at(i)]));
             continue;
         }
         if is_html(line) {
             continue;
         }
+        grow(&mut open, n);
         match &mut item {
             // An item's next line, indented or lazy.
             Some((_, _, text)) => text.push(line.trim()),
@@ -308,7 +339,7 @@ pub fn parse(source: &str) -> Vec<Block> {
             }
         }
     }
-    flush(&mut out, &mut para, &mut quote, &mut item);
+    flush(&mut out, &mut para, &mut quote, &mut item, &mut open);
     out
 }
 
@@ -552,6 +583,19 @@ mod tests {
         assert_eq!(marks(&s), [("the logo", Style::Image("logo.png".into()))]);
         // Lines join with a space; two spaces at the end break the line.
         assert_eq!(inline("one\ntwo  \nthree").text, "one two\nthree");
+    }
+
+    #[test]
+    fn each_block_knows_its_lines() {
+        let doc = "# shop\n\nThe shop's web app.\nIt sells.\n\n    ./deploy.sh\n    ./check.sh\n\n- one\n  more\n- two\n\n> Ask\n> first\n\n```sh\nls\n```\n| a | b |\n|---|---|\n| 1 | 2 |\nTitle\n=====\n";
+        let lines: Vec<[u32; 2]> = parse_lines(doc).into_iter().map(|(_, l)| l).collect();
+        assert_eq!(lines, [[1, 1], [3, 4], [6, 7], [9, 10], [11, 11], [13, 14], [16, 18], [19, 21], [22, 23]]);
+        // "README.md:4-9" marks the paragraph, the code and the first item: one run of blocks.
+        let blocks = parse_lines(doc);
+        assert_eq!(blocks_at(&blocks, 4, 9), 1..4);
+        assert_eq!(blocks_at(&blocks, 12, 12), 0..0);
+        assert_eq!(blocks_at(&blocks, 22, 22), 8..9);
+        assert_eq!(blocks_at(&blocks, 90, 99), 0..0);
     }
 
     #[test]

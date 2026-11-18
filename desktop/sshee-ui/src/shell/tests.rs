@@ -578,3 +578,7 @@ mod notes;
 
 /// The top bar's title and tabs sharing their room, the status bar, the sidebar's tooltips.
 mod chrome;
+
+/// What 0.10 had around a terminal: browse its folder, "Not kept", progress, asleep, paths at
+/// their lines, files dropped on it.
+mod ported;
