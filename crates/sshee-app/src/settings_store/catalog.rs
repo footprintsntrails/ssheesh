@@ -828,7 +828,7 @@ fn build() -> Vec<Row> {
         .hint_by(|st, _| {
             let text = match st.get().reconnect_mode {
                 ReconnectMode::Auto => "Reconnects on its own and lands you back in the same session.",
-                ReconnectMode::Ask => "The tab says Disconnected and waits for you: a key or a click on it reconnects.",
+                ReconnectMode::Ask => "Shows what happened, with a Reconnect button, and waits for you.",
                 _ => "Stays quiet: the tab says Disconnected until a key or a click on it reconnects.",
             };
             text.into()

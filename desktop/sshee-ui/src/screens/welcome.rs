@@ -135,6 +135,10 @@ impl Shell {
 
     /// A choice picked: through its row of Settings, at once.
     fn welcome_pick(&mut self, key: &'static str, value: &'static str, tx: &mut Tx) {
+        // What's already picked stays as it is: writing it again could swap the active theme.
+        if tour::chosen(&self.settings, key).as_deref() == Some(value) {
+            return;
+        }
         self.change_settings(tx, |st| {
             tour::pick(st, key, value);
         });
@@ -310,7 +314,7 @@ fn framed(picture: El, width: f32, color: rune::Color) -> El {
 /// A choice row of Settings as a segmented control, picking through the welcome.
 fn choice_segmented(s: &Shell, t: &Theme, r: &'static Row) -> El {
     let Control::Choice { options, get, .. } = r.control else { return el() };
-    let labels = r.choice_labels(super::settings::keyboard(s));
+    let labels = r.choice_labels(&s.settings, super::settings::keyboard(s));
     let now = get(&s.settings);
     let key = r.key;
     segmented(t, r.label, &labels, options.iter().position(|(v, _)| *v == now), true, move |s: &mut Shell, i, tx| s.welcome_pick(key, options[i].0, tx))
@@ -349,7 +353,7 @@ fn terminal(s: &Shell, t: &'static Theme) -> Content {
 /// A choice row's options, one under another: the picked one marked.
 fn options(s: &Shell, t: &Theme, r: &'static Row, now: &str) -> El {
     let Control::Choice { options, .. } = r.control else { return el() };
-    let labels = r.choice_labels(super::settings::keyboard(s));
+    let labels = r.choice_labels(&s.settings, super::settings::keyboard(s));
     let mut list = col().w_full().gap(2.0).role("radiogroup").label(r.label).focus_group();
     for (i, (value, _)) in options.iter().enumerate() {
         let picked = *value == now;
