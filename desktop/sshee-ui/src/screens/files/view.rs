@@ -47,6 +47,8 @@ use crate::theme::{self, Theme};
 /// A row of the list, the header above it and the line under it.
 const ROW: f32 = 26.0;
 const TOOLBAR: f32 = 40.0;
+/// A button in the preview's header, which is a list header's height ([`ROW`]).
+const HEAD_BUTTON: f32 = 22.0;
 /// The columns after the name.
 const SIZE_W: f32 = 76.0;
 const DATE_W: f32 = 132.0;
@@ -1634,7 +1636,9 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
     let dirty = dirty(s, id).is_some();
     let markdown = kinds::is_markdown(&name) && editor.text().is_some();
     let svg = kinds::is_svg(&name) && editor.text().is_some();
-    let mut head = row().key("preview-head").w_full().h(TOOLBAR).items_center().gap(8.0).pl(14.0).pr(8.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(
+    // As tall as the list's header beside it, so their hairlines run on as one; its buttons
+    // are the smaller ones that fit (`HEAD_BUTTON`).
+    let mut head = row().key("preview-head").w_full().h(ROW).items_center().gap(8.0).pl(14.0).pr(4.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(
         text(s.text_shown(&name).into_owned()).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate().shrink().min_w(0.0),
     );
     if dirty {
@@ -1661,19 +1665,19 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
     }
     if dirty {
         let label = if editor.is_saving() { "Saving…" } else { "Save" };
-        head = head.child(push_button(t, label, Push::Quiet, true).key("preview-save").on_press_tx(move |s: &mut Shell, tx| {
+        head = head.child(push_button(t, label, Push::Quiet, true).h(HEAD_BUTTON).key("preview-save").on_press_tx(move |s: &mut Shell, tx| {
             save(s, id);
             tx.instant();
         }));
     }
     if on_server {
         let n = editor.path();
-        head = head.child(toolbar_button(t, "preview-download", Icon::Download, "Download").on_press_tx(move |s: &mut Shell, tx| {
+        head = head.child(toolbar_button(t, "preview-download", Icon::Download, "Download").size(HEAD_BUTTON, HEAD_BUTTON).on_press_tx(move |s: &mut Shell, tx| {
             super::download_file(s, id, &n);
             tx.instant();
         }));
     }
-    head = head.child(toolbar_button(t, "preview-close", Icon::Close, "Close preview").on_press_tx(move |s: &mut Shell, tx| {
+    head = head.child(toolbar_button(t, "preview-close", Icon::Close, "Close preview").size(HEAD_BUTTON, HEAD_BUTTON).on_press_tx(move |s: &mut Shell, tx| {
         guarded(s, id, After::Close);
         tx.instant();
     }));
@@ -1713,7 +1717,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         pane = pane.child(line);
     }
     // A picture, or an SVG drawn: on squares where it's see-through, with its size in pixels
-    // and bytes under it (0.10's MediaPreview).
+    // under it (0.10's MediaPreview; its bytes are in the header already).
     let picture = || match &state.ui.picture {
         Some((_, picture)) => {
             let natural = picture.size();
@@ -1728,15 +1732,14 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                 drawn = drawn.pixels_fit(squares.pixels(), SurfaceFit::Fill);
             }
             let drawn = drawn.child(el().w_full().h_full().pixels_fit(picture.pixels(), SurfaceFit::Fit));
-            // A drawing has no size of its own: only its bytes.
-            let size = editor.size().map(bytes).unwrap_or_default();
-            let said = match natural {
-                Some([w, h]) if !svg => format!("{w} × {h} · {size}"),
-                _ => size,
+            // A drawing has no size of its own: no foot.
+            let foot = match natural {
+                Some([w, h]) if !svg => Some(
+                    row().key("preview-picture-foot").w_full().h(24.0).px(12.0).items_center().border_sides([1.0, 0.0, 0.0, 0.0], t.hair2).child(text(format!("{w} × {h}")).font(theme::LIST_NUMBER).color(t.l2).single_line()),
+                ),
+                _ => None,
             };
-            col().key("preview-picture").w_full().grow(1.0).min_h(0.0).child(row().w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(drawn)).child(
-                row().key("preview-picture-foot").w_full().h(24.0).px(12.0).items_center().border_sides([1.0, 0.0, 0.0, 0.0], t.hair2).child(text(said).font(theme::LIST_NUMBER).color(t.l2).single_line()),
-            )
+            col().key("preview-picture").w_full().grow(1.0).min_h(0.0).child(row().w_full().grow(1.0).min_h(0.0).padding(14.0).items_center().justify_center().child(drawn)).children(foot)
         }
         None => centered(vec![crate::icons::logo_loader(20.0), text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
     };
