@@ -674,3 +674,57 @@ fn the_backend_hears_the_window_hidden_and_shown_again() {
     use crate::shell::WindowAsk::*;
     assert_eq!(asked.lock().unwrap().as_slice(), [Hide, Raise { token: None }, Quit]);
 }
+
+/// Seconds of 60 Hz frames until `done` says so, at most `limit`, with a line a second
+/// printed in `other` all the while.
+fn seconds_until(w: &mut Window, other: TabId, limit: f64, done: impl Fn(&Window) -> bool) -> Option<f64> {
+    for frame in 0..(limit * 60.0) as usize {
+        if frame % 60 == 0 {
+            w.arrives(other, "tick\r\n");
+        }
+        w.frames(1);
+        if done(w) {
+            return Some(frame as f64 / 60.0);
+        }
+    }
+    None
+}
+
+#[test]
+fn a_long_run_goes_quiet_on_its_tab_on_time_while_the_terminal_on_screen_keeps_printing() {
+    let (mut w, agent, here) = Window::with_agent_on(STAGING, 2);
+    w.wait(2.5);
+    // Twenty seconds of work out of sight, with a log scrolling in the terminal on screen.
+    for i in 0..40 {
+        w.arrives(agent, &format!("● step {i}\r\n"));
+        if i % 2 == 0 {
+            w.arrives(here, "tick\r\n");
+        }
+        w.wait(0.5);
+    }
+    assert!(w.agent().working(agent));
+    // It stops: "went quiet" six seconds later, as 0.10 said it (looking every two seconds),
+    // whatever the other terminal prints. It used to wait for every terminal to be quiet.
+    let quiet = |w: &Window| w.agent().agents.attention(agent).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done);
+    let took = seconds_until(&mut w, here, 20.0, quiet);
+    assert!(took.is_some_and(|s| s <= 6.2), "went quiet after {took:?} s");
+}
+
+#[test]
+fn a_command_given_on_a_server_has_its_agents_asked_about_soon() {
+    let (mut w, agent, _) = Window::with_agent_on(STAGING, 2);
+    let asked = |w: &Window| w.world.lock().unwrap().agents_on.len();
+    // Return in this computer's terminal: nothing to ask a server.
+    let before = asked(&w);
+    w.typed("ls");
+    w.key(Key::Enter, "");
+    assert_eq!(asked(&w), before);
+    // Return in the server's: the backend hears the same servers again, which brings its next
+    // look forward (`app/src/agents.rs`), so the tab is named after the agent in a moment.
+    w.click(&format!("tab-{}", agent.0));
+    w.typed("codex");
+    assert_eq!(asked(&w), before);
+    w.key(Key::Enter, "");
+    assert_eq!(asked(&w), before + 1);
+    assert_eq!(w.world.lock().unwrap().agents_on.last().unwrap(), &["web-staging"]);
+}

@@ -96,8 +96,6 @@ pub struct Session {
     /// The agents the server has, once asked.
     pub(crate) agents: Option<Vec<AgentKind>>,
     agents_asked: bool,
-    /// The pointer is near the top of the pane: the agents' buttons show.
-    pub(crate) near_top: bool,
     /// The countdown last drawn, to draw again when it changes.
     shown_seconds: Option<u64>,
     /// "Reconnecting…" is due (connecting again for longer than a moment).
@@ -550,6 +548,7 @@ impl TermPane {
             (Launch::Agent(command), Some((true, _))) => {
                 let out = self.model.user_input_at(format!("\x05\x15{command}\r").as_bytes(), self.now());
                 self.link.write(&out);
+                self.note_entered();
                 self.focus_terminal(tx);
             }
             (launch, Some((_, cwd))) => {

@@ -83,6 +83,10 @@ pub struct State {
     pub(crate) system_dark: std::cell::Cell<bool>,
     /// The rows' column as last laid out, its padding included; 0 before the first layout.
     rows_width: f32,
+    /// Sections visited before this one, and those left by going back: the mouse's side
+    /// buttons walk them, as a browser's history.
+    back: Vec<Section>,
+    ahead: Vec<Section>,
 }
 
 impl Default for State {
@@ -103,6 +107,8 @@ impl Default for State {
             wink: crate::looks::Wink::default(),
             system_dark: std::cell::Cell::new(true),
             rows_width: 0.0,
+            back: Vec::new(),
+            ahead: Vec::new(),
         }
     }
 }
@@ -131,8 +137,32 @@ impl State {
         }
     }
 
-    /// Shows `section` from its top.
+    /// Shows `section` from its top, the one it leaves kept for going back.
     pub(crate) fn go_to(&mut self, section: Section) {
+        if section != self.section {
+            self.back.push(self.section);
+            self.ahead.clear();
+        }
+        self.show(section);
+    }
+
+    /// The section visited before this one (the mouse's back button). False: none.
+    pub(crate) fn go_back(&mut self) -> bool {
+        let Some(section) = self.back.pop() else { return false };
+        self.ahead.push(self.section);
+        self.show(section);
+        true
+    }
+
+    /// The section gone back from (the mouse's forward button). False: none.
+    pub(crate) fn go_forward(&mut self) -> bool {
+        let Some(section) = self.ahead.pop() else { return false };
+        self.back.push(self.section);
+        self.show(section);
+        true
+    }
+
+    pub(crate) fn show(&mut self, section: Section) {
         self.section = section;
         self.menu = None;
         self.found = None;
@@ -143,6 +173,8 @@ impl State {
     /// Settings goes off screen: what was half done in it is dropped.
     pub(crate) fn leave(&mut self) {
         self.open = false;
+        self.back.clear();
+        self.ahead.clear();
         self.menu = None;
         self.found = None;
         self.keys = shortcuts::Recording::default();
@@ -363,6 +395,20 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .h_full()
         .role("group")
         .label_static("Settings")
+        // The mouse's side buttons go back and forward through the sections visited, as in a
+        // browser (Files does the same with folders).
+        .pointer_buttons([rune::PointerButton::Back, rune::PointerButton::Forward])
+        .on_background_press_tx(|s: &mut Shell, tx| {
+            let state = &mut s.screens.settings;
+            let moved = match tx.button() {
+                rune::PointerButton::Back => state.go_back(),
+                rune::PointerButton::Forward => state.go_forward(),
+                _ => false,
+            };
+            if moved {
+                tx.instant();
+            }
+        })
         .child(nav(s, t))
         .child(col().key("settings-main").grow(1.0).min_w(0.0).h_full().child(head(s, t)).child(scroll))
 }

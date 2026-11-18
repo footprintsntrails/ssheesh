@@ -807,3 +807,45 @@ fn a_theme_of_your_own_is_made_edited_and_deleted_in_settings() {
     w.click("accent-own");
     assert!(w.has("picker-accent"));
 }
+
+#[test]
+fn the_mouses_side_buttons_walk_back_and_forward_through_the_sections_visited() {
+    use rune::PointerButton::{Back, Forward};
+    let mut w = Window::defaults();
+    w.go(Section::Terminal);
+    w.go(Section::Appearance);
+    w.go(Section::Keyboard);
+    let side = |w: &mut Window, key: &str, button: rune::PointerButton| {
+        let (x, y) = w.rt.find(key).unwrap();
+        w.rt.button_down(x, y, button);
+        w.rt.frame(1.0 / 60.0);
+        w.rt.button_up(x, y, button);
+        w.settle();
+    };
+    let at = |w: &Window| w.rt.state.screens.settings.section;
+    // Back, over the rows or over the list of sections, as in a browser.
+    side(&mut w, "settings-title", Back);
+    assert_eq!(at(&w), Section::Appearance);
+    side(&mut w, "nav-layout", Back);
+    assert_eq!(at(&w), Section::Terminal);
+    side(&mut w, "settings-title", Forward);
+    assert_eq!(at(&w), Section::Appearance);
+    // A section picked now starts a new way forward.
+    w.go(Section::Privacy);
+    side(&mut w, "settings-title", Forward);
+    assert_eq!(at(&w), Section::Privacy);
+    side(&mut w, "settings-title", Back);
+    assert_eq!(at(&w), Section::Appearance);
+    // Back past the first section visited does nothing, and Settings stays.
+    for _ in 0..4 {
+        side(&mut w, "settings-title", Back);
+    }
+    assert!(w.rt.state.screens.settings.open);
+    // Closed and opened again, Settings starts a fresh history.
+    w.rt.update(|s, tx| s.close_settings(tx));
+    w.settle();
+    w.click("settings-gear");
+    let first = at(&w);
+    side(&mut w, "settings-title", Back);
+    assert_eq!(at(&w), first);
+}

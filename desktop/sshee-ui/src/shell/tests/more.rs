@@ -1133,6 +1133,78 @@ fn compact_mode_slides_the_bars_in_at_the_edges() {
 }
 
 #[test]
+fn compact_tab_bar_mode_hides_only_the_row_and_brings_it_back_at_the_top() {
+    use sshee_app::model::CompactMode;
+    for frame in [Frame::Linux, Frame::Windows] {
+        let mut w = Window::open(frame, false);
+        w.click("server-1");
+        w.rt.update(|s, tx| s.change_settings(tx, |st| st.set(|s| s.compact_mode = CompactMode::Tabbar)));
+        w.settle();
+        // The row stands aside; the sidebar and the status bar stay.
+        assert!(w.rt.find("bar").is_none() && w.rt.find("tabs").is_none(), "{frame:?}");
+        assert!(w.rt.find("rail").is_some() && w.rt.find("status").is_some(), "{frame:?}");
+        // The pointer at the top of the window brings the row, over the page. On Windows the
+        // first 8 points are the resize edge, which the window never hears the pointer in
+        // (`compact::BAND_WINDOWS`): just under it.
+        let top = if frame == Frame::Windows { 10.0 } else { 1.0 };
+        w.rt.pointer_move(600.0, top);
+        w.settle();
+        assert!(w.rt.find("out-top").is_some() && w.rt.find("tabs").is_some(), "{frame:?}");
+        // Into the page, away from it: it goes.
+        w.rt.pointer_move(600.0, 400.0);
+        w.settle();
+        assert!(w.rt.find("out-top").is_none(), "{frame:?}");
+        // "Both" does the same at the top, and the sidebar at its edge.
+        w.rt.update(|s, tx| s.change_settings(tx, |st| st.set(|s| s.compact_mode = CompactMode::Both)));
+        w.settle();
+        w.rt.pointer_move(600.0, top);
+        w.settle();
+        assert!(w.rt.find("out-top").is_some() && w.rt.find("tabs").is_some(), "{frame:?}");
+        w.rt.pointer_move(600.0, 400.0);
+        w.settle();
+        assert!(w.rt.find("out-top").is_none(), "{frame:?}");
+    }
+}
+
+#[test]
+fn the_agents_a_server_has_are_in_sight_in_the_terminals_header_and_start_with_a_click() {
+    use sshee_app::agents::AgentKind;
+    let mut w = linux();
+    w.click("server-1");
+    let id = w.rt.state.bench.active_id().unwrap();
+    let claude = format!("agent-claude-{}", id.0);
+    // None found (the fake server answers nothing): no buttons.
+    assert!(w.rt.find(&claude).is_none());
+    // Claude Code and Codex found: in the top row, which is the terminal's header while it
+    // fills the page, with nothing to point at first (0.10 had them in the pane's header).
+    w.rt.state.panes.get_mut(&id).unwrap().over.session.agents = Some(vec![AgentKind::Claude, AgentKind::Codex]);
+    w.rt.update(|_, tx| tx.instant());
+    w.settle();
+    let [x, y, _, h] = w.rect(&claude).expect("Claude Code's button is shown");
+    let bar = w.rect("bar").unwrap();
+    assert!(y >= bar[1] && y + h <= bar[1] + bar[3], "in the top row: {y}");
+    assert!(x > w.rect("bar-middle").unwrap()[0], "after the title and the tabs");
+    assert!(w.rt.find(&format!("agent-codex-{}", id.0)).is_some());
+    let tree = w.tree();
+    assert!(tree.contains("Start Claude Code here") && tree.contains("Start Codex here"), "{tree}");
+    // Not on the main menu, nor in Settings.
+    w.click("home");
+    assert!(w.rt.find(&claude).is_none());
+    w.click("server-1");
+    assert!(w.rt.find(&claude).is_some());
+    // A click: nothing tells the shell waits at its prompt here, so the agent gets a terminal
+    // of its own beside this one, as 0.10's `startAgent`.
+    w.click(&claude);
+    assert_eq!(w.sessions(), 2);
+    assert!(w.rt.state.bench.layout().shown_with(id).is_some());
+    // Beside another tab, each pane's own header has them instead of the top row.
+    let head = w.rect(&format!("side-head-{}", id.0)).unwrap();
+    let [_, y, _, h] = w.rect(&claude).expect("in the pane's header");
+    assert!(y >= head[1] && y + h <= head[1] + head[3] + 0.5, "in the pane's header: {y}");
+    assert_eq!(w.rt.state.bench.tabs().len(), 2);
+}
+
+#[test]
 fn splits_are_kept_with_the_tabs() {
     let mut w = linux();
     w.click("server-1");

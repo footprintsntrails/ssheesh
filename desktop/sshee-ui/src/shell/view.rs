@@ -143,7 +143,14 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .child(super::tabs::strip(s, t, active, fit));
     // Then streamer mode's switch, and while the sidebar is hidden, its foot. What's left of
     // the row moves the window, and Windows' buttons take its end.
-    bar.child(middle).child(super::streamer::eye(s, t)).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
+    // The AI agents the terminal on screen can start (0.10's header buttons): a pane beside
+    // another has its own header, where they are instead.
+    let agents = s
+        .bench
+        .active_id()
+        .filter(|id| !s.screens.settings.open && !s.bench.showing_home() && s.bench.layout().shown_with(*id).is_none())
+        .and_then(|id| screens::prompts::agent_starters(s, id, theme::CONTROL, t));
+    bar.child(middle).children(agents.map(|a| a.ml(6.0))).child(super::streamer::eye(s, t)).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }
 
 /// The page: darker than the frame, its top-left corner rounded where it meets the sidebar.

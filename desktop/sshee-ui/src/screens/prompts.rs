@@ -243,44 +243,42 @@ pub(crate) fn show_path(s: &mut crate::shell::Shell, from: sshee_app::workbench:
 
 // ---- the agents' buttons
 
-/// The agents the server has, at the terminal's top right while the pointer is near the top
-/// (0.10's header buttons, quiet until you reach for them): a press starts one here when the
-/// shell waits at its prompt, else in a new terminal beside, in the same folder.
-pub fn agent_buttons<S: 'static>(pane: &TermPane, t: &'static Theme, get: impl Fn(&mut S) -> Option<&mut TermPane> + Copy + 'static) -> Option<El> {
-    let s = &pane.over.session;
-    let agents = s.agents.as_ref().filter(|a| !a.is_empty())?;
-    if !s.near_top || pane.find_is_open() || !matches!(pane.status, crate::terminal::LinkStatus::Connected { .. }) {
+/// The agents the terminal's server has, where 0.10 showed them: in the terminal's header,
+/// which is the top row for the tab on screen and a pane's own header beside another. Once
+/// found they stay in sight, one quiet button each in the agent's own mark: a press starts it
+/// here when the shell waits at its prompt, else in a new terminal beside, in the same folder.
+/// `size`: each button's side, the header's own.
+pub(crate) fn agent_starters(s: &crate::shell::Shell, id: sshee_app::workbench::TabId, size: f32, t: &'static Theme) -> Option<El> {
+    let pane = s.panes.get(&id)?;
+    let agents = pane.over.session.agents.as_ref().filter(|a| !a.is_empty())?;
+    if !matches!(pane.status, crate::terminal::LinkStatus::Connected { .. }) {
         return None;
     }
-    let mut bar = row().key("agent-buttons").gap(2.0).padding(3.0).radius(theme::RADIUS).fill(t.pop).border(1.0, t.rim).on_hover_change(move |s: &mut S, over, tx| {
-        if let Some(p) = get(s) {
-            p.over.session.near_top = over;
-            tx.instant();
-        }
-    });
+    let mut bar = row().key(format!("agents-{}", id.0)).gap(1.0).items_center().role("group").label_static("AI agents on this server");
     for agent in agents.iter().copied() {
         let name = format!("Start {} here", agent.name());
         bar = bar.child(
-            el().key(format!("agent-{}", agent.command()))
-                .size(26.0, 26.0)
-                .radius(theme::RADIUS_ROW)
+            el().key(format!("agent-{}-{}", agent.command(), id.0))
+                .size(size, size)
+                .radius(if size < theme::CONTROL { theme::RADIUS_ROW } else { theme::RADIUS })
                 .items_center()
                 .justify_center()
                 .hover(t.hov2)
                 .press(t.down)
+                .focusable(true)
                 .role("button")
                 .label(name.clone())
                 .help(name)
-                .on_press_tx(move |s: &mut S, tx| {
-                    if let Some(p) = get(s) {
-                        p.over.session.near_top = false;
+                .on_press_tx(move |s: &mut crate::shell::Shell, tx| {
+                    if let Some(p) = s.panes.get_mut(&id) {
                         p.start_agent(agent, tx);
                     }
+                    tx.instant();
                 })
-                .child(agent_mark(agent, 15.0, t)),
+                .child(agent_mark(agent, (size * 0.57).round(), t)),
         );
     }
-    Some(row().key("agent-buttons-row").absolute(0.0, 8.0).w_full().justify_end().pr(22.0).child(bar))
+    Some(bar)
 }
 
 /// An agent's mark, as 0.10 drew them: Claude's from Simple Icons (CC0), OpenCode's and

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sshee_core::agents;
 use sshee_core::ssh::{SshEnv, Target};
@@ -43,12 +43,18 @@ impl Watcher {
             let mut servers: Vec<Asked> = Vec::new();
             // Whether a server has any agent installed, once it could be asked.
             let mut has_agents: HashMap<String, bool> = HashMap::new();
-            let mut wait = FIRST;
+            let mut next_round = Instant::now() + FIRST;
             loop {
-                match rx.recv_timeout(if servers.is_empty() { Duration::from_secs(3600) } else { wait }) {
+                let wait = if servers.is_empty() { Duration::from_secs(3600) } else { next_round.saturating_duration_since(Instant::now()) };
+                match rx.recv_timeout(wait) {
                     Ok(next) => {
+                        // Other servers: asked soon. The same ones again: a command was given in
+                        // one of their terminals, so the round comes soon, never later than it
+                        // would have (typing all day doesn't hold it off).
+                        let soon = Instant::now() + FIRST;
+                        let same = next.iter().map(|(k, _)| k).eq(servers.iter().map(|(k, _)| k));
+                        next_round = if same { next_round.min(soon) } else { soon };
                         servers = next;
-                        wait = FIRST;
                         continue;
                     }
                     Err(RecvTimeoutError::Disconnected) => return,
@@ -73,7 +79,7 @@ impl Watcher {
                         remote.set_foreground(key.clone(), running(list));
                     }
                 }
-                wait = EVERY;
+                next_round = Instant::now() + EVERY;
             }
         });
         if let Err(e) = spawned {
