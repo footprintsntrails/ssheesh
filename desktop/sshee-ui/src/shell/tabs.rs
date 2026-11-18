@@ -420,7 +420,9 @@ impl Shell {
         let Some(like) = self.bench.tab(id).cloned() else { return };
         // A new tab opens next to the tab you were last on at its machine.
         self.bench.focus(id);
-        self.bench.open_with(like.kind, &like.server, Open { path: like.path, ..Open::default() });
+        // A terminal into a container opens into it again, under its name.
+        let title = like.container.as_ref().and(like.title);
+        self.bench.open_with(like.kind, &like.server, Open { path: like.path, title, container: like.container, ..Open::default() });
         self.settle(tx);
     }
 }

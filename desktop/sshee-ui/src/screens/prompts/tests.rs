@@ -179,6 +179,22 @@ fn a_new_servers_key_is_asked_about_with_its_fingerprint_and_trusting_it_signs_i
     assert_eq!(w.did(0), ["trust true"]);
 }
 
+/// Streamer mode turned on while the key question is up hides the server's name in it, and
+/// turned off, shows it again.
+#[test]
+fn the_key_question_names_the_server_as_streamer_mode_shows_it() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::HostKey(HostKey::New { fingerprints: vec![print("madeUpFingerprint1")] }));
+    assert!(w.tree().contains("Is this really web-7731?"));
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
+    w.frames(2);
+    let tree = w.tree();
+    assert!(tree.contains("New server. Is this really") && !tree.contains("web-7731"), "{tree}");
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
+    w.frames(2);
+    assert!(w.tree().contains("Is this really web-7731?"), "{}", w.tree());
+}
+
 #[test]
 fn a_changed_key_is_red_shows_both_and_return_is_the_safe_answer() {
     let mut w = Window::on_web();
