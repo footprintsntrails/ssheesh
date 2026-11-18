@@ -334,19 +334,22 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
             let (_, y) = centre(&run, &format!("nav-{id}"));
             assert_eq!(y, FIRST_SECTION + SECTION_ROW * n as f64, "{theme}: {name}");
         }
-        assert_eq!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
+        // The picked section is a quiet fill, not the accent blue, and it differs from the rest.
+        assert_ne!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
+        assert_ne!(run.fill("nav-layout"), run.fill("nav-terminal"), "{theme}");
         // Rows with their words and controls; one that comes later says so.
         for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Tabs run along the top. Tabs under each server aren't built yet.", "Search"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
-        // The picture: the page's colour, a box of rows on it, the picked section's blue, and
+        // The picture: the page's colour, a box of rows on it, the picked section's quiet fill, and
         // a switch that is on in the system's green.
         let px = run.pixels();
         assert_eq!(at(&px, 1250, 400), page, "{theme}: the page");
         assert_eq!(at(&px, 26, 500), frame, "{theme}: the sidebar");
         let [x, y, w, _] = run.rect("layout-tab-server");
         assert_eq!(at(&px, (x + w / 2.0) as u32, (y + 4.0) as u32), group, "{theme}: a row's box");
-        assert_eq!(at(&px, 262, 106), "#0071e3", "{theme}: the picked section");
+        assert_ne!(at(&px, 262, 106), "#0071e3", "{theme}: the picked section");
+        assert_ne!(at(&px, 262, 106), frame, "{theme}: the picked section");
         let [sx, sy, sw, sh] = run.rect("layout-tab-server-control");
         let green = if theme == "dark" { [0x30, 0xd1, 0x58] } else { [0x34, 0xc7, 0x59] };
         assert!(near(&px, [sx as u32, sy as u32, (sx + sw) as u32, (sy + sh) as u32], green) > 100, "{theme}: the switch isn't green");
@@ -1342,8 +1345,8 @@ fn stats_has_graphs_meters_and_programs_in_both_appearances() {
         }
         let px = run.pixels();
         let graph = run.rect("stat-cpu");
-        // The graph's line: the page's quiet ink, never blue.
-        assert_eq!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x00, 0x71, 0xe3]), 0, "{theme}");
+        // The graph's line is drawn in the accent, so a quiet server's graph is still seen.
+        assert!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x00, 0x71, 0xe3]) > 20, "{theme}: the CPU line isn't in the accent");
         assert_eq!(at(&px, 1270, 790), page, "{theme}");
     }
 }
