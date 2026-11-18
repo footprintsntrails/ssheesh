@@ -64,6 +64,17 @@ struct Doors {
     last: u16,
     /// Files open in an editor elsewhere, by session id: the window that opened each.
     edits: HashMap<String, u16>,
+    /// The window that last asked what isn't answered to a tab, by kind.
+    askers: HashMap<Asker, u16>,
+}
+
+/// What a window asks of the backend whose answer isn't addressed to a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Asker {
+    /// Adding and changing servers (`Shell::servers_answer`).
+    Servers,
+    /// The edit bridge: "Choose an app…", leftovers, a failure.
+    Edits,
 }
 
 impl Hub {
@@ -89,16 +100,31 @@ impl Hub {
         let mut doors = self.lock();
         doors.open.retain(|(n, _)| *n != no);
         doors.edits.retain(|_, n| *n != no);
+        doors.askers.retain(|_, n| *n != no);
         if doors.front == no {
             doors.front = doors.open.first().map_or(MAIN, |(n, _)| *n);
         }
     }
 
-    /// The number for a window about to open: never one used before in this run.
-    pub fn next_window(&self) -> u16 {
+    /// The number for a window about to open: never one used before in this run. `None` once
+    /// every number has been used (65,535 windows in one run): no other window opens.
+    pub fn next_window(&self) -> Option<u16> {
         let mut doors = self.lock();
-        doors.last += 1;
-        doors.last
+        doors.last = doors.last.checked_add(1)?;
+        Some(doors.last)
+    }
+
+    /// Window `no` asked something whose answer isn't addressed to a tab: the answer goes back
+    /// there.
+    pub(crate) fn note_asker(&self, kind: Asker, no: u16) {
+        self.lock().askers.insert(kind, no);
+    }
+
+    /// The window that last asked for `kind`, while it's open; else the window in front.
+    pub(crate) fn asker(&self, kind: Asker) -> Option<u16> {
+        let doors = self.lock();
+        let open = |no: &u16| doors.open.iter().any(|(n, _)| n == no);
+        doors.askers.get(&kind).copied().filter(open).or(Some(doors.front).filter(open)).or(doors.open.first().map(|(n, _)| *n))
     }
 
     /// The window came to the front.
@@ -146,13 +172,13 @@ impl Hub {
         self.lock().edits.get(id).copied()
     }
 
-    /// Settings changed in window `from`: the other windows take them (each compares, so the
-    /// one that has them already stops there). Nothing to do with one window.
-    pub(crate) fn settings_changed(&self, from: u16, settings: &sshee_app::model::Settings, more: &sshee_app::settings_store::Additions) {
+    /// Settings changed in window `from`: the other windows take what changed, and hand it on
+    /// to nobody. Nothing to do with one window.
+    pub(crate) fn settings_changed(&self, from: u16, change: sshee_app::settings_store::Change) {
         let others: Vec<Remote> = self.lock().open.iter().filter(|(n, _)| *n != from).map(|(_, r)| r.clone()).collect();
         for other in others {
-            let (settings, more) = (settings.clone(), more.clone());
-            other.update(move |s| s.mirror_settings(settings, more));
+            let change = change.clone();
+            other.update(move |s| s.mirror_settings(&change));
         }
     }
 
@@ -191,8 +217,9 @@ struct Core {
 }
 
 impl Core {
-    fn seen(&mut self, no: u16) -> &mut Seen {
-        self.windows.entry(no).or_default()
+    /// What window `no` asked; `None` once it has left (a late call from it changes nothing).
+    fn seen(&mut self, no: u16) -> Option<&mut Seen> {
+        self.windows.get_mut(&no)
     }
 
     /// Every window's servers asked about their programs, each once, in the windows' order.
@@ -261,8 +288,8 @@ impl Shared {
         if core.windows.len() < 2 || core.watcher == self.no {
             return;
         }
+        let Some(watch) = core.seen(self.no).map(|w| w.watch.clone()) else { return };
         core.watcher = self.no;
-        let watch = core.seen(self.no).watch.clone();
         core.backend.watch(watch.as_ref());
     }
 
@@ -303,7 +330,13 @@ impl Backend for Shared {
 
     fn watch(&mut self, server: Option<&Server>) {
         let mut core = self.core.borrow_mut();
-        core.seen(self.no).watch = server.cloned();
+        let Some(seen) = core.seen(self.no) else { return };
+        seen.watch = server.cloned();
+        // The window in front (or the only one) decides; another's server is still looked at
+        // with its programs (`agents_on`).
+        if core.windows.len() > 1 && self.hub.front() != self.no {
+            return;
+        }
         core.watcher = self.no;
         core.backend.watch(server);
     }
@@ -318,7 +351,8 @@ impl Backend for Shared {
 
     fn agents_on(&mut self, servers: &[Server]) {
         let mut core = self.core.borrow_mut();
-        core.seen(self.no).agents = servers.to_vec();
+        let Some(seen) = core.seen(self.no) else { return };
+        seen.agents = servers.to_vec();
         let all = core.agents();
         core.backend.agents_on(&all);
     }
@@ -329,14 +363,16 @@ impl Backend for Shared {
 
     fn waiting_changed(&mut self, waiting: &[Waiting]) {
         let mut core = self.core.borrow_mut();
-        core.seen(self.no).waiting = waiting.to_vec();
+        let Some(seen) = core.seen(self.no) else { return };
+        seen.waiting = waiting.to_vec();
         let all = core.waiting();
         core.backend.waiting_changed(&all);
     }
 
     fn window_shown(&mut self, shown: bool) {
         let mut core = self.core.borrow_mut();
-        core.seen(self.no).shown = shown;
+        let Some(seen) = core.seen(self.no) else { return };
+        seen.shown = shown;
         let any = core.shown();
         core.backend.window_shown(any);
     }
@@ -362,6 +398,7 @@ impl Backend for Shared {
     }
 
     fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
+        self.hub.note_asker(Asker::Edits, self.no);
         self.backend().edit(ask);
     }
 
@@ -408,6 +445,7 @@ impl Backend for Shared {
     }
 
     fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        self.hub.note_asker(Asker::Servers, self.no);
         self.backend().servers(ask);
     }
 
@@ -528,8 +566,11 @@ impl Shell {
 
     /// Settings changed in another window: this one takes them and applies them (what the
     /// terminals show, at the next frame).
-    pub fn mirror_settings(&mut self, settings: sshee_app::model::Settings, more: sshee_app::settings_store::Additions) {
-        if self.settings.mirror(settings, more) {
+    pub fn mirror_settings(&mut self, change: &sshee_app::settings_store::Change) {
+        self.mirroring.store(true, std::sync::atomic::Ordering::Relaxed);
+        let changed = self.settings.mirror(change);
+        self.mirroring.store(false, std::sync::atomic::Ordering::Relaxed);
+        if changed {
             self.apply_settings();
             self.look_stale = true;
         }
@@ -662,7 +703,7 @@ mod tests {
             let mut main = Shell::new(Workbench::new(servers), Box::new(Fake(world.clone())), Options::default(), Some(remote));
             main.go_to(WEB, &mut Tx::default());
             let (remote, second_q) = door();
-            let no = main.hub().next_window();
+            let no = main.hub().next_window().unwrap();
             let second = main.window_for(no, DB, remote);
             Two { world, main, main_q, second, second_q }
         }
@@ -768,6 +809,100 @@ mod tests {
         t.settle();
         assert_eq!(t.main.screens.snippets.list, list);
         assert_eq!(t.world.lock().unwrap().snippets_kept, 1);
+    }
+
+    /// The queue a window's posts wait in.
+    fn waiting(q: &Queue) -> usize {
+        q.lock().unwrap().len()
+    }
+
+    #[test]
+    fn settings_go_one_way_and_neither_windows_change_is_lost() {
+        let mut t = Two::open();
+        t.settle();
+        // Two changes in one turn: the other window takes both, in order, and hands nothing back.
+        t.second.change_settings(&mut Tx::default(), |st| st.set(|v| v.terminal_font_size = 15.0));
+        t.second.change_settings(&mut Tx::default(), |st| st.set(|v| v.terminal_font_size = 16.0));
+        assert_eq!((waiting(&t.main_q), waiting(&t.second_q)), (2, 0));
+        drain(&t.main_q, &mut t.main);
+        assert_eq!((waiting(&t.main_q), waiting(&t.second_q)), (0, 0), "a change taken was handed back");
+        assert_eq!(t.main.settings.get().terminal_font_size, 16.0);
+        // Both windows change a different setting before either hears of the other's.
+        t.main.change_settings(&mut Tx::default(), |st| st.set(|v| v.cursor_blink = false));
+        t.second.change_settings(&mut Tx::default(), |st| st.set(|v| v.terminal_padding = 9.0));
+        t.settle();
+        for s in [&t.main, &t.second] {
+            assert_eq!((s.settings.get().cursor_blink, s.settings.get().terminal_padding, s.settings.get().terminal_font_size), (false, 9.0, 16.0));
+        }
+    }
+
+    #[test]
+    fn an_answer_to_what_a_window_asked_goes_back_to_it() {
+        let mut t = Two::open();
+        t.settle();
+        let remote = t.backend_remote();
+        // Asked in the second window, while the first is in front.
+        t.main.window_focus(true, &mut Tx::default());
+        t.second.backend_mut().servers(sshee_app::servers::Ask::LocalAuth);
+        remote.servers_answer(sshee_app::servers::Answer::Changed);
+        assert_eq!((waiting(&t.main_q), waiting(&t.second_q)), (0, 1));
+        t.second.backend_mut().edit(sshee_app::files::edit::EditAsk::ChooseApp { path: "/usr/bin/true".into() });
+        remote.edit(sshee_app::files::edit::EditReply::Chosen(Err("not an editor".into())));
+        assert_eq!((waiting(&t.main_q), waiting(&t.second_q)), (0, 2));
+        t.settle();
+        // Once it has closed, the window in front hears.
+        t.second.close();
+        remote.servers_answer(sshee_app::servers::Answer::Changed);
+        assert_eq!((waiting(&t.main_q), waiting(&t.second_q)), (1, 0));
+    }
+
+    #[test]
+    fn the_window_in_front_picks_the_machine_watched_and_one_gone_asks_nothing() {
+        let mut t = Two::open();
+        t.settle();
+        let servers = t.main.bench.servers().to_vec();
+        let told = |t: &Two| t.world.lock().unwrap().watching.len();
+        // The main window is in front: the second's server changing doesn't take the watch.
+        let before = told(&t);
+        t.second.backend_mut().watch(Some(&servers[2]));
+        assert_eq!(told(&t), before);
+        // In front, it does.
+        t.second.window_focus(true, &mut Tx::default());
+        assert_eq!(t.world.lock().unwrap().watching.last().unwrap().as_deref(), Some(DB));
+        // A window that has left is never counted again.
+        t.second.close();
+        let w = t.world.lock().unwrap();
+        let (agents, waits, watched) = (w.agents.len(), w.waiting.len(), w.watching.len());
+        drop(w);
+        t.second.backend_mut().window_shown(true);
+        t.second.backend_mut().agents_on(&servers[1..]);
+        t.second.backend_mut().waiting_changed(&[]);
+        t.second.backend_mut().watch(Some(&servers[2]));
+        let w = t.world.lock().unwrap();
+        assert_eq!((w.agents.len(), w.waiting.len(), w.watching.len()), (agents, waits, watched));
+    }
+
+    #[test]
+    fn quitting_the_app_keeps_every_windows_shells() {
+        let mut t = Two::open();
+        let theirs = t.second.bench.active_id().unwrap();
+        t.second.quit();
+        // Closing it afterwards changes nothing: it's gone already.
+        t.second.close();
+        let w = t.world.lock().unwrap();
+        assert!(!w.terminals.iter().filter(|(t, _)| *t == theirs).any(|(_, e)| *e.lock().unwrap()));
+    }
+
+    #[test]
+    fn no_window_opens_once_every_number_is_used() {
+        let hub = super::Hub::new();
+        let mut last = 0;
+        while let Some(no) = hub.next_window() {
+            assert!(no > last);
+            last = no;
+        }
+        assert_eq!(last, u16::MAX);
+        assert_eq!(hub.next_window(), None);
     }
 
     #[test]

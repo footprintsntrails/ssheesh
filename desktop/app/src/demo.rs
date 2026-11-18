@@ -191,7 +191,7 @@ impl DemoBackend {
             s.set_server_faces(faces.clone());
         });
         if let Some(answer) = answer {
-            remote.update(move |s| s.servers_answer(answer));
+            remote.servers_answer(answer);
         }
     }
 }

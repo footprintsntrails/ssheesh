@@ -172,6 +172,49 @@ pub type Listener = Box<dyn FnMut(&Settings, &Additions) + Send>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Subscription(u64);
 
+/// The settings a change changed, by their names in the file, with their new values: what one
+/// window hands the others ([`SettingsStore::mirror`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Change {
+    settings: JsonMap,
+    more: JsonMap,
+}
+
+impl Change {
+    /// What differs from `before` to `after`. A setting that went away (an option emptied) is
+    /// `null`.
+    pub fn between(before: (&Settings, &Additions), after: (&Settings, &Additions)) -> Change {
+        fn changed(before: Json, after: Json) -> JsonMap {
+            let (Json::Object(before), Json::Object(after)) = (before, after) else { return JsonMap::new() };
+            let mut out: JsonMap = after.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            out.extend(before.keys().filter(|k| !after.contains_key(*k)).map(|k| (k.clone(), Json::Null)));
+            out
+        }
+        Change { settings: changed(Json::of(before.0), Json::of(after.0)), more: changed(Json::of(before.1), Json::of(after.1)) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.settings.is_empty() && self.more.is_empty()
+    }
+
+    /// `now` with `keys` put in; `None` when that doesn't read (a newer value this version
+    /// can't take).
+    fn apply<T: Serialize + serde::de::DeserializeOwned>(&self, now: &T, keys: &JsonMap) -> Option<T> {
+        let put = |keep_null: bool| {
+            let Json::Object(mut map) = Json::of(now) else { return None };
+            for (k, v) in keys.iter().filter(|(_, v)| keep_null || **v != Json::Null) {
+                if *v == Json::Null {
+                    map.shift_remove(k);
+                } else {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+            Json::Object(map).typed::<T>().ok()
+        };
+        put(true).or_else(|| put(false))
+    }
+}
+
 /// The settings of a running app.
 pub struct SettingsStore {
     settings: Settings,
@@ -523,10 +566,13 @@ impl SettingsStore {
         }
     }
 
-    /// The settings as another window's store has them now (its listener heard a change).
-    /// Listeners hear and the file is written only if they differ from these: two windows
-    /// that tell each other stop at once. Returns whether anything changed.
-    pub fn mirror(&mut self, settings: Settings, more: Additions) -> bool {
+    /// What another window changed ([`Change::between`] its settings before and after): only
+    /// those settings are taken, so one changed here meanwhile stays. Listeners hear and the
+    /// file is written only if something differs. The window that takes it doesn't hand it
+    /// on: a change goes one way, from the window it was made in to the others. Returns
+    /// whether anything changed.
+    pub fn mirror(&mut self, change: &Change) -> bool {
+        let (Some(settings), Some(more)) = (change.apply(&self.settings, &change.settings), change.apply(&self.more, &change.more)) else { return false };
         if settings == self.settings && more == self.more {
             return false;
         }
@@ -1153,25 +1199,56 @@ mod tests {
         main.update(|s| s.terminal_font_size = 15.0);
         let mut second = main.follower();
         assert_eq!(second.get(), main.get());
-        // Each window's listener hands its change to the other; the copy that already has it
-        // stops there, so two windows never tell each other forever.
+        // A window hands on what it changed; the other takes it, and its listeners hear.
         let heard = Arc::new(AtomicUsize::new(0));
         let h = heard.clone();
         main.subscribe(Box::new(move |_, _| {
             h.fetch_add(1, Ordering::SeqCst);
         }));
+        let snapshot = |s: &SettingsStore| (s.get().clone(), s.more().clone());
+        let before = snapshot(&second);
         second.update(|s| s.cursor_blink = false);
-        assert!(main.mirror(second.get().clone(), second.more().clone()));
-        assert!(!main.mirror(second.get().clone(), second.more().clone()));
-        assert!(!second.mirror(main.get().clone(), main.more().clone()));
+        let change = Change::between((&before.0, &before.1), (second.get(), second.more()));
+        assert!(main.mirror(&change));
+        assert!(!main.mirror(&change));
         assert_eq!(heard.load(Ordering::SeqCst), 1);
+        // Two changes in a row arrive in order and end where the window that made them is.
+        let (one, two) = (snapshot(&second), {
+            second.update(|s| s.terminal_font_size = 16.0);
+            snapshot(&second)
+        });
+        second.update(|s| s.terminal_font_size = 17.0);
+        let first = Change::between((&one.0, &one.1), (&two.0, &two.1));
+        let then = Change::between((&two.0, &two.1), (second.get(), second.more()));
+        assert!(main.mirror(&first) && main.mirror(&then));
+        assert_eq!(main.get().terminal_font_size, 17.0);
+        // Both windows change a different setting before either hears: each keeps its own
+        // and takes the other's.
+        let (m0, s0) = (snapshot(&main), snapshot(&second));
+        main.update(|s| s.cursor_blink = true);
+        second.update(|s| s.terminal_padding = 9.0);
+        let from_main = Change::between((&m0.0, &m0.1), (main.get(), main.more()));
+        let from_second = Change::between((&s0.0, &s0.1), (second.get(), second.more()));
+        assert!(second.mirror(&from_main) && main.mirror(&from_second));
+        assert_eq!(main.get(), second.get());
+        assert!(main.get().cursor_blink && main.get().terminal_padding == 9.0);
+        // An option emptied is emptied there too.
+        let e0 = snapshot(&second);
+        second.set_more(|m| m.external_editor = Some("code".into()));
+        let e1 = snapshot(&second);
+        second.set_more(|m| m.external_editor = None);
+        main.mirror(&Change::between((&e0.0, &e0.1), (&e1.0, &e1.1)));
+        assert_eq!(main.more().external_editor.as_deref(), Some("code"));
+        main.mirror(&Change::between((&e1.0, &e1.1), (second.get(), second.more())));
+        assert_eq!(main.more().external_editor, None);
+        second.update(|s| s.cursor_blink = false);
         // A change in the second window reaches the file, as one in the first does.
         second.update_more(|m| m.tabs_name_server = false);
         drop(main);
         second.flush();
         drop(second);
         let again = SettingsStore::open(&dir, linux());
-        assert_eq!((again.get().terminal_font_size, again.get().cursor_blink, again.more().tabs_name_server), (15.0, false, false));
+        assert_eq!((again.get().terminal_font_size, again.get().cursor_blink, again.more().tabs_name_server), (17.0, false, false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

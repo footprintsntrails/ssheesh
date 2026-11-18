@@ -106,7 +106,7 @@ fn window_app(options: &mut Options) -> App<Shell> {
         .on_ime(|s, ev, tx| s.ime(ev, tx))
         .on_close(|s, _| s.close())
         // The tray's Quit ends the app without closing the window first.
-        .on_quit(|s, _| s.close())
+        .on_quit(|s, _| s.quit())
         // A Windows toast's click, handed over by the program Windows started for it.
         .on_open_url(|s, link, tx| s.open_link(link, tx))
 }
@@ -144,7 +144,7 @@ pub(crate) fn open_window(from: &mut Shell, server: &str) -> bool {
     let mut options = Options { frame: Frame::current(), ..from.options.clone() };
     let app = window_app(&mut options);
     let remote = window_remote(&app);
-    let no = from.hub().next_window();
+    let Some(no) = from.hub().next_window() else { return false };
     let mut shell = from.window_for(no, server, remote);
     shell.options.frame = options.frame;
     rune::open_window(WindowSpec::from_app(format!("server-{no}"), app.init(move || shell)));
