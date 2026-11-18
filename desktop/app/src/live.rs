@@ -195,7 +195,7 @@ fn show(remote: &Remote, shown: Shown, answer: Option<sshee_app::servers::Answer
         s.set_server_faces(shown.faces.clone());
     });
     if let Some(answer) = answer {
-        remote.update(move |s| s.servers_answer(answer));
+        remote.servers_answer(answer);
     }
 }
 
@@ -390,10 +390,10 @@ impl Backend for LiveBackend {
         let failed = remote.clone();
         let spawned = std::thread::Builder::new().name("servers".into()).spawn(move || {
             let answer = match &ask {
-                S::LocalAuth => return remote.update(|s| s.servers_answer(sshee_app::servers::Answer::LocalAuth(crate::servers::local_auth()))),
+                S::LocalAuth => return remote.servers_answer(sshee_app::servers::Answer::LocalAuth(crate::servers::local_auth())),
                 S::Test(new) | S::TrustTest(new) => {
                     let answer = crate::servers::test(&keys, &env, new, matches!(ask, S::TrustTest(_)));
-                    return remote.update(move |s| s.servers_answer(answer));
+                    return remote.servers_answer(answer);
                 }
                 S::Detect { server, first } => {
                     // The shell just opened goes first.
@@ -418,7 +418,7 @@ impl Backend for LiveBackend {
             show(&remote, shown, Some(answer));
         });
         if let Err(e) = spawned {
-            failed.update(move |s| s.servers_answer(sshee_app::servers::Answer::Failed(format!("Couldn't start: {e}"))));
+            failed.servers_answer(sshee_app::servers::Answer::Failed(format!("Couldn't start: {e}")));
         }
     }
 

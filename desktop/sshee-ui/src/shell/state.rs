@@ -15,7 +15,7 @@ use sshee_app::settings_store::SettingsStore;
 use sshee_app::workbench::shortcuts::{match_shortcut, Pressed, Shortcut};
 use sshee_app::workbench::{Link, SavedTabs, Server, ServerKey, Tab, TabId, TabKind, Tor, Vitals, Workbench};
 
-use super::windows::{Every, Hub, Shared};
+use super::windows::{Asker, Every, Hub, Shared};
 pub use super::windows::Job;
 use crate::terminal::{LinkStatus, PaneOptions, StatusSink, TermLink, TermPane};
 use crate::theme::Frame;
@@ -180,6 +180,23 @@ impl Remote {
         self.every(move |s| crate::screens::agent::foreground(s, &server, &running));
     }
 
+    /// The answer to adding or changing a server (`Shell::servers_answer`): to the window that
+    /// asked, or the one in front once that one closed.
+    pub fn servers_answer(&self, answer: sshee_app::servers::Answer) {
+        let job: Job = Box::new(move |s, _| {
+            s.servers_answer(answer);
+            true
+        });
+        match self.hub() {
+            None => self.post_job(job),
+            Some(hub) => {
+                if let Some(no) = hub.asker(Asker::Servers) {
+                    self.to_window(no, job);
+                }
+            }
+        }
+    }
+
     /// The answer to a Files request, or news of a transfer (`screens::files::deliver`).
     pub fn files(&self, reply: sshee_app::files::Reply) {
         self.to_tab(
@@ -265,11 +282,14 @@ impl Remote {
                 Some(no) => self.to_window(no, deliver(reply)),
                 None => self.post_job(deliver(reply)),
             },
-            EditReply::Resumed { id, .. } => {
-                hub.note_edit(id.clone(), hub.front());
-                self.post_job(deliver(reply));
+            // Answers to what a window asked go back to it ("Choose an app…" waits there).
+            EditReply::Resumed { .. } | EditReply::Leftovers(_) | EditReply::Chosen(_) | EditReply::Failed { .. } => {
+                let Some(no) = hub.asker(Asker::Edits) else { return };
+                if let EditReply::Resumed { id, .. } = &reply {
+                    hub.note_edit(id.clone(), no);
+                }
+                self.to_window(no, deliver(reply));
             }
-            EditReply::Leftovers(_) | EditReply::Chosen(_) | EditReply::Failed { .. } => self.post_job(deliver(reply)),
         }
     }
 }
@@ -580,6 +600,10 @@ pub struct Shell {
     pub(crate) window: Option<rune::WindowHandle>,
     /// Terminal tabs restored from the last run whose pane hasn't been made yet.
     opened_before: Vec<Tab>,
+    /// A change from another window is being taken: the settings' listener doesn't hand it on.
+    pub(crate) mirroring: Arc<std::sync::atomic::AtomicBool>,
+    /// The window closed, or the app quit: nothing more ends.
+    closed: bool,
 }
 
 /// A session's status as a tab's.
@@ -617,11 +641,18 @@ impl Shell {
         let clock_base = backend.replays().then(Instant::now);
         let kept = bench.saved();
         let mut settings = backend.settings();
-        // A change made here reaches the other windows' settings (none while this is the only one).
+        // A change made here reaches the other windows' settings (none while this is the only
+        // one): what it changed, not the whole, so one they made meanwhile stays. A change
+        // taken from another window goes no further.
         let (hub, no) = (backend.hub().clone(), backend.window());
+        let mirroring = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let taking = mirroring.clone();
+        let mut last = (settings.get().clone(), settings.more().clone());
         settings.subscribe(Box::new(move |s, more| {
-            if hub.count() > 1 {
-                hub.settings_changed(no, s, more);
+            let change = sshee_app::settings_store::Change::between((&last.0, &last.1), (s, more));
+            last = (s.clone(), more.clone());
+            if !taking.load(std::sync::atomic::Ordering::Relaxed) && !change.is_empty() && hub.count() > 1 {
+                hub.settings_changed(no, change);
             }
         }));
         let secondary = backend.is_secondary();
@@ -653,6 +684,8 @@ impl Shell {
             upload_spare: rune::TextEdit::new(""),
             window: None,
             opened_before: Vec::new(),
+            mirroring,
+            closed: false,
         };
         shell.opened_before = shell.bench.tabs().iter().filter(|t| t.kind == TabKind::Terminal && t.session_key.is_some()).cloned().collect();
         shell.apply_settings();
@@ -1095,6 +1128,19 @@ impl Shell {
     /// Another window's tabs aren't kept, so closing it is closing them: their shells end
     /// too, as a tab's cross ends its own.
     pub fn close(&mut self) {
+        self.close_as(true);
+    }
+
+    /// The app quits (the tray's Quit, logging off): every window closes as the main window
+    /// does, its shells kept in tmux. Only closing another window by itself ends its shells.
+    pub fn quit(&mut self) {
+        self.close_as(false);
+    }
+
+    fn close_as(&mut self, alone: bool) {
+        if std::mem::replace(&mut self.closed, true) {
+            return;
+        }
         // Where the window is, to open there next time.
         if let Some(place) = super::place::now(self) {
             self.backend.window_placed(&place);
@@ -1103,7 +1149,7 @@ impl Shell {
         self.settings.flush();
         // Files open in an editor elsewhere end; copies with unsent changes stay.
         crate::screens::files::edit::close_all(self);
-        let secondary = self.is_secondary();
+        let secondary = self.is_secondary() && alone;
         for pane in self.panes.values_mut() {
             if secondary {
                 pane.end();
