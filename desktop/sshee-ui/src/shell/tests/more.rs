@@ -1439,5 +1439,8 @@ fn a_files_pane_in_a_split_opens_its_menus_under_the_pointer() {
         let ([bx, by, _, bh], [cx, cy, cw, ch]) = (w.rect("files-places").unwrap(), w.rect("files-places-card").expect("the Places list opened"));
         assert!((cx - bx).abs() < 4.0 && cy >= by + bh && cy < by + bh + 12.0, "{dir:?}: {:?} under {:?}", [cx, cy], [bx, by]);
         assert!(cx + cw <= 1280.0 && cy + ch <= 800.0);
+        // Its "?" says what the server's well-known folders are.
+        assert!(w.rect("places-about").is_some());
+        assert_eq!(crate::screens::help::heard(&w.rt, "places").as_deref(), Some(crate::screens::help::PLACES));
     }
 }

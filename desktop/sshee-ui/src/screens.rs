@@ -15,6 +15,7 @@ pub mod checkup;
 pub mod containers;
 pub mod disk;
 pub mod files;
+pub mod help;
 pub mod home;
 pub mod palette;
 pub mod recipes;
@@ -95,6 +96,8 @@ pub struct States {
     pub tunnels: tunnels::State,
     /// The status bar's menu is open, its corner where the pointer was.
     pub vitals_menu: Option<[f32; 2]>,
+    /// The card a "?" opened (`help`).
+    pub tip: Option<crate::kit::help::Tip>,
 }
 
 impl States {
@@ -139,6 +142,7 @@ impl States {
         self.tor.open = false;
         self.tunnels.open = None;
         self.vitals_menu = None;
+        self.tip = None;
     }
 }
 

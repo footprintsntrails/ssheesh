@@ -312,3 +312,14 @@ fn from_the_main_menu_it_asks_which_server_and_the_server_menu_opens_it() {
     w.click("sm-6");
     assert_eq!(w.rt.state.screens.disk.open.as_deref(), Some(STAGING));
 }
+
+#[test]
+fn dockers_tiles_have_a_question_mark_that_says_what_each_is() {
+    let mut w = Window::open();
+    w.open_on(STAGING);
+    assert!(!w.has("disk-docker-about"), "no Docker, no tiles");
+    w.rt.update(|s, _| s.screens.disk.report.as_mut().unwrap().docker = Some(sshee_app::disk::Docker { images: 4 * GB, images_reclaimable: GB, ..Default::default() }));
+    w.settle();
+    assert!(w.has("disk-docker-about"));
+    assert_eq!(crate::screens::help::heard(&w.rt, "Docker's disk use").as_deref(), Some(crate::screens::help::DOCKER_DISK));
+}

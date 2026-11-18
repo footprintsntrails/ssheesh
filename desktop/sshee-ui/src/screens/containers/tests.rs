@@ -388,6 +388,9 @@ fn the_stats_tab_shows_numbers_graphs_and_the_busiest_programs() {
     for said in ["CPU 38%", "Load 0.42  0.38  0.30", "Memory 60%", "Busiest programs", "node", "12.5%", "Last 5 minutes", "web-7731, Linux 6.8.0, up 1 h 0 min"] {
         assert!(tree.contains(said), "{said} isn't in: {tree}");
     }
+    // Load, which few know, has a "?" after it.
+    assert!(w.rt.find("stat-load-about").is_some());
+    assert_eq!(crate::screens::help::heard(&w.rt, "load").as_deref(), Some(crate::screens::help::LOAD));
     assert_eq!(w.world.lock().unwrap().programs.len(), 1);
     // Programs again after five seconds while the tab is on screen.
     w.rt.frame(5.5);
@@ -416,4 +419,12 @@ fn the_servers_card_shows_its_load_while_it_is_looked_at() {
         s.bench.set_link(id, Link::Disconnected);
     });
     assert!(!card(&w.rt.state, crate::theme::Theme::of(true)));
+}
+
+#[test]
+fn the_containers_toolbar_says_what_a_container_is_behind_a_question_mark() {
+    let mut w = Window::open();
+    w.open_tab(TabKind::Containers, WEB);
+    assert!(w.rt.find("containers-about").is_some());
+    assert_eq!(crate::screens::help::heard(&w.rt, "containers").as_deref(), Some(crate::screens::help::CONTAINERS));
 }

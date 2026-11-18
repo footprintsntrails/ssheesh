@@ -99,6 +99,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .children(super::notes::dialog_view(s, t))
         // A tab being dragged over the page: where it would land.
         .children(super::split::drop_mark(s, t))
+        // What a "?" explains, over everything (`screens::help`).
+        .children(screens::help::card(s, t))
 }
 
 /// The top row.

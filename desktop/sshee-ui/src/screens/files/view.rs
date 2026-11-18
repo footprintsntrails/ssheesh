@@ -2164,7 +2164,12 @@ fn places(s: &Shell, id: TabId, t: &'static Theme) -> El {
     let mut card = popover(t, 260.0).key("files-places-card").anchored("files-places", Side::Bottom, Align::Start, 6.0).padding(6.0).role("menu").label_static("Bookmarks and places");
     let mut n = 0;
     for (title, rows) in place_rows(s, id) {
-        let mut head = row().w_full().px(8.0).pt(6.0).pb(2.0).items_center().child(text(title).font(theme::SMALL).color(t.l2).single_line().grow(1.0));
+        let mut head = row().w_full().px(8.0).pt(6.0).pb(2.0).gap(2.0).items_center().child(text(title).font(theme::SMALL).color(t.l2).single_line());
+        if title == "Places" {
+            // The "?" is a hover's and a click's here: the list's own keys walk its rows.
+            head = head.child(crate::screens::help::tip(s, t, "places-about", "places", crate::screens::help::PLACES).my(-2.0));
+        }
+        head = head.child(spacer());
         if title == "Recent" {
             head = head.child(
                 el().key("place-hide-recent").size(18.0, 18.0).radius(4.0).items_center().justify_center().hover(t.hov2).role("button").label_static("Hide recent folders").help("Hide recent folders").child(icon(Icon::EyeOff, 12.0, t.l2)).on_press_tx(

@@ -495,7 +495,7 @@ fn biggest(t: &Theme, s: &Shell, server: &str) -> El {
 }
 
 /// Docker's images, containers, volumes and build cache, two tiles a row.
-fn docker(t: &Theme, d: &rules::Docker) -> El {
+fn docker(t: &Theme, s: &Shell, d: &rules::Docker) -> El {
     let tile = |(label, total, unused): (&str, u64, u64)| {
         col()
             .grow(1.0)
@@ -510,7 +510,8 @@ fn docker(t: &Theme, d: &rules::Docker) -> El {
             .child(text(rules::docker_words(total, unused)).font(theme::LIST_NUMBER).color(t.l1).single_line().truncate())
     };
     let [a, b, c, e] = d.rows();
-    col().key("disk-docker").w_full().gap(8.0).child(section(t, "Docker", None)).child(row().w_full().gap(8.0).child(tile(a)).child(tile(b))).child(row().w_full().gap(8.0).child(tile(c)).child(tile(e)))
+    let head = row().w_full().gap(2.0).items_center().child(text("Docker").font(theme::GROUP_TITLE).color(t.l2).single_line()).child(super::help::tip(s, t, "disk-docker-about", "Docker's disk use", super::help::DOCKER_DISK));
+    col().key("disk-docker").w_full().gap(8.0).child(head).child(row().w_full().gap(8.0).child(tile(a)).child(tile(b))).child(row().w_full().gap(8.0).child(tile(c)).child(tile(e)))
 }
 
 fn waiting(t: &Theme, words: &str) -> El {
@@ -591,7 +592,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         page = page.child(biggest(t, s, server));
         if let Some(report) = &state.report {
             if let Some(d) = &report.docker {
-                page = page.child(docker(t, d));
+                page = page.child(docker(t, s, d));
             }
             if let Some(journal) = report.journal {
                 page = page.child(text(rules::journal_words(journal)).key("disk-journal").font(theme::NOTE).color(t.l2).single_line());

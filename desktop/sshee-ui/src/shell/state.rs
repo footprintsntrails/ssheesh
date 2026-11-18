@@ -862,6 +862,9 @@ impl Shell {
     /// A key with nothing focused (`AppSpec::on_key`): a shortcut, else the terminal on
     /// screen's.
     pub fn key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if self.tip_key(ev, tx) {
+            return true;
+        }
         // Behind the palette, a dialog or a menu, keys are theirs alone; streamer mode's
         // shortcut works over all of them (names must hide at once).
         if self.screens.any_open() || self.upload.is_some() {

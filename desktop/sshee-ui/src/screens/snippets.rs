@@ -364,7 +364,14 @@ fn edit_page(t: &Theme, s: &Shell, id: Option<&str>) -> El {
         let names: Vec<String> = found.iter().map(|b| b.name.clone()).collect();
         hint.push_str(&format!(" Blanks here: {}.", names.join(", ")));
     }
-    page = page.child(text(hint).key("snip-hint").font(theme::SMALL).color(t.l2).wrap());
+    page = page.child(
+        row()
+            .w_full()
+            .gap(2.0)
+            .items_start()
+            .child(text(hint).key("snip-hint").font(theme::SMALL).color(t.l2).wrap().shrink().min_w(0.0))
+            .child(super::help::tip(s, t, "snip-blanks-about", "blanks", super::help::SNIPPET_BLANKS).mt(-3.0)),
+    );
     if let Some(here) = s.bench.current_key() {
         let name = server_name(s, here);
         let only = state.only_here;

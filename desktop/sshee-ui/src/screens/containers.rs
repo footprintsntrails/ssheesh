@@ -147,7 +147,7 @@ fn toolbar(s: &Shell, id: TabId, t: &'static Theme) -> El {
         .pl(16.0)
         .pr(8.0)
         .border_sides([0.0, 0.0, 1.0, 0.0], t.hair2)
-        .child(text("Containers").font(theme::TEXT_BOLD).color(t.l1).single_line());
+        .child(row().gap(2.0).items_center().child(text("Containers").font(theme::TEXT_BOLD).color(t.l1).single_line()).child(super::help::tip(s, t, "containers-about", "containers", super::help::CONTAINERS)));
     if let Some(summary) = board.and_then(Board::summary) {
         bar = bar.child(text(summary).key("containers-summary").font(theme::NOTE).color(t.l2).single_line());
     }
