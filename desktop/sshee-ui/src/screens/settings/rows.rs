@@ -441,10 +441,12 @@ fn network(s: &Shell, t: &'static Theme) -> El {
             item(
                 Icon::Globe,
                 "GitHub, for updates",
-                match (s.options.build.updates_itself() && s.settings.canary_updates(), tor) {
-                    (true, true) => "A test build asks it for a newer one every few hours, through Tor.",
-                    (true, false) => "A test build asks it for a newer one every few hours.",
-                    (false, _) => "Not from this copy: it doesn't look for updates.",
+                match (sshee_app::canary::Channel::choose(&s.options.build, &s.settings.update_mode(), s.settings.canary_updates()), tor) {
+                    (Some((sshee_app::canary::Channel::Canary, _)), true) => "A test build asks it for a newer one every few hours, through Tor.",
+                    (Some((sshee_app::canary::Channel::Canary, _)), false) => "A test build asks it for a newer one every few hours.",
+                    (Some(_), true) => "SSHeesh asks it for a newer version every few hours, through Tor.",
+                    (Some(_), false) => "SSHeesh asks it for a newer version every few hours.",
+                    (None, _) => "Not from this copy: it doesn't look for updates.",
                 },
             ),
             row().w_full().px(12.0).py(9.0).child(
@@ -530,7 +532,14 @@ fn alone(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
         Special::TerminalPreview => terminal_preview(s, t),
         Special::Network => col().w_full().gap(6.0).child(form_heading(t, r.label, None)).child(network(s, t)),
         Special::UpdateCard => {
-            version_card(t, "updates-card", 40.0, (&format!("SSHeesh Preview {version}"), if s.options.build.updates_itself() { "A test build: it looks for newer test builds by itself." } else { "Built on this computer: it doesn't update itself." }), Some("Check now"))
+            let build = &s.options.build;
+            let line = match (build.is_test(), build.release) {
+                (true, _) if s.settings.canary_updates() => "A test build: it looks for newer test builds by itself.",
+                (true, _) => "A test build: it looks for releases by itself.",
+                (false, true) => "It looks for newer versions by itself.",
+                (false, false) => "Built on this computer: it doesn't update itself.",
+            };
+            version_card(t, "updates-card", 40.0, (&format!("SSHeesh Preview {version}"), line), Some("Check now"))
         }
         Special::AboutCard => col()
             .w_full()

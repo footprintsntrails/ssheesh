@@ -28,7 +28,7 @@ dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Each server's colour by its key, in the order sshee-app lists them (the version it uses).
 indexmap = "2"
-# Test builds updating themselves (`update`): canary.json and the archives over HTTPS (rustls
+# Updating itself (`update`): canary.json, update-v1.json and the archives over HTTPS (rustls
 # with ring and the web's roots, as sshee-core's Tor already builds it), the archive's SHA-256
 # and minisign signature (the checker Tauri's updater uses), and the program out of a tar.gz
 # or a zip (the versions sshee-core already locks).
@@ -40,6 +40,8 @@ base64 = "0.22"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 tar = { version = "0.4", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Releases (`update-v1.json`) compare by semver precedence (the version the lock already has).
+semver = "1"
 # A server's picture: a file made into a small PNG icon, and the icon decoded for the window
 # (the version and decoders Rune already locks). TIFF too: turned on here, Rune's own decoder
 # reads it as well, so Files shows a .tif (the version of `tiff` the lock already has).

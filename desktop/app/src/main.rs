@@ -45,7 +45,7 @@ fn fail(message: &str) -> ! {
 /// The live backend, which also keeps the tabs between runs.
 struct Live {
     inner: live::LiveBackend,
-    /// Test builds looking for newer ones (`update`).
+    /// Test builds and releases looking for newer ones (`update`).
     update: update::Updater,
 }
 
@@ -246,7 +246,7 @@ fn main() {
     if let Some(code) = sshee_core::secrets::askpass_main() {
         std::process::exit(code);
     }
-    // A test build's update started this, the build from before, to start the new one and
+    // An update started this, the build from before, to start the new one and
     // put this one back if it doesn't start.
     if let Some(code) = update::watch_main() {
         std::process::exit(code);

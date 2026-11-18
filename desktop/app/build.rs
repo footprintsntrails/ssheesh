@@ -4,8 +4,12 @@
 //! - `SSHEESH_BUILD_SHA`: the commit. The canary workflow sets it; elsewhere `GITHUB_SHA`
 //!   (any CI), then `git rev-parse` here, then nothing.
 //! - `SSHEESH_CANARY_RUN`: the canary workflow's run number, set only on the step that builds
-//!   what it publishes. A build without it (tests, a build on your computer) never updates
-//!   itself.
+//!   what it publishes.
+//! - `SSHEESH_RELEASE=1`: built by the release workflow, on the step that builds what it
+//!   publishes: the build looks for newer releases (`update-v1.json`). Ignored when
+//!   `SSHEESH_CANARY_RUN` is set.
+//!
+//! A build with neither (tests, a build on your computer) never updates itself.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,7 +21,7 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    for var in ["SSHEESH_BUILD_SHA", "SSHEESH_CANARY_RUN", "GITHUB_SHA"] {
+    for var in ["SSHEESH_BUILD_SHA", "SSHEESH_CANARY_RUN", "SSHEESH_RELEASE", "GITHUB_SHA"] {
         println!("cargo:rerun-if-env-changed={var}");
     }
     let dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
@@ -47,4 +51,6 @@ fn main() {
     println!("cargo:rustc-env=SSHEESH_BUILD_SHA={sha}");
     let run = std::env::var("SSHEESH_CANARY_RUN").ok().and_then(|r| r.trim().parse::<u64>().ok()).filter(|r| *r > 0);
     println!("cargo:rustc-env=SSHEESH_CANARY_RUN={}", run.map(|r| r.to_string()).unwrap_or_default());
+    let release = run.is_none() && std::env::var("SSHEESH_RELEASE").is_ok_and(|v| v.trim() == "1");
+    println!("cargo:rustc-env=SSHEESH_RELEASE={}", if release { "1" } else { "" });
 }

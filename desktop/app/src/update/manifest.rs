@@ -126,9 +126,17 @@ fn text<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
     v.get(key).and_then(Value::as_str).ok_or_else(|| format!("no {key}"))
 }
 
-fn asset(v: &Value) -> Result<Asset, String> {
+/// Whether `url` is a file of this repository's releases: `<DOWNLOADS><tag>/<file>`, with
+/// nothing that could lead elsewhere on the way (`..`, an escape, a query, a fragment).
+pub fn is_release_file(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix(DOWNLOADS) else { return false };
+    let plain = |part: &str| !part.is_empty() && part != "." && part != ".." && part.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b));
+    url.len() <= 512 && matches!(rest.split('/').collect::<Vec<_>>().as_slice(), [tag, file] if plain(tag) && plain(file))
+}
+
+pub(crate) fn asset(v: &Value) -> Result<Asset, String> {
     let url = text(v, "url")?;
-    if !url.starts_with(DOWNLOADS) || url.len() > 512 || url.bytes().any(|b| b.is_ascii_whitespace() || b.is_ascii_control()) {
+    if !is_release_file(url) {
         return Err("a download from somewhere else".into());
     }
     let size = v.get("size").and_then(Value::as_u64).filter(|s| *s > 0 && *s <= MOST_BYTES).ok_or("no size, or too big")?;
@@ -215,6 +223,28 @@ mod tests {
         assert!(elsewhere.asset(Platform::LinuxX64).is_none());
         let plain = Manifest::parse(sample("1.0.0-canary.124", "http://github.com/footprintsntrails/ssheesh/releases/download/canary/a").as_bytes()).unwrap();
         assert!(plain.asset(Platform::LinuxX64).is_none());
+    }
+
+    #[test]
+    fn only_this_repositorys_release_files_are_downloads() {
+        assert!(is_release_file(&format!("{DOWNLOADS}v1.0.1/ssheesh-1.0.1-linux-x64.tar.gz")));
+        assert!(is_release_file(&format!("{DOWNLOADS}canary/ssheesh-1.0.0-canary-windows-x64.zip")));
+        for bad in [
+            "https://github.com/someone-else/ssheesh/releases/download/v1.0.1/a.tar.gz".to_owned(),
+            "https://github.com/footprintsntrails/ssheesh-fork/releases/download/v1.0.1/a.tar.gz".to_owned(),
+            "https://example.invalid/footprintsntrails/ssheesh/releases/download/v1.0.1/a.tar.gz".to_owned(),
+            format!("{DOWNLOADS}../../../someone-else/repo/releases/download/v1/a.tar.gz"),
+            format!("{DOWNLOADS}v1.0.1/../a.tar.gz"),
+            format!("{DOWNLOADS}v1.0.1/%2e%2e/a.tar.gz"),
+            format!("{DOWNLOADS}v1.0.1/a.tar.gz?x=1"),
+            format!("{DOWNLOADS}v1.0.1/a.tar.gz#x"),
+            format!("{DOWNLOADS}v1.0.1/sub/a.tar.gz"),
+            format!("{DOWNLOADS}v1.0.1/"),
+            format!("{DOWNLOADS}v1.0.1/a b.tar.gz"),
+            format!("{DOWNLOADS}v1.0.1/{}", "a".repeat(512)),
+        ] {
+            assert!(!is_release_file(&bad), "{bad}");
+        }
     }
 
     #[test]

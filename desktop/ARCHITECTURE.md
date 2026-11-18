@@ -208,19 +208,29 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ../target/desktop/debug/ss
 Preview keeps its own files in `~/.sshee-preview` (shared connections, Tor, `tabs.json`) and
 never writes 0.10's. `--demo` reads and writes nothing.
 
-## Test builds updating themselves
+## Updating itself
 
-A build the canary workflow made knows its commit and run (`app/build.rs`; Settings → About
-shows `Options::build`). It reads the `canary` pre-release's `canary.json` at start and every
-four hours (through Tor while Tor is on), downloads a newer archive, checks its size, SHA-256
-and minisign signature by the canary key (`update::CANARY_PUBLIC_KEY`, never 0.10's), and
-stages the program next to itself; `screens::canary` says so across the top of the page.
-"Restart to update" (`Backend::restart_to_update`) swaps the files and leaves a helper (the
-old program, `--canary-watch`) that starts the new one once the window has closed and puts
-the old one back if it doesn't say it started within a minute. All of it is
-`app/src/update.rs` and `update/`; the words are `sshee_app::canary`. Settings → Updates →
-"Check for test builds" turns the looking off. 0.10's `latest.json` and `v*` releases are
-never touched.
+A build the canary workflow made knows its commit and run; one the release workflow made
+knows it's a release (`SSHEESH_RELEASE=1`, `app/build.rs`; Settings → About shows
+`Options::build`). At start and every four hours (through Tor while Tor is on) it reads its
+channel's manifest (`sshee_app::canary::Channel::choose`, from Settings → Updates):
+
+- test builds: the `canary` pre-release's `canary.json`, archives signed by the canary key
+  (`update::CANARY_PUBLIC_KEY`, never the release key);
+- releases: `update-v1.json` in the `channel-stable` release (`channel-rc` for a release
+  candidate), signed with its archives by the release key 0.10 trusts
+  (`update::channel::RELEASE_PUBLIC_KEY`, the public half in `src-tauri/tauri.conf.json`). The
+  manifest's signature names the file and its version; versions compare by semver, never
+  down unless this version is listed as pulled. Never `releases/latest`: that's 0.10's.
+
+It downloads a newer archive, checks its size, SHA-256 and signature, and stages the program
+next to itself; `screens::canary` says so across the top of the page ("Ask me" only says a
+version is out, with a link). "Restart to update" (`Backend::restart_to_update`) swaps the
+files and leaves a helper (the old program, `--canary-watch`) that starts the new one once the
+window has closed and puts the old one back if it doesn't say it started within a minute. All
+of it is `app/src/update.rs` and `update/`; the words are `sshee_app::canary`. "Never check"
+turns the looking off; "Check for test builds" off moves a test build to releases. 0.10's
+`latest.json` and `v*` releases are never touched.
 
 ## Known gaps in the shell (not screens)
 
