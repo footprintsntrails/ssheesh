@@ -252,7 +252,7 @@ fn a_servers_tunnels_are_added_switched_and_removed() {
     let mut w = Window::open();
     w.right_click("server-1");
     assert!(w.tree().contains("Web apps and tunnels…"));
-    w.click("sm-5");
+    w.click("sm-6");
     assert!(w.has("tunnels-dialog"));
     // It looks at what the server runs; nothing saved yet.
     assert_eq!(w.told.lock().unwrap().tunnels.first(), Some(&TunnelAsk::Scan { host: "web".into() }));
@@ -422,7 +422,7 @@ fn the_list_from_last_time_arrives_with_its_states() {
         r.tunnels(Reply::State { id: "a".into(), state: Some(State::Failed { message: "Port 3000 on this computer is already in use.".into() }) });
     });
     w.right_click("server-1");
-    w.click("sm-5");
+    w.click("sm-6");
     assert!(!w.has("tunnels-form"), "a server with tunnels opens on its list");
     assert!(w.tree().contains("Grafana") && w.tree().contains("Port 3000 on this computer is already in use."));
     w.click("tunnel-a-retry");

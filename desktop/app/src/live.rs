@@ -186,16 +186,17 @@ fn by_key(hosts: &[Host]) -> HashMap<String, Host> {
     hosts.iter().map(|h| (format!("host:{}", h.id), h.clone())).collect()
 }
 
-/// Tells the window what the list holds now.
+/// Tells every window what the list holds now, and the one in front the answer to what it
+/// asked.
 fn show(remote: &Remote, shown: Shown, answer: Option<sshee_app::servers::Answer>) {
-    remote.update(move |s| {
-        s.bench.set_servers(shown.servers);
-        s.set_server_looks(shown.colors, shown.config_new, shown.old_new);
-        s.set_server_faces(shown.faces);
-        if let Some(answer) = answer {
-            s.servers_answer(answer);
-        }
+    remote.every(move |s| {
+        s.bench.set_servers(shown.servers.clone());
+        s.set_server_looks(shown.colors.clone(), shown.config_new, shown.old_new);
+        s.set_server_faces(shown.faces.clone());
     });
+    if let Some(answer) = answer {
+        remote.update(move |s| s.servers_answer(answer));
+    }
 }
 
 /// Tor's state as the window takes it (`sshee_app::tor::Status`, sshee-core's mirrored).
@@ -299,7 +300,7 @@ impl Backend for LiveBackend {
         let learn = remote.clone();
         let _ = std::thread::Builder::new().name("local-host".into()).spawn(move || {
             let host = sshee_core::identity::local().hostname;
-            learn.update(move |s| s.learn_local_host(host));
+            learn.every(move |s| s.learn_local_host(host.clone()));
         });
         // The servers' colours, and what 0.10 and the ssh config still offer: files to read,
         // so on a thread, and the main menu says so when it's known.

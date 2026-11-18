@@ -136,9 +136,27 @@ impl TabKind {
     }
 }
 
-/// A tab's id: a number that is never used twice in one run.
+/// A tab's id: a number that is never used twice in one run, in any window. Each window
+/// numbers its tabs in a range of its own ([`TabId::in_window`]): the main window's are `1`,
+/// `2`, … as they always were, a second window's start at `1 << 48`. So an answer addressed to
+/// a tab finds its window by the number alone ([`TabId::window`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(pub u64);
+
+/// The bits of a [`TabId`] a window numbers its own tabs with; the bits above say which window.
+pub const WINDOW_SHIFT: u32 = 48;
+
+impl TabId {
+    /// The id numbered `n` in window `window`'s range (window 0 is the main window).
+    pub const fn in_window(window: u16, n: u64) -> TabId {
+        TabId(((window as u64) << WINDOW_SHIFT) | (n & ((1 << WINDOW_SHIFT) - 1)))
+    }
+
+    /// The window whose range the id is in.
+    pub const fn window(self) -> u16 {
+        (self.0 >> WINDOW_SHIFT) as u16
+    }
+}
 
 /// Where a tab's connection is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -461,6 +479,23 @@ impl Workbench {
         };
         w.set_servers(servers);
         w
+    }
+
+    /// What another window starts from (Shift+click on a server): the same servers, what is
+    /// known of them (vital signs, their graphs) and of Tor, and no tabs; its tabs are
+    /// numbered in window `window`'s range ([`TabId::in_window`]), so no id is used twice.
+    pub fn for_window(&self, window: u16) -> Workbench {
+        Workbench {
+            servers: self.servers.clone(),
+            tor: self.tor,
+            vitals: self.vitals.clone(),
+            history: self.history.clone(),
+            sidebar: self.sidebar,
+            together: self.together,
+            under_servers: self.under_servers,
+            next_id: TabId::in_window(window, 1).0,
+            ..Workbench::new(vec![])
+        }
     }
 
     /// The list changed (a server added, renamed, labelled). Tabs of a machine that left the
@@ -1176,6 +1211,30 @@ mod tests {
             .map(|s| format!("{}{}{}@{}", if s.starts_group { "| " } else { "" }, if s.active { "*" } else { "" }, s.tab.label(), s.server_name))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    #[test]
+    fn another_windows_tabs_never_share_an_id_with_the_main_windows() {
+        let mut main = bench();
+        main.set_tor(Tor::On { latency_ms: Some(120) });
+        let a = main.open(TabKind::Terminal, WEB);
+        // Opened from the main window: its servers and Tor, none of its tabs.
+        let mut second = main.for_window(1);
+        assert!(second.tabs().is_empty() && second.showing_home());
+        assert_eq!(second.servers(), main.servers());
+        assert_eq!(second.tor(), main.tor());
+        let b = second.go_to(WEB);
+        let c = second.open(TabKind::Files, DB);
+        let d = main.open(TabKind::Terminal, DB);
+        let ids = [a, b, c, d];
+        for (i, x) in ids.iter().enumerate() {
+            assert!(ids[i + 1..].iter().all(|y| y != x), "{ids:?}");
+        }
+        // The main window numbers as it always did; each id names its window.
+        assert_eq!((a, d), (TabId(1), TabId(2)));
+        assert_eq!((a.window(), d.window(), b.window(), c.window()), (0, 0, 1, 1));
+        assert_eq!(main.for_window(7).open(TabKind::Terminal, WEB).window(), 7);
+        assert_eq!(TabId::in_window(3, 9).window(), 3);
     }
 
     #[test]

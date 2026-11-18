@@ -92,9 +92,10 @@ impl State {
 impl Remote {
     /// News of the tunnels: the list kept from last time, one tunnel's state, a look at a
     /// server. A web app waiting to be opened opens in the browser once its tunnel is on.
+    /// Every window keeps the list; the one waiting to open a web app opens it.
     pub fn tunnels(&self, reply: Reply) {
-        self.update_tx(move |s, tx| {
-            if let Some(url) = s.screens.tunnels.tunnels.deliver(reply) {
+        self.every_tx(move |s, tx| {
+            if let Some(url) = s.screens.tunnels.tunnels.deliver(reply.clone()) {
                 s.open_in_browser(&url, tx);
             }
         });

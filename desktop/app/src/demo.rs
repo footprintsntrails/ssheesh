@@ -183,16 +183,16 @@ impl DemoBackend {
         let Some(remote) = &self.remote else { return };
         let (servers, colors, config_new, old_new) = (self.book.servers(), self.book.colors(), self.book.config_new(), self.book.sources.old.len());
         let faces = self.book.faces(crate::servers::picture);
-        remote.update(move |s| {
+        remote.every(move |s| {
             let mut all = vec![Server::this_computer()];
-            all.extend(servers);
+            all.extend(servers.iter().cloned());
             s.bench.set_servers(all);
-            s.set_server_looks(colors, config_new, old_new);
-            s.set_server_faces(faces);
-            if let Some(answer) = answer {
-                s.servers_answer(answer);
-            }
+            s.set_server_looks(colors.clone(), config_new, old_new);
+            s.set_server_faces(faces.clone());
         });
+        if let Some(answer) = answer {
+            remote.update(move |s| s.servers_answer(answer));
+        }
     }
 }
 

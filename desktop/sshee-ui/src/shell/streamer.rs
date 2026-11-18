@@ -39,7 +39,7 @@ pub struct Streamer {
     /// The list the names were made from, once they were made.
     made_from: Option<Vec<(String, String)>>,
     /// This computer's hostname, once the backend learned it (`Shell::learn_local_host`).
-    local_host: Option<String>,
+    pub(crate) local_host: Option<String>,
 }
 
 /// The host of `deploy@203.0.113.17:2222`, and its user.

@@ -182,8 +182,9 @@ pub struct SettingsStore {
     origin: Origin,
     notice: Option<PrivacyNotice>,
     options: OpenOptions,
-    /// `None`: kept in memory only (a demo, a test).
-    saver: Option<Saver>,
+    /// `None`: kept in memory only (a demo, a test). Shared with the stores of the program's
+    /// other windows ([`SettingsStore::follower`]): one file, written by one thread.
+    saver: Option<Arc<Saver>>,
     listeners: Vec<(u64, Listener)>,
     next_listener: u64,
     revision: u64,
@@ -220,7 +221,7 @@ impl SettingsStore {
     /// so the next start reads it with certainty and never asks 0.10 a second time.
     pub fn open(dir: &Path, options: OpenOptions) -> SettingsStore {
         let path = dir.join(FILE);
-        let mut store = SettingsStore { options, saver: Some(Saver::new(path.clone())), ..SettingsStore::in_memory(Settings::defaults(options.platform)) };
+        let mut store = SettingsStore { options, saver: Some(Arc::new(Saver::new(path.clone()))), ..SettingsStore::in_memory(Settings::defaults(options.platform)) };
         match std::fs::read_to_string(&path) {
             Ok(text) => match read_file(&text, options.platform) {
                 Ok(read) => {
@@ -504,6 +505,37 @@ impl SettingsStore {
         true
     }
 
+    /// The store of another window of the same program: the settings as they are now, written
+    /// to the same file by the same thread, with no listeners of its own. Each window's
+    /// store is kept the same as the others' by [`SettingsStore::mirror`].
+    pub fn follower(&self) -> SettingsStore {
+        SettingsStore {
+            settings: self.settings.clone(),
+            more: self.more.clone(),
+            version: self.version,
+            origin: self.origin,
+            notice: self.notice.clone(),
+            options: self.options,
+            saver: self.saver.clone(),
+            listeners: vec![],
+            next_listener: 0,
+            revision: self.revision,
+        }
+    }
+
+    /// The settings as another window's store has them now (its listener heard a change).
+    /// Listeners hear and the file is written only if they differ from these: two windows
+    /// that tell each other stop at once. Returns whether anything changed.
+    pub fn mirror(&mut self, settings: Settings, more: Additions) -> bool {
+        if settings == self.settings && more == self.more {
+            return false;
+        }
+        self.settings = settings;
+        self.more = more;
+        self.changed();
+        true
+    }
+
     /// Hears every change from now on.
     pub fn subscribe(&mut self, listener: Listener) -> Subscription {
         self.next_listener += 1;
@@ -568,7 +600,7 @@ impl SettingsStore {
 
     /// Why the last save didn't reach the file, if it didn't. One plain line, no path.
     pub fn save_error(&self) -> Option<String> {
-        self.saver.as_ref().and_then(Saver::error)
+        self.saver.as_deref().and_then(Saver::error)
     }
 }
 
@@ -1111,6 +1143,36 @@ mod tests {
         store.unsubscribe(ticket);
         store.update(|s| s.terminal_font_size = 15.0);
         assert_eq!(heard.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn another_windows_store_follows_and_writes_the_same_file() {
+        let dir = folder("follower");
+        let mut main = SettingsStore::open(&dir, linux());
+        main.seed(Seed::Fresh);
+        main.update(|s| s.terminal_font_size = 15.0);
+        let mut second = main.follower();
+        assert_eq!(second.get(), main.get());
+        // Each window's listener hands its change to the other; the copy that already has it
+        // stops there, so two windows never tell each other forever.
+        let heard = Arc::new(AtomicUsize::new(0));
+        let h = heard.clone();
+        main.subscribe(Box::new(move |_, _| {
+            h.fetch_add(1, Ordering::SeqCst);
+        }));
+        second.update(|s| s.cursor_blink = false);
+        assert!(main.mirror(second.get().clone(), second.more().clone()));
+        assert!(!main.mirror(second.get().clone(), second.more().clone()));
+        assert!(!second.mirror(main.get().clone(), main.more().clone()));
+        assert_eq!(heard.load(Ordering::SeqCst), 1);
+        // A change in the second window reaches the file, as one in the first does.
+        second.update_more(|m| m.tabs_name_server = false);
+        drop(main);
+        second.flush();
+        drop(second);
+        let again = SettingsStore::open(&dir, linux());
+        assert_eq!((again.get().terminal_font_size, again.get().cursor_blink, again.more().tabs_name_server), (15.0, false, false));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -309,7 +309,7 @@ fn from_the_main_menu_it_asks_which_server_and_the_server_menu_opens_it() {
     w.rt.secondary_up(x, y);
     w.settle();
     assert!(w.tree().contains("Free up disk space…"));
-    w.click("sm-6");
+    w.click("sm-7");
     assert_eq!(w.rt.state.screens.disk.open.as_deref(), Some(STAGING));
 }
 

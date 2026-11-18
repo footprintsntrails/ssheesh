@@ -37,6 +37,11 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
 - **Who owns it.** One `sshee_ui::shell::Shell` per window (`shell/state.rs`): the
   `Workbench` (`s.bench`), the terminal panes by tab (`s.panes`), each screen's own state
   (`s.screens`), and the `Backend`. Rune owns the `Shell` and hands it to handlers.
+- **More than one window.** Shift+click on a server opens another `Shell` in the same process
+  (`shell/windows.rs`): one backend shared by every window (`Shared`), tab ids in a range per
+  window (`TabId::window`), and the backend's `Remote` routes through the `Hub`: an answer for
+  a tab to that tab's window, news of the app (servers, vital signs, Tor) to every window,
+  anything else to the window in front. A new `Remote` method picks one of the three.
 - **How a view reads it.** `fn view(s: &Shell, cx: &mut Cx<Shell>) -> El` runs again after
   every handler and every `poll` that returns true. It only reads. Hover, press and the focus
   ring are paint (`El::hover`, `El::press`, `Cx::focus_ring`): they never run the view.

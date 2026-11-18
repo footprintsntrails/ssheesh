@@ -120,10 +120,18 @@ pub fn reconnected(s: &mut Shell, tab: TabId) {
     }
 }
 
-/// The window closes: every session ends first (copies with unsent changes stay).
+/// The window closes: every session ends first (copies with unsent changes stay). While
+/// another window is open, only this window's sessions end: the bridge is the program's.
 pub fn close_all(s: &mut Shell) {
-    if s.screens.edits.sessions.iter().any(Session::is_open) {
-        ask(s, EditAsk::CloseAll);
+    if s.is_last_window() {
+        if s.screens.edits.sessions.iter().any(Session::is_open) {
+            ask(s, EditAsk::CloseAll);
+        }
+        return;
+    }
+    let mine: Vec<String> = s.screens.edits.sessions.iter().filter(|e| e.is_open()).map(|e| e.id.clone()).collect();
+    for id in mine {
+        ask(s, EditAsk::Close { id });
     }
 }
 

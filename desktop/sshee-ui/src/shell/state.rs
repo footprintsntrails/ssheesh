@@ -15,31 +15,98 @@ use sshee_app::settings_store::SettingsStore;
 use sshee_app::workbench::shortcuts::{match_shortcut, Pressed, Shortcut};
 use sshee_app::workbench::{Link, SavedTabs, Server, ServerKey, Tab, TabId, TabKind, Tor, Vitals, Workbench};
 
+use super::windows::{Every, Hub, Shared};
+pub use super::windows::Job;
 use crate::terminal::{LinkStatus, PaneOptions, StatusSink, TermLink, TermPane};
 use crate::theme::Frame;
 
 /// How another thread reaches the window's state: a closure run on the UI thread, in order.
 /// It returns whether the window must draw again (Rune's `AppHandle::update_if`).
-pub type Post = Arc<dyn Fn(Box<dyn FnOnce(&mut Shell, &mut Tx) -> bool + Send>) + Send + Sync>;
+pub type Post = Arc<dyn Fn(Job) + Send + Sync>;
 
 /// The window, as background work reaches it: a session's status, a server's vital signs,
 /// Tor's state. Cheap to clone; every call may come from any thread.
+///
+/// A window's own `Remote` reaches that window. The backend's reaches every window the program
+/// has open (`shell::windows`): an answer addressed to a tab goes to the window that has it,
+/// news of the app (servers, vital signs, Tor, tunnels) to every window, anything else to the
+/// window in front.
 #[derive(Clone)]
 pub struct Remote {
-    post: Post,
+    to: To,
     /// Brings the window forward, hides it, quits (`shell::desktop`); none in tests.
     pub(crate) window: Option<super::desktop::WindowControl>,
 }
 
+#[derive(Clone)]
+enum To {
+    Window(Post),
+    Windows(Arc<Hub>),
+}
+
 impl Remote {
     pub fn new(post: Post) -> Remote {
-        Remote { post, window: None }
+        Remote { to: To::Window(post), window: None }
+    }
+
+    /// The backend's: every window the program has open.
+    pub(crate) fn routed(hub: Arc<Hub>) -> Remote {
+        Remote { to: To::Windows(hub), window: None }
+    }
+
+    pub(crate) fn hub(&self) -> Option<&Arc<Hub>> {
+        match &self.to {
+            To::Window(_) => None,
+            To::Windows(hub) => Some(hub),
+        }
+    }
+
+    /// To this window; the backend's: to the window in front.
+    pub(crate) fn post_job(&self, job: Job) {
+        match &self.to {
+            To::Window(post) => post(job),
+            To::Windows(hub) => {
+                if let Some(door) = hub.front_door() {
+                    door.post_job(job);
+                }
+            }
+        }
+    }
+
+    /// To window `no`; nowhere when it has closed. A window's own `Remote` has one window.
+    fn to_window(&self, no: u16, job: Job) {
+        match &self.to {
+            To::Window(post) => post(job),
+            To::Windows(hub) => {
+                if let Some(door) = hub.door(no) {
+                    door.post_job(job);
+                }
+            }
+        }
+    }
+
+    /// To the window that has `tab` (its id says which: `TabId::window`).
+    fn to_tab(&self, tab: TabId, job: Job) {
+        self.to_window(tab.window(), job);
+    }
+
+    /// To every window open.
+    fn to_every(&self, f: Every) {
+        match &self.to {
+            To::Window(post) => post(Box::new(move |s, tx| f(s, tx))),
+            To::Windows(hub) => {
+                for (_, door) in hub.doors() {
+                    let f = f.clone();
+                    door.post_job(Box::new(move |s, tx| f(s, tx)));
+                }
+            }
+        }
     }
 
     /// Runs `f` on the UI thread with the change's `Tx` (to move the keyboard, say); the
     /// window draws again after it.
     pub fn update_tx(&self, f: impl FnOnce(&mut Shell, &mut Tx) + Send + 'static) {
-        (self.post)(Box::new(move |s, tx| {
+        self.post_job(Box::new(move |s, tx| {
             f(s, tx);
             true
         }));
@@ -47,7 +114,7 @@ impl Remote {
 
     /// Runs `f` on the UI thread; the window draws again after it.
     pub fn update(&self, f: impl FnOnce(&mut Shell) + Send + 'static) {
-        (self.post)(Box::new(move |s, _| {
+        self.post_job(Box::new(move |s, _| {
             f(s);
             true
         }));
@@ -55,25 +122,53 @@ impl Remote {
 
     /// Runs `f` on the UI thread without drawing: for what only sets a timer.
     pub fn quietly(&self, f: impl FnOnce(&mut Shell, &mut Tx) + Send + 'static) {
-        (self.post)(Box::new(move |s, tx| {
+        self.post_job(Box::new(move |s, tx| {
             f(s, tx);
             false
         }));
     }
 
+    /// Runs `f` in every window the program has open (news of the app: the servers' list and
+    /// looks, this computer's name); each draws again after it.
+    pub fn every(&self, f: impl Fn(&mut Shell) + Send + Sync + 'static) {
+        self.to_every(Arc::new(move |s, _| {
+            f(s);
+            true
+        }));
+    }
+
+    /// [`Remote::every`] with the change's `Tx`.
+    pub fn every_tx(&self, f: impl Fn(&mut Shell, &mut Tx) + Send + Sync + 'static) {
+        self.to_every(Arc::new(move |s, tx| {
+            f(s, tx);
+            true
+        }));
+    }
+
+    /// Runs `f` in the window that has `tab` (nowhere once that window closed).
+    pub fn update_tab(&self, tab: TabId, f: impl FnOnce(&mut Shell) + Send + 'static) {
+        self.to_tab(
+            tab,
+            Box::new(move |s, _| {
+                f(s);
+                true
+            }),
+        );
+    }
+
     /// A machine's vital signs, or `None` when it can't be asked.
     pub fn set_vitals(&self, server: ServerKey, vitals: Option<Vitals>) {
-        self.update(move |s| s.bench.set_vitals(&server, vitals));
+        self.every(move |s| s.bench.set_vitals(&server, vitals.clone()));
     }
 
     pub fn set_tor(&self, tor: Tor) {
-        self.update(move |s| s.bench.set_tor(tor));
+        self.every(move |s| s.bench.set_tor(tor));
     }
 
     /// The list of servers changed.
     pub fn set_servers(&self, servers: Vec<Server>) {
-        self.update(move |s| {
-            s.bench.set_servers(servers);
+        self.every(move |s| {
+            s.bench.set_servers(servers.clone());
             // Streamer mode hides the new names too.
             s.apply_settings();
         });
@@ -82,58 +177,100 @@ impl Remote {
     /// The program in front in each of a server's terminals, by session key (tmux's answer):
     /// tabs are named after the agent working in them.
     pub fn set_foreground(&self, server: ServerKey, running: Vec<(String, String)>) {
-        self.update(move |s| crate::screens::agent::foreground(s, &server, &running));
+        self.every(move |s| crate::screens::agent::foreground(s, &server, &running));
     }
 
     /// The answer to a Files request, or news of a transfer (`screens::files::deliver`).
     pub fn files(&self, reply: sshee_app::files::Reply) {
-        self.update(move |s| crate::screens::files::deliver(s, reply));
+        self.to_tab(
+            reply.tab,
+            Box::new(move |s, _| {
+                crate::screens::files::deliver(s, reply);
+                true
+            }),
+        );
     }
 
     /// The answer to the security check, a fix, or what a recipe asked
-    /// (`screens::checkup::deliver`).
+    /// (`screens::checkup::deliver`). Addressed to a server: every window hears, and the one
+    /// with that server's check (or recipe) open takes it.
     pub fn recipes(&self, reply: sshee_app::recipes::Reply) {
-        self.update(move |s| crate::screens::checkup::deliver(s, reply));
+        self.every(move |s| crate::screens::checkup::deliver(s, reply.clone()));
     }
 
     /// "Free up disk space": a look, a folder's biggest entries, how a cleanup went
-    /// (`screens::disk::deliver`).
+    /// (`screens::disk::deliver`). Every window hears; the one open on that server takes it.
     pub fn disk(&self, reply: sshee_app::disk::Reply) {
-        self.update(move |s| crate::screens::disk::deliver(s, reply));
+        self.every(move |s| crate::screens::disk::deliver(s, reply.clone()));
     }
 
     /// A Containers tab's answer: a look, or how a start, stop or restart went
     /// (`screens::containers::deliver`, which times the next look).
     pub fn containers(&self, reply: sshee_app::containers::Reply) {
-        (self.post)(Box::new(move |s, tx| {
-            // The snippet form's look, for a `{{container}}` blank.
-            if reply.tab == sshee_app::snippets::FORM_TAB {
-                crate::screens::snippets::containers_listed(s, reply);
-            } else {
-                crate::screens::containers::deliver(s, reply, tx);
-            }
-            true
-        }));
+        self.to_tab(
+            reply.tab,
+            Box::new(move |s, tx| {
+                // The snippet form's look, for a `{{container}}` blank.
+                if reply.tab == sshee_app::snippets::form_tab(s.window_no()) {
+                    crate::screens::snippets::containers_listed(s, reply);
+                } else {
+                    crate::screens::containers::deliver(s, reply, tx);
+                }
+                true
+            }),
+        );
     }
 
     /// The programs on a machine, for a Stats tab (`screens::stats::deliver`).
     pub fn stats(&self, reply: sshee_app::stats::Reply) {
-        (self.post)(Box::new(move |s, tx| {
-            crate::screens::stats::deliver(s, reply, tx);
-            true
-        }));
+        self.to_tab(
+            reply.tab,
+            Box::new(move |s, tx| {
+                crate::screens::stats::deliver(s, reply, tx);
+                true
+            }),
+        );
     }
 
     /// What a look at a machine told beyond its vital signs (name, kernel, load, every disk),
     /// or why it can't be asked.
     pub fn set_facts(&self, server: ServerKey, facts: Result<sshee_app::stats::Facts, String>) {
-        self.update(move |s| crate::screens::stats::set_facts(s, server, facts));
+        self.every(move |s| crate::screens::stats::set_facts(s, server.clone(), facts.clone()));
     }
 
     /// News from the edit bridge: a file open in an editor elsewhere, an answer to what was
-    /// asked of it (`screens::files::edit::deliver`).
+    /// asked of it (`screens::files::edit::deliver`). The editors found go to every window;
+    /// a file's news to the window that opened it; anything else to the window in front.
     pub fn edit(&self, reply: sshee_app::files::edit::EditReply) {
-        self.update(move |s| crate::screens::files::edit::deliver(s, reply));
+        use sshee_app::files::edit::{EditReply, Opened};
+        let deliver = |reply: EditReply| -> Job {
+            Box::new(move |s, _| {
+                crate::screens::files::edit::deliver(s, reply);
+                true
+            })
+        };
+        let Some(hub) = self.hub() else { return self.post_job(deliver(reply)) };
+        match &reply {
+            EditReply::Editors { .. } => self.to_every(Arc::new(move |s, _| {
+                crate::screens::files::edit::deliver(s, reply.clone());
+                true
+            })),
+            EditReply::Opened { tab, result, .. } => {
+                if let Ok(Opened::Session { id, .. }) = result {
+                    hub.note_edit(id.clone(), tab.window());
+                }
+                self.to_tab(*tab, deliver(reply));
+            }
+            EditReply::Event { id, .. } | EditReply::Compared { id, .. } | EditReply::CopySaved { id, .. } => match hub.edit_owner(id) {
+                Some(no) => self.to_window(no, deliver(reply)),
+                None => self.post_job(deliver(reply)),
+            },
+            EditReply::Resumed { id, .. } => {
+                hub.note_edit(id.clone(), hub.front());
+                self.post_job(deliver(reply));
+            }
+            EditReply::Leftovers(_) | EditReply::Chosen(_) | EditReply::Failed { .. } => self.post_job(deliver(reply)),
+        }
     }
 }
 
@@ -394,7 +531,7 @@ pub struct Shell {
     /// The panes of terminal tabs that have been on screen, by tab. A tab that hasn't been
     /// shown yet has none (and no session).
     pub(crate) panes: HashMap<TabId, TermPane>,
-    backend: Box<dyn Backend>,
+    backend: Shared,
     pub options: Options,
     pub(crate) remote: Option<Remote>,
     /// Rune's waker, for panes made later.
@@ -463,13 +600,31 @@ fn link_of(status: &LinkStatus) -> Link {
 }
 
 impl Shell {
-    pub fn new(bench: Workbench, mut backend: Box<dyn Backend>, options: Options, remote: Option<Remote>) -> Shell {
+    /// The main window, and the program's backend. With a `remote` (the window's own) the
+    /// backend starts, and reaches this window and any opened later (`shell::windows`).
+    pub fn new(bench: Workbench, backend: Box<dyn Backend>, options: Options, remote: Option<Remote>) -> Shell {
+        let hub = Hub::new();
+        let mut backend = Shared::main(backend, hub.clone());
         if let Some(remote) = &remote {
-            backend.start(remote.clone());
+            hub.join(super::windows::MAIN, remote.clone());
+            backend.start(Remote::routed(hub));
         }
+        Shell::build(bench, backend, options, remote)
+    }
+
+    /// A window on `backend` (the main window's, or another's: `shell::windows`).
+    pub(crate) fn build(bench: Workbench, mut backend: Shared, options: Options, remote: Option<Remote>) -> Shell {
         let clock_base = backend.replays().then(Instant::now);
         let kept = bench.saved();
-        let settings = backend.settings();
+        let mut settings = backend.settings();
+        // A change made here reaches the other windows' settings (none while this is the only one).
+        let (hub, no) = (backend.hub().clone(), backend.window());
+        settings.subscribe(Box::new(move |s, more| {
+            if hub.count() > 1 {
+                hub.settings_changed(no, s, more);
+            }
+        }));
+        let secondary = backend.is_secondary();
         let mut shell = Shell {
             settings,
             highlights: Default::default(),
@@ -503,6 +658,10 @@ impl Shell {
         shell.apply_settings();
         shell.sync_panes();
         shell.sync_watch();
+        if secondary {
+            // Another window takes these from the one that opened it (`shell::windows`).
+            return shell;
+        }
         // The editors on this computer, and copies an earlier run left unsent.
         crate::screens::files::edit::start(&mut shell);
         // Your snippets; the welcome or "What's new", when one is due.
@@ -510,6 +669,26 @@ impl Shell {
         crate::screens::files::start(&mut shell);
         crate::screens::welcome::start(&mut shell);
         shell
+    }
+
+    /// This window's number: 0 for the main window (`shell::windows`).
+    pub fn window_no(&self) -> u16 {
+        self.backend.window()
+    }
+
+    /// Another window, opened on one server (Shift+click): its tabs aren't kept.
+    pub fn is_secondary(&self) -> bool {
+        self.backend.is_secondary()
+    }
+
+    /// The program's open windows.
+    pub(crate) fn hub(&self) -> &Arc<Hub> {
+        self.backend.hub()
+    }
+
+    /// The backend as this window reaches it, for opening another window on it.
+    pub(crate) fn shared(&self) -> &Shared {
+        &self.backend
     }
 
     /// Rune's waker (`AppSpec::setup`): output in any pane wakes the window.
@@ -537,7 +716,7 @@ impl Shell {
 
     /// The backend, for a screen that asks it for something.
     pub(crate) fn backend_mut(&mut self) -> &mut dyn Backend {
-        self.backend.as_mut()
+        &mut self.backend
     }
 
     /// A pane for `tab`, with a link from the backend and the window's wakers.
@@ -905,11 +1084,16 @@ impl Shell {
         if focused {
             // In front, so on screen: the tray offers Hide (`desktop.rs`).
             self.window_shown(true);
+            // What answers whoever asked comes here now; its machine is the one watched.
+            self.backend.came_to_front();
         }
         self.sync_keyboard(tx);
     }
 
     /// The window closes: connections go, shells in tmux stay.
+    ///
+    /// Another window's tabs aren't kept, so closing it is closing them: their shells end
+    /// too, as a tab's cross ends its own.
     pub fn close(&mut self) {
         // Where the window is, to open there next time.
         if let Some(place) = super::place::now(self) {
@@ -919,9 +1103,19 @@ impl Shell {
         self.settings.flush();
         // Files open in an editor elsewhere end; copies with unsent changes stay.
         crate::screens::files::edit::close_all(self);
+        let secondary = self.is_secondary();
         for pane in self.panes.values_mut() {
-            pane.close();
+            if secondary {
+                pane.end();
+            } else {
+                pane.close();
+            }
         }
+        if secondary {
+            self.panes.clear();
+        }
+        // Nothing reaches this window any more; what it asked of the backend is taken back.
+        self.backend.leave();
     }
 
     /// A session told its status (from its thread, through [`Remote`]).
@@ -950,7 +1144,9 @@ impl Shell {
         // A folder pointed at in Files is listed ahead; a picture it opened is decoded.
         let pictured = crate::screens::files::tick(self, clock, tx);
         // A hint whose moment came; "Add a server" opened from the welcome, at its list.
-        let ticked = crate::screens::tour::tick(self, clock) | crate::screens::welcome::tick(self) | ticked;
+        // Hints come up in the main window only: never the same one twice at once.
+        let hinted = !self.is_secondary() && crate::screens::tour::tick(self, clock);
+        let ticked = hinted | crate::screens::welcome::tick(self) | ticked;
         let winked = crate::looks::tick_logo(self, clock, tx);
         // A setting brought more tabs onto the page ("Tabs on screen"): their terminals start.
         let unmade = self.tabs_on_screen().into_iter().any(|id| !self.panes.contains_key(&id) && self.bench.tab(id).is_some_and(|t| t.kind == TabKind::Terminal));

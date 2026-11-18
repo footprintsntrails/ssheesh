@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use rune::{col, el, row, spacer, text, text_input, El, TextEdit, Tx};
 use sshee_app::model::{Snippet, Snippets};
-use sshee_app::snippets::{self, blanks, complete, container_choices, fill, only_on, Choice, FORM_TAB};
+use sshee_app::snippets::{self, blanks, complete, container_choices, fill, form_tab, only_on, Choice};
 
 use super::checkup::{body, close_button, command_block, dialog, header, headed, note};
 use crate::icons::Icon;
@@ -88,7 +88,7 @@ impl State {
 }
 
 /// The containers the form asked for came back (`Remote::containers`, addressed to
-/// [`FORM_TAB`]). A late answer, or one for a form that closed, is dropped.
+/// [`form_tab`]). A late answer, or one for a form that closed, is dropped.
 pub fn containers_listed(s: &mut Shell, reply: sshee_app::containers::Reply) {
     let state = &mut s.screens.snippets;
     let sshee_app::containers::Answer::Listed { ticket, result } = reply.answer else { return };
@@ -205,7 +205,8 @@ impl Shell {
         if list.iter().any(|b| b.wants_container()) {
             state.ticket += 1;
             let want = sshee_app::containers::Want::List { ticket: state.ticket };
-            self.backend_mut().containers(sshee_app::containers::Ask { tab: FORM_TAB, server: server.to_owned(), want });
+            let tab = form_tab(self.window_no());
+            self.backend_mut().containers(sshee_app::containers::Ask { tab, server: server.to_owned(), want });
         }
         tx.instant();
     }

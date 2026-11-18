@@ -292,7 +292,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         tiles = tiles.child(
             tile(t, spec)
                 .key(format!("tile-{i}"))
-                .on_press_tx(move |s: &mut Shell, tx| s.go_to(&to, tx))
+                .on_press_tx(move |s: &mut Shell, tx| if tx.mods().shift { s.open_in_new_window(&to, tx) } else { s.go_to(&to, tx) })
                 .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx)),
         );
     }

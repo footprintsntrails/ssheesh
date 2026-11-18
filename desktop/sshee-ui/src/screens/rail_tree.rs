@@ -35,8 +35,9 @@ use crate::theme::{self, Theme};
 mod tabs;
 pub use tabs::{list as tabs, rail as rail_tabs};
 
-/// The ids of trees' boards count down from here: no tab ever has one.
-pub const TREE_IDS: u64 = u64::MAX / 2;
+/// The ids of trees' boards count down from here, in the window's own range of ids
+/// (`TabId::in_window`): no tab ever has one.
+pub const TREE_IDS: u64 = 1 << 47;
 
 /// The menu's width.
 const MENU_WIDTH: f32 = 220.0;
@@ -232,6 +233,7 @@ impl Shell {
 /// something changed on screen.
 pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
     let shown = shown(s);
+    let window = s.window_no();
     let st = &mut s.screens.rail_tree;
     st.trees.retain(|k, _| shown.contains(k));
     let mut changed = false;
@@ -239,7 +241,7 @@ pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
         let st = &mut s.screens.rail_tree;
         if !st.trees.contains_key(&server) {
             st.made += 1;
-            let id = TabId(TREE_IDS - st.made);
+            let id = TabId::in_window(window, TREE_IDS - st.made);
             st.trees.insert(server.clone(), Tree { id, board: Board::default(), due: None, asked: None });
         }
         let Some(tree) = st.trees.get_mut(&server) else { continue };
