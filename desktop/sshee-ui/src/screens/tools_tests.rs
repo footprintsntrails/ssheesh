@@ -499,6 +499,13 @@ fn the_welcome_offers_0_10s_servers_then_the_tour() {
     assert!(!w.has("welcome") && w.has("add-dialog"));
     assert_eq!(w.rt.state.screens.add_server.page, crate::screens::add_server::Page::List(sshee_app::servers::Source::Old));
     assert_eq!(w.rt.state.settings.get().onboarding_version, sshee_app::tour::ONBOARDING_VERSION);
+    // "Add a server" closed: the welcome comes back at its next page, once.
+    w.key(Key::Escape);
+    assert!(!w.has("add-dialog") && w.has("welcome-page-look"), "{}", w.tree());
+    w.key(Key::Escape);
+    assert!(!w.has("welcome"));
+    w.settle();
+    assert!(!w.has("welcome"));
     // It doesn't come back.
     let mut again = Window::open_with(Start { welcome: true, settings: w.rt.state.settings.get().clone(), ..Start::default() });
     assert!(!again.has("welcome"));
@@ -511,6 +518,59 @@ fn the_welcome_offers_0_10s_servers_then_the_tour() {
     assert!(again.tree().contains("Two tabs at once"));
     again.key(Key::Enter);
     assert!(!again.has("tour"));
+}
+
+#[test]
+fn clicking_through_the_welcome_changes_nothing() {
+    let mut w = Window::open_with(Start { welcome: true, ..Start::default() });
+    let before = w.rt.state.settings.get().clone();
+    for page in ["servers", "look", "terminal", "tips"] {
+        assert!(w.has(&format!("welcome-page-{page}")), "{page}\n{}", w.tree());
+        w.click("welcome-next");
+    }
+    assert!(!w.has("welcome"));
+    let after = w.rt.state.settings.get().clone();
+    assert!(after.onboarded && after.onboarding_version == sshee_app::tour::ONBOARDING_VERSION);
+    assert_eq!(Settings { onboarded: before.onboarded, onboarding_version: before.onboarding_version, ..after }, before);
+}
+
+#[test]
+fn a_choice_in_the_welcome_is_made_as_in_settings_and_skipping_keeps_it() {
+    use sshee_app::model::{ReconnectMode, Side};
+    let mut w = Window::open_with(Start { welcome: true, ..Start::default() });
+    let settings = |w: &Window| w.rt.state.settings.get().clone();
+    w.click("welcome-next");
+    // How it looks: what's on is picked, and a pick shows at once.
+    assert!(w.tree().contains("Match my system"));
+    w.click("welcome-look-dark");
+    assert!(!settings(&w).theme_follows_system && w.rt.state.dark(false));
+    w.click("welcome-sidebar/seg-1");
+    assert_eq!(settings(&w).sidebar_side, Side::Right);
+    assert!(w.rt.state.sidebar_at_right());
+    // In the terminal: each choice through its row of Settings, with a line on what it does.
+    w.click("welcome-next");
+    assert!(w.tree().contains("Select text and it's copied."), "{}", w.tree());
+    w.click("welcome-term-copy-keys");
+    assert!(!settings(&w).copy_on_select && !w.rt.state.settings.copy_on_select());
+    assert!(w.tree().contains("Selecting only selects; Ctrl+Shift+C copies."));
+    w.click("welcome-term-reconnect-auto");
+    assert_eq!(settings(&w).reconnect_mode, ReconnectMode::Auto);
+    assert!(w.tree().contains("Reconnects on its own and lands you back in the same session."));
+    // Back, then Esc: it's done, and what was picked stays; nothing else is decided.
+    w.click("welcome-back");
+    assert!(w.has("welcome-page-look"));
+    w.key(Key::Escape);
+    assert!(!w.has("welcome"));
+    let now = settings(&w);
+    assert_eq!(now.onboarding_version, sshee_app::tour::ONBOARDING_VERSION);
+    assert!(!now.copy_on_select && now.reconnect_mode == ReconnectMode::Auto && now.sidebar_side == Side::Right);
+    // Settings → About's "Show the welcome again": at its first page, with Skip.
+    w.rt.update(|s, tx| s.open_welcome(tx));
+    w.settle();
+    assert!(w.has("welcome-page-servers") && w.has("welcome-skip"));
+    w.click("welcome-skip");
+    assert!(!w.has("welcome"));
+    assert_eq!(settings(&w), now);
 }
 
 #[test]
