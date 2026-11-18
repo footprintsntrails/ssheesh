@@ -158,18 +158,27 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     if spec.prod {
         e = e.child(prod_chip(t, active));
     }
-    if let Some(b) = spec.badge {
-        e = e.child(badge(t, b, compact));
+    e.children(state_mark(t, spec, compact)).child(close_button(t, active, on_close))
+}
+
+/// What a tab has to say after its name, if anything: its badge ("Needs you", a dropped
+/// connection, asleep), else a ring while it connects or an agent works, the check of one that
+/// went quiet, a program's progress. `compact`: only the mark, named for a screen reader. The
+/// row along the top and the tabs under each server in the sidebar draw the same.
+pub fn state_mark(t: &Theme, spec: &Tab, compact: bool) -> Option<El> {
+    Some(if let Some(b) = spec.badge {
+        badge(t, b, compact)
     } else if spec.connecting {
-        e = e.child(rune::row().key("connecting").items_center().label_static("Connecting").child(progress_ring(10.0, 1.5, t.l2)));
+        rune::row().key("connecting").items_center().label_static("Connecting").child(progress_ring(10.0, 1.5, t.l2))
     } else if spec.went_quiet {
-        e = e.child(rune::row().key("quiet").items_center().label_static("Went quiet").child(icon(Icon::Check, 12.0, t.green)));
+        rune::row().key("quiet").items_center().label_static("Went quiet").child(icon(Icon::Check, 12.0, t.green))
     } else if let Some(p) = spec.progress {
-        e = e.child(rune::row().key("progress").items_center().label(progress_words(Some(p))).child(progress_mark(t, p)));
+        rune::row().key("progress").items_center().label(progress_words(Some(p))).child(progress_mark(t, p))
     } else if spec.working {
-        e = e.child(rune::row().key("working").items_center().label_static("Working").child(progress_ring(10.0, 1.5, t.l2)));
-    }
-    e.child(close_button(t, active, on_close))
+        rune::row().key("working").items_center().label_static("Working").child(progress_ring(10.0, 1.5, t.l2))
+    } else {
+        return None;
+    })
 }
 
 /// What a program's progress says to a screen reader: "42% done", or "Working" when it can't

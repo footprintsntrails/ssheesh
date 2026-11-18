@@ -13,6 +13,8 @@
 //! │                mark while it connects, reconnects or couldn't connect (`health`); its load
 //! │                (`load`, `load-line`) as Settings → Layout → Server load picks; in the
 //! │                list, under the pointer, expand-N (its containers: `tree-N`) and new-on-N
+//! ├── tabs-N       its tabs under it, when Settings → Layout → Where tabs go says so
+//! │                (`screens::rail_tree::tabs`)
 //! ├── add-server
 //! ├── check, tor, settings-gear   at the foot (a row in the list)
 //! └── rail-edge    drag to resize, double-click for the first width
@@ -218,9 +220,12 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
             .on_hover_change(move |s: &mut Shell, inside, tx| s.hover_server(i, inside, tx))
             .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx));
         rail = rail.child(b);
-        // Its containers, when its tree is open.
+        // Its tabs, when they go under each server; then its containers, when its tree is open.
         if wide {
+            rail = rail.children(rail_tree::tabs(s, t, i, &server.key(), TAB_BRANCH));
             rail = rail.children(rail_tree::tree(s, t, i, &server.key(), TREE_INDENT));
+        } else {
+            rail = rail.children(rail_tree::rail_tabs(s, t, i, &server.key()));
         }
     }
     if !wide {
@@ -291,12 +296,17 @@ const TREE_INDENT: f32 = 40.0;
 /// The chevron's room at the start of a server's row in the list.
 const CHEVRON: f32 = 14.0;
 
+/// Where the line a server's tabs hang from runs: under the middle of its icon (after the
+/// chevron, the row's gap and the icon's own margin).
+const TAB_BRANCH: f32 = CHEVRON + 6.0 + 2.0 + theme::ICON_RAIL / 2.0;
+
 /// A server's icon in the rail: its picture or icon (smaller beside its load), its label's
 /// line under it, a mark while it connects or when it's in trouble, its load, the orange dot.
 fn rail_server(s: &Shell, t: &Theme, server: &Server, selected: bool) -> El {
     let key = server.key();
     let name = s.server_shown(&key, &server.name).into_owned();
-    let waiting = s.bench.server_needs_you(&key);
+    // With its tabs under it, the tab that waits has the dot (0.10's).
+    let waiting = s.bench.server_needs_you(&key) && !s.bench.tabs_under_servers();
     let state = if selected { RailState::Selected } else { RailState::Plain };
     let load = rail_load::load(s, &key);
     let style = load.as_ref().map(|(style, _)| style);
@@ -326,7 +336,8 @@ fn rail_server(s: &Shell, t: &Theme, server: &Server, selected: bool) -> El {
 fn list_server(s: &Shell, t: &'static Theme, i: usize, server: &Server, selected: bool) -> El {
     let key = server.key();
     let name = s.server_shown(&key, &server.name).into_owned();
-    let waiting = s.bench.server_needs_you(&key);
+    // With its tabs under it, the tab that waits says so (0.10's).
+    let waiting = s.bench.server_needs_you(&key) && !s.bench.tabs_under_servers();
     let under = s.screens.server_card.row == Some(i);
     let open = rail_tree::expanded(s, &key);
     let health = s.bench.health(&key);
@@ -399,7 +410,8 @@ fn list_server(s: &Shell, t: &'static Theme, i: usize, server: &Server, selected
     if let Some((_, load)) = rail_load::load(s, &key) {
         e = e.child(load_line(t, &load));
     }
-    if selected {
+    // The server on screen is lit; with its tabs under it, the tab you're on is instead.
+    if selected && !s.bench.tabs_under_servers() {
         e = e.fill(t.selrail);
     }
     e

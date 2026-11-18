@@ -587,3 +587,6 @@ mod ported;
 
 /// The sidebar's servers: their state, labels, load, the row's "+", the title's menu.
 mod sidebar;
+
+/// Tabs under each server in the sidebar (Settings → Layout → Where tabs go).
+mod side_tabs;

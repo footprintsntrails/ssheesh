@@ -250,6 +250,8 @@ impl Row {
         self
     }
 
+    // Every row works today; the next one kept from 0.10 before 1.0 acts on it says so here.
+    #[allow(dead_code)]
     const fn later(mut self, why: &'static str) -> Row {
         self.status = Status::Later(why);
         self
@@ -504,8 +506,7 @@ fn build() -> Vec<Row> {
             },
         )
         .group("Tabs")
-        .hint("Under each server in the sidebar, or in a strip along the top.")
-        .later("Tabs run along the top. Tabs under each server aren't built yet.")
+        .hint("Under each server in the sidebar, or in a strip along the top. With the sidebar hidden, they run along the top.")
         .saves(&["tabsPlacement"])
         .words("tab strip bar sidebar top"),
         Row::new(
@@ -1136,8 +1137,8 @@ mod tests {
     #[test]
     fn a_row_that_comes_later_says_so_in_one_line() {
         let later: Vec<&Row> = rows().iter().filter(|r| !r.works()).collect();
-        // Only what belongs to features still being built.
-        assert!(!later.is_empty() && later.len() <= 8, "{}", later.len());
+        // Only what belongs to features still being built: none left today.
+        assert!(later.len() <= 8, "{}", later.len());
         for row in later {
             let Status::Later(why) = row.status else { unreachable!() };
             assert!(!why.is_empty() && !why.contains('\n') && why.ends_with('.'), "{}: {why:?}", row.key);
@@ -1154,6 +1155,7 @@ mod tests {
             "layout-sidebar-side",
             "layout-sidebar-shown",
             "layout-tab-server",
+            "layout-tabs",
             "privacy-streamer",
             "privacy-secrets",
             "keys-shortcuts",
