@@ -1159,8 +1159,10 @@ impl Shell {
         let mut asked = Vec::new();
         let mut wishes = Vec::new();
         let shown = self.tabs_on_screen();
+        let covered = self.screens.any_open();
         for (id, pane) in &mut self.panes {
             pane.set_shown(shown.contains(id));
+            changed |= pane.set_covered(covered) && shown.contains(id);
             let drew = pane.poll(clock, tx);
             changed |= drew && shown.contains(id);
             if pane.take_wants_you() {

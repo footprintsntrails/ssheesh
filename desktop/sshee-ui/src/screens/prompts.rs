@@ -6,7 +6,9 @@
 //!
 //! ```text
 //! term-box
-//! ├── session-note   a pill at the top middle: reconnecting, asleep, back online
+//! ├── session-note   a pill at the top right (under the find bar while it's open):
+//! │                  reconnecting, asleep, back online; away while something is open over
+//! │                  the window
 //! └── session-card   a card in the middle: the key's question, a session that stopped
 //! ```
 //!
@@ -27,6 +29,12 @@ use crate::theme::{self, Theme};
 /// The card over `pane`'s text, if its session has one.
 pub fn card<S: 'static>(pane: &TermPane, t: &'static Theme, get: impl Fn(&mut S) -> Option<&mut TermPane> + Copy + 'static) -> Option<El> {
     let card = pane.card()?;
+    // A pill under the palette or the agents' list would peek out above it: it waits.
+    let pill = !matches!(card, Card::HostKey(_) | Card::Stopped { .. });
+    if pill && pane.covered() {
+        return None;
+    }
+    let top = if pane.find_is_open() { NOTE_UNDER_FIND } else { NOTE_TOP };
     Some(match card {
         Card::HostKey(question) => host_key(&question, &pane.over.session.server_name, t, get),
         Card::Disconnected { reason } => {
@@ -43,24 +51,27 @@ pub fn card<S: 'static>(pane: &TermPane, t: &'static Theme, get: impl Fn(&mut S)
                         p.focus_terminal(tx);
                     }
                 });
-            note(t, dot(t.orange), col().min_w(0.0).shrink().child(line(t, &reason, true)).child(always), Some(again(t, "Reconnect", get)))
+            note(t, top, dot(t.orange), col().min_w(0.0).shrink().child(line(t, &reason, true)).child(always), Some(again(t, "Reconnect", get)))
         }
         Card::Asleep { minutes } => note(
             t,
+            top,
             icon(Icon::Terminal, 14.0, t.l2),
             col().min_w(0.0).shrink().child(line(t, &prompts::asleep_title(minutes), true)).child(line(t, prompts::ASLEEP_LINE, false)),
             Some(again(t, "Reconnect", get)),
         ),
         Card::Retrying { reason, line: when } => note(
             t,
+            top,
             dot(t.orange),
             col().min_w(0.0).shrink().child(line(t, &reason, true)).child(text(when).key("card-countdown").font(theme::VALUE).color(t.l2).single_line()),
             Some(again(t, "Now", get)),
         ),
         // The small kin of "Connecting to …" (`terminal/connecting.rs`): the text stays seen.
-        Card::Rejoining => note(t, crate::icons::logo_loader(16.0), line(t, "Reconnecting…", true), None),
+        Card::Rejoining => note(t, top, crate::icons::logo_loader(16.0), line(t, "Reconnecting…", true), None),
         Card::Back { durable } => note(
             t,
+            top,
             dot(t.green),
             row().gap(6.0).child(line(t, "Back online", true)).child(text(prompts::back_online_line(durable)).font(theme::NOTE).color(t.l2).single_line()),
             None,
@@ -156,15 +167,23 @@ fn prints(t: &Theme, label: &str, list: &[Fingerprint], old: bool) -> El {
     c
 }
 
-/// A pill at the top middle of the terminal: a mark, its words, maybe a button.
-fn note(t: &Theme, mark: El, words: El, button: Option<El>) -> El {
+/// How far down the pane the pill sits, and how far while the find bar is open (its top, its
+/// height and a gap: `terminal/find.rs`).
+const NOTE_TOP: f32 = 8.0;
+const NOTE_UNDER_FIND: f32 = 8.0 + 36.0 + 8.0;
+
+/// A pill at the top right of the terminal, where the find bar opens: a mark, its words,
+/// maybe a button. At the right, a terminal's first line seldom reaches it, and it stays clear
+/// of what hangs from the title in the middle.
+fn note(t: &Theme, top: f32, mark: El, words: El, button: Option<El>) -> El {
     let mut pill = row().key("session-note").gap(10.0).items_center().py(7.0).pl(12.0).pr(if button.is_some() { 7.0 } else { 14.0 }).max_w(560.0)
         .radius(theme::RADIUS_POPOVER).fill(t.pop).border(1.0, t.rim).shadow(4.0, 16.0, rune::Color::BLACK.alpha(0.22)).role("status")
         .child(mark).child(words.shrink().min_w(0.0));
     if let Some(b) = button {
         pill = pill.child(b);
     }
-    row().key("session-note-row").absolute(0.0, 12.0).w_full().justify_center().px(12.0).child(pill)
+    // Lined up with the find bar's right edge, clear of the scroll bar.
+    row().key("session-note-row").absolute(0.0, top).w_full().justify_end().pl(12.0).pr(20.0).child(pill)
 }
 
 fn centered(card: El) -> El {
