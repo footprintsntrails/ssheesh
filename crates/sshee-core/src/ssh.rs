@@ -285,6 +285,26 @@ fn escape_time_ms(through_console: bool) -> u32 {
 const ANSWERS_MS: u32 = 3000;
 const ANSWERS_SECONDS: u32 = 5;
 
+/// Answers to "which terminal are you?" (DA1, DA2) that tmux is told to drop, after its Esc.
+/// tmux asks as it attaches and waits five seconds; an answer that comes later (through Tor it
+/// can) it takes for typing, and "61;6;7;21;22;23;24;28;32;42c0;10;1c" lands at the prompt.
+/// Bound to keys that do nothing, they go nowhere. Colour answers it takes at any time.
+/// (Three or more keys at once tmux takes for a paste, which no binding sees; a terminal
+/// answers two, DA1 and DA2.) Kept in this order: the test splits it so.
+const LATE_ANSWERS: [&str; 7] = [
+    // Windows' console (ConPTY), which answers for us there, as its versions do.
+    "[?61;6;7;21;22;23;24;28;32;42c",
+    "[?61;6;7;14;21;22;23;24;28;32;42c",
+    "[?61;6;7;14;21;22;23;24;28;32;42;52c",
+    "[?1;0c",
+    "[>0;10;1c",
+    // The app's own terminal elsewhere (sshee-term, whose test keeps these the same).
+    "[?6c",
+    "[>0;2600;1c",
+];
+/// The first of tmux's `user-keys` slots `LATE_ANSWERS` take (906 is leaving scrolling).
+const LATE_ANSWER_KEYS: usize = 907;
+
 /// The remote command for an interactive session. If tmux exists on the
 /// server, the shell lives inside a named tmux session that outlives the
 /// connection, and reconnecting attaches to it again. tmux's status bar is
@@ -303,7 +323,9 @@ const ANSWERS_SECONDS: u32 = 5;
 /// a character at a time. tmux gives an answer half a second, and through Tor
 /// it can take longer: the rest landed in the shell as text, as here with
 /// "61;6;7;21;22;23;24;28;32;42c0;10;1c". So for the first seconds after
-/// attaching, when these answers come, it waits longer (see `ANSWERS_MS`).
+/// attaching, when these answers come, it waits longer (see `ANSWERS_MS`). An
+/// answer that comes after tmux stops waiting altogether is dropped (see
+/// `LATE_ANSWERS`).
 pub fn durable_command(key: &str, run: Option<&[String]>, welcome: &crate::welcome::Welcome) -> String {
     durable_command_for(key, run, welcome, cfg!(windows))
 }
@@ -332,8 +354,16 @@ fn durable_command_for(key: &str, run: Option<&[String]>, welcome: &crate::welco
             (format!(" {}", shell_quote(&format!("sh -c {}", shell_quote(&login)))), login)
         }
     };
+    let late: String = LATE_ANSWERS
+        .iter()
+        .enumerate()
+        .map(|(i, answer)| {
+            let n = LATE_ANSWER_KEYS + i;
+            format!(r#" \; set-option -s 'user-keys[{n}]' "${{E}}{answer}" \; bind-key -n User{n} if-shell -F 0 refresh-client"#)
+        })
+        .collect();
     let script = format!(
-        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; {escape_time} \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
+        r#"export COLORTERM=truecolor; if command -v tmux >/dev/null 2>&1; then printf "\033]7777;sshee=durable\007"; tmux set-environment -g COLORTERM truecolor 2>/dev/null; case "$(tmux -V)" in "tmux 1."*|"tmux 2."*|"tmux 3.0"*|"tmux 3.1"*) new= ;; *) new=1 ;; esac; if [ -n "$new" ]; then set -- -T RGB,sync; else set --; fi; set -- "$@" new-session -A -s {name}{in_tmux} \; set-option status off \; set-option mouse on \; {escape_time} \; set-option -s focus-events on \; set-option -s set-clipboard on; if [ -n "$new" ]; then E=$(printf '\033'); set -- "$@" \; set-option set-titles on \; set-option set-titles-string '{SCROLL_TITLE}' \; set-option -s 'user-keys[906]' "${{E}}[9006~" \; bind-key -n User906 if-shell -F '#{{pane_in_mode}}' 'send-keys -X cancel'{late}; fi; exec tmux "$@"; else printf "\033]7777;sshee=plain\007"; {plain}; fi"#
     );
     format!("sh -c {}", shell_quote(&script))
 }
@@ -688,6 +718,93 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!screen.contains("61;6;7") && !screen.contains("0;10;1c"), "landed in the shell: {screen}");
         assert_eq!(escape_time.trim(), format!("escape-time {}", escape_time_ms(true)));
+    }
+
+    /// tmux waits five seconds for the answers to "which terminal are you?" and then takes
+    /// them for typing. Through Tor they can come later than that, from Windows' console or
+    /// from the app's own terminal: in real tmux they go nowhere, and typing still works.
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_after_tmux_stopped_waiting_stays_out_of_the_shell() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+        if !Command::new("tmux").arg("-V").output().is_ok_and(|o| o.status.success()) {
+            return;
+        }
+        let dir = PathBuf::from(format!("/tmp/sshee-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", &durable_command_for("late", None, &Default::default(), false)]);
+        cmd.env("TMUX_TMPDIR", &dir);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("SHELL", "/bin/sh");
+        cmd.env_remove("TMUX");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (said, heard) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 || said.send(chunk[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut writer = pair.master.take_writer().unwrap();
+        let tmux = |args: &[&str]| {
+            let out = Command::new("tmux").env("TMUX_TMPDIR", &dir).args(args).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let (mut all, start) = (Vec::new(), Instant::now());
+        while !all.windows(3).any(|w| w == b"\x1b[c") && start.elapsed() < Duration::from_secs(5) {
+            if let Ok(chunk) = heard.recv_timeout(Duration::from_millis(100)) {
+                all.extend(chunk);
+            }
+        }
+        let asked = all.windows(3).any(|w| w == b"\x1b[c");
+        // Past tmux's five seconds (a tmux too old to ask has nothing to drop either).
+        std::thread::sleep(Duration::from_secs(6));
+        // As a terminal answers: DA1 and DA2 together. (Keys in a quicker run than that tmux
+        // takes for a paste, which no binding sees.)
+        let (consoles, own) = LATE_ANSWERS.split_at(5);
+        let (da2, da1s) = consoles.split_last().unwrap();
+        let bursts = da1s.iter().map(|da1| format!("\x1b{da1}\x1b{da2}")).chain([format!("\x1b{}\x1b{}", own[0], own[1])]);
+        for burst in bursts {
+            writer.write_all(burst.as_bytes()).unwrap();
+            writer.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        writer.write_all(b"echo typed-$((40+2))\r").unwrap();
+        writer.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        let screen = tmux(&["capture-pane", "-p"]);
+        let _ = child.kill();
+        let _ = child.wait();
+        tmux(&["kill-server"]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(asked, "tmux didn't ask: {:?}", String::from_utf8_lossy(&all));
+        for answer in LATE_ANSWERS {
+            assert!(!screen.contains(&answer[1..]), "{answer:?} landed in the shell: {screen}");
+        }
+        // sh runs what lands as commands ("61: not found").
+        assert!(!screen.contains("not found"), "landed in the shell: {screen}");
+        assert!(screen.contains("typed-42"), "typing after them was lost: {screen}");
+    }
+
+    /// Each late answer has a key of its own, and none takes the slot that leaves scrolling.
+    #[test]
+    fn every_late_answer_is_bound_to_nothing() {
+        let script = durable_command_for("k", None, &Default::default(), false);
+        for (i, answer) in LATE_ANSWERS.iter().enumerate() {
+            let n = LATE_ANSWER_KEYS + i;
+            assert!(script.contains(&format!("user-keys[{n}]")) && script.contains(answer), "{answer}");
+            assert!(script.contains(&format!("bind-key -n User{n} if-shell -F 0 refresh-client")), "{answer}");
+        }
+        assert!(LATE_ANSWER_KEYS > 906);
     }
 
     #[cfg(unix)]
