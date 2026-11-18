@@ -205,7 +205,13 @@ impl Shell {
 
     /// Opens Settings at `section` (a search result elsewhere, "Turn it off in Updates").
     pub fn open_settings_at(&mut self, section: Section, tx: &mut Tx) {
-        self.screens.settings.go_to(section);
+        // Opened afresh, Settings starts its history at this section.
+        let state = &mut self.screens.settings;
+        if state.open {
+            state.go_to(section);
+        } else {
+            state.show(section);
+        }
         self.open_settings(tx);
     }
 

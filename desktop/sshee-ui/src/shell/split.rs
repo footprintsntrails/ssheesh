@@ -277,7 +277,8 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
             head = head.child(prod_chip(t, false));
         }
     }
-    head = head.child(rune::spacer());
+    // The AI agents this terminal can start, as in 0.10's header.
+    head = head.children(crate::screens::prompts::agent_starters(s, id, HEAD_BUTTON, t)).child(rune::spacer());
     let n = id.0;
     match zoomed {
         // Filling the window: the way back says how many panes there are.

@@ -279,7 +279,6 @@ pub fn layer<S: 'static>(term: El, pane: &TermPane, cx: &mut Cx<S>, get: impl Fn
     layer = layer.children(links::hint(pane, t, m));
     // The session's card or note (`screens/prompts.rs`).
     layer = layer.children(crate::screens::prompts::card(pane, t, get));
-    layer = layer.children(crate::screens::prompts::agent_buttons(pane, t, get));
     layer = layer.children(find::bar(pane, t, get));
     layer.children(menu::view(pane, t, get))
 }

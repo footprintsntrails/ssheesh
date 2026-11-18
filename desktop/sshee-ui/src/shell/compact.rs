@@ -19,6 +19,11 @@ use crate::theme::{self, Frame, Theme};
 
 /// The band at an edge that brings a bar in.
 const BAND: f32 = 6.0;
+/// The top band on Windows. A restored window's top resize edge is inside the client area
+/// there (`WM_NCHITTEST` answers `HTTOP` for its first 8 points, Rune's `win32/frame.rs`), so
+/// the window never hears the pointer in it: a band no taller than that never brings the row.
+/// This one reaches past it.
+const BAND_WINDOWS: f32 = 14.0;
 
 /// Which bars are out now.
 #[derive(Default)]
@@ -71,7 +76,11 @@ impl Shell {
 /// The band at the top that stands in for the row: it moves the window, holds a Mac's window
 /// buttons, and brings the row in.
 pub(crate) fn top_band(s: &Shell, t: &Theme) -> El {
-    let h = if s.options.frame == Frame::Mac { 28.0 } else { BAND };
+    let h = match s.options.frame {
+        Frame::Mac => 28.0,
+        Frame::Windows => BAND_WINDOWS,
+        Frame::Linux => BAND,
+    };
     el().key("edge-top").w_full().h(h).fill(t.frame).window_drag().on_hover_change(|s: &mut Shell, over, tx| {
         if over {
             s.reveal(true, true, tx)

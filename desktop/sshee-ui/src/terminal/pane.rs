@@ -190,6 +190,8 @@ pub struct TermPane {
     pub(crate) anchor: Option<(usize, u16)>,
     /// When the user last typed (pane clock).
     typed_at: Option<f64>,
+    /// How many times Return was sent: commands given, as far as the window can tell.
+    entered: u64,
     /// When the newest output on screen was parsed.
     pub(super) last_output: Option<Instant>,
     meter: Option<SharedMeter>,
@@ -209,8 +211,10 @@ pub struct TermPane {
     pub(crate) echo: Option<super::echo::Counter>,
 }
 
-/// How often a pane out of sight takes a frame of its output, in seconds.
-pub const HIDDEN_FRAME: f64 = 0.5;
+/// How often a pane out of sight takes a frame of its output, in seconds: its tab's working
+/// mark starts at most this long after the output (0.10's xterm saw it at once), still far
+/// from a display's beat.
+pub const HIDDEN_FRAME: f64 = 0.2;
 
 impl TermPane {
     /// A pane with `link` as its session, which tells its status to `status`. Nothing starts
@@ -260,6 +264,7 @@ impl TermPane {
             ime: ImeState::default(),
             anchor: None,
             typed_at: None,
+            entered: 0,
             last_output: None,
             meter: None,
             wants_you: false,
@@ -651,6 +656,9 @@ impl TermPane {
         let out = self.model.user_input_at(bytes, now);
         self.count_key(bytes);
         self.link.write(&out);
+        if bytes.contains(&b'\r') {
+            self.entered += 1;
+        }
         if input::is_typing(bytes) {
             self.typed_at = Some(tx.clock());
             self.rest_cursor(tx);
@@ -1011,16 +1019,7 @@ impl TermPane {
             self.mouse_report(line, col, MouseAction::Move(MouseButton::None), tx.mods(), tx);
         }
         // The link under the pointer is underlined (`links.rs`).
-        let mut linked = self.links_moved(line, col, tx);
-        // Near the top, the agents' buttons show (`screens::prompts::agent_buttons`).
-        let near_top = p.y < 44.0;
-        if near_top != self.over.session.near_top {
-            self.over.session.near_top = near_top;
-            linked |= self.over.session.agents.as_ref().is_some_and(|a| !a.is_empty());
-            if linked {
-                tx.instant();
-            }
-        }
+        let linked = self.links_moved(line, col, tx);
         if over != self.hover_secret {
             self.hover_secret = over;
         } else if !linked {
@@ -1079,6 +1078,16 @@ impl TermPane {
     }
 
     /// When a key was last typed here, on the pane's clock.
+    /// How many times Return was sent (a command given), an agent started from its button
+    /// included.
+    pub fn entered(&self) -> u64 {
+        self.entered
+    }
+
+    pub(crate) fn note_entered(&mut self) {
+        self.entered += 1;
+    }
+
     pub fn typed_at(&self) -> Option<f64> {
         self.typed_at
     }

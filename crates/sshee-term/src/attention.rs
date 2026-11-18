@@ -114,7 +114,14 @@ impl QuietWatch {
         self.last_output = now;
     }
 
-    /// Called every few seconds: `true` once for a long unwatched run that stopped.
+    /// When [`Self::check`] will next say `true` if no more output comes: a long unwatched run
+    /// not yet noted, [`QUIET_MS`] after its last output.
+    pub fn due(&self) -> Option<u64> {
+        let busy_since = self.busy_since?;
+        (!self.noted && self.last_output.saturating_sub(busy_since) >= LONG_RUN_MS).then_some(self.last_output + QUIET_MS)
+    }
+
+    /// `true` once for a long unwatched run that stopped.
     pub fn check(&mut self, now: u64) -> bool {
         let Some(busy_since) = self.busy_since else { return false };
         if self.noted || now.saturating_sub(self.last_output) < QUIET_MS || self.last_output.saturating_sub(busy_since) < LONG_RUN_MS {

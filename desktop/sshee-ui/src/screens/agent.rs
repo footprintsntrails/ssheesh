@@ -27,7 +27,7 @@ use rune::{canvas, col, el, row, spacer, text, text_input, Align, Cx, El, Key, K
 use sshee_app::agents::answer::{Card, Did, Outcome, Press, RowLook, Scene, Stroke};
 use sshee_app::agents::{waited, AgentKind, AgentRow, AgentState, Agents, Standing};
 use sshee_app::workbench::{Link, Server, ServerKey, Tab, TabId, TabKind};
-use sshee_term::attention::{AttentionKind, QUIET_MS};
+use sshee_term::attention::AttentionKind;
 use sshee_term::present::Look;
 use sshee_term::question::{self, ChoiceKind, Reading, Unsure};
 
@@ -94,8 +94,9 @@ pub struct State {
     first_frame: HashMap<TabId, u64>,
     /// The tabs drawn with the working mark.
     working: HashSet<TabId>,
-    /// When output last came anywhere, for the "went quiet" check.
-    last_output: Option<u64>,
+    /// How many commands each terminal was given (Return), as last seen: a new one on a
+    /// server has its agents asked about sooner (`poll`).
+    entered: HashMap<TabId, u64>,
     /// The servers the backend was last told to ask about agents.
     asking: Vec<ServerKey>,
     /// The clock at the last poll.
@@ -120,7 +121,7 @@ impl Default for State {
             frames: HashMap::new(),
             first_frame: HashMap::new(),
             working: HashSet::new(),
-            last_output: None,
+            entered: HashMap::new(),
             asking: Vec::new(),
             now: CLOCK_START_MS,
         }
@@ -563,10 +564,14 @@ pub(crate) fn poll(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
     let mut soon = |at: u64| wake = Some(wake.map_or(at, |w: u64| w.min(at)));
 
     // Output: a pane that took frames since the last look had some.
+    let mut commanded = false;
     {
         let st = &mut s.screens.agent;
         st.now = now;
         for (id, pane) in &s.panes {
+            // A command given in a server's terminal may have started an agent, or ended one.
+            let before = st.entered.insert(*id, pane.entered());
+            commanded |= before.is_some_and(|n| n != pane.entered()) && s.bench.tab(*id).is_some_and(|t| t.server != "local");
             let seen = st.frames.insert(*id, pane.frames);
             if pane.frames > 0 {
                 st.first_frame.entry(*id).or_insert(now);
@@ -574,17 +579,23 @@ pub(crate) fn poll(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
             let opening = st.first_frame.get(id).is_none_or(|at| now < at + OPENING_MS);
             if seen.is_some_and(|n| n != pane.frames) && !opening {
                 st.agents.output(*id, now, focused && active == Some(*id));
-                st.last_output = Some(now);
             }
         }
     }
 
-    // Long runs that went quiet while nobody looked.
-    if let Some(last) = s.screens.agent.last_output {
-        if now >= last + QUIET_MS {
+    // What runs in the server's terminals is asked again in a moment instead of at the next
+    // round, so a tab says it has an agent soon after it was started (`Backend::agents_on`).
+    if commanded && !s.screens.agent.asking.is_empty() {
+        let servers: Vec<Server> = s.screens.agent.asking.iter().filter_map(|k| s.bench.server(k).cloned()).collect();
+        s.backend_mut().agents_on(&servers);
+    }
+
+    // Long runs that went quiet while nobody looked: each when its own quiet is up, whatever
+    // the other terminals print meanwhile.
+    if let Some(due) = s.screens.agent.agents.quiet_due() {
+        if now >= due {
             let look = s.look();
             let st = &mut s.screens.agent;
-            st.last_output = None;
             let notify = st.notify;
             let quiet = st.agents.check_quiet(&mut s.bench, now, |id| standing(focused, active == Some(id), notify, &look));
             for (id, note) in quiet {
@@ -594,7 +605,7 @@ pub(crate) fn poll(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
                 }
             }
         } else {
-            soon(last + QUIET_MS);
+            soon(due);
         }
     }
 

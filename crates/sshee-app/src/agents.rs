@@ -233,7 +233,13 @@ impl Agents {
         said.notification
     }
 
-    /// Called every few seconds: the runs that went quiet since, each with its notification
+    /// When the next run that is still going would count as gone quiet, if no more output
+    /// comes to it: [`Self::check_quiet`] is due then.
+    pub fn quiet_due(&self) -> Option<u64> {
+        self.tabs.values().filter_map(|w| w.quiet.due()).min()
+    }
+
+    /// Called when [`Self::quiet_due`] says: the runs that went quiet since, each with its notification
     /// if one is due. `standing` tells where the window stands for a tab.
     pub fn check_quiet<'a>(&mut self, bench: &mut Workbench, now: u64, standing: impl Fn(TabId) -> Standing<'a>) -> Vec<(TabId, Option<Notification>)> {
         let quiet: Vec<TabId> = self.tabs.iter_mut().filter_map(|(id, w)| w.quiet.check(now).then_some(*id)).collect();
