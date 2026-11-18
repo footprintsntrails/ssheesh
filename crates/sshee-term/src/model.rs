@@ -547,6 +547,7 @@ impl<E: Engine> Model<E> {
     /// gone, and nothing more of a held-back burst or of its synchronized update is coming. What
     /// the update held shows now, and the reports go off at once: past the gate, which would
     /// hold them as output (and so a key's answer after the reconnect still shows at once).
+    /// Answers not yet written go too (see [`Model::new_connection`]).
     pub fn disconnected(&self) {
         let mut inner = self.inner.lock();
         inner.gate.reset();
@@ -554,8 +555,25 @@ impl<E: Engine> Model<E> {
         inner.sync_work = 0;
         self.settle(&mut inner, true);
         self.parse(&mut inner, STOP_REPORTS, false);
+        self.forget_replies();
         drop(inner);
         self.wake();
+    }
+
+    /// A new connection starts (after a drop, or a reroute that goes straight to one): answers
+    /// to what the last one asked, not yet written, are dropped. Whoever asked (tmux attaching,
+    /// a program) is gone, and the answer would reach the new shell as typed text.
+    pub fn new_connection(&self) {
+        let mut inner = self.inner.lock();
+        // What a synchronized update still held is parsed first, so its questions go too.
+        inner.engine.stop_sync();
+        inner.sync_work = 0;
+        self.settle(&mut inner, true);
+        self.forget_replies();
+    }
+
+    fn forget_replies(&self) {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).replies.clear();
     }
 
     /// A reconnect landed in a new shell: says so on screen (past the gate, as above).
@@ -791,6 +809,32 @@ mod tests {
         let m = Model::new(Size::new(20, 4), &EngineConfig { answer_da1: false, ..EngineConfig::default() });
         m.feed(b"\x1b[c\x1b[6n");
         assert_eq!(m.take_events(), [TermEvent::Reply(b"\x1b[1;1R".to_vec())]);
+    }
+
+    /// A question that came on a connection that then dropped isn't answered on the next one:
+    /// through Tor the answer would land in the new shell as text. Questions on the new
+    /// connection are answered as ever.
+    #[test]
+    fn questions_from_a_connection_that_dropped_go_unanswered() {
+        let m = model(20, 4);
+        m.feed(b"\x1b[c\x1b[6n\x1b]11;?\x07");
+        m.disconnected();
+        assert!(!m.take_events().iter().any(|e| matches!(e, TermEvent::Reply(_))));
+        // A reroute goes straight to a new connection, with no drop said in between.
+        m.feed(b"\x1b[>c\x1b[6n");
+        m.new_connection();
+        assert!(!m.take_events().iter().any(|e| matches!(e, TermEvent::Reply(_))));
+        m.feed(b"\x1b[6n");
+        assert_eq!(m.take_events(), [TermEvent::Reply(b"\x1b[1;1R".to_vec())]);
+    }
+
+    /// tmux is told to drop these answers when they come too late for it (`LATE_ANSWERS` in
+    /// sshee-core's `ssh.rs`): an alacritty_terminal that answers otherwise goes there too.
+    #[test]
+    fn device_attributes_answers_are_the_ones_tmux_drops_when_late() {
+        let m = model(20, 4);
+        m.feed(b"\x1b[c\x1b[>c");
+        assert_eq!(m.take_events(), [TermEvent::Reply(b"\x1b[?6c\x1b[>0;2600;1c".to_vec())]);
     }
 
     #[test]

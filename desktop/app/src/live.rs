@@ -823,7 +823,9 @@ impl Inner {
                             model.reconnected_new_shell();
                         }
                     }
-                    SessionState::Connecting { .. } => {}
+                    // Answers the last connection's questions still wait for would land in
+                    // this one's shell.
+                    SessionState::Connecting { .. } => model.new_connection(),
                     _ => {
                         was_down.store(true, Ordering::Relaxed);
                         model.disconnected();
