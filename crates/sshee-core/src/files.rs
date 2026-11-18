@@ -680,21 +680,27 @@ pub fn rename(target: &Target, env: &SshEnv, from: &str, to: &str) -> Result<(),
     let exists = || OpError::new(ErrorCode::Exists, "Something with that name already exists here.");
     match ssh_only(target) {
         Some(t) => {
-            let script = format!(
-                r#"[ -e {to} ] && {{ echo EXISTS >&2; exit 5; }}; mv -- {from} {to}"#,
-                from = shell_quote(from),
-                to = shell_quote(to)
-            );
-            run_remote(t, env, &script, None).map(|_| ()).map_err(|e| if e.message == "EXISTS" { exists() } else { e })
+            run_remote(t, env, &rename_script(from, to), None).map(|_| ()).map_err(|e| if e.message == "EXISTS" { exists() } else { e })
         }
         None => {
             let to = resolve_local(to);
-            if to.exists() {
+            // A broken link "doesn't exist" to `exists()`, yet rename would replace it.
+            if to.symlink_metadata().is_ok() {
                 return Err(exists());
             }
             Ok(std::fs::rename(resolve_local(from), to)?)
         }
     }
+}
+
+/// The server half of `rename`: refuses when anything, a broken link
+/// included, already has the new name.
+fn rename_script(from: &str, to: &str) -> String {
+    format!(
+        r#"{{ [ -e {to} ] || [ -L {to} ]; }} && {{ echo EXISTS >&2; exit 5; }}; mv -- {from} {to}"#,
+        from = shell_quote(from),
+        to = shell_quote(to)
+    )
 }
 
 fn copy_here(from: &Path, dir: &Path, overwrite: bool) -> Result<(), OpError> {
@@ -783,7 +789,7 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
             let items = names.iter().map(|n| shell_quote(n)).collect::<Vec<_>>().join(" ");
             let script = format!(
                 // "./": GNU tar takes a name with ":" in it as host:file and runs ssh to reach it.
-                r#"cd -- {dir} || exit 1; [ -e {name} ] && {{ echo EXISTS >&2; exit 5; }}; {set}; tar -czf ./{name} -- "$@""#,
+                r#"cd -- {dir} || exit 1; {{ [ -e {name} ] || [ -L {name} ]; }} && {{ echo EXISTS >&2; exit 5; }}; {set}; tar -czf ./{name} -- "$@""#,
                 dir = shell_quote(dir),
                 name = shell_quote(archive),
                 set = tar_items(&items),
@@ -792,7 +798,7 @@ pub fn archive(target: &Target, env: &SshEnv, dir: &str, names: &[String], archi
         }
         None => {
             let base = resolve_local(dir);
-            if base.join(archive).exists() {
+            if base.join(archive).symlink_metadata().is_ok() {
                 return Err(exists());
             }
             // tar ships with macOS, Linux and Windows 10 and newer.
@@ -2583,6 +2589,28 @@ mod tests {
         // A second archive with the same name is refused, not overwritten.
         let again = archive(&Target::Local, &env, &d, &["notes.txt".into()], "backup.tar.gz");
         assert_eq!(again.unwrap_err().code, ErrorCode::Exists);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Rename and Move never replace a broken link, here or on a server.
+    #[cfg(unix)]
+    #[test]
+    fn rename_refuses_a_broken_link_in_the_way() {
+        let dir = std::env::temp_dir().join(format!("sshee-rename-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink("missing-target", dir.join("b.txt")).unwrap();
+        let (a, b) = (dir.join("a.txt").display().to_string(), dir.join("b.txt").display().to_string());
+        let err = rename(&Target::Local, &SshEnv::default(), &a, &b).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Exists);
+        // The server script, run by a local sh.
+        assert_eq!(sh_with_input(&rename_script(&a, &b), b"").code(), Some(5));
+        assert!(dir.join("b.txt").symlink_metadata().unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "keep");
+        // A free name still renames.
+        let c = dir.join("c.txt").display().to_string();
+        assert!(sh_with_input(&rename_script(&a, &c), b"").success());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

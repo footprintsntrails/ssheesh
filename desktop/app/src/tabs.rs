@@ -9,11 +9,11 @@ use sshee_app::workbench::SavedTabs;
 
 const FILE: &str = "tabs.json";
 
-/// The tabs saved in `dir`, if there are any and they read. A file that doesn't read is left
-/// where it is and the window starts without tabs.
+/// The tabs saved in `dir`, if there are any and they read. A file that doesn't read is moved
+/// aside to `tabs.damaged.json` (the next save would write over it) and the window starts
+/// without tabs.
 pub fn load(dir: &Path) -> Option<SavedTabs> {
-    let text = std::fs::read_to_string(dir.join(FILE)).ok()?;
-    serde_json::from_str(&text).ok()
+    sshee_app::settings_store::read_json_or_set_aside(&dir.join(FILE))
 }
 
 /// Writes the tabs to `dir`, whole or not at all: to a file beside it first, then over the
@@ -75,12 +75,16 @@ mod tests {
     }
 
     #[test]
-    fn a_file_that_does_not_read_starts_without_tabs_and_is_left_alone() {
+    fn a_file_that_does_not_read_starts_without_tabs_and_is_kept_aside() {
         let dir = folder("bad");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), "{ not json").unwrap();
+        std::fs::write(dir.join("tabs.damaged.json"), "older").unwrap();
         assert_eq!(load(&dir), None);
-        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "{ not json");
+        // The next save writes beside it, and an earlier one is kept too.
+        save(&dir, &SavedTabs::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("tabs.damaged-2.json")).unwrap(), "{ not json");
+        assert_eq!(std::fs::read_to_string(dir.join("tabs.damaged.json")).unwrap(), "older");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

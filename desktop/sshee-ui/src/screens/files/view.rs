@@ -92,7 +92,8 @@ const SVG_DRAWN: f32 = 1024.0;
 /// What a yes to the question on screen does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
-    Delete(Vec<String>),
+    /// These rows of `dir` on `server`: where they were when the question was asked.
+    Delete { server: String, dir: String, names: Vec<String> },
     Discard(After),
 }
 
@@ -178,6 +179,29 @@ impl Default for Ui {
 }
 
 impl Ui {
+    /// The tab went to another folder: a question, menu or name field about the last one's
+    /// rows closes, so it can't act on this one's.
+    pub(super) fn folder_changed(&mut self) {
+        if matches!(self.confirm, Some((_, Pending::Delete { .. }))) {
+            self.confirm = None;
+        }
+        self.naming = None;
+        self.menu = None;
+        self.dragging = None;
+    }
+
+    /// What a yes to the question on screen would do.
+    #[cfg(test)]
+    pub(super) fn pending(&self) -> Option<&Pending> {
+        self.confirm.as_ref().map(|(_, p)| p)
+    }
+
+    /// Types `text` into the open file, as a person would.
+    #[cfg(test)]
+    pub(super) fn type_draft(&mut self, text: &str) {
+        self.draft = TextEdit::new(text);
+    }
+
     /// The open file's text as typed so far.
     pub(crate) fn draft_text(&self) -> &str {
         &self.draft.text
@@ -246,16 +270,16 @@ fn run_after(s: &mut Shell, tab: TabId, after: After) {
     match after {
         After::Close => super::close_file(s, tab),
         After::Open(name) => super::open(s, tab, &name),
-        After::Go(to) => super::go(s, tab, &to),
-        After::Back => super::back(s, tab),
-        After::Forward => super::forward(s, tab),
-        After::Up => super::up(s, tab),
+        After::Go(to) => super::go_now(s, tab, &to),
+        After::Back => super::back_now(s, tab),
+        After::Forward => super::forward_now(s, tab),
+        After::Up => super::up_now(s, tab),
     }
     sync(s);
 }
 
 /// Does `after`, unless what was typed into the open file would be lost: then it asks first.
-fn guarded(s: &mut Shell, tab: TabId, after: After) {
+pub(super) fn guarded(s: &mut Shell, tab: TabId, after: After) {
     match dirty(s, tab).map(ops::discard_question) {
         Some(question) => {
             if let Some(state) = s.screens.files.get_mut(&tab) {
@@ -263,6 +287,21 @@ fn guarded(s: &mut Shell, tab: TabId, after: After) {
             }
         }
         None => run_after(s, tab, after),
+    }
+}
+
+/// Yes or no to the question on screen.
+pub(super) fn answer_confirm(s: &mut Shell, tab: TabId, yes: bool) {
+    let Some((_, pending)) = ui(s, tab).and_then(|ui| ui.confirm.take()) else { return };
+    match pending {
+        // Only on the server it was asked about; in the folder it was asked in.
+        Pending::Delete { server, dir, names } if yes => {
+            if s.screens.files.get(&tab).is_some_and(|st| st.browser.server() == server) {
+                super::delete(s, tab, &dir, &names);
+            }
+        }
+        Pending::Discard(after) if yes => run_after(s, tab, after),
+        _ => {}
     }
 }
 
@@ -281,13 +320,14 @@ fn targets(s: &Shell, tab: TabId, clicked: &str) -> Vec<String> {
     }
 }
 
-fn ask_delete(s: &mut Shell, tab: TabId, names: Vec<String>) {
+pub(super) fn ask_delete(s: &mut Shell, tab: TabId, names: Vec<String>) {
     let on_server = super::on_server(s, tab);
     let Some(state) = s.screens.files.get_mut(&tab) else { return };
     let entries: Vec<_> = names.iter().filter_map(|n| state.browser.entry(n)).collect();
     if !entries.is_empty() {
         let question = ops::delete_question(&entries, on_server);
-        state.ui.confirm = Some((question, Pending::Delete(names)));
+        let (server, dir) = (state.browser.server().to_owned(), state.browser.dir().to_owned());
+        state.ui.confirm = Some((question, Pending::Delete { server, dir, names }));
     }
 }
 
@@ -1555,12 +1595,7 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     if let Some(q) = state.ui.confirm.as_ref().map(|(q, _)| shown(s, q)) {
         let answer = move |yes: bool| {
             move |s: &mut Shell, tx: &mut Tx| {
-                let Some((_, pending)) = ui(s, id).and_then(|ui| ui.confirm.take()) else { return };
-                match pending {
-                    Pending::Delete(names) if yes => super::delete(s, id, &names),
-                    Pending::Discard(after) if yes => run_after(s, id, after),
-                    _ => {}
-                }
+                answer_confirm(s, id, yes);
                 tx.instant();
             }
         };

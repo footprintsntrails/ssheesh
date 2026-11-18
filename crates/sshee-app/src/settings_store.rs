@@ -633,6 +633,37 @@ fn read_file(text: &str, platform: Platform) -> Result<ReadFile, String> {
     Ok(ReadFile { settings, more, version, notice, doubts })
 }
 
+/// The JSON kept at `path`, if there's a file and it reads. One that's there but doesn't read
+/// (not JSON, not this shape, not text) is moved aside by `set_aside` first, so the next save
+/// can't write over it. A file that can't be opened at all is left alone.
+pub fn read_json_or_set_aside<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let bytes = std::fs::read(path).ok()?;
+    let read = std::str::from_utf8(&bytes).ok().and_then(|text| serde_json::from_str(text).ok());
+    if read.is_none() {
+        set_aside(path);
+    }
+    read
+}
+
+/// Moves a file that doesn't read to a name beside it, `x.json` to `x.damaged.json`, never over
+/// one kept aside before (`x.damaged-2.json`, and on). Where it went, if it moved.
+pub fn set_aside(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    for n in 1..1000 {
+        let suffix = if n == 1 { String::new() } else { format!("-{n}") };
+        let aside = path.with_file_name(format!("{stem}.damaged{suffix}{ext}"));
+        if aside.symlink_metadata().is_ok() {
+            continue;
+        }
+        return std::fs::rename(path, &aside).ok().map(|()| aside);
+    }
+    None
+}
+
 /// Writes `bytes` to `path`, whole or not at all: to a file beside it first, synced, then
 /// over the old one. The file is the user's alone (names of themes and words to highlight are
 /// their own business), and so is the folder it's in: made 0700 on Unix when created or found
@@ -812,6 +843,29 @@ fn plain_error(e: &std::io::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_that_doesnt_read_is_set_aside_and_earlier_ones_kept() {
+        let dir = std::env::temp_dir().join(format!("sshee-set-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bookmarks.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        assert_eq!(super::read_json_or_set_aside::<Vec<String>>(&path), None);
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_to_string(dir.join("bookmarks.damaged.json")).unwrap(), "{ not json");
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert_eq!(super::read_json_or_set_aside::<Vec<String>>(&path), None);
+        assert_eq!(std::fs::read_to_string(dir.join("bookmarks.damaged.json")).unwrap(), "{ not json");
+        assert_eq!(std::fs::read(dir.join("bookmarks.damaged-2.json")).unwrap(), [0xff, 0xfe]);
+        // One that reads stays where it is; none at all is just none.
+        std::fs::write(&path, r#"["a"]"#).unwrap();
+        assert_eq!(super::read_json_or_set_aside::<Vec<String>>(&path), Some(vec!["a".to_string()]));
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(super::read_json_or_set_aside::<Vec<String>>(&path), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
     use crate::import::{import, ImportOptions};
     use crate::model::{CursorStyle, Keys, Side};
