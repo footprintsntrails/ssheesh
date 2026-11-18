@@ -9,7 +9,7 @@ use rune::{Env, Key, KeyEvent, Mods, Runtime, Tx};
 use sshee_app::home::Spot;
 use sshee_app::labels::{Listed, Looks};
 use sshee_app::model::EnvLabel;
-use sshee_app::servers::{Ask, Book, Candidate, Sources};
+use sshee_app::servers::{App, AppOffer, Ask, Book, Candidate, Sources};
 use sshee_app::workbench::{Open, Server, Tab, TabKind, Workbench};
 use sshee_term::engine::Size;
 use sshee_term::model::Model;
@@ -96,7 +96,7 @@ impl Backend for FakeBackend {
 }
 
 /// The made-up list: two servers in the sidebar, one from a made-up ssh config not picked
-/// yet, one XPipe offers and one 0.10 does.
+/// yet, one XPipe offers, one PuTTY does and one 0.10 does.
 fn book() -> Book {
     let host = |id: &str, name: &str, address: &str, from_config: bool| Listed { id: id.into(), name: name.into(), address: address.into(), from_config };
     let hosts = vec![host("web", "web-7731", "deploy@203.0.113.17", false), host("db", "db-main", "postgres@203.0.113.31", false), host("cfg:cache-7731", "cache-7731", "deploy@203.0.113.40", true)];
@@ -105,7 +105,8 @@ fn book() -> Book {
     looks.set_env("web", Some(EnvLabel::Prod));
     looks.set_icon("db", "database");
     let offer = |name: &str, address: &str| Candidate { id: address.into(), name: name.into(), address: address.into(), identity_file: None, had_password: false, picked: true };
-    let sources = Sources { xpipe: vec![offer("mail-7731", "root@203.0.113.25")], old: vec![offer("metrics", "ops@203.0.113.60")], ..Sources::default() };
+    let putty = AppOffer { app: App::Putty, servers: vec![offer("files-7731", "ops@198.51.100.70")], here: 0, through_jump: 1, ppk_keys: 0 };
+    let sources = Sources { xpipe: vec![offer("mail-7731", "root@203.0.113.25")], old: vec![offer("metrics", "ops@203.0.113.60")], apps: vec![putty], ..Sources::default() };
     let mut book = Book::new(hosts, looks, sources);
     // Keys and a password manager found here, a saved password for web-7731, whose identity
     // is known (a new server shows a fingerprint first).
@@ -601,6 +602,26 @@ fn servers_are_brought_in_from_the_ssh_config_xpipe_and_0_10() {
     assert!(!w.has("add-from-old"));
     w.click("add-cancel");
     assert!(!w.rt.state.screens.add_server.open && !w.has("home-old") && !w.has("home-config"));
+}
+
+#[test]
+fn servers_are_brought_in_from_other_apps_and_streamer_mode_hides_them() {
+    let mut w = Window::open(false);
+    w.click("home-config");
+    assert!(w.tree().contains("Import from PuTTY"), "{}", w.tree());
+    // Streaming: the list shows neither the name nor the address.
+    w.rt.state.streamer.on = true;
+    w.click("add-from-putty");
+    let tree = w.tree();
+    assert!(tree.contains("Found 1 new server in PuTTY") && tree.contains("PuTTY isn't changed."), "{tree}");
+    assert!(tree.contains("1 server goes through another server or a proxy"), "{tree}");
+    assert!(!tree.contains("files-7731") && !tree.contains("198.51.100.70"), "{tree}");
+    w.rt.state.streamer.on = false;
+    w.click("add-import");
+    assert!(w.servers().contains(&"files-7731".to_owned()), "{:?}", w.servers());
+    assert!(w.tree().contains("Added 1 server from PuTTY."), "{}", w.tree());
+    // Offered no more.
+    assert!(!w.has("add-from-putty"));
 }
 
 // ---------------------------------------------------------------- a server's menu and card

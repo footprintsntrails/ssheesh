@@ -1,6 +1,7 @@
 //! "Add a server" (0.10's `AddServerDialog`, `ConfigImport` and `XpipeImport`): a form for one
 //! server typed by hand, and above it the places servers can be brought in from: 0.10's own
-//! list, `~/.ssh/config`, and XPipe's vault.
+//! list, `~/.ssh/config`, XPipe's vault, and other SSH apps' saved sessions (PuTTY, KiTTY,
+//! WinSCP, MobaXterm, FileZilla, SecureCRT, Remmina), each in the same pick list.
 //!
 //! ```text
 //! add-scrim    dims the window; the dialog is modal (Esc closes; a click outside doesn't,
@@ -574,9 +575,10 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
             let mut rows = col().key("add-sources").w_full().mx(-8.0);
             for (source, count) in offers {
                 let key = match source {
-                    Source::Old => "add-from-old",
-                    Source::SshConfig => "add-from-config",
-                    Source::Xpipe => "add-from-xpipe",
+                    Source::Old => "add-from-old".to_owned(),
+                    Source::SshConfig => "add-from-config".to_owned(),
+                    Source::Xpipe => "add-from-xpipe".to_owned(),
+                    Source::App(app) => format!("add-from-{}", app.key()),
                 };
                 let spec = ListRow { icon: Some(Icon::Plus), label: source.label(), note: &count, ..ListRow::default() };
                 rows = rows.child(list_row(t, &spec).key(key).hover(t.hov2).focusable(true).role("button").on_press_tx(move |s: &mut Shell, _| s.add_server_list(source)));

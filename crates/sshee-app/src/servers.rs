@@ -467,6 +467,85 @@ pub enum Source {
     Xpipe,
     /// The servers 0.10 saved, with their labels and looks.
     Old,
+    /// Another SSH app's saved sessions (PuTTY, WinSCP…).
+    App(App),
+}
+
+/// Another SSH app on this computer whose saved servers can be brought in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum App {
+    Putty,
+    Kitty,
+    WinScp,
+    MobaXterm,
+    FileZilla,
+    SecureCrt,
+    Remmina,
+}
+
+impl App {
+    /// The app's own name, as it writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            App::Putty => "PuTTY",
+            App::Kitty => "KiTTY",
+            App::WinScp => "WinSCP",
+            App::MobaXterm => "MobaXterm",
+            App::FileZilla => "FileZilla",
+            App::SecureCrt => "SecureCRT",
+            App::Remmina => "Remmina",
+        }
+    }
+
+    /// A word for keys in the window (`add-from-putty`).
+    pub fn key(self) -> &'static str {
+        match self {
+            App::Putty => "putty",
+            App::Kitty => "kitty",
+            App::WinScp => "winscp",
+            App::MobaXterm => "mobaxterm",
+            App::FileZilla => "filezilla",
+            App::SecureCrt => "securecrt",
+            App::Remmina => "remmina",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            App::Putty => "Import from PuTTY",
+            App::Kitty => "Import from KiTTY",
+            App::WinScp => "Import from WinSCP",
+            App::MobaXterm => "Import from MobaXterm",
+            App::FileZilla => "Import from FileZilla",
+            App::SecureCrt => "Import from SecureCRT",
+            App::Remmina => "Import from Remmina",
+        }
+    }
+
+    fn promise(self) -> &'static str {
+        match self {
+            App::Putty => "Pick the ones to add. PuTTY isn't changed.",
+            App::Kitty => "Pick the ones to add. KiTTY isn't changed.",
+            App::WinScp => "Pick the ones to add. WinSCP isn't changed.",
+            App::MobaXterm => "Pick the ones to add. MobaXterm isn't changed.",
+            App::FileZilla => "Pick the ones to add. FileZilla isn't changed.",
+            App::SecureCrt => "Pick the ones to add. SecureCRT isn't changed.",
+            App::Remmina => "Pick the ones to add. Remmina isn't changed.",
+        }
+    }
+}
+
+/// What another app offers: its servers not here yet, and what stays out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppOffer {
+    pub app: App,
+    pub servers: Vec<Candidate>,
+    /// Its servers that are here already.
+    pub here: usize,
+    /// Reached through another server or a proxy, which SSHeesh can't set yet.
+    pub through_jump: usize,
+    /// Signed in with a PuTTY key (`.ppk`) OpenSSH can't read: they come without it.
+    pub ppk_keys: usize,
 }
 
 impl Source {
@@ -476,6 +555,7 @@ impl Source {
             Source::SshConfig => "From ~/.ssh/config",
             Source::Xpipe => "Import from XPipe",
             Source::Old => "Bring over your servers from 0.10",
+            Source::App(app) => app.label(),
         }
     }
 
@@ -485,6 +565,7 @@ impl Source {
             Source::SshConfig => "Choose which ones show up in SSHeesh. Your config file isn't changed.",
             Source::Xpipe => "Pick the ones to add. XPipe isn't changed.",
             Source::Old => "Pick the ones to add, with their labels and icons. SSHeesh 0.10 keeps its own list.",
+            Source::App(app) => app.promise(),
         }
     }
 }
@@ -493,7 +574,7 @@ impl Source {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Candidate {
     /// What names it within its source: a host id for `~/.ssh/config` and 0.10, the address
-    /// for XPipe.
+    /// for XPipe and the other apps.
     pub id: String,
     pub name: String,
     pub address: String,
@@ -519,6 +600,8 @@ pub struct Sources {
     pub xpipe_locked: usize,
     pub xpipe_through_jump: usize,
     pub old: Vec<Candidate>,
+    /// The other SSH apps that have servers, in a steady order.
+    pub apps: Vec<AppOffer>,
     /// Servers here, brought over from 0.10, whose password 0.10 keeps in its keychain and
     /// this copy doesn't have: what "Use 0.10's saved passwords" would bring over.
     pub old_passwords: usize,
@@ -552,7 +635,13 @@ impl Sources {
             Source::SshConfig => &self.config,
             Source::Xpipe => &self.xpipe,
             Source::Old => &self.old,
+            Source::App(app) => self.app(app).map_or(&[], |o| &o.servers),
         }
+    }
+
+    /// What one other app offers.
+    pub fn app(&self, app: App) -> Option<&AppOffer> {
+        self.apps.iter().find(|o| o.app == app)
     }
 
     /// The sources worth a row in "Add a server", each with how many it offers.
@@ -567,6 +656,9 @@ impl Sources {
         if !self.xpipe.is_empty() {
             out.push((Source::Xpipe, plural(self.xpipe.len(), "new server", "new servers")));
         }
+        for offer in self.apps.iter().filter(|o| !o.servers.is_empty()) {
+            out.push((Source::App(offer.app), plural(offer.servers.len(), "new server", "new servers")));
+        }
         out
     }
 
@@ -577,6 +669,7 @@ impl Sources {
             Source::SshConfig => "Servers from ~/.ssh/config".into(),
             Source::Xpipe => format!("Found {} in XPipe", plural(n, "new server", "new servers")),
             Source::Old => format!("Found {} in SSHeesh 0.10", plural(n, "server", "servers")),
+            Source::App(app) => format!("Found {} in {}", plural(n, "new server", "new servers"), app.name()),
         }
     }
 
@@ -605,6 +698,33 @@ impl Sources {
                 notes.push("Passwords stay in XPipe: a server that needs one asks the first time.".into());
                 notes
             }
+            Source::App(app) => {
+                let Some(offer) = self.app(app) else { return vec![] };
+                let mut notes = Vec::new();
+                if offer.here > 0 {
+                    notes.push(format!("{} in SSHeesh already.", plural(offer.here, "server is", "servers are")));
+                }
+                if offer.through_jump > 0 {
+                    let n = offer.through_jump;
+                    notes.push(format!(
+                        "{} through another server or a proxy, which SSHeesh can't do yet, so {} out.",
+                        plural(n, "server goes", "servers go"),
+                        if n == 1 { "it stays" } else { "they stay" }
+                    ));
+                }
+                if offer.ppk_keys > 0 {
+                    let n = offer.ppk_keys;
+                    notes.push(format!(
+                        "{} a PuTTY key (.ppk), which SSHeesh can't use, so {} without it. PuTTYgen makes an OpenSSH copy: Conversions, then Export OpenSSH key.",
+                        plural(n, "server signs in with", "servers sign in with"),
+                        if n == 1 { "it comes" } else { "they come" }
+                    ));
+                }
+                if offer.servers.iter().any(|c| c.had_password) {
+                    notes.push(format!("Saved passwords stay in {}: a server that needs one asks the first time.", app.name()));
+                }
+                notes
+            }
         }
     }
 }
@@ -624,6 +744,7 @@ pub fn imported_note(source: Source, added: usize, failed: &[String], with_passw
         Source::SshConfig => return format!("{} from ~/.ssh/config.", plural(added, "server shows", "servers show")),
         Source::Xpipe => "XPipe",
         Source::Old => "SSHeesh 0.10",
+        Source::App(app) => app.name(),
     };
     let mut note = format!("Added {} from {from}.", plural(added, "server", "servers"));
     if !failed.is_empty() {
@@ -898,11 +1019,18 @@ impl Book {
                 Answer::Imported { source: Source::SshConfig, note: imported_note(Source::SshConfig, picks.len(), &[], 0), old_passwords: 0 }
             }
             Ask::Import { source, picks, .. } => {
-                let pool = if source == Source::Xpipe { &mut self.sources.xpipe } else { &mut self.sources.old };
+                let (pool, here) = match source {
+                    Source::Xpipe => (&mut self.sources.xpipe, Some(&mut self.sources.xpipe_here)),
+                    Source::App(app) => match self.sources.apps.iter_mut().find(|o| o.app == app) {
+                        Some(o) => (&mut o.servers, Some(&mut o.here)),
+                        None => return Answer::Failed(format!("{} has no servers to add.", app.name())),
+                    },
+                    _ => (&mut self.sources.old, None),
+                };
                 let (chosen, left): (Vec<Candidate>, Vec<Candidate>) = std::mem::take(pool).into_iter().partition(|c| picks.contains(&c.id));
                 *pool = left;
-                if source == Source::Xpipe {
-                    self.sources.xpipe_here += chosen.len();
+                if let Some(here) = here {
+                    *here += chosen.len();
                 }
                 let with_password = chosen.iter().filter(|c| c.had_password).count();
                 for c in &chosen {
@@ -1145,6 +1273,45 @@ mod tests {
             "Added 2 servers from SSHeesh 0.10. Couldn't add db-main. 1 server will ask for a password the first time."
         );
         assert_eq!(imported_note(Source::SshConfig, 3, &[], 0), "3 servers show from ~/.ssh/config.");
+    }
+
+    #[test]
+    fn other_apps_are_offered_and_brought_in_like_xpipe() {
+        let c = |name: &str, had_password: bool| Candidate { id: format!("root@{name}"), name: name.into(), address: format!("root@{name}"), had_password, picked: true, ..Candidate::default() };
+        let putty = AppOffer { app: App::Putty, servers: vec![c("web-7731", false), c("db-7731", false)], here: 1, through_jump: 1, ppk_keys: 2 };
+        let winscp = AppOffer { app: App::WinScp, servers: vec![c("files-7731", true)], here: 0, through_jump: 0, ppk_keys: 0 };
+        // An app with nothing new gets no row.
+        let empty = AppOffer { app: App::Remmina, servers: vec![], here: 3, through_jump: 0, ppk_keys: 0 };
+        let sources = Sources { apps: vec![putty, winscp, empty], ..Sources::default() };
+        assert_eq!(
+            sources.offers(),
+            [(Source::App(App::Putty), "2 new servers".to_owned()), (Source::App(App::WinScp), "1 new server".to_owned())]
+        );
+        assert_eq!(Source::App(App::Putty).label(), "Import from PuTTY");
+        assert_eq!(Source::App(App::WinScp).promise(), "Pick the ones to add. WinSCP isn't changed.");
+        assert_eq!(sources.title(Source::App(App::Putty)), "Found 2 new servers in PuTTY");
+        assert_eq!(
+            sources.notes(Source::App(App::Putty)),
+            [
+                "1 server is in SSHeesh already.",
+                "1 server goes through another server or a proxy, which SSHeesh can't do yet, so it stays out.",
+                "2 servers sign in with a PuTTY key (.ppk), which SSHeesh can't use, so they come without it. PuTTYgen makes an OpenSSH copy: Conversions, then Export OpenSSH key.",
+            ]
+        );
+        assert_eq!(sources.notes(Source::App(App::WinScp)), ["Saved passwords stay in WinSCP: a server that needs one asks the first time."]);
+        assert!(sources.of(Source::App(App::FileZilla)).is_empty());
+
+        let mut book = Book::new(vec![], Looks::default(), sources);
+        let answer = book.handle(Ask::Import { source: Source::App(App::WinScp), picks: vec!["root@files-7731".into()], offered: vec!["root@files-7731".into()] });
+        assert_eq!(
+            answer,
+            Answer::Imported { source: Source::App(App::WinScp), note: "Added 1 server from WinSCP. 1 server will ask for a password the first time.".into(), old_passwords: 0 }
+        );
+        assert_eq!(book.servers().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["files-7731"]);
+        let Answer::Sources(after) = book.handle(Ask::Sources) else { panic!() };
+        assert_eq!(after.offers(), [(Source::App(App::Putty), "2 new servers".to_owned())]);
+        assert_eq!(after.app(App::WinScp).map(|o| o.here), Some(1));
+        assert!(matches!(book.handle(Ask::Import { source: Source::App(App::Kitty), picks: vec![], offered: vec![] }), Answer::Failed(_)));
     }
 
     #[test]
