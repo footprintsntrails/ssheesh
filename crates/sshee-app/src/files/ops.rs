@@ -108,6 +108,35 @@ pub fn drop_folder(dir: &str, dragged: &[String], on: DropOn<'_>) -> Option<Stri
     }
 }
 
+/// Whether rows of the folder `dir` (their full paths, `dragged`) may move into `folder` on
+/// the same machine: not into the folder they're in, and a folder never into itself or into a
+/// folder of its own (0.10's `dropFor`). For drops that aren't on a row of the same list: a
+/// folder of the path, another Files tab's folder or a row there.
+pub fn may_move_into(dir: &str, dragged: &[String], folder: &str) -> bool {
+    let trimmed = |p: &str| if p.len() > 1 { p.trim_end_matches('/').to_owned() } else { p.to_owned() };
+    let folder = trimmed(folder);
+    if dragged.is_empty() || folder == trimmed(dir) {
+        return false;
+    }
+    !dragged.iter().map(|p| trimmed(p)).any(|p| folder == p || folder.starts_with(&format!("{}/", p.trim_end_matches('/'))))
+}
+
+/// Before rows dragged out of the window download (0.10.14): letting go out there is easy to do
+/// by accident, so it asks, naming where they'll land. `into` is the folder under the pointer
+/// when the system said (the desktop, a folder's window), else they go to Downloads. A folder
+/// on this computer may be split by "\" (Windows).
+pub fn download_out_question(names: &[&str], server: &str, into: Option<&str>) -> Confirm {
+    let place = into.map(|p| {
+        let p = p.trim_end_matches(['/', '\\']);
+        p.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(p).to_owned()
+    });
+    let body = match into {
+        Some(into) => format!("From {server}, into {into}. Nothing there is replaced."),
+        None => format!("From {server}, into your Downloads folder."),
+    };
+    Confirm { title: format!("Download {} to {}?", what(names), place.as_deref().unwrap_or("Downloads")), body, lines: Vec::new(), confirm_label: "Download", danger: false }
+}
+
 /// "Undo" on the note after a move: moves `names` from `from` back into `to`, on the machine
 /// the move was made on, whatever tab is on screen when it's pressed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,6 +522,31 @@ mod tests {
         assert_eq!(drop_folder("/home", &dragged, DropOn::UpRow), Some("/".into()));
         assert_eq!(drop_folder("/", &dragged, DropOn::UpRow), None);
         assert_eq!(drop_folder("/home/deploy", &[], DropOn::Row(&shop)), None);
+    }
+
+    #[test]
+    fn rows_move_into_any_folder_but_their_own_and_their_insides() {
+        let dragged = names(&["/home/deploy/shop", "/home/deploy/notes.md"]);
+        assert!(may_move_into("/home/deploy", &dragged, "/home"));
+        assert!(may_move_into("/home/deploy", &dragged, "/"));
+        assert!(may_move_into("/home/deploy", &dragged, "/home/deploy/logs"));
+        assert!(!may_move_into("/home/deploy", &dragged, "/home/deploy"), "where they are");
+        assert!(!may_move_into("/home/deploy", &dragged, "/home/deploy/"), "where they are");
+        assert!(!may_move_into("/home/deploy", &dragged, "/home/deploy/shop"), "a folder into itself");
+        assert!(!may_move_into("/home/deploy", &dragged, "/home/deploy/shop/assets"), "into its own folder");
+        assert!(may_move_into("/home/deploy", &dragged, "/home/deploy/shopping"), "only a whole name is the same folder");
+        assert!(!may_move_into("/home/deploy", &[], "/srv"));
+    }
+
+    #[test]
+    fn dragging_out_asks_where_it_lands() {
+        let q = download_out_question(&["shop-db.sql.gz"], "web-7731", Some("C:\\Users\\dev\\Desktop"));
+        assert_eq!(q.title, "Download “shop-db.sql.gz” to Desktop?");
+        assert_eq!(q.body, "From web-7731, into C:\\Users\\dev\\Desktop. Nothing there is replaced.");
+        assert_eq!((q.confirm_label, q.danger), ("Download", false));
+        let q = download_out_question(&["a", "b"], "web-7731", None);
+        assert_eq!((q.title.as_str(), q.body.as_str()), ("Download 2 items to Downloads?", "From web-7731, into your Downloads folder."));
+        assert_eq!(download_out_question(&["a"], "web-7731", Some("/home/dev/Desktop/")).title, "Download “a” to Desktop?");
     }
 
     #[test]

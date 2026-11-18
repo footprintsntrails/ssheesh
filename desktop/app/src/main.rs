@@ -136,6 +136,10 @@ impl Backend for Live {
         self.inner.files(ask);
     }
 
+    fn folder_under_pointer(&mut self) -> Option<std::path::PathBuf> {
+        self.inner.folder_under_pointer()
+    }
+
     fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
         self.inner.edit(ask);
     }

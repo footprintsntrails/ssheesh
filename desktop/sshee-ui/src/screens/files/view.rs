@@ -78,11 +78,47 @@ pub enum After {
     Up,
 }
 
-/// Where dragged rows are: over a row of the list, or over "..".
+/// What dragged rows are over in a Files tab: a row of its list, "..", a folder of its path,
+/// or the list itself (the folder it shows).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Over {
     Row(usize),
     UpRow,
+    Crumb(usize),
+    List,
+}
+
+/// Where dragged rows would land if let go now (0.10's `dropFor`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Landing {
+    /// Into the folder `to` on their own machine, shown by Files tab `tab` (theirs, or another
+    /// on the same machine), which lights up `over`.
+    Move { tab: TabId, over: Over, to: String },
+    /// Copied into the folder `to` of another server, shown by Files tab `tab`.
+    Copy { tab: TabId, over: Over, server: String, to: String },
+    /// Past the window's edge: a server's files download to this computer.
+    Out,
+}
+
+impl Landing {
+    /// What lights up in Files tab `tab`.
+    fn lights(&self, tab: TabId) -> Option<Over> {
+        match self {
+            Landing::Move { tab: t, over, .. } | Landing::Copy { tab: t, over, .. } if *t == tab => Some(*over),
+            _ => None,
+        }
+    }
+}
+
+/// Rows being dragged out of their list.
+pub struct Dragging {
+    names: Vec<String>,
+    /// Where letting go now puts them; `None`: nowhere.
+    landing: Option<Landing>,
+    /// The pointer, in the window's points: the card flies with it.
+    at: [f32; 2],
+    /// The row the drag started on is a folder (the card shows one).
+    folder: bool,
 }
 
 /// How far the pointer travels before a press on a row is a drag.
@@ -97,6 +133,9 @@ pub enum Pending {
     /// These rows of `dir` on `server`: where they were when the question was asked.
     Delete { server: String, dir: String, names: Vec<String> },
     Discard(After),
+    /// Rows of `dir` on `server` dragged out of the window: downloaded into `into` (the folder
+    /// under the pointer when they were let go), or Downloads.
+    DownloadOut { server: String, dir: String, names: Vec<String>, into: Option<std::path::PathBuf> },
 }
 
 /// A context menu that is open: where, and for which row (`None`: the folder itself).
@@ -118,11 +157,9 @@ pub struct Ui {
     naming: Option<(Naming, TextEdit)>,
     menu: Option<Menu>,
     confirm: Option<(Confirm, Pending)>,
-    /// Rows being dragged to a folder of this list, and the row under the pointer when they
-    /// may be dropped there (`None`: nowhere they could go).
-    dragging: Option<(Vec<String>, Option<Over>)>,
-    /// Those rows are past the window's edge: letting go downloads them (0.10.13).
-    out: bool,
+    /// Rows of this list being dragged: onto a folder they move there, onto another server's
+    /// Files they're copied there, past the window's edge they download (0.10.13).
+    dragging: Option<Dragging>,
     /// The folder row files from another app are dragged over (`super::dropped` into it).
     drop_row: Option<usize>,
     /// The bookmarks are open.
@@ -160,7 +197,6 @@ impl Default for Ui {
             menu: None,
             confirm: None,
             dragging: None,
-            out: false,
             drop_row: None,
             places: false,
             last_menu_at: [0.0, 0.0],
@@ -188,6 +224,14 @@ impl Ui {
         self.naming = None;
         self.menu = None;
         self.dragging = None;
+        self.path_edit = None;
+    }
+
+    /// The address bar as a field, while it has the keyboard. A click anywhere else takes the
+    /// keyboard from it (Rune clears `focused`), and from then on the path shows as folders
+    /// again, as a browser's address bar does when it loses focus.
+    pub(super) fn typing_path(&self) -> Option<&TextEdit> {
+        self.path_edit.as_ref().filter(|e| e.focused)
     }
 
     /// What a yes to the question on screen would do.
@@ -301,6 +345,9 @@ pub(super) fn answer_confirm(s: &mut Shell, tab: TabId, yes: bool) {
             }
         }
         Pending::Discard(after) if yes => run_after(s, tab, after),
+        Pending::DownloadOut { server, dir, names, into } if yes && s.screens.files.get(&tab).is_some_and(|st| st.browser.server() == server) => {
+            super::download_to(s, tab, &dir, &names, into);
+        }
         _ => {}
     }
 }
@@ -477,78 +524,202 @@ fn open_menu(s: &mut Shell, tab: TabId, clicked: Option<&str>, at: PointerPress,
     tx.instant();
 }
 
-/// The row an element under the pointer belongs to.
-fn over(picked: Option<&Picked>) -> Option<Over> {
-    picked?.path().split('/').find_map(|part| match part {
+/// The Files tab and what of it an element under the pointer belongs to.
+fn over(picked: &Picked) -> Option<(TabId, Over)> {
+    let parts: Vec<&str> = picked.path().split('/').collect();
+    let tab = parts.iter().find_map(|p| p.strip_prefix("files-tab-")?.parse().ok()).map(TabId)?;
+    let over = parts.iter().rev().find_map(|part| match *part {
         "files-up-row" => Some(Over::UpRow),
-        _ => part.strip_prefix("row-")?.parse().ok().map(Over::Row),
-    })
+        "files-list" => Some(Over::List),
+        _ => part.strip_prefix("row-").and_then(|i| i.parse().ok()).map(Over::Row).or_else(|| part.strip_prefix("crumb-").and_then(|i| i.parse().ok()).map(Over::Crumb)),
+    })?;
+    Some((tab, over))
 }
 
-/// The folder `names` would move into when let go over `over`, if they may.
-fn drop_target(s: &Shell, tab: TabId, names: &[String], over: Over) -> Option<String> {
+/// Where rows `names` of Files tab `from` would land if let go at a point: past the window's
+/// edge (`outside`), or over `picked` in the page. Onto a folder of their own machine they
+/// move, in any Files tab; onto a folder of another server's Files they're copied; past the
+/// edge a server's files download.
+fn landing(s: &Shell, from: TabId, names: &[String], outside: bool, picked: Option<&Picked>) -> Option<Landing> {
+    let source = &s.screens.files.get(&from)?.browser;
+    if outside {
+        return (source.server() != "local").then_some(Landing::Out);
+    }
+    let (tab, over) = over(picked?)?;
     let b = &s.screens.files.get(&tab)?.browser;
-    let on = match over {
-        Over::Row(i) => DropOn::Row(b.row(i)?.entry),
-        Over::UpRow => DropOn::UpRow,
+    let to = match over {
+        // Rows of their own list: a folder that isn't one of them (`ops::drop_folder`).
+        Over::Row(i) if tab == from => ops::drop_folder(b.dir(), names, DropOn::Row(b.row(i)?.entry))?,
+        Over::UpRow if tab == from => ops::drop_folder(b.dir(), names, DropOn::UpRow)?,
+        Over::Row(i) => Some(b.row(i)?.entry).filter(|e| e.is_dir()).map(|e| b.path_of(&e.name))?,
+        Over::UpRow => paths::has_parent(b.dir()).then(|| paths::parent(b.dir()))?,
+        Over::Crumb(i) => paths::crumbs(b.dir()).into_iter().nth(i)?.path,
+        Over::List => b.dir().to_owned(),
     };
-    ops::drop_folder(b.dir(), names, on)
+    if b.server() == source.server() {
+        let dragged: Vec<String> = names.iter().map(|n| source.path_of(n)).collect();
+        ops::may_move_into(source.dir(), &dragged, &to).then_some(Landing::Move { tab, over, to })
+    } else {
+        // To a server; this computer's own Files take nothing from one.
+        (b.server() != "local").then(|| Landing::Copy { tab, over, server: b.server().to_owned(), to })
+    }
 }
 
-/// A press on a row that travels: the row (or the selection it's part of) is dragged, the
-/// folder under the pointer lights up, and letting go there moves them into it.
+/// Where a drag from any Files tab would land in Files tab `tab`, lit there.
+fn lit(s: &Shell, tab: TabId) -> Option<Over> {
+    s.screens.files.values().find_map(|st| st.ui.dragging.as_ref()?.landing.as_ref()?.lights(tab))
+}
+
+/// What's under window point (`x`, `y`) for dragged rows, handed to `then` with whether it's
+/// past the window's edge. Each Files tab on screen is looked into on its own: a server's
+/// coloured frame, cards and notes drawn over the page don't hide the folder under them.
+fn pick_under(s: &Shell, tx: &mut Tx, x: f32, y: f32, then: impl FnOnce(&mut Shell, bool, Option<Picked>) + 'static) {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    let outside = Rc::new(Cell::new(false));
+    let found: Rc<RefCell<Option<Picked>>> = Rc::default();
+    let seen = outside.clone();
+    tx.element_at(x, y, move |_: &mut Shell, picked, _| seen.set(picked.is_none()));
+    for id in s.bench.on_screen().into_iter().filter(|id| s.screens.files.contains_key(id)) {
+        let found = found.clone();
+        tx.element_at_in(format!("files-tab-{}", id.0), x, y, move |_: &mut Shell, picked, _| {
+            if let Some(picked) = picked {
+                found.borrow_mut().get_or_insert(picked);
+            }
+        });
+    }
+    // Read after the ones above: what they found.
+    tx.element_at(x, y, move |s: &mut Shell, _, tx| {
+        then(s, outside.get(), found.take());
+        tx.instant();
+    });
+}
+
+/// A press on a row that travels: the row (or the selection it's part of) is dragged, a card
+/// with it flies with the pointer, the folder under it lights up, and letting go there moves
+/// them into it (or copies them, to another server's Files). Past the window's edge, a
+/// server's files download, after a question naming where.
 fn drag(s: &mut Shell, tab: TabId, name: &str, d: &mut Drag, tx: &mut Tx) {
     let [x, y] = d.window_point();
     match d.phase {
         Phase::Down => {}
         Phase::Move => {
-            if d.dx.hypot(d.dy) < DRAG_FROM {
+            if d.dx.hypot(d.dy) < DRAG_FROM && ui(s, tab).is_some_and(|ui| ui.dragging.is_none()) {
                 return;
             }
             let names = targets(s, tab, name);
-            // Nothing of the window under the pointer: it's outside.
-            tx.element_at(x, y, move |s: &mut Shell, picked, tx| {
+            let folder = s.screens.files.get(&tab).and_then(|st| st.browser.entry(name)).is_some_and(|e| e.is_dir());
+            pick_under(s, tx, x, y, move |s, outside, picked| {
+                let landing = landing(s, tab, &names, outside, picked.as_ref());
                 if let Some(ui) = ui(s, tab) {
-                    ui.out = picked.is_none();
+                    ui.dragging = Some(Dragging { names, landing, at: [x, y], folder });
                 }
-                tx.instant();
-            });
-            tx.element_at_in("files-list", x, y, move |s: &mut Shell, picked, tx| {
-                let to = over(picked.as_ref()).filter(|o| drop_target(s, tab, &names, *o).is_some());
-                if let Some(ui) = ui(s, tab) {
-                    ui.dragging = Some((names, to));
-                }
-                tx.instant();
             });
         }
         Phase::Up => {
-            let Some((names, _)) = ui(s, tab).and_then(|ui| {
-                ui.out = false;
-                ui.dragging.take()
-            }) else {
-                return;
-            };
+            let Some(dragging) = ui(s, tab).and_then(|ui| ui.dragging.take()) else { return };
             if d.cancelled() {
+                tx.instant();
                 return;
             }
-            // Let go outside the window: a server's files download there (0.10.13). The
-            // pointer is the window's while the button is held, so its place is known.
-            let out = names.clone();
-            tx.element_at(x, y, move |s: &mut Shell, picked, tx| {
-                if picked.is_none() {
-                    super::download_here(s, tab, &out);
-                }
-                tx.instant();
-            });
-            tx.element_at_in("files-list", x, y, move |s: &mut Shell, picked, tx| {
-                if let Some(to) = over(picked.as_ref()).and_then(|o| drop_target(s, tab, &names, o)) {
-                    super::move_into(s, tab, &names, &to);
-                }
-                tx.instant();
+            let names = dragging.names;
+            pick_under(s, tx, x, y, move |s, outside, picked| match landing(s, tab, &names, outside, picked.as_ref()) {
+                Some(Landing::Move { to, .. }) => super::move_into(s, tab, &names, &to),
+                Some(Landing::Copy { server, to, .. }) => super::copy_dragged(s, tab, &names, &server, &to),
+                Some(Landing::Out) => ask_download_out(s, tab, names),
+                None => {}
             });
         }
     }
     tx.instant();
+}
+
+/// Rows let go outside the window (0.10.14). Where the system can say which folder is under
+/// the pointer (asked at once: the pointer moves on while the question is up) they go there,
+/// else into Downloads; it asks first, since letting go out there is easy to do by accident.
+fn ask_download_out(s: &mut Shell, tab: TabId, names: Vec<String>) {
+    let into = s.backend_mut().folder_under_pointer();
+    let Some(state) = s.screens.files.get(&tab).filter(|st| st.browser.server() != "local") else { return };
+    let (server, dir) = (state.browser.server().to_owned(), state.browser.dir().to_owned());
+    let name = server_name(s, &server);
+    let shown: Vec<&str> = names.iter().map(String::as_str).collect();
+    let where_to = into.as_ref().map(|p| p.to_string_lossy().into_owned());
+    let question = ops::download_out_question(&shown, &name, where_to.as_deref());
+    if let Some(ui) = ui(s, tab) {
+        ui.confirm = Some((question, Pending::DownloadOut { server, dir, names, into }));
+    }
+}
+
+/// A server's name as the window shows it (dots while streaming).
+fn server_name(s: &Shell, key: &str) -> String {
+    s.bench.server(key).map(|sv| s.server_shown(key, &sv.name).into_owned()).unwrap_or_else(|| key.to_owned())
+}
+
+/// What letting go does now, for the card that flies with the pointer and the line under the
+/// list (0.10's wording).
+fn landing_text(s: &Shell, d: &Dragging, from_server: bool) -> String {
+    match &d.landing {
+        Some(Landing::Move { to, .. }) => {
+            let folder = match paths::name(to) {
+                "" => "/",
+                name => name,
+            };
+            format!("Move to {}", s.text_shown(folder))
+        }
+        Some(Landing::Copy { server, .. }) => format!("Copy to {}", server_name(s, server)),
+        Some(Landing::Out) => "Let go to download".to_owned(),
+        None if from_server => "To a folder, or out to download".to_owned(),
+        None => "To a folder to move it".to_owned(),
+    }
+}
+
+/// The card that flies with the pointer while rows are dragged: a folder or a file, how many,
+/// and what letting go would do. It lets the pointer through, so what's under it still counts.
+fn drag_card(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
+    let state = s.screens.files.get(&id)?;
+    let d = state.ui.dragging.as_ref()?;
+    if d.landing == Some(Landing::Out) {
+        return Some(out_hint(s, d, t));
+    }
+    let what = if let [one] = d.names.as_slice() { s.text_shown(one).into_owned() } else { format!("{} items", d.names.len()) };
+    let ok = d.landing.is_some();
+    let glyph = if d.folder { Icon::Folder } else { Icon::Doc };
+    let mut badge = el().size(30.0, 30.0).radius(8.0).fill(t.blue.alpha(0.14)).items_center().justify_center().child(icon(glyph, 16.0, t.blue));
+    if d.names.len() > 1 {
+        badge = badge.child(el().pin(None, Some(-5.0), Some(-5.0), None).h(16.0).min_w(16.0).px(4.0).radius(8.0).fill(t.blue).items_center().justify_center().child(text(d.names.len().to_string()).font(theme::SMALL).color(t.on_color).single_line()));
+    }
+    let card = popover(t, 230.0)
+        .key("files-drag-card")
+        .absolute(d.at[0] + 12.0, d.at[1] + 14.0)
+        .padding(8.0)
+        .child(
+            row().w_full().gap(10.0).items_center().child(badge).child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(1.0)
+                    .child(text(what).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate())
+                    .child(text(landing_text(s, d, super::on_server(s, id))).key("files-drag-does").font(theme::NOTE).color(if ok { t.blue } else { t.l2 }).single_line().truncate()),
+            ),
+        )
+        .inert();
+    Some(card)
+}
+
+/// Past the window's edge the card can't follow: the window says what letting go does, and
+/// where it lands.
+fn out_hint(s: &Shell, d: &Dragging, t: &'static Theme) -> El {
+    let what = if let [one] = d.names.as_slice() { s.text_shown(one).into_owned() } else { format!("{} items", d.names.len()) };
+    let lands = if cfg!(windows) { "Over the desktop or a folder's window it lands there; anywhere else, in Downloads." } else { "It lands in your Downloads folder." };
+    let card = popover(t, 320.0)
+        .key("files-drag-out")
+        .padding(20.0)
+        .gap(6.0)
+        .items_center()
+        .child(el().size(54.0, 54.0).radius(14.0).fill(t.blue.alpha(0.14)).items_center().justify_center().child(icon(Icon::Download, 26.0, t.blue)))
+        .child(text(format!("Let go to download {what}")).font(theme::TITLE).color(t.l1).single_line().truncate().max_w(280.0))
+        .child(text(lands).font(theme::NOTE).color(t.l2).wrap().align(Align::Center).max_w(280.0));
+    el().key("files-drag-out-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.blue.alpha(0.06)).border(2.0, t.blue.alpha(0.6)).items_center().justify_center().child(card).inert()
 }
 
 /// The row a move landed on comes into view.
@@ -570,7 +741,7 @@ pub fn key(s: &mut Shell, ev: &KeyEvent, tx: &mut Tx) -> bool {
         save(s, tab);
         return true;
     }
-    if state.ui.naming.is_some() || state.ui.draft.focused || state.ui.filter.focused || state.ui.path_edit.is_some() || state.ui.confirm.is_some() || state.ui.menu.is_some() || state.replace.is_some() || state.paste.is_some() || state.copy.is_some() {
+    if state.ui.naming.is_some() || state.ui.draft.focused || state.ui.filter.focused || state.ui.typing_path().is_some() || state.ui.confirm.is_some() || state.ui.menu.is_some() || state.replace.is_some() || state.paste.is_some() || state.copy.is_some() {
         return false;
     }
     if state.ui.places {
@@ -776,7 +947,7 @@ fn go_typed(s: &mut Shell, tab: TabId, tx: &mut Tx) {
 fn address_bar(s: &Shell, id: TabId, t: &'static Theme) -> El {
     let Some(state) = s.screens.files.get(&id) else { return el() };
     let well = |inner: El| row().key("files-address").grow(1.0).min_w(0.0).h(26.0).ml(4.0).radius(7.0).fill(t.code).items_center().child(inner);
-    if let Some(edit) = &state.ui.path_edit {
+    if let Some(edit) = state.ui.typing_path() {
         let input = text_input(edit, theme::CODE)
             .key("files-path-field")
             .single_line()
@@ -808,6 +979,10 @@ fn address_bar(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
         let (ink, font) = if i == last { (t.l1, TextStyle::new(12.0, 500.0).mono()) } else { (t.l2on, theme::CODE) };
         let mut crumb = el().key(format!("crumb-{i}")).h(22.0).px(4.0).radius(5.0).gap(4.0).items_center().hover(t.hov2).press(t.down).role("button");
+        // Rows dragged over a folder of the path move there.
+        if lit(s, id) == Some(Over::Crumb(i)) {
+            crumb = crumb.fill(t.blue.alpha(0.15)).border(1.5, t.blue.alpha(0.7));
+        }
         // The start of the path draws as what it is: the disk, or home.
         crumb = match (root, c.label.as_str()) {
             (true, "/") => crumb.label_static("Top of the disk").child(icon(Icon::Drive, 13.0, t.l2on)),
@@ -818,7 +993,9 @@ fn address_bar(s: &Shell, id: TabId, t: &'static Theme) -> El {
             // The first slash looks like the way to the top, so it is one.
             crumb = crumb.child(text("/").font(theme::CODE).color(t.l2.alpha(0.6)).single_line().a11y_hidden());
         }
-        if i == last {
+        // The disk or home at the start always goes there, even when you're there already: it
+        // never turns the bar into a field (that's the folder you're in, or the space after).
+        if i == last && !root {
             crumb = crumb.help("Type a path").on_press_tx(move |s: &mut Shell, tx| edit_path(s, id, tx));
         } else {
             let to = c.path.clone();
@@ -1007,12 +1184,12 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
         (true, false) => line.fill(t.hov2),
         _ => line.hover(t.hov),
     };
-    if let Some((names, to)) = &state.ui.dragging {
-        if *to == Some(Over::Row(i)) {
-            line = line.border(1.5, t.ring);
-        } else if names.contains(&e.name) {
-            line = line.opacity(0.45);
-        }
+    // Dragged rows: the folder they'd land in lights up (0.10's accent wash and ring), and the
+    // rows on their way dim.
+    if lit(s, id) == Some(Over::Row(i)) {
+        line = line.fill(t.blue.alpha(0.15)).border(1.5, t.blue.alpha(0.7));
+    } else if state.ui.dragging.as_ref().is_some_and(|d| d.names.contains(&e.name)) {
+        line = line.opacity(0.45);
     }
     line = line.child(icon(glyph_icon(glyph(e)), theme::ICON, if blue { t.on_color } else { t.l2on }));
     // », after a folder's name: what's inside, without going there. It follows the name, so
@@ -1249,7 +1426,7 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
             }
             tx.instant();
         });
-    if state.ui.drop_over {
+    if state.ui.drop_over || lit(s, id) == Some(Over::List) {
         rows = rows.border(2.0, t.ring).radius(theme::RADIUS);
     }
     if b.listing().is_none() {
@@ -1262,12 +1439,13 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
     } else {
         if b.has_up_row() {
-            let lit = matches!(&state.ui.dragging, Some((_, Some(Over::UpRow))));
+            let lit = lit(s, id) == Some(Over::UpRow);
             let above = paths::parent(b.dir());
             rows = rows.child(
                 list_row()
                     .key("files-up-row")
-                    .border(1.5, if lit { t.ring } else { t.ring.alpha(0.0) })
+                    .border(1.5, if lit { t.blue.alpha(0.7) } else { t.ring.alpha(0.0) })
+                    .fill(if lit { t.blue.alpha(0.15) } else { t.blue.alpha(0.0) })
                     .hover(t.hov)
                     .role("row")
                     .label_static("The folder above")
@@ -1322,16 +1500,7 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
     }
     foot = foot.child(spacer());
-    let moving = state.ui.dragging.as_ref().map(|(names, to)| {
-        let what = if let [one] = names.as_slice() { one.clone() } else { format!("{} items", names.len()) };
-        if state.ui.out && super::on_server(s, id) {
-            format!("Let go to download {what}")
-        } else if to.is_some() {
-            format!("Let go to move {what} here")
-        } else {
-            format!("Drag {what} onto a folder to move it there, or out of the window to download it")
-        }
-    });
+    let moving = state.ui.dragging.as_ref().map(|d| landing_text(s, d, super::on_server(s, id)));
     let dropping = state.ui.drop_over.then(|| if super::on_server(s, id) { "Drop to upload here" } else { "Drop to copy here" });
     if let Some(busy) = dropping.or(moving.as_deref()).or(state.busy.as_deref()).or(b.is_loading().then_some("Loading…")) {
         foot = foot.child(text(busy).key("files-busy").font(theme::STATUS).color(t.l2on).single_line().truncate().shrink().min_w(0.0));
@@ -1552,7 +1721,9 @@ fn save(s: &mut Shell, tab: TabId) {
 /// A Files tab's page.
 pub fn page(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     let id = tab.id;
-    let Some(state) = s.screens.files.get(&id) else { return col().key("files").w_full().h_full() };
+    // Keyed by the tab: rows dragged over it know whose they are (`over`).
+    let key = format!("files-tab-{}", id.0);
+    let Some(state) = s.screens.files.get(&id) else { return col().key(key).w_full().h_full() };
     let width = pane_width(state);
     let beside = layout::preview_width(width, wanted_preview(s, state));
     let mut body = row().key("files-body").w_full().grow(1.0).min_h(0.0);
@@ -1562,7 +1733,7 @@ pub fn page(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
         (Some(open), Some(_)) => body = body.child(list(s, id, t)).child(grip(t, id)).child(open),
         (None, _) => body = body.child(list(s, id, t)),
     }
-    col().key("files").w_full().h_full().child(toolbar(s, id, t, width)).child(body).on_layout(move |s: &mut Shell, rect: [f32; 4]| {
+    col().key(key).w_full().h_full().child(toolbar(s, id, t, width)).child(body).on_layout(move |s: &mut Shell, rect: [f32; 4]| {
         if let Some(st) = s.screens.files.get_mut(&id) {
             st.ui.width = rect[2];
         }
@@ -1620,6 +1791,9 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
 /// [`overlay`] for Files tab `id`: `None` when nothing of it is open over the window.
 fn tab_overlay(s: &Shell, id: TabId, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let state = s.screens.files.get(&id)?;
+    if let Some(card) = drag_card(s, id, t) {
+        return Some(card);
+    }
     if let Some(q) = state.ui.confirm.as_ref().map(|(q, _)| shown(s, q)) {
         let answer = move |yes: bool| {
             move |s: &mut Shell, tx: &mut Tx| {

@@ -67,10 +67,10 @@ pub enum Want {
     Move { from: String, names: Vec<String>, to: String },
     /// Downloads into this computer's Downloads folder, one after another, under one card.
     Download { id: TransferId, items: Vec<Item> },
-    /// [`Want::Download`] for rows dragged out of the window: into the folder under the
-    /// pointer on this computer's screen where the system says which (Windows: the desktop or
-    /// an Explorer window), else into Downloads.
-    DownloadHere { id: TransferId, items: Vec<Item> },
+    /// [`Want::Download`] into the folder `into` on this computer: rows dragged out of the
+    /// window and let go over it (the folder under the pointer, as the system said when they
+    /// were let go: Windows' desktop or an Explorer window). Downloads, if it's gone since.
+    DownloadInto { id: TransferId, items: Vec<Item>, into: PathBuf },
     /// Sends files and folders of this computer into `dir`. Without `overwrite`, nothing is
     /// sent if any name is taken there ([`super::FailureKind::Exists`]): the screen asks, and
     /// sends the same again with `overwrite`.
@@ -81,6 +81,9 @@ pub enum Want {
     CopyTo { id: TransferId, to: ServerKey, paths: Vec<String>, dir: String, overwrite: bool },
     /// Stops a transfer; its end still arrives, as [`super::FailureKind::Cancelled`].
     CancelTransfer { id: TransferId },
+    /// Lets go of the connection to the tab's server: the tab went unused off screen
+    /// ([`super::sleeps_now`]) and nothing else on the window uses it. No answer comes.
+    LetGo,
 }
 
 /// Why a save wrote nothing.

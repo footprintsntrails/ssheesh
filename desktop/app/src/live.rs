@@ -520,6 +520,10 @@ impl Backend for LiveBackend {
         self.files.ask_to(ask, target, prepare, to);
     }
 
+    fn folder_under_pointer(&mut self) -> Option<std::path::PathBuf> {
+        sshee_core::drop_folder::folder_under_pointer().filter(|d| d.is_dir())
+    }
+
     fn edit(&mut self, ask: sshee_app::files::edit::EditAsk) {
         self.edit.ask(ask, |host| self.reach(host));
     }

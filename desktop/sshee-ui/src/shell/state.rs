@@ -196,6 +196,13 @@ pub trait Backend {
         let _ = ask;
     }
 
+    /// The folder on this computer under the pointer, outside the window, where the system can
+    /// say (Windows: the desktop or an Explorer window): rows dragged out of Files and let go
+    /// there download into it. Asked the moment they're let go. `None`: into Downloads.
+    fn folder_under_pointer(&mut self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// A Containers tab asks for a look or a start, stop or restart. Done on a thread of its
     /// own; the answer comes back through [`Remote::containers`].
     fn containers(&mut self, ask: sshee_app::containers::Ask) {
