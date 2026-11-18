@@ -653,6 +653,16 @@ fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bo
     (own.min(if st.active { ACTIVE_TAB } else { MIN_TAB }) + 2.0, lead)
 }
 
+/// The tabs the row along the top holds: every machine's, or none while they are under each
+/// server in the sidebar (Settings → Layout → Where tabs go). Then the row is only "+", as
+/// 0.10's top bar had no strip at all.
+fn in_row(s: &Shell) -> Vec<StripTab<'_>> {
+    if s.bench.tabs_under_servers() {
+        return Vec::new();
+    }
+    s.bench.strip()
+}
+
 /// How the top row shares its room between the title and the tabs, decided once a frame from
 /// one measurement (the room the two share), so neither reacts to the other a frame late.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -682,27 +692,27 @@ fn tab_names(s: &Shell, strip: &[StripTab]) -> Vec<(String, String)> {
     strip.iter().map(|st| (s.text_shown(&sshee_app::agents::tab_label(st.tab)).into_owned(), s.server_shown(&st.tab.server, st.server_name).into_owned())).collect()
 }
 
-fn working(s: &Shell, st: &StripTab) -> bool {
-    s.screens.agent.working(st.tab.id)
+pub(crate) fn working(s: &Shell, tab: &sshee_app::workbench::Tab) -> bool {
+    s.screens.agent.working(tab.id)
 }
 
-fn connecting(st: &StripTab) -> bool {
-    st.tab.link == sshee_app::workbench::Link::Connecting
+pub(crate) fn connecting(tab: &sshee_app::workbench::Tab) -> bool {
+    tab.link == sshee_app::workbench::Link::Connecting
 }
 
-fn went_quiet(s: &Shell, st: &StripTab) -> bool {
-    s.screens.agent.agents.attention(st.tab.id).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done)
+pub(crate) fn went_quiet(s: &Shell, tab: &sshee_app::workbench::Tab) -> bool {
+    s.screens.agent.agents.attention(tab.id).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done)
 }
 
 /// What the program in the tab's terminal says of its progress (OSC 9;4).
-fn progress(s: &Shell, st: &StripTab) -> Option<sshee_term::osc::Progress> {
-    s.pane(st.tab.id).and_then(|p| p.progress())
+pub(crate) fn progress(s: &Shell, tab: &sshee_app::workbench::Tab) -> Option<sshee_term::osc::Progress> {
+    s.pane(tab.id).and_then(|p| p.progress())
 }
 
 /// A mark after the name (working, connecting, went quiet, a program's progress): the room
 /// one takes.
 fn marked(s: &Shell, st: &StripTab) -> bool {
-    working(s, st) || connecting(st) || went_quiet(s, st) || progress(s, st).is_some()
+    working(s, st.tab) || connecting(st.tab) || went_quiet(s, st.tab) || progress(s, st.tab).is_some()
 }
 
 /// How wide the row is with nothing squeezed, "+" included.
@@ -727,7 +737,7 @@ fn needed_width(s: &Shell, strip: &[StripTab], names: &[(String, String)]) -> f3
 /// This frame's [`Fit`]: as the widths say, but not changing under the pointer while what the
 /// row held still keeps "+" in the window.
 pub(crate) fn fit(s: &Shell) -> Fit {
-    let strip = s.bench.strip();
+    let strip = in_row(s);
     let row = &s.row;
     let (title, address) = super::title::widths(s);
     let Some(middle) = s.bar_room else {
@@ -751,12 +761,12 @@ pub(crate) fn fit(s: &Shell) -> Fit {
 
 /// The row of tabs, as `fit` shares the bar. `window_active`: the window is in front.
 pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit) -> El {
-    let strip = s.bench.strip();
+    let strip = in_row(s);
     let row = &s.row;
     let names = tab_names(s, &strip);
-    let working = |st: &StripTab| working(s, st);
-    let connecting = |st: &StripTab| connecting(st);
-    let went_quiet = |st: &StripTab| went_quiet(s, st);
+    let working = |st: &StripTab| working(s, st.tab);
+    let connecting = |st: &StripTab| connecting(st.tab);
+    let went_quiet = |st: &StripTab| went_quiet(s, st.tab);
     let marked = |st: &StripTab| marked(s, st);
     let named = s.settings.more().tabs_name_server;
     let compact = fit.crowded;
@@ -864,7 +874,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
             working: working(st),
             connecting: connecting(st),
             went_quiet: went_quiet(st),
-            progress: progress(s, st),
+            progress: progress(s, st.tab),
             active: st.active && !in_settings,
             window_active,
             compact,
@@ -1116,7 +1126,8 @@ fn tab_menu_items(s: &Shell, id: TabId) -> Vec<Option<MenuItem>> {
         None,
         row("tab-close", "Close tab", keys(Shortcut::CloseTab), TabPick::Close, true),
         row("tab-close-others", "Close other tabs", None, TabPick::CloseOthers, !layout::others(&s.bench, id).is_empty()),
-        row("tab-close-right", "Close tabs to the right", None, TabPick::CloseRight, !layout::to_the_right(&s.bench, id).is_empty()),
+        // Under each server the list runs down: what's after it is below.
+        row("tab-close-right", if s.bench.tabs_under_servers() { "Close tabs below" } else { "Close tabs to the right" }, None, TabPick::CloseRight, !layout::to_the_right(&s.bench, id).is_empty()),
     ]);
     items
 }

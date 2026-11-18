@@ -111,6 +111,7 @@ impl States {
         self.containers.retain(|id, _| open(*id));
         self.palette.retain(&open);
         self.agent.retain(&open);
+        self.rail_tree.retain(&open);
     }
 
     /// Something is open over the window (the palette, a dialog, a menu): no shortcut fires

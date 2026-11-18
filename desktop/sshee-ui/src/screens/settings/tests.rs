@@ -418,14 +418,13 @@ fn a_pop_up_button_opens_its_menu_and_takes_the_pick() {
 }
 
 #[test]
-fn a_row_that_comes_later_is_shown_and_cannot_be_changed() {
+fn rows_that_once_came_later_work_now() {
     let mut w = Window::defaults();
     w.go(Section::Layout);
-    let before = w.settings().clone();
-    // Tabs under each server: there, dimmed, with why. (Compact mode and the server list work.)
+    // Tabs under each server: built, so the row changes where they go.
     w.click("layout-tabs-control/seg-0");
-    assert_eq!(*w.settings(), before);
-    assert!(w.says("Tabs run along the top."));
+    assert_eq!(w.settings().tabs_placement.as_str(), "sidebar");
+    assert!(!w.says("Tabs run along the top."));
     // Install updates works now: Never check stops the looking for test builds too.
     w.go(Section::Updates);
     w.click("updates-mode-control/seg-2");

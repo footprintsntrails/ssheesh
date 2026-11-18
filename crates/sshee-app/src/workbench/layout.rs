@@ -617,15 +617,22 @@ pub struct SavedPart {
     pub share: f32,
 }
 
-/// The tabs "Close other tabs" closes: every tab of the row but `id`.
+/// The tabs "Close other tabs" closes: every tab of the row but `id`; with tabs under each
+/// server, every other tab of its machine (0.10's, where the menu's list was the machine's).
 pub fn others(bench: &Workbench, id: TabId) -> Vec<TabId> {
-    bench.tabs().iter().map(|t| t.id).filter(|t| *t != id).collect()
+    listed_with(bench, id).filter(|t| *t != id).collect()
 }
 
-/// The tabs "Close tabs to the right" closes: those after `id` in the row.
+/// The tabs "Close tabs to the right" ("Close tabs below", under each server) closes: those
+/// after `id` in the row, or in its machine's list.
 pub fn to_the_right(bench: &Workbench, id: TabId) -> Vec<TabId> {
-    let after = bench.tabs().iter().skip_while(|t| t.id != id).skip(1);
-    after.map(|t| t.id).collect()
+    listed_with(bench, id).skip_while(|t| *t != id).skip(1).collect()
+}
+
+/// The tabs listed with `id`: the row's, or under each server, its machine's.
+fn listed_with(bench: &Workbench, id: TabId) -> impl Iterator<Item = TabId> + '_ {
+    let server = bench.tab(id).map(|t| t.server.clone()).filter(|_| bench.tabs_under_servers());
+    bench.tabs().iter().filter(move |t| server.as_ref().is_none_or(|s| t.server == *s)).map(|t| t.id)
 }
 
 /// The place a dragged tab lands in: `centres` are the middles of the other tabs along the

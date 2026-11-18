@@ -122,6 +122,8 @@ impl Shell {
         // "Tabs on screen": side by side, or one at a time.
         let together = self.settings.get().view_mode == sshee_app::model::ViewMode::Split;
         self.bench.set_side_by_side(together);
+        // "Where tabs go": under each server in the sidebar, or along the top.
+        self.bench.set_tabs_under_servers(self.settings.get().tabs_placement == sshee_app::model::TabsPlacement::Sidebar);
         // The copy is the settings' own, so the backend can't hold a borrow of the window.
         let settings = self.settings.get().clone();
         self.backend_mut().settings_changed(&settings);

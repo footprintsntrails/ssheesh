@@ -253,7 +253,12 @@ turns the looking off; "Check for test builds" off moves a test build to release
   be dragged out into a window of its own. The title (`shell/title.rs`) names the machine and
   its address and opens its tools (Tunnels and Recipes join that menu when their screens
   land).
-- Settings' "Tabs under each server" (tabs in the wide sidebar instead of the row) isn't built.
+- Settings' "Where tabs go: Under each server" hangs each machine's tabs under it in the
+  sidebar, as rows in the list and smaller icons in the rail (`screens/rail_tree/tabs.rs`, the
+  first part of a server's tree, above its containers); the row along the top keeps only "+".
+  Ctrl+Tab, the numbers, "Close other tabs" and "Close tabs below" then stay with the machine
+  on screen, and closing its last tab goes to the main menu (`Workbench::tabs_under_servers`).
+  With the sidebar hidden the tabs run along the top again.
 - A terminal tab is named after its shell's folder when the shell says it (OSC 7, or a
   `user@host: ~/dir` title). In tmux on a server neither reaches the window (tmux keeps both):
   the agents' watch reads `pane_current_path` and should call `Shell::set_folder`, and
@@ -340,8 +345,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 |---|---|---|
 | Files, what is left (everything of 0.10's Files is built but these): a video player (Rune has no video element), the editor over 128 KB (Rune's text field shapes the whole text on every key), a card flying with the pointer while rows are dragged, drag onto a Files tab in the row of tabs | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
-| Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
-| Tabs under each server in the sidebar (`Sidebar.tsx`); the wide sidebar is built | `shell/rail.rs` | `workbench.rs` |
+| Settings: built, themes and their editor included; a row marked `.later` in the catalogue would wait for another feature (none is today) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
 | A tab dragged out to its own window (`windows.ts`) | `shell/tabs.rs` | `workbench/layout.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |
 | Host-key question, reconnect and sleep notices, the agents' buttons: built (`terminal/session.rs` holds their state). Not built: a password question of its own | `screens/prompts.rs` | `prompts.rs` |

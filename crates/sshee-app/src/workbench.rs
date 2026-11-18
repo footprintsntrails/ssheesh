@@ -432,6 +432,9 @@ pub struct Workbench {
     together: bool,
     /// Each machine's looks so far, for the graphs.
     history: HashMap<ServerKey, History>,
+    /// Settings' "Where tabs go: Under each server": each machine's tabs under its name in the
+    /// sidebar instead of in one row along the top ([`Self::tabs_under_servers`]).
+    under_servers: bool,
 }
 
 const UNKNOWN_SERVER: &str = "Unknown server";
@@ -454,6 +457,7 @@ impl Workbench {
             layout: layout::Layout::new(),
             together: false,
             history: HashMap::new(),
+            under_servers: false,
         };
         w.set_servers(servers);
         w
@@ -668,8 +672,8 @@ impl Workbench {
 
     /// Closes a tab and gives it back (the window ends its session). Closing the one you're on
     /// brings up the next, as in a browser: the tab after it on its machine, else the one
-    /// before; a machine's last tab goes to its neighbour in the row; the last tab of all, to
-    /// the main menu.
+    /// before; a machine's last tab goes to its neighbour in the row (with tabs under each
+    /// server, to the main menu); the last tab of all, to the main menu.
     pub fn close(&mut self, id: TabId) -> Option<Tab> {
         let at = self.index_of(id)?;
         // Shown with others: the pane nearest it comes up, and has its room.
@@ -681,7 +685,10 @@ impl Workbench {
             let same = |t: &&Tab| t.server == self.tabs[at].server;
             let after = self.tabs[at + 1..].iter().find(same);
             let before = self.tabs[..at].iter().rev().find(same);
-            after.or(before).or(self.tabs.get(at + 1)).or(at.checked_sub(1).and_then(|i| self.tabs.get(i))).map(|t| t.id)
+            // Under each server, a machine's last tab goes to the main menu (0.10's): the next
+            // machine's tabs are elsewhere in the sidebar, not beside it.
+            let neighbour = |i: Option<usize>| i.and_then(|i| self.tabs.get(i)).filter(|_| !self.tabs_under_servers());
+            after.or(before).or(neighbour(Some(at + 1))).or(neighbour(at.checked_sub(1))).map(|t| t.id)
         } else {
             self.focused
         };
@@ -731,29 +738,41 @@ impl Workbench {
         Some(self.open_with(c.kind, &c.server, Open { title: c.title, path: c.path, agent: None, container: c.container }))
     }
 
+    /// The tabs Ctrl+Tab and the numbers go through: every machine's, in the row's order; with
+    /// tabs under each server, those of the machine on screen (0.10's `nextTab`), as its list
+    /// in the sidebar has them.
+    fn walked(&self) -> Vec<TabId> {
+        let here = self.focused.and_then(|id| self.tab(id)).map(|t| t.server.as_str()).filter(|_| self.tabs_under_servers());
+        self.tabs.iter().filter(|t| here.is_none_or(|h| t.server == h)).map(|t| t.id).collect()
+    }
+
     /// Ctrl+Tab and Ctrl+Shift+Tab: the next (`1`) or previous (`-1`) tab in the row, around
-    /// its ends, every machine's. On the main menu it comes back to the tab you were on.
+    /// its ends, every machine's (with tabs under each server, the machine on screen's). On
+    /// the main menu it comes back to the tab you were on.
     pub fn step(&mut self, step: i32) -> Option<TabId> {
-        let Some(at) = self.focused.and_then(|id| self.index_of(id)) else {
+        let walked = self.walked();
+        let Some(at) = self.focused.and_then(|id| walked.iter().position(|t| *t == id)) else {
             let first = self.tabs.first()?.id;
             self.land_on(first);
             return Some(first);
         };
-        let n = self.tabs.len() as i32;
+        let n = walked.len() as i32;
         let to = if self.showing_home() { at } else { (at as i32 + step).rem_euclid(n) as usize };
-        let id = self.tabs[to].id;
+        let id = walked[to];
         self.land_on(id);
         Some(id)
     }
 
-    /// Jumps to the `n`th tab in the row (1 to 8); 9 is the last one, as in a browser.
+    /// Jumps to the `n`th tab in the row (1 to 8); 9 is the last one, as in a browser. With
+    /// tabs under each server, the `n`th of the machine on screen.
     pub fn jump(&mut self, n: usize) -> Option<TabId> {
-        let tab = match n {
-            1..=8 => self.tabs.get(n - 1),
-            9 => self.tabs.last(),
+        let walked = self.walked();
+        let id = match n {
+            1..=8 => walked.get(n - 1),
+            9 => walked.last(),
             _ => None,
-        }?;
-        let id = tab.id;
+        }
+        .copied()?;
         self.land_on(id);
         Some(id)
     }
@@ -913,6 +932,18 @@ impl Workbench {
 
     pub fn sidebar_shown(&self) -> bool {
         self.sidebar
+    }
+
+    /// Settings' "Where tabs go": under each server in the sidebar (`true`), or along the top.
+    pub fn set_tabs_under_servers(&mut self, on: bool) {
+        self.under_servers = on;
+    }
+
+    /// Each machine's tabs are under its name in the sidebar, not in a row along the top: as
+    /// Settings has it, while the sidebar is shown (hidden, the row comes back, or the tabs
+    /// would be nowhere).
+    pub fn tabs_under_servers(&self) -> bool {
+        self.under_servers && self.sidebar
     }
 
     /// Tabs shown together on the page.
@@ -1423,6 +1454,41 @@ mod tests {
         w.show_home();
         assert_eq!(w.step(1), Some(c));
         assert!(!w.showing_home());
+    }
+
+    #[test]
+    fn under_each_server_steps_numbers_and_closing_stay_with_the_machine_on_screen() {
+        let mut w = bench();
+        w.set_tabs_under_servers(true);
+        assert!(w.tabs_under_servers());
+        let a = w.go_to(WEB);
+        let b = w.open(TabKind::Terminal, WEB);
+        let d = w.go_to(DB);
+        let c = w.open(TabKind::Files, WEB);
+        // On web-7731: its three tabs, around the ends, never db-main's.
+        w.focus(a);
+        assert_eq!(w.step(-1), Some(c));
+        assert_eq!(w.step(1), Some(a));
+        assert_eq!(w.step(1), Some(b));
+        assert_eq!(w.jump(9), Some(c));
+        assert_eq!(w.jump(2), Some(b));
+        // Its menu's "Close other tabs" and "Close tabs below" are the machine's.
+        assert_eq!(layout::others(&w, a), vec![b, c]);
+        assert_eq!(layout::to_the_right(&w, b), vec![c]);
+        // A machine's last tab goes to the main menu, not to the next machine's.
+        w.focus(d);
+        w.close(d);
+        assert!(w.showing_home());
+        // With the sidebar hidden the row is back, and with it every machine's tabs.
+        w.toggle_sidebar();
+        assert!(!w.tabs_under_servers());
+        w.focus(c);
+        let e = w.go_to(DB);
+        w.focus(c);
+        assert_eq!(w.step(1), Some(e));
+        w.close(e);
+        // Along the top, its neighbour in the row comes up.
+        assert_eq!(w.active_id(), Some(c), "{}", row(&w));
     }
 
     #[test]

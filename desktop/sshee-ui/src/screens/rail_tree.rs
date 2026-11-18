@@ -3,8 +3,12 @@
 //! the Containers tab. A click on a running container opens a shell in it; a right click opens
 //! its menu: Open shell, Follow logs, Restart and Stop (or Start), Copy name.
 //!
+//! With Settings → Layout → Where tabs go on "Under each server", the server's tabs come first
+//! in its tree, open or not (`tabs.rs`).
+//!
 //! ```text
 //! expand-N        the chevron on server row N (kept open in Settings' `expanded`, as 0.10 did)
+//! tabs-N          under the row: its tabs, when they go under each server (`tabs.rs`)
 //! tree-N          under the row: tree-note (looking, a problem, none yet) · ct-N-<i> rows
 //! ct-menu         a container's menu: ctm-shell, ctm-logs, ctm-restart, ctm-stop | ctm-start,
 //!                 ctm-copy
@@ -27,6 +31,9 @@ use crate::kit::menu::RowState;
 use crate::kit::popover::popover;
 use crate::shell::{Shell, Toast};
 use crate::theme::{self, Theme};
+
+mod tabs;
+pub use tabs::{list as tabs, rail as rail_tabs};
 
 /// The ids of trees' boards count down from here: no tab ever has one.
 pub const TREE_IDS: u64 = u64::MAX / 2;
@@ -69,12 +76,25 @@ pub struct State {
     trees: IndexMap<ServerKey, Tree>,
     made: u64,
     pub menu: Option<Menu>,
+    /// The servers' tabs, when they go under each server.
+    tabs: tabs::Tabs,
 }
 
 impl State {
     /// The board behind a reply, when the reply is a tree's.
     fn by_id(&mut self, id: TabId) -> Option<(&ServerKey, &mut Tree)> {
         self.trees.iter_mut().find(|(_, t)| t.id == id)
+    }
+
+    /// Forgets what it knew of tabs that are gone.
+    pub(crate) fn retain(&mut self, open: impl Fn(TabId) -> bool) {
+        self.tabs.retain(open);
+    }
+
+    /// A tab under its server is being dragged.
+    #[cfg(test)]
+    pub(crate) fn dragging_tab(&self) -> bool {
+        self.tabs.drag.is_some()
     }
 
     /// A server's board, while its tree is open.

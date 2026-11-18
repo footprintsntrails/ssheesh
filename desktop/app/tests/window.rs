@@ -722,6 +722,41 @@ fn the_sidebar_drags_wide_with_names_in_both_appearances() {
 }
 
 #[test]
+fn tabs_go_under_each_server_in_both_appearances() {
+    // Settings → Layout → Where tabs go: "Under each server"; then the sidebar dragged wide.
+    let script = || {
+        json!([
+            chord(0.3, Shortcut::Settings),
+            tap(0.8, "nav-layout"),
+            tap(1.3, "layout-tabs-control/seg-0"),
+            { "t": 1.8, "type": "key", "name": "Escape" },
+            { "t": 2.3, "type": "drag", "key": "rail-edge", "dx": 200.0, "dy": 0.0, "dur": 0.4 },
+            end(3.4)
+        ])
+    };
+    in_both("tabs-under-servers", script, |run, dark| {
+        let rail = run.rect("rail");
+        let lists: Vec<&Value> = run.tree["elements"].as_array().unwrap().iter().filter(|e| e["key"].as_str().is_some_and(|k| k.starts_with("tabs-"))).collect();
+        // The demo's tabs are on two servers: a list under each.
+        assert_eq!(lists.len(), 2, "{}", run.tree_text);
+        // Every tab is in the sidebar, none along the top; "+" stays there.
+        for id in 1..=3 {
+            let tab = run.rect(&format!("tab-{id}"));
+            assert!(tab[0] >= rail[0] && tab[0] + tab[2] <= rail[0] + rail[2] + 1.0 && tab[1] > 44.0, "tab-{id}: {tab:?} {rail:?}");
+        }
+        assert!(run.element("new-tab").is_some());
+        // The tab on screen (~/shop) is lit quietly; the one whose agent waits says so.
+        assert_eq!(run.fill("tab-1"), if dark { "#ffffff24" } else { "#0000001f" });
+        assert!(run.tree_text.contains("Needs you"), "{}", run.tree_text);
+        // Its line in the accent, beside it, in the picture.
+        let [x, y, _, h] = run.rect("tab-1");
+        let px = run.pixels();
+        let blue = [0x00, 0x71, 0xe3];
+        assert!(near(&px, [(x - 9.0) as u32, y as u32, x as u32, (y + h) as u32], blue) > 6, "no accent line beside the tab on screen");
+    });
+}
+
+#[test]
 fn compact_mode_hides_the_bars_until_the_pointer_comes() {
     let script = || {
         json!([
