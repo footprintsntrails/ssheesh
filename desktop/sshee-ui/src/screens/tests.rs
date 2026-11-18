@@ -377,6 +377,9 @@ fn the_palettes_first_row_is_files_and_arrows_and_return_go_places() {
     for said in ["On web-7731", "Files", "recent: ~/shop/releases", "Go to", "Migration 0042", "Needs you", "db-main", "Window", "New terminal", "Settings"] {
         assert!(tree.contains(said), "{said} isn't in the palette: {tree}");
     }
+    // How to close it is said once, by the "esc" cap in the field, not again in the foot.
+    assert!(!tree.contains("Esc to close"), "{tree}");
+    assert!(w.has("palette-field"));
     assert_eq!(w.rt.state.screens.palette.hot, Some(0));
     // Return on the first row: Files, at the folder it was last in.
     w.key(Key::Enter, "");

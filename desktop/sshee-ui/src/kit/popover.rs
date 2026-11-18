@@ -24,16 +24,19 @@ pub fn popover(t: &Theme, width: f32) -> El {
 }
 
 /// A popover's foot: a quiet hint at the left ("Press 1, 2 or 3, or click an answer") and
-/// another at the right ("Esc to decide later"), over a hairline.
+/// another at the right ("Esc to decide later"), over a hairline. An empty `right` leaves
+/// the left one the whole width (the palette shows Esc on its field already).
 pub fn popover_foot(t: &Theme, left: &str, right: &str) -> El {
-    rune::row()
+    let foot = rune::row()
         .w_full()
         .h(34.0)
         .px(14.0)
         .gap(8.0)
         .items_center()
         .border_sides([1.0, 0.0, 0.0, 0.0], t.hair)
-        .child(text(left).font(theme::SMALL).color(t.l2).single_line().truncate().shrink())
-        .child(rune::spacer())
-        .child(text(right).font(theme::SMALL).color(t.l2).single_line())
+        .child(text(left).font(theme::SMALL).color(t.l2).single_line().truncate().shrink());
+    if right.is_empty() {
+        return foot;
+    }
+    foot.child(rune::spacer()).child(text(right).font(theme::SMALL).color(t.l2).single_line())
 }
