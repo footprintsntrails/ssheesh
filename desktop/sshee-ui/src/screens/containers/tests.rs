@@ -41,6 +41,8 @@ struct World {
     remote: Option<Remote>,
     /// web's containers; db answers that Docker isn't there.
     web: Vec<Container>,
+    /// Looks go unanswered, as over a connection that hangs.
+    silent: bool,
 }
 
 struct Fake(Arc<Mutex<World>>);
@@ -73,6 +75,9 @@ impl Backend for Fake {
     fn containers(&mut self, ask: Ask) {
         let mut w = self.0.lock().unwrap();
         w.asks.push(ask.clone());
+        if w.silent && matches!(ask.want, Want::List { .. }) {
+            return;
+        }
         let answer = match &ask.want {
             Want::List { ticket } if ask.server == WEB => Answer::Listed { ticket: *ticket, result: Ok(ContainerList { engines: vec![Engine::Docker], containers: w.web.clone(), problems: vec![] }) },
             Want::List { ticket } => Answer::Listed { ticket: *ticket, result: Ok(ContainerList::default()) },
@@ -112,6 +117,11 @@ struct Window {
 
 impl Window {
     fn open() -> Window {
+        Window::open_with(|_| {})
+    }
+
+    /// A window whose workbench is first made ready by `ready` (tabs restored, say).
+    fn open_with(ready: impl FnOnce(&mut Workbench)) -> Window {
         crate::fonts::declare();
         let world = Arc::new(Mutex::new(World {
             web: vec![
@@ -130,7 +140,9 @@ impl Window {
             Server::host("web", "web-7731", "deploy@203.0.113.17").env(EnvLabel::Prod).icon("globe"),
             Server::host("db", "db-main", "postgres@203.0.113.31").icon("database"),
         ];
-        let shell = Shell::new(Workbench::new(servers), Box::new(Fake(world.clone())), options, Some(Remote::new(post)));
+        let mut bench = Workbench::new(servers);
+        ready(&mut bench);
+        let shell = Shell::new(bench, Box::new(Fake(world.clone())), options, Some(Remote::new(post)));
         let text = rune::text::TextSystem::new(crate::fonts::FONTS, crate::fonts::FAMILIES);
         let mut rt = Runtime::with_text(shell, crate::shell::view::view, (1280.0, 800.0), Env::new(true, 1.0), text);
         rt.poll = Some(|s, clock, tx| s.poll(clock, tx));
@@ -203,6 +215,70 @@ fn a_containers_tab_lists_them_by_project_and_looks_again_while_on_screen() {
     w.rt.frame(30.0);
     w.settle();
     assert_eq!(w.lists(), 2, "a hidden tab doesn't look");
+}
+
+#[test]
+fn docker_with_no_containers_says_so_and_offers_a_guide() {
+    let mut w = Window::open();
+    w.world.lock().unwrap().web.clear();
+    w.open_tab(TabKind::Containers, WEB);
+    assert!(w.rt.find("containers-loading").is_none(), "no skeleton once the look came back");
+    let tree = w.tree();
+    assert!(tree.contains("No containers yet"), "{tree}");
+    assert!(!tree.contains("docker run -d --name hello"), "the guide waits to be asked for");
+    w.click("containers-guide");
+    let tree = w.tree();
+    for said in ["docker run -d --name hello -p 8080:80 nginx", "docker compose up -d", "Start one container"] {
+        assert!(tree.contains(said), "{said} isn't in: {tree}");
+    }
+    // Its commands are typed into a terminal there, as every command on the page is.
+    w.click("containers-guide-0-type");
+    let active = w.rt.state.bench.active().unwrap();
+    assert_eq!((active.kind, active.server.as_str()), (TabKind::Terminal, WEB));
+}
+
+#[test]
+fn a_restored_containers_tab_looks_when_it_comes_on_screen() {
+    let mut old = Workbench::new(vec![Server::host("web", "web-7731", "deploy@203.0.113.17")]);
+    old.open(TabKind::Containers, WEB);
+    let terminal = old.open(TabKind::Terminal, WEB);
+    old.focus(terminal);
+    let saved = old.saved();
+    // Restored behind a terminal: no look while it's out of sight.
+    let mut w = Window::open_with(|b| b.restore(&saved));
+    let id = w.rt.state.bench.tabs().iter().find(|t| t.kind == TabKind::Containers).map(|t| t.id).expect("restored");
+    assert_eq!(w.lists(), 0);
+    w.rt.update(|s, tx| {
+        s.bench.focus(id);
+        s.settle(tx);
+    });
+    w.settle();
+    assert_eq!(w.lists(), 1);
+    assert!(w.rt.find("containers-loading").is_none() && w.tree().contains("4 containers, 3 running"), "{}", w.tree());
+    // Restored on screen: it looks in the first frames.
+    let saved = w.rt.state.bench.saved();
+    let w = Window::open_with(|b| b.restore(&saved));
+    assert_eq!(w.lists(), 1);
+    assert!(w.tree().contains("4 containers, 3 running"), "{}", w.tree());
+}
+
+#[test]
+fn a_look_that_never_answers_ends_in_try_again() {
+    let mut w = Window::open();
+    w.world.lock().unwrap().silent = true;
+    w.open_tab(TabKind::Containers, WEB);
+    assert_eq!(w.lists(), 1);
+    assert!(w.rt.find("containers-loading").is_some() && w.rt.find("containers-busy").is_some(), "Looking… while it waits");
+    w.rt.frame(sshee_app::containers::LOOK_TIMEOUT_SECS + 0.5);
+    w.settle();
+    assert!(w.rt.find("containers-loading").is_none(), "no endless skeleton");
+    let tree = w.tree();
+    assert!(tree.contains("Couldn't look for containers") && tree.contains(sshee_app::containers::NO_ANSWER), "{tree}");
+    // Try again, with a server that answers now.
+    w.world.lock().unwrap().silent = false;
+    w.click("containers-try-again");
+    assert_eq!(w.lists(), 2);
+    assert!(w.tree().contains("4 containers, 3 running"), "{}", w.tree());
 }
 
 #[test]

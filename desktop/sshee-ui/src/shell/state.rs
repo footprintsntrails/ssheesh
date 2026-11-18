@@ -918,7 +918,7 @@ impl Shell {
             self.settle_in_place(tx);
         }
         // Containers and Stats tabs on screen look again when it's time.
-        let ticked = crate::screens::containers::tick(self, clock) | crate::screens::stats::tick(self, clock) | ticked;
+        let ticked = crate::screens::containers::tick(self, clock, tx) | crate::screens::stats::tick(self, clock) | ticked;
         let mut changed = false;
         let mut asked = Vec::new();
         let mut wishes = Vec::new();
