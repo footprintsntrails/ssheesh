@@ -61,6 +61,13 @@ pub enum Action {
     StopEditing,
 }
 
+impl Action {
+    /// It opens more choices in the menu's place (drawn with a chevron), not an action.
+    pub fn opens_more(self) -> bool {
+        matches!(self, Action::OpenInOther)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub action: Action,
@@ -115,6 +122,9 @@ pub struct Context<'a> {
     pub can_forward: bool,
     /// The paste shortcut as this system writes it: "Ctrl+V", "⌘V".
     pub paste_key: &'static str,
+    /// The key that deletes the selected rows as this system writes it: "Del", "⌘⌫"
+    /// ([`super::browser::key_does`]).
+    pub delete_key: &'static str,
 }
 
 /// The rows an action from a row's menu applies to: all the selected ones when the click
@@ -222,7 +232,7 @@ pub fn menu(cx: &Context<'_>) -> Vec<MenuRow> {
         }
     }
     items.push(None);
-    items.push(Some(MenuItem { destructive: true, ..item(Action::Delete, if many { format!("Delete {count} items") } else { "Delete".into() }) }));
+    items.push(Some(MenuItem { destructive: true, hint: Some(cx.delete_key), ..item(Action::Delete, if many { format!("Delete {count} items") } else { "Delete".into() }) }));
     rows(items)
 }
 
@@ -275,7 +285,8 @@ mod tests {
                         None => "",
                     };
                     let hint = i.hint.map(|h| format!(" [{h}]")).unwrap_or_default();
-                    format!("{tick}{}{hint}{}{}", i.label, if i.destructive { " !" } else { "" }, if i.disabled { " ~" } else { "" })
+                    let more = if i.action.opens_more() { " >" } else { "" };
+                    format!("{tick}{}{more}{hint}{}{}", i.label, if i.destructive { " !" } else { "" }, if i.disabled { " ~" } else { "" })
                 }
             })
             .collect()
@@ -297,6 +308,7 @@ mod tests {
             can_back: false,
             can_forward: false,
             paste_key: "Ctrl+V",
+            delete_key: "Del",
         }
     }
 
@@ -304,11 +316,11 @@ mod tests {
     fn on_a_file() {
         let readme = file("README.md", 1, 1);
         let cx = Context { clicked: Some(&readme), selected: &[&readme], ..base() };
-        assert_eq!(lines(menu(&cx)), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Archive “README.md”", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(menu(&cx)), ["Open preview [↵]", "Open in… >", "---", "Download", "Rename [F2]", "Archive “README.md”", "Copy path", "---", "Delete [Del] !"]);
         // This computer has nothing to download from; another server to copy to is offered.
         assert_eq!(
             lines(menu(&Context { on_server: false, can_copy_out: true, ..cx })),
-            ["Open preview [↵]", "Open in…", "---", "Copy to a server…", "Rename [F2]", "Archive “README.md”", "Copy path", "---", "Delete !"]
+            ["Open preview [↵]", "Open in… >", "---", "Copy to a server…", "Rename [F2]", "Archive “README.md”", "Copy path", "---", "Delete [Del] !"]
         );
         assert_eq!(lines(menu(&Context { can_copy_out: true, ..cx }))[4], "Copy to another folder or server…");
     }
@@ -317,11 +329,11 @@ mod tests {
     fn a_file_opens_in_an_editor_elsewhere() {
         let env = file(".env", 1, 1);
         let cx = Context { clicked: Some(&env), selected: &[&env], editor: Some("VS Code"), ..base() };
-        assert_eq!(lines(menu(&cx))[..3], ["Open preview [↵]", "Open in VS Code", "Open in…"]);
+        assert_eq!(lines(menu(&cx))[..3], ["Open preview [↵]", "Open in VS Code", "Open in… >"]);
         assert_eq!(lines(menu(&Context { editing: true, ..cx }))[3], "Stop editing");
         // Never for a folder, nor for several files at once.
         let shop = dir("shop");
-        assert!(!lines(menu(&Context { clicked: Some(&shop), selected: &[&shop], ..cx })).iter().any(|l| l.starts_with("Open in VS") || l == "Open in…"));
+        assert!(!lines(menu(&Context { clicked: Some(&shop), selected: &[&shop], ..cx })).iter().any(|l| l.starts_with("Open in VS") || l == "Open in… >"));
         let other = file("b", 1, 1);
         assert!(!lines(menu(&Context { selected: &[&env, &other], ..cx })).iter().any(|l| l.starts_with("Open in")));
         // "Open in…": every editor found, then the picker.
@@ -337,7 +349,7 @@ mod tests {
         let cx = Context { clicked: Some(&shop), selected: &[&shop], ..base() };
         assert_eq!(
             lines(menu(&cx)),
-            ["Open [↵]", "Download", "Rename [F2]", "Archive “shop”", "Copy path", "Add to bookmarks", "Open in main terminal", "Open new terminal here", "---", "Delete !"]
+            ["Open [↵]", "Download", "Rename [F2]", "Archive “shop”", "Copy path", "Add to bookmarks", "Open in main terminal", "Open new terminal here", "---", "Delete [Del] !"]
         );
         let pins = ["/home/deploy/shop".to_owned()];
         assert_eq!(lines(menu(&Context { pins: &pins, ..cx }))[5], "Remove bookmark");
@@ -350,7 +362,7 @@ mod tests {
     fn an_archive_is_unpacked_where_the_machine_can_and_not_packed_again() {
         let site = file("site.tar.gz", 1, 1);
         let cx = Context { clicked: Some(&site), selected: &[&site], ..base() };
-        assert_eq!(lines(menu(&cx)), ["Open preview [↵]", "Open in…", "---", "Download", "Rename [F2]", "Unpack “site.tar.gz”", "Copy path", "---", "Delete !"]);
+        assert_eq!(lines(menu(&cx)), ["Open preview [↵]", "Open in… >", "---", "Download", "Rename [F2]", "Unpack “site.tar.gz”", "Copy path", "---", "Delete [Del] !"]);
         let squeezed = file("dump.sql.gz", 1, 1);
         let here = Context { clicked: Some(&squeezed), selected: &[&squeezed], on_server: false, on_this_windows: true, ..base() };
         assert!(!lines(menu(&here)).iter().any(|l| l.starts_with("Unpack")));
@@ -363,8 +375,8 @@ mod tests {
         let (a, b, c) = (file("a.txt", 1, 1), dir("b"), file("c.txt", 1, 1));
         let selected = [&a, &b];
         let cx = Context { clicked: Some(&a), selected: &selected, can_copy_out: true, ..base() };
-        assert_eq!(lines(menu(&cx)), ["Download 2 items", "Copy 2 items to another folder or server…", "Archive 2 items", "---", "Delete 2 items !"]);
-        assert_eq!(lines(menu(&Context { on_server: false, can_copy_out: false, ..cx })), ["Archive 2 items", "---", "Delete 2 items !"]);
+        assert_eq!(lines(menu(&cx)), ["Download 2 items", "Copy 2 items to another folder or server…", "Archive 2 items", "---", "Delete 2 items [Del] !"]);
+        assert_eq!(lines(menu(&Context { on_server: false, can_copy_out: false, ..cx })), ["Archive 2 items", "---", "Delete 2 items [Del] !"]);
         assert_eq!(targets(&a, &selected).len(), 2);
         // A row outside the selection is about itself (the browser selects it first).
         assert_eq!(targets(&c, &selected), [&c]);

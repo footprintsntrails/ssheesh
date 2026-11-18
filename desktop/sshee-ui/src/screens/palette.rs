@@ -408,13 +408,13 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> Option<El> {
     }
 
     // Under the list: why a pick did nothing, how to run a command no row is chosen for, or
-    // how to narrow the list.
+    // how to narrow the list. How to close it is the "esc" cap in the field, said once.
     let running = state.hot.and_then(|hot| rows.get(hot)).is_some_and(Row::runs);
     let foot = match (&state.note, state.hot, server) {
-        (Some(note), _, _) => popover_foot(t, note, "Esc to close"),
-        (None, Some(_), Some(server)) if running => popover_foot(t, &format!("↩ types it into the terminal on {server}{}", if on_prod { ", a Production server" } else { "" }), "Esc to close"),
-        (None, None, Some(server)) if !rows.is_empty() => popover_foot(t, &format!("Nothing runs by itself: ↓ to choose, then ↩ runs it on {server}"), "Esc to close"),
-        _ => popover_foot(t, "srv:  cmd:  file:  set:  in front narrows it down", "Esc to close"),
+        (Some(note), _, _) => popover_foot(t, note, ""),
+        (None, Some(_), Some(server)) if running => popover_foot(t, &format!("↩ types it into the terminal on {server}{}", if on_prod { ", a Production server" } else { "" }), ""),
+        (None, None, Some(server)) if !rows.is_empty() => popover_foot(t, &format!("Nothing runs by itself: ↓ to choose, then ↩ runs it on {server}"), ""),
+        _ => popover_foot(t, "srv:  cmd:  file:  set:  in front narrows it down", ""),
     };
 
     let surface = popover(t, WIDTH)

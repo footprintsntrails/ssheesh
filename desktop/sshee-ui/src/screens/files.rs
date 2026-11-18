@@ -987,6 +987,7 @@ pub fn menu_for(s: &Shell, tab: TabId, clicked: Option<&str>) -> Vec<MenuRow> {
         can_back: browser.can_go_back(),
         can_forward: browser.can_go_forward(),
         paste_key: if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" },
+        delete_key: if cfg!(target_os = "macos") { "⌘⌫" } else { "Del" },
         pins: bookmarks::pins(&s.screens.bookmarks, browser.server()),
         show_hidden: browser.show_hidden(),
         editor: chosen.as_ref().map(|e| e.name.as_str()),

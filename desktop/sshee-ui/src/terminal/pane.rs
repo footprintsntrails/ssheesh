@@ -205,6 +205,9 @@ pub struct TermPane {
     /// frames slowly (`HIDDEN_FRAME`): enough for an agent's question to be read and output
     /// to be noticed, not a frame a display beat for nobody.
     shown: bool,
+    /// Something is open over the window (the palette, the agents' list...): the session's
+    /// pill steps aside instead of peeking out from under it.
+    covered: bool,
     /// When a pane out of sight last took a frame.
     hidden_pull: f64,
     /// The typing counter, when Settings asks for it (`echo.rs`).
@@ -271,6 +274,7 @@ impl TermPane {
             over: super::overlays::Overlays::default(),
             said: None,
             shown: true,
+            covered: false,
             hidden_pull: f64::NEG_INFINITY,
             echo: count_typing.then(super::echo::Counter::new),
         }
@@ -305,6 +309,17 @@ impl TermPane {
     /// The pane is on screen (`true`), or out of sight: see `HIDDEN_FRAME`.
     pub fn set_shown(&mut self, shown: bool) {
         self.shown = shown;
+    }
+
+    /// Something is open over the window (`States::any_open`), or nothing is any more. True
+    /// when that changed: the pane's pill shows or goes.
+    pub fn set_covered(&mut self, covered: bool) -> bool {
+        std::mem::replace(&mut self.covered, covered) != covered
+    }
+
+    /// Whether something is open over the window ([`Self::set_covered`]).
+    pub(crate) fn covered(&self) -> bool {
+        self.covered
     }
 
     /// The window's theme, for what is drawn over the terminal, on a dark or a light system.

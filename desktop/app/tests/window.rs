@@ -947,7 +947,8 @@ fn files_lists_opens_and_asks_in_both_appearances() {
         press(1.6, "Enter", false, false, false),
         // Markdown opens formatted: Source, to edit it.
         tap(1.9, "seg-1"),
-        { "t": 2.2, "type": "tap", "x": 1000.0, "y": 300.0 },
+        // On the text (the preview's header is a list header's height: its lines start higher).
+        { "t": 2.2, "type": "tap", "x": 1000.0, "y": 250.0 },
         { "t": 2.5, "type": "type", "text": "x" },
         press(2.8, "s", !MAC, MAC, false),
         { "t": 3.4, "type": "mark", "name": "end" }
@@ -1178,10 +1179,14 @@ fn files_peek_a_file_places_ticks_picture_sizes_and_the_copy_dialog_as_in_0_10()
     for said in ["Hide Disk", "Recent folders", "Logs", "Config"] {
         assert!(run.tree_text.contains(said), "{said} isn't in the tree");
     }
-    // A picture: its size in pixels and in bytes under it, and drawn no bigger than it is.
+    // A picture: its size in pixels under it, its bytes once (in the header), and drawn no
+    // bigger than it is. The header is as tall as the list's beside it: one hairline.
     let script = json!([files.clone(), { "t": 0.8, "type": "double-click", "x": 300.0, "y": 257.0 }, end(1.8)]);
     let Some(run) = self::run("files-picture", &["--demo"], Some(script)) else { return };
-    assert!(run.tree_text.contains("48 × 48 · 6.9 KB"), "no size under the picture");
+    assert!(run.tree_text.contains("48 × 48"), "no size under the picture");
+    assert!(run.element("preview-size").is_some() && !run.tree_text.contains("48 × 48 ·"), "the bytes again under the picture");
+    let (head, list) = (run.rect("preview-head"), run.rect("files-header"));
+    assert_eq!(head[1] + head[3], list[1] + list[3], "the header's hairline and the list's don't line up");
     let [_, _, w, h] = run.rect("preview-picture-box");
     assert!(w <= 48.0 && h <= 48.0, "drawn bigger than it is: {w}×{h}");
     // Copy to another folder or server: from where, which server is this one, and never into

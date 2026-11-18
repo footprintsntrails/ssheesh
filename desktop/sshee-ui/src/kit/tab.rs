@@ -3,6 +3,8 @@
 //!
 //! - Every tab ends with the same close cross, after its status mark: always on the tab
 //!   you're on, under the pointer on the others (its room is kept, so the tab keeps its width).
+//!   In a crowded row only the tab you're on has one, as in a browser: the others give its
+//!   room to their names, and close with the middle button or their menu.
 //! - The tab you're on is a rounded lighter fill; under the pointer any other gets a fainter one.
 //! - In a window that isn't in front, the tab you're on goes quiet; "Prod" stays red.
 //! - A program's progress (OSC 9;4) is a small ring after the name, filling as it goes
@@ -147,9 +149,11 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     // The name fades out at its end in any tab narrower than its words: a crowded row, or a
     // tab the row holds at its width while the pointer is over it.
     let name = text(spec.name).key("name").font(theme::TAB_NAME).color(name_ink).single_line().truncate_fade().shrink();
+    // Crowded, only the tab you're on keeps a cross (`close_room`).
+    let cross = active || !compact;
     if compact {
         // Its icon and its cross stay inside it; the name gives way.
-        e = e.shrink().min_w(theme::ICON + 16.0 + 6.0 + 14.0);
+        e = e.shrink().min_w(theme::ICON + 16.0 + if cross { close_room() } else { 0.0 });
     }
     e = e.child(name);
     if let Some(server) = spec.server {
@@ -158,7 +162,17 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     if spec.prod {
         e = e.child(prod_chip(t, active));
     }
-    e.children(state_mark(t, spec, compact)).child(close_button(t, active, on_close))
+    e = e.children(state_mark(t, spec, compact));
+    if cross {
+        e = e.child(close_button(t, active, on_close));
+    }
+    e
+}
+
+/// The room a tab's cross takes after what comes before it: the gap of a crowded tab and the
+/// cross's own width less its margins.
+pub fn close_room() -> f32 {
+    6.0 + 14.0
 }
 
 /// What a tab has to say after its name, if anything: its badge ("Needs you", a dropped

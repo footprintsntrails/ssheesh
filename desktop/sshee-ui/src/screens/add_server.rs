@@ -690,8 +690,11 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
 
     // Where.
     let address = input(t, &state.address, "203.0.113.10").key("add-address").on_edit(|s: &mut Shell| &mut s.screens.add_server.address);
-    let port = input(t, &state.port, "22").key("add-port").on_edit(|s: &mut Shell| &mut s.screens.add_server.port);
-    let user = input(t, &state.user, "root").key("add-user").on_edit(|s: &mut Shell| &mut s.screens.add_server.user);
+    // A pasted `ssh root@host -p 2222` sets the port and the user: their fields say what it
+    // read, in the placeholder's grey, instead of the usual 22 and root.
+    let read = form.parsed();
+    let port = input(t, &state.port, read.port.as_deref().unwrap_or("22")).key("add-port").on_edit(|s: &mut Shell| &mut s.screens.add_server.port);
+    let user = input(t, &state.user, read.user.as_deref().unwrap_or("root")).key("add-user").on_edit(|s: &mut Shell| &mut s.screens.add_server.user);
     let bad_address = state.error.as_deref().is_some_and(|e| e == sshee_app::servers::NO_ADDRESS || e == sshee_app::servers::BAD_ADDRESS);
     let bad_port = state.error.as_deref() == Some(sshee_app::servers::BAD_PORT);
     let mut place = col().w_full().gap(8.0).child(

@@ -525,16 +525,6 @@ fn build() -> Vec<Row> {
         .saves(&["viewMode"])
         .words("split panes side by side"),
         Row::new(
-            "layout-tab-server",
-            Layout,
-            "Name the server on every tab",
-            Switch { get: |st| st.more().tabs_name_server, set: |st, v| st.set_more(|m| m.tabs_name_server = v) },
-        )
-        .group("Tabs")
-        .hint("Off, a server is named once, before its group of tabs.")
-        .adds(&["tabsNameServer"])
-        .words("tab title host name group"),
-        Row::new(
             "layout-tabs",
             Layout,
             "Where tabs go",
@@ -549,6 +539,19 @@ fn build() -> Vec<Row> {
         .hint("Under each server in the sidebar, or in a strip along the top. With the sidebar hidden, they run along the top.")
         .saves(&["tabsPlacement"])
         .words("tab strip bar sidebar top"),
+        Row::new(
+            "layout-tab-server",
+            Layout,
+            "Name the server on every tab",
+            Switch { get: |st| st.more().tabs_name_server, set: |st, v| st.set_more(|m| m.tabs_name_server = v) },
+        )
+        .group("Tabs")
+        .hint("Off, a server is named once, before its group of tabs.")
+        // Under each server, a tab sits under its server's name already: the row is for the
+        // strip along the top (where the tabs run too while the sidebar is hidden).
+        .when(|st| st.get().tabs_placement != TabsPlacement::Sidebar || !st.get().sidebar_visible)
+        .adds(&["tabsNameServer"])
+        .words("tab title host name group"),
         Row::new(
             "layout-compact",
             Layout,
@@ -1190,6 +1193,20 @@ mod tests {
         // Tabs under each server: the bar along the top holds no tabs, as 0.10 said.
         st.set(|s| s.tabs_placement = TabsPlacement::Sidebar);
         assert_eq!(compact.choice_labels(&st, Keyboard::Mac), ["Off", "Sidebar", "Top bar", "Both"]);
+    }
+
+    #[test]
+    fn naming_the_server_on_tabs_shows_only_while_tabs_run_along_the_top() {
+        let mut st = store();
+        let named = row("layout-tab-server").unwrap();
+        st.set(|s| s.tabs_placement = TabsPlacement::Top);
+        assert!(named.shows(&st, Platform::Linux));
+        // Under each server, every tab sits under its server's name already.
+        st.set(|s| s.tabs_placement = TabsPlacement::Sidebar);
+        assert!(!named.shows(&st, Platform::Linux));
+        // With the sidebar hidden they run along the top again, and the row is back.
+        st.set(|s| s.sidebar_visible = false);
+        assert!(named.shows(&st, Platform::Linux));
     }
 
     #[test]

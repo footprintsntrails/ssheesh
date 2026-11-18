@@ -76,6 +76,22 @@ impl Shell {
             card.hide();
         }
     }
+
+    /// The pointer came over a button in a server's row that has a tooltip of its own (the
+    /// chevron to its containers, the "+"), or left it: the card makes way for the tooltip, one
+    /// thing beside the pointer at a time, and comes back after a rest on the row.
+    pub fn hover_server_button(&mut self, index: usize, inside: bool, tx: &mut Tx) {
+        let now = tx.clock();
+        let card = &mut self.screens.server_card;
+        if inside {
+            card.hide();
+        } else if card.row == Some(index) {
+            card.over = Some(index);
+            card.since = now;
+            card.shown = false;
+            tx.wake_after(Duration::from_secs_f64(REST + 0.02));
+        }
+    }
 }
 
 /// Every frame: shows the card once the pointer has rested. True when it just came up.

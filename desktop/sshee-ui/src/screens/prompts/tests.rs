@@ -255,6 +255,25 @@ fn a_dropped_connection_counts_down_and_comes_back_online() {
 }
 
 #[test]
+fn the_pill_sits_at_the_top_right_and_steps_aside_for_what_opens_over_the_window() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Retrying { attempt: 2, retry_in_ms: 8000, reason: "The server stopped responding".into() });
+    w.status(0, LinkStatus::Connected { durable: true });
+    assert!(w.tree().contains("Back online"));
+    // At the right, where a terminal's first line seldom reaches, clear of the middle where
+    // the palette and the agents' list hang from the title.
+    let (term, pill) = (w.rt.presented("term-box").unwrap().0, w.rt.presented("session-note").unwrap().0);
+    assert!(pill[0] > term[0] + term[2] / 2.0, "{term:?} {pill:?}");
+    assert!((term[0] + term[2] - (pill[0] + pill[2]) - 20.0).abs() < 1.0, "not lined up with the find bar: {term:?} {pill:?}");
+    // Under the palette it would peek out above it: it waits until the palette goes.
+    w.rt.update(|s, tx| s.open_palette("", tx));
+    w.frames(2);
+    assert!(w.rt.find("session-note").is_none(), "the pill shows under the palette");
+    w.key(Key::Escape);
+    assert!(w.rt.find("session-note").is_some());
+}
+
+#[test]
 fn connecting_again_says_so_only_after_a_moment() {
     let mut w = Window::on_web();
     w.status(0, LinkStatus::Rejoining { attempt: 2 });

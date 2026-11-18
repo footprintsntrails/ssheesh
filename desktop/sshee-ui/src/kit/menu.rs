@@ -41,6 +41,13 @@ pub fn menu_row(t: &Theme, label: &str, keys: Option<&str>, state: RowState) -> 
     row_in(t, label, keys, state, t.l1)
 }
 
+/// A row that opens more choices in the menu's place ("Open in…"): a chevron at its end
+/// where a key cap would be.
+pub fn menu_row_more(t: &Theme, label: &str, state: RowState) -> El {
+    let ink = if matches!(state, RowState::Hot | RowState::Down) { t.on_color } else { t.l2 };
+    row_in(t, label, None, state, t.l1).expanded(false).child(crate::icons::icon(crate::icons::Icon::ChevronRight, 12.0, ink).a11y_hidden())
+}
+
 /// A row that deletes or discards: its words are red while it rests.
 pub fn menu_row_destructive(t: &Theme, label: &str, keys: Option<&str>, state: RowState) -> El {
     row_in(t, label, keys, state, t.red)

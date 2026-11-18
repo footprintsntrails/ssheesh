@@ -26,7 +26,8 @@
 //! ```
 //!
 //! Three rules keep the row still under the pointer, as a browser's is:
-//! - a tab under the pointer shows its close cross in room it always keeps (the kit);
+//! - a tab under the pointer shows its close cross in room it always keeps (the kit); in a
+//!   crowded row only the tab you're on has one, and the others' names get its room;
 //! - while the pointer is over the row, every tab keeps the width it had when the pointer
 //!   came, and the row stays crowded or roomy as it was: a tab renamed by its shell, or one
 //!   closed with the cross, doesn't move the next cross away from the pointer;
@@ -641,7 +642,10 @@ fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bo
     } else if working {
         own += 6.0 + 10.0;
     }
-    own += 6.0 + 14.0;
+    // Only the tab you're on keeps its cross in a crowded row (`kit::tab`).
+    if st.active {
+        own += crate::kit::tab::close_room();
+    }
     let mut lead = if st.starts_group { 11.0 + 2.0 } else { 0.0 };
     if leads {
         lead += 12.0 + rune::text::advance(server, theme::GROUP) + 2.0;

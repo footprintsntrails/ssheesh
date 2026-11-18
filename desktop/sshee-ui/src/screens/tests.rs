@@ -377,6 +377,9 @@ fn the_palettes_first_row_is_files_and_arrows_and_return_go_places() {
     for said in ["On web-7731", "Files", "recent: ~/shop/releases", "Go to", "Migration 0042", "Needs you", "db-main", "Window", "New terminal", "Settings"] {
         assert!(tree.contains(said), "{said} isn't in the palette: {tree}");
     }
+    // How to close it is said once, by the "esc" cap in the field, not again in the foot.
+    assert!(!tree.contains("Esc to close"), "{tree}");
+    assert!(w.has("palette-field"));
     assert_eq!(w.rt.state.screens.palette.hot, Some(0));
     // Return on the first row: Files, at the folder it was last in.
     w.key(Key::Enter, "");
@@ -506,6 +509,9 @@ fn a_server_typed_by_hand_is_added_and_its_terminal_opens() {
     // The address field has the keyboard.
     w.type_text("ssh root@203.0.113.77 -p 2222");
     assert!(w.tree().contains("Reads as root@203.0.113.77:2222"), "{}", w.tree());
+    // The port field says the port it read, not the usual 22.
+    let tree = w.tree();
+    assert!(tree.lines().any(|l| l == "2222") && !tree.lines().any(|l| l == "22"), "{tree}");
     assert_eq!(w.written(0), "", "typing in the dialog reached the shell");
     w.click("add-name");
     w.type_text("queue");
