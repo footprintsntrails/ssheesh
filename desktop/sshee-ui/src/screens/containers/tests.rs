@@ -417,3 +417,89 @@ fn the_servers_card_shows_its_load_while_it_is_looked_at() {
     });
     assert!(!card(&w.rt.state, crate::theme::Theme::of(true)));
 }
+
+impl Window {
+    fn right_click(&mut self, key: &str) {
+        let (x, y) = self.rt.find(key).unwrap_or_else(|| panic!("no element {key}"));
+        self.rt.secondary_down(x, y);
+        self.rt.secondary_up(x, y);
+        self.settle();
+    }
+
+    /// The sidebar shows the servers' names, the pointer on server row `i`.
+    fn wide_on(&mut self, i: usize) {
+        self.rt.update(|s, tx| s.change_settings(tx, |st| st.set(|x| x.sidebar_mode = sshee_app::model::SidebarMode::Wide)));
+        // The sidebar widens as it slides: let it land.
+        for _ in 0..40 {
+            self.rt.frame(0.05);
+        }
+        self.settle();
+        let (x, y) = self.rt.find(&format!("server-{i}")).unwrap();
+        self.rt.pointer_move(x, y);
+        self.settle();
+    }
+}
+
+#[test]
+fn a_servers_containers_show_under_it_in_the_list_with_their_menu() {
+    let mut w = Window::open();
+    w.wide_on(1);
+    w.click("expand-1");
+    assert!(w.rt.state.settings.get().expanded.iter().any(|k| k == WEB), "kept open, as 0.10 did");
+    // A look of its own, under an id no tab has, answered like a tab's.
+    let ask = w.world.lock().unwrap().asks.last().cloned().expect("a look");
+    assert!(matches!(ask.want, Want::List { .. }) && ask.server == WEB && ask.tab.0 > crate::screens::rail_tree::TREE_IDS - 10);
+    let tree = w.tree();
+    for said in ["shop", "shop-api-1", "shop-db-1", "nightly-backup, stopped"] {
+        assert!(tree.contains(said), "{said} isn't in: {tree}");
+    }
+    // A running one: a click opens a shell in it.
+    w.click("ct-1-0");
+    let active = w.rt.state.bench.active().unwrap();
+    assert_eq!((active.server.as_str(), active.container.as_ref().map(|c| (c.name.as_str(), c.run.clone()))), (WEB, Some(("shop-api-1", ContainerRun::Shell))));
+    // A stopped one (running ones first, projects first): its menu starts it, or follows its
+    // logs; no shell.
+    w.right_click("ct-1-3");
+    assert!(w.rt.find("ct-menu").is_some());
+    assert!(w.rt.find("ctm-start").is_some() && w.rt.find("ctm-logs").is_some() && w.rt.find("ctm-shell").is_none(), "{}", w.tree());
+    w.click("ctm-start");
+    assert!(w.rt.find("ct-menu").is_none());
+    let acted = w.world.lock().unwrap().asks.iter().any(|a| matches!(&a.want, Want::Act { name, action: Action::Start, .. } if name == "nightly-backup"));
+    assert!(acted, "the start reached the backend");
+    // How it went, in a toast, and the list looked at again.
+    assert!(w.tree().contains("Started nightly-backup"), "{}", w.tree());
+    // Closed again: no more looks.
+    w.wide_on(1);
+    w.click("expand-1");
+    assert!(w.rt.find("tree-1").is_none());
+    let before = w.lists();
+    w.rt.frame(30.0);
+    w.settle();
+    assert_eq!(w.lists(), before);
+}
+
+#[test]
+fn the_list_shows_a_connected_servers_cpu_and_ram_and_its_state() {
+    let mut w = Window::open();
+    w.rt.update(|s, tx| {
+        s.change_settings(tx, |st| st.set(|x| x.rail_status = sshee_app::model::RailStatus::Frame));
+        let id = s.bench.open(TabKind::Terminal, WEB);
+        s.bench.set_link(id, Link::Connected { durable: true });
+        s.bench.set_vitals(WEB, Some(Vitals { cpu: Some(0.38), memory: 0.93, disk: Some((0.44, None)), uptime_secs: 3_600, down: None, up: None }));
+    });
+    w.settle();
+    // On its icon in the rail, in each style; none when Settings says Off.
+    for style in [sshee_app::model::RailStatus::Frame, sshee_app::model::RailStatus::Bars, sshee_app::model::RailStatus::Pulse, sshee_app::model::RailStatus::Count] {
+        w.rt.update(|s, tx| s.change_settings(tx, |st| st.set(|x| x.rail_status = style.clone())));
+        w.settle();
+        assert!(w.rt.find("load").is_some(), "{style:?}");
+        assert!(w.tree().contains("CPU 38% · Memory 93% · Disk 44%"), "{style:?}");
+    }
+    // In the list: CPU and RAM under the name, and the warning.
+    w.wide_on(1);
+    assert!(w.rt.find("load-line").is_some());
+    assert!(w.tree().contains("Memory 93% used"), "{}", w.tree());
+    w.rt.update(|s, tx| s.change_settings(tx, |st| st.set(|x| x.rail_status = sshee_app::model::RailStatus::Off)));
+    w.settle();
+    assert!(w.rt.find("load-line").is_none() && w.rt.find("load").is_none());
+}

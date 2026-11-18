@@ -350,6 +350,21 @@ impl Tunnels {
         vec![Ask::Stop { id: id.to_owned() }, Ask::Save(self.saved.clone())]
     }
 
+    /// A server left the list: its tunnels stop and are forgotten (0.10's
+    /// `forgetHostTunnels`). Nothing to do when it had none.
+    pub fn forget(&mut self, host: &str) -> Vec<Ask> {
+        let Some(list) = self.saved.by_host.shift_remove(host) else { return vec![] };
+        let mut asks: Vec<Ask> = list
+            .iter()
+            .map(|t| {
+                self.states.remove(&t.id);
+                Ask::Stop { id: t.id.clone() }
+            })
+            .collect();
+        asks.push(Ask::Save(self.saved.clone()));
+        asks
+    }
+
     /// The backend's news. The address to open in the browser now, when a tunnel waiting to
     /// be opened came on.
     pub fn deliver(&mut self, reply: Reply) -> Option<String> {
@@ -635,6 +650,21 @@ mod tests {
         t.save("demo-web", None, "", socks(1080));
         assert_eq!(t.of("demo-web")[1].id, "tun-2");
         assert_eq!(t.of("demo-web")[1].name, None);
+    }
+
+    #[test]
+    fn a_server_taken_out_of_the_list_takes_its_tunnels_with_it() {
+        let mut t = Tunnels::default();
+        t.save("demo-web", None, "", local(3000, SERVER, 3000));
+        t.save("demo-web", None, "", socks(1080));
+        t.save("demo-db", None, "", local(5432, SERVER, 5432));
+        let asks = t.forget("demo-web");
+        assert_eq!(asks[..2], [Ask::Stop { id: "tun-1".into() }, Ask::Stop { id: "tun-2".into() }]);
+        assert!(matches!(&asks[2], Ask::Save(list) if !list.by_host.contains_key("demo-web") && list.by_host.contains_key("demo-db")));
+        assert!(t.of("demo-web").is_empty() && !t.states.contains_key("tun-1"));
+        assert_eq!(t.active("demo-db"), 1);
+        // A server without tunnels: nothing to ask.
+        assert!(t.forget("demo-web").is_empty());
     }
 
     #[test]

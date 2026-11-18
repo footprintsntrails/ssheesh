@@ -279,7 +279,11 @@ never touched.
   `divider-…` by their path in the tree; "Space between panes" is the dividers' room.
 - **The sidebar** (`shell/rail.rs`) is the rail of icons or 0.10's list of names; its edge drags
   (`layout::sidebar`: under 120 points it folds into icons) and Settings keeps `sidebarMode` and
-  `sidebarWidth`. Hidden or shown by its button, ⌘B / Ctrl+Shift+B and the palette.
+  `sidebarWidth`. Hidden or shown by its button, ⌘B / Ctrl+Shift+B and the palette. A server
+  shows its state (`Workbench::health`: connecting, lost, couldn't connect), its label (Prod,
+  Staging, Dev), its load as Settings' `railStatus` picks (`shell/rail_load.rs`), and in the
+  list a "+" for a new terminal and its containers (`screens/rail_tree.rs`, the Containers
+  tab's `Board` under an id no tab has). Pixel icons: `pixel_icons.rs`.
 - **Compact mode** (`shell/compact.rs`, ⇧⌘M / Ctrl+Shift+M): the sidebar, the top row or both
   stand aside, and slide in over the page while the pointer is at that edge.
 - Files' own shortcut is Ctrl+Shift+O off a Mac (⇧⌘E on one): 0.10's Split down has Ctrl+Shift+E.
@@ -300,7 +304,7 @@ never touched.
 | Containers (a tab kind): grouped by Compose project, state, ports, image, uptime, health; Start, Stop, Restart; logs (followed) and a shell, each in a new terminal tab (`Tab::container`, kept between runs); trouble said with the command that fixes it | `screens/containers.rs` | `containers.rs` (`Board`, `Ask`, `Reply`) |
 | Stats (a tab kind): CPU, load, memory, network and each disk with graphs over five minutes or meters, the machine's name and kernel, the busiest programs; the load on a server's card in the sidebar | `screens/stats.rs`, `kit/graph.rs` | `stats.rs`, `workbench/vitals.rs` (`History`) |
 | Tor: the popover over the sidebar's onion and the status bar's "Tor 84 ms" (the switch, a start's progress and what holds it up, the round trip, the log's last lines, new routes, start fresh) | `screens/tor.rs` | `tor.rs` |
-| Tunnels, from a server's menu: saved per server with their switches and states; a server's port here, a SOCKS proxy, and a port here on the server (1.0's own). Not built: 0.10's list of the server's web apps to open with one click | `screens/tunnels.rs` | `tunnels.rs` |
+| Tunnels, from a server's menu and the title's: saved per server with their switches and states; a server's port here, a SOCKS proxy, and a port here on the server (1.0's own). Not built: 0.10's list of the server's web apps to open with one click | `screens/tunnels.rs` | `tunnels.rs` |
 
 Tor: `desktop/app/src/live.rs` hears sshee-core's watcher (`Remote::tor_status`), looks at
 the round trip every 2 s (`Remote::tor_latency`), and after a switch moves what's connected
@@ -326,8 +330,7 @@ that opens it) and `screens.rs` (its `State`), plus `Backend` methods in `shell/
 |---|---|---|
 | Files, what is left (everything of 0.10's Files is built but these): a video player (Rune has no video element), the editor over 128 KB (Rune's text field shapes the whole text on every key), a card flying with the pointer while rows are dragged, drag onto a Files tab in the row of tabs | `screens/files.rs`, `screens/files/` | `files.rs`, `files/`, `paths.rs`, `dir_cache.rs` |
 | Transfers, what is left: notes that go away by themselves (`Transfers.tsx`, toasts of `Overlays.tsx`) | `screens/transfers.rs` | `transfers.rs` |
-| The load drawn on each server's sidebar icon (`RailLoad` in `ServerLoad.tsx`: Settings' `railStatus`) | `kit/rail.rs` | `stats.rs` (`Load`) |
-| Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, pixel icons, server load, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
+| Settings: built, themes and their editor included; the few rows marked `.later` in the catalogue wait for other features (tabs under each server, updates, the tour, tips) | `screens/settings.rs`, `screens/settings/` | `settings_store.rs`, `settings_store/` |
 | Tabs under each server in the sidebar (`Sidebar.tsx`); the wide sidebar is built | `shell/rail.rs` | `workbench.rs` |
 | A tab dragged out to its own window (`windows.ts`) | `shell/tabs.rs` | `workbench/layout.rs` |
 | An agent's question and answers; agent names on tabs (`agents.ts`, the design's popover). Built: names and "Needs you" on tabs, the card under a waiting agent's tab, the list of agents (Ctrl+Shift+A); the question is read by `sshee-term::question`. Not built: the buttons that start an agent | `screens/agent.rs`, `screens/agent/` | `agents.rs`, `agents/answer.rs` |

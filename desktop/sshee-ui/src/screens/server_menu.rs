@@ -382,7 +382,7 @@ pub fn linked(s: &mut Shell, tab: TabId) {
 /// A server's icon `size` points square, as the sidebar, the main menu's tiles and the menus
 /// draw it: its picture (never in streamer mode), else its icon in the colour you picked for
 /// it, else in `ink`, the quiet grey of where it's drawn (0.10's `HostIcon`, without the
-/// colour 0.10 made up from its name).
+/// colour 0.10 made up from its name); in pixels when Settings says so (`crate::pixel_icons`).
 pub fn glyph(s: &Shell, server: &Server, size: f32, ink: Color) -> El {
     glyph_of(s, &server.key(), &server.icon, size, ink)
 }
@@ -392,7 +392,12 @@ pub fn glyph_of(s: &Shell, key: &str, icon_id: &str, size: f32, ink: Color) -> E
     if let (Some(pixels), false) = (s.screens.server_menu.pictures.get(key), s.streaming()) {
         return rune::el().size(size, size).radius(size * 0.22).clip_rounded(size * 0.22).pixels_fit(pixels, SurfaceFit::Fill).a11y_hidden();
     }
-    icon(Icon::for_server(icon_id), size, own_color(s, key).unwrap_or(ink))
+    let ink = own_color(s, key).unwrap_or(ink);
+    // Settings → Layout → Server icons → Pixels: like the >_< logo.
+    if s.settings.get().icon_pack == sshee_app::model::IconPack::Pixel {
+        return crate::pixel_icons::pixel_icon(if key == "local" { "local" } else { icon_id }, size, ink);
+    }
+    icon(Icon::for_server(icon_id), size, ink)
 }
 
 /// Whether [`glyph_of`] draws the server's picture (streamer mode hides it).

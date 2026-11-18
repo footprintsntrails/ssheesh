@@ -465,7 +465,6 @@ fn build() -> Vec<Row> {
         )
         .group("Sidebar")
         .hint("Clean lines, or pixels like the >_< logo.")
-        .later("Lines only. Pixel icons aren't drawn yet.")
         .saves(&["iconPack"])
         .words("icon pack pixel line style look"),
         Row::new(
@@ -595,8 +594,7 @@ fn build() -> Vec<Row> {
             },
         )
         .group("Servers")
-        .hint("How busy each open server is, on its icon.")
-        .later("Not shown on the icons yet. The status bar shows the load of the server on screen.")
+        .hint("How busy each connected server is: on its icon, and as CPU and RAM under its name in the list.")
         .saves(&["railStatus"])
         .words("cpu memory busy meter stats"),
         // ------------------------------------------------------------------ Appearance
@@ -1172,6 +1170,8 @@ mod tests {
             "look-accent",
             "look-logo",
             "layout-title-bar",
+            "layout-server-load",
+            "layout-server-icons",
         ] {
             assert!(row(key).is_some_and(Row::works), "{key}");
         }

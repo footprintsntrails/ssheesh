@@ -11,6 +11,7 @@ pub mod notes;
 mod pane_marks;
 mod place;
 pub mod rail;
+pub mod rail_load;
 pub mod sheet;
 pub mod split;
 pub mod state;

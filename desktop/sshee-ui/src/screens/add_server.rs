@@ -9,8 +9,9 @@
 //!     Form   add-body (scrolls) · add-from-<source> rows · add-address, add-port, add-user ·
 //!            add-key | add-password | add-manager · key-usual, key-0 …, key-other, add-key-file ·
 //!            add-secret, add-eye, add-remember · manager-0 … · add-look (icons open in place:
-//!            look-<id>), look-color-0 … 5, look-env-<prod|staging|dev> · add-name ·
-//!            add-test, test-step-0 …, add-trust · add-error · add-cancel, add-save
+//!            look-<id>), look-color-0 … 5, look-hex (your own colour), look-env-<prod|staging|
+//!            dev> · add-picture, add-no-picture · add-name · add-test, test-step-0 … (step-copy:
+//!            tmux's install command), add-trust · add-error · add-cancel, add-save
 //!     List   add-back · pick-0 … (ticks) · add-all, add-none · add-cancel, add-import
 //! ```
 //!
@@ -22,8 +23,10 @@
 //! screen reader, trace or tree ever holds it; the eye shows its characters, nothing else) and
 //! leaves this file only inside an `Ask::Add` or `Ask::Test`.
 
-use rune::{col, row, text, text_input, El, ScrollSpec, TextEdit, Tx};
-use sshee_app::labels::{icon_name, env_name, env_order, HOST_COLORS, HOST_ICONS};
+use std::path::PathBuf;
+
+use rune::{col, row, text, text_input, El, FileDialogOptions, ScrollSpec, TextEdit, Tx};
+use sshee_app::labels::{env_name, env_order, icon_name, parse_color, HOST_COLORS, HOST_ICONS};
 use sshee_app::model::EnvLabel;
 use sshee_app::servers::{
     import_button, old_passwords_question, Answer, Ask, Connection, Form, LocalAuth, Password, PickedLook, SignIn, Source, Sources, StepTone, Tested, OLD_PASSWORDS_MEANING,
@@ -86,6 +89,11 @@ pub struct State {
     pub env: Option<EnvLabel>,
     /// The icons are open under the name.
     pub icons_open: bool,
+    /// A colour of your own, typed as `#2389e2`: it wins over the swatches while it reads as one.
+    pub hex: TextEdit,
+    /// A picture of your own for its icon, made into one once the server is added
+    /// (`Ask::SetImage`, as the server's menu does).
+    pub picture: Option<PathBuf>,
     /// What's wrong, under the form.
     pub error: Option<String>,
     /// The backend is saving.
@@ -125,6 +133,8 @@ impl Default for State {
             look: None,
             env: None,
             icons_open: false,
+            hex: TextEdit::default(),
+            picture: None,
             error: None,
             busy: false,
             testing: false,
@@ -156,9 +166,16 @@ impl State {
             password: if with_password { Password::new(self.password.text.clone()) } else { Password::new("•".repeat(self.password.text.chars().count())) },
             remember: self.remember,
             agent: self.agent.clone(),
-            look: self.look.clone(),
+            look: self.look(),
             env: self.env.clone(),
         }
+    }
+
+    /// The look picked, with the colour typed in the field when it reads as one.
+    fn look(&self) -> Option<PickedLook> {
+        let Some(color) = parse_color(&self.hex.text) else { return self.look.clone() };
+        let icon = self.look.as_ref().map(|l| l.icon.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| "server".into());
+        Some(PickedLook { icon, color, image: None })
     }
 
     /// The last check, while it still holds for the form.
@@ -270,7 +287,12 @@ impl Shell {
             Answer::Added { server, name, warning } => {
                 // "Add and connect": the dialog goes and the new server's terminal opens. A
                 // half-right add (the keychain refused the password) still added it, and says.
+                let picture = state.picture.take();
                 *state = State::default();
+                // Its picture: made into its icon now that it has a place in the list.
+                if let Some(path) = picture {
+                    self.backend_mut().servers(Ask::SetImage { server: server.clone(), path });
+                }
                 if self.bench.server(&server).is_some() {
                     self.bench.go_to(&server);
                 }
@@ -295,8 +317,17 @@ impl Shell {
                 }
                 self.offer_old_passwords(old_passwords);
             }
-            // The list that comes with these says the rest.
-            Answer::Removed { .. } | Answer::Changed => {}
+            // A server taken out of the list stops its tunnels and forgets them (0.10 did);
+            // one from ~/.ssh/config is only hidden, and may come back with them.
+            Answer::Removed { server } => {
+                if let Some(host) = sshee_app::servers::host_id(&server).filter(|_| !server.starts_with("host:cfg:")) {
+                    for ask in self.screens.tunnels.tunnels.forget(host) {
+                        self.backend_mut().tunnels(ask);
+                    }
+                }
+            }
+            // The list that comes with it says the rest.
+            Answer::Changed => {}
             Answer::Detected { server, icon } => self.server_detected(&server, icon.is_some()),
             Answer::Note(note) => {
                 let note = self.text_shown(&note).into_owned();
@@ -446,7 +477,8 @@ fn sign_in(state: &State, t: &Theme) -> El {
 
 /// "In your list": the icon (its picker opens in place), the colour, the label, the name.
 fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
-    let look = state.look.clone().unwrap_or_default();
+    let picked = state.look();
+    let look = picked.clone().unwrap_or_default();
     let icon_id = if look.icon.is_empty() { "server" } else { look.icon.as_str() };
     let ink = rune::color::hex(&look.color).unwrap_or(t.l2);
     let button = rune::el()
@@ -463,7 +495,7 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
         .label(format!("Icon: {}. Change", icon_name(icon_id)))
         .help("Icon")
         .on_press_tx(|s: &mut Shell, _| s.screens.add_server.icons_open ^= true)
-        .child(icon(Icon::for_server(icon_id), 17.0, if state.look.is_some() { ink } else { t.l2 }));
+        .child(icon(Icon::for_server(icon_id), 17.0, if picked.is_some() { ink } else { t.l2 }));
     let name = input(t, &state.name, if shown_host.is_empty() { "Name" } else { shown_host }).key("add-name").on_edit(|s: &mut Shell| &mut s.screens.add_server.name);
     let mut body = col().w_full().gap(8.0).child(row().w_full().gap(8.0).items_center().child(button).child(field(t, name, false).grow(1.0).min_w(0.0)));
     if state.icons_open {
@@ -496,7 +528,7 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
     }
     let mut colors = row().gap(6.0).items_center().role("radiogroup").label_static("Icon color");
     for (i, hex) in HOST_COLORS.into_iter().enumerate() {
-        let chosen = state.look.as_ref().is_some_and(|l| l.color.eq_ignore_ascii_case(hex));
+        let chosen = picked.as_ref().is_some_and(|l| l.color.eq_ignore_ascii_case(hex));
         let mut b = rune::el()
             .key(format!("look-color-{i}"))
             .size(22.0, 22.0)
@@ -511,6 +543,8 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
                 let st = &mut s.screens.add_server;
                 let icon = st.look.as_ref().map(|l| l.icon.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| "server".into());
                 st.look = Some(PickedLook { icon, color: hex.to_owned(), image: None });
+                // A swatch picked: the colour typed before steps aside.
+                st.hex = TextEdit::default();
             })
             .child(rune::el().size(16.0, 16.0).radius(8.0).fill(rune::color::hex(hex).unwrap_or(t.l2)));
         if chosen {
@@ -532,8 +566,46 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
         }),
     )
     .label_static("Label");
+    // Any other colour, typed: it shows on the icon as soon as it reads as one.
+    let typed_bad = !state.hex.text.trim().is_empty() && parse_color(&state.hex.text).is_none();
+    let hex = code_input(t, &state.hex, "#2389e2").key("look-hex").label_static("Your own color").on_edit(|s: &mut Shell| &mut s.screens.add_server.hex);
+    colors = colors.child(field(t, hex, typed_bad).w(92.0).ml(4.0));
     body = body.child(row().w_full().gap(12.0).items_center().flex_wrap().child(colors).child(rune::spacer()).child(labels));
+    // A picture of your own in place of the icon.
+    let mut picture = row().w_full().gap(8.0).items_center();
+    match &state.picture {
+        Some(path) => {
+            let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            picture = picture
+                .child(icon(Icon::Image, 15.0, t.l2))
+                .child(text(file).key("add-picture-name").font(theme::NOTE).color(t.l1).single_line().truncate().shrink().min_w(0.0))
+                .child(push_button(t, "Pick another…", Push::Quiet, true).key("add-picture").on_press_tx(|_: &mut Shell, tx| pick_picture(tx)))
+                .child(push_button(t, "Remove", Push::Quiet, true).key("add-no-picture").on_press_tx(|s: &mut Shell, _| s.screens.add_server.picture = None));
+        }
+        None => picture = picture.child(push_button(t, "Use a picture…", Push::Quiet, true).key("add-picture").help("A picture of your own in place of the icon").on_press_tx(|_: &mut Shell, tx| pick_picture(tx))),
+    }
+    body = body.child(picture);
     section(t, "In your list", body)
+}
+
+/// "Copy": the command to the clipboard, and a toast that says so.
+fn copy_command(t: &Theme, command: &str) -> El {
+    let words = command.to_owned();
+    push_button(t, "Copy", Push::Quiet, true).key("step-copy").label(format!("Copy {command}")).on_press_tx(move |s: &mut Shell, tx| {
+        tx.copy(words.clone());
+        s.toast(Toast::info("Copied").body(words.clone()));
+    })
+}
+
+/// "Use a picture…": the system's picker; the file is made into the icon once the server is
+/// added.
+fn pick_picture(tx: &mut Tx) {
+    let options = FileDialogOptions { title: "Choose a picture".into(), ..Default::default() }.filter("Pictures", &["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico"]);
+    tx.open_file(options, |s: &mut Shell, result, _| match result {
+        Ok(Some(path)) => s.screens.add_server.picture = Some(path),
+        Ok(None) => {}
+        Err(e) => s.screens.add_server.error = Some(format!("Couldn't open the file picker. {e}")),
+    });
 }
 
 /// "Check before adding" and what it found (0.10's `TestResult`).
@@ -552,6 +624,18 @@ fn check(state: &State, t: &Theme, ready: bool) -> El {
         let mut words = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(text(&step.title).font(theme::TEXT).color(t.l1).wrap());
         if let Some(detail) = &step.detail {
             words = words.child(text(detail).font(theme::SMALL).color(t.l2).wrap());
+        }
+        // The command that fixes it, to copy (0.10's install line for tmux).
+        if let Some(command) = &step.command {
+            words = words.child(
+                row()
+                    .key("step-command")
+                    .w_full()
+                    .gap(6.0)
+                    .items_center()
+                    .child(rune::el().px(8.0).py(4.0).radius(theme::RADIUS_ROW).fill(t.hov2).grow(1.0).min_w(0.0).child(text(command).font(theme::CODE).color(t.l1).wrap()))
+                    .child(copy_command(t, command)),
+            );
         }
         if step.tone == StepTone::Ask {
             for (kind, sha) in tested.fingerprints() {

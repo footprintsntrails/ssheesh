@@ -7,6 +7,7 @@ pub mod icons;
 pub mod kit;
 pub mod looks;
 pub mod meter;
+pub mod pixel_icons;
 pub mod proto;
 pub mod screens;
 pub mod shell;

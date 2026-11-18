@@ -50,6 +50,8 @@ struct World {
     /// Every session, with its tab's machine, in the order they were made.
     sessions: Vec<(String, Arc<Mutex<Seen>>)>,
     asks: Vec<Ask>,
+    /// What the tunnels were asked.
+    tunnels: Vec<sshee_app::tunnels::Ask>,
 }
 
 /// A backend with fake sessions and the server list in memory.
@@ -92,6 +94,9 @@ impl Backend for FakeBackend {
     }
     fn replays(&self) -> bool {
         true
+    }
+    fn tunnels(&mut self, ask: sshee_app::tunnels::Ask) {
+        self.world.lock().unwrap().tunnels.push(ask);
     }
 }
 

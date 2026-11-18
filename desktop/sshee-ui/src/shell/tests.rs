@@ -584,3 +584,6 @@ mod hotkeys;
 /// What 0.10 had around a terminal: browse its folder, "Not kept", progress, asleep, paths at
 /// their lines, files dropped on it.
 mod ported;
+
+/// The sidebar's servers: their state, labels, load, the row's "+", the title's menu.
+mod sidebar;

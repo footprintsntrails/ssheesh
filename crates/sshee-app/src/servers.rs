@@ -328,6 +328,8 @@ pub struct Step {
     pub tone: StepTone,
     pub title: String,
     pub detail: Option<String>,
+    /// A command that fixes it, to copy (tmux's install).
+    pub command: Option<String>,
 }
 
 /// The command offered when tmux isn't on a server.
@@ -336,7 +338,7 @@ pub const INSTALL_TMUX: &str = "sudo apt install tmux";
 impl Tested {
     /// The result, one step a line, in 0.10's words.
     pub fn steps(&self) -> Vec<Step> {
-        let step = |tone, title: &str, detail: Option<String>| Step { tone, title: title.to_owned(), detail };
+        let step = |tone, title: &str, detail: Option<String>| Step { tone, title: title.to_owned(), detail, command: None };
         let mut out = Vec::new();
         match &self.host_key {
             HostKeyState::Unreachable { message } => {
@@ -354,7 +356,10 @@ impl Tested {
         }
         match self.tmux {
             Some(true) if self.signed_in => out.push(step(StepTone::Ok, "tmux is installed: sessions survive dropped connections", None)),
-            Some(false) if self.signed_in => out.push(step(StepTone::Warn, "tmux isn't installed", Some(format!("Terminals work, but a dropped connection ends them. Install it on the server with {INSTALL_TMUX}")))),
+            Some(false) if self.signed_in => out.push(Step {
+                command: Some(INSTALL_TMUX.to_owned()),
+                ..step(StepTone::Warn, "tmux isn't installed", Some("Terminals work, but a dropped connection ends them. Install it on the server with:".into()))
+            }),
             _ => {}
         }
         out
@@ -1414,9 +1419,10 @@ mod tests {
         assert_eq!(down.steps().len(), 1);
         let bare = Tested { host_key: HostKeyState::Known, signed_in: true, tmux: Some(false), message: None };
         assert_eq!(bare.steps().iter().map(|s| s.tone).collect::<Vec<_>>(), [StepTone::Ok, StepTone::Ok, StepTone::Warn]);
-        assert!(bare.steps()[2].detail.as_deref().unwrap().ends_with(INSTALL_TMUX));
+        assert!(bare.steps()[2].detail.as_deref().unwrap().ends_with("Install it on the server with:"));
+        assert_eq!(bare.steps()[2].command.as_deref(), Some(INSTALL_TMUX));
         let refused = Tested { host_key: HostKeyState::Known, signed_in: false, tmux: None, message: Some("Permission denied (publickey).".into()) };
-        assert_eq!(refused.steps()[1], Step { tone: StepTone::Bad, title: "Couldn't sign in".into(), detail: Some("Permission denied (publickey).".into()) });
+        assert_eq!(refused.steps()[1], Step { tone: StepTone::Bad, title: "Couldn't sign in".into(), detail: Some("Permission denied (publickey).".into()), command: None });
         let changed = Tested { host_key: HostKeyState::Changed, signed_in: false, tmux: None, message: None };
         assert_eq!(changed.steps()[1].tone, StepTone::Bad);
         assert!(!changed.can_trust());
