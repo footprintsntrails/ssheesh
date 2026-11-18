@@ -509,6 +509,9 @@ fn a_server_typed_by_hand_is_added_and_its_terminal_opens() {
     // The address field has the keyboard.
     w.type_text("ssh root@203.0.113.77 -p 2222");
     assert!(w.tree().contains("Reads as root@203.0.113.77:2222"), "{}", w.tree());
+    // The port field says the port it read, not the usual 22.
+    let tree = w.tree();
+    assert!(tree.lines().any(|l| l == "2222") && !tree.lines().any(|l| l == "22"), "{tree}");
     assert_eq!(w.written(0), "", "typing in the dialog reached the shell");
     w.click("add-name");
     w.type_text("queue");
