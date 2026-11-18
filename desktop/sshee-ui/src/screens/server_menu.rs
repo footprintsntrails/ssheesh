@@ -1,6 +1,7 @@
 //! A server's menu: a right click on its icon in the sidebar or on its tile on the main menu
 //! (0.10's server menu in `Sidebar.tsx`, with its look picker and its "Remove?" question).
-//! New terminal, Files, the two side by side, Stats, Containers and its tunnels; its address
+//! New terminal, Files, the two side by side, Stats, Containers, its tunnels and "Free up disk
+//! space"; its address
 //! to copy; a name of your own; its icon, colour or picture; its Production, Staging or
 //! Development label; forgetting its saved password; and taking it out of the list, asked by
 //! name first.
@@ -93,6 +94,7 @@ enum Item {
     Stats,
     Containers,
     Tunnels,
+    Disk,
     CopyAddress,
     Rename,
     Look,
@@ -112,6 +114,7 @@ fn groups(server: &Server, saved_password: bool, streaming: bool) -> Vec<Vec<Ite
     let mut groups = vec![vec![Item::NewTerminal, Item::Files, Item::SideBySide, Item::Stats, Item::Containers]];
     if !server.is_local() {
         groups[0].push(Item::Tunnels);
+        groups[0].push(Item::Disk);
         let mut own = vec![Item::Rename, Item::Look];
         if !streaming && !server.address.is_empty() {
             own.insert(0, Item::CopyAddress);
@@ -242,6 +245,7 @@ impl Shell {
                 self.screens.server_menu.open = None;
                 self.open_tunnels(&key, tx);
             }
+            Item::Disk => self.open_disk(&key, tx),
             Item::CopyAddress => {
                 tx.copy(server.address.clone());
                 self.toast(Toast::info("Copied the address"));
@@ -406,6 +410,7 @@ fn menu_page(t: &Theme, server: &Server, saved_password: bool, streaming: bool, 
                 Item::Stats => ListRow { icon: Some(Icon::Stats), label: "Stats", state, ..ListRow::default() },
                 Item::Containers => ListRow { icon: Some(Icon::Cube), label: "Containers", state, ..ListRow::default() },
                 Item::Tunnels => ListRow { icon: Some(Icon::Link), label: "Tunnels…", state, ..ListRow::default() },
+                Item::Disk => ListRow { icon: Some(Icon::Drive), label: "Free up disk space…", state, ..ListRow::default() },
                 Item::CopyAddress => ListRow { icon: Some(Icon::Copy), label: "Copy address", state, ..ListRow::default() },
                 Item::Rename => ListRow { icon: Some(Icon::Pencil), label: "Rename…", state, ..ListRow::default() },
                 Item::Look => ListRow { icon: Some(Icon::Swatch), label: "Icon and color…", state, ..ListRow::default() },

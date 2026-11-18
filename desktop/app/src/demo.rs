@@ -9,6 +9,7 @@
 //! Each server's files are a made-up tree in memory (`files`).
 
 mod containers;
+mod disk;
 mod edit;
 mod files;
 mod recipes;
@@ -127,6 +128,8 @@ pub struct DemoBackend {
     card: String,
     /// Each machine's made-up containers.
     containers: containers::DemoContainers,
+    /// What each machine's made-up disks have had cleaned.
+    disk: disk::DemoDisk,
 }
 
 impl Default for DemoBackend {
@@ -150,7 +153,7 @@ impl DemoBackend {
     }
 
     pub fn new() -> DemoBackend {
-        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), welcome: false, whats_new: false, card: "hostkey-new".into(), containers: containers::DemoContainers::new(), update: false }
+        DemoBackend { book: book(), remote: None, files: files::DemoFiles::new(WEB, STAGING, BACKUPS, DB), edit: edit::DemoEdit::default(), welcome: false, whats_new: false, card: "hostkey-new".into(), containers: containers::DemoContainers::new(), disk: disk::DemoDisk::default(), update: false }
     }
 
     /// The welcome at the start (`--demo-welcome`), "What's new" (`--demo-whats-new`).
@@ -356,6 +359,14 @@ impl Backend for DemoBackend {
     fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
         if let Some(remote) = &self.remote {
             remote.recipes(recipes::answer(ask));
+        }
+    }
+
+    /// Made-up disks, folders and cleanups (`disk`): through the window's queue.
+    fn disk(&mut self, ask: sshee_app::disk::Ask) {
+        let reply = self.disk.answer(ask);
+        if let Some(remote) = &self.remote {
+            remote.disk(reply);
         }
     }
 

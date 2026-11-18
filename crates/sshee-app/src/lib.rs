@@ -42,5 +42,6 @@ pub mod tor;
 pub mod tunnels;
 pub mod containers;
 pub mod stats;
+pub mod disk;
 pub mod windows;
 pub mod dropped;
