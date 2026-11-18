@@ -81,6 +81,8 @@ pub struct State {
     /// Whether the system was dark when Settings last drew (which theme is on screen while
     /// following it).
     pub(crate) system_dark: std::cell::Cell<bool>,
+    /// The rows' column as last laid out, its padding included; 0 before the first layout.
+    rows_width: f32,
 }
 
 impl Default for State {
@@ -100,11 +102,22 @@ impl Default for State {
             looks: looks::Looks::default(),
             wink: crate::looks::Wink::default(),
             system_dark: std::cell::Cell::new(true),
+            rows_width: 0.0,
         }
     }
 }
 
 impl State {
+    /// How wide a box of rows is: the column less its padding, or the most it can be before
+    /// it has been laid out.
+    pub(crate) fn row_width(&self) -> f32 {
+        if self.rows_width > 56.0 {
+            self.rows_width - 56.0
+        } else {
+            CONTENT_WIDTH
+        }
+    }
+
     /// Takes the store's text values into the fields that show them (when Settings opens).
     pub(crate) fn sync(&mut self, store: &SettingsStore) {
         for row in catalog::rows() {
@@ -238,13 +251,18 @@ fn nav(s: &Shell, t: &'static Theme) -> El {
                     jump(s, &first, tx);
                 }
             })
-            .on_input_key(|s: &mut Shell, ev, _| {
-                // Esc empties the field first; a second one leaves Settings.
-                let typed = !s.screens.settings.search.text.is_empty();
-                if ev.key == Key::Escape && typed {
+            .on_input_key(|s: &mut Shell, ev, tx| {
+                // Esc empties the field first; a second one leaves Settings (the field has the
+                // keyboard as Settings opens).
+                if ev.key != Key::Escape {
+                    return false;
+                }
+                if s.screens.settings.search.text.is_empty() {
+                    s.close_settings(tx);
+                } else {
                     s.screens.settings.search.clear();
                 }
-                ev.key == Key::Escape && typed
+                true
             }),
     )
     .w_full();
@@ -289,9 +307,11 @@ fn nav(s: &Shell, t: &'static Theme) -> El {
 /// The section's name, and at its right what applies to the whole section.
 fn head(s: &Shell, t: &'static Theme) -> El {
     let section = s.screens.settings.section;
+    // As wide as the rows under it, so Reset and Close end where they do.
     let mut head = row()
         .key("settings-head")
         .w_full()
+        .max_w(CONTENT_WIDTH + 56.0)
         .h(52.0)
         .px(28.0)
         .gap(8.0)
@@ -332,7 +352,9 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom: false })
         .scroll_margin(24.0)
-        .child(col().key("settings-rows").w_full().max_w(CONTENT_WIDTH + 56.0).px(28.0).pb(28.0).gap(10.0).children(body));
+        .child(col().key("settings-rows").w_full().max_w(CONTENT_WIDTH + 56.0).px(28.0).pb(28.0).gap(10.0).children(body).on_layout(|s: &mut Shell, rect: [f32; 4]| {
+            s.screens.settings.rows_width = rect[2];
+        }));
     row()
         .key("settings")
         .w_full()

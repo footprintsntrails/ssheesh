@@ -308,7 +308,7 @@ impl Shell {
         let typed = self.screens.server_menu.hex.text.clone();
         match sshee_app::labels::parse_color(&typed) {
             Some(color) => self.server_menu_look(|server| Ask::SetColor { server, color }),
-            None => self.screens.server_menu.error = Some("That isn't a colour. Type it as #2389e2.".into()),
+            None => self.screens.server_menu.error = Some("That isn't a color. Type it as #2389e2.".into()),
         }
     }
 
@@ -408,7 +408,7 @@ fn menu_page(t: &Theme, server: &Server, saved_password: bool, streaming: bool, 
                 Item::Tunnels => ListRow { icon: Some(Icon::Link), label: "Tunnels…", state, ..ListRow::default() },
                 Item::CopyAddress => ListRow { icon: Some(Icon::Copy), label: "Copy address", state, ..ListRow::default() },
                 Item::Rename => ListRow { icon: Some(Icon::Pencil), label: "Rename…", state, ..ListRow::default() },
-                Item::Look => ListRow { icon: Some(Icon::Swatch), label: "Icon and colour…", state, ..ListRow::default() },
+                Item::Look => ListRow { icon: Some(Icon::Swatch), label: "Icon and color…", state, ..ListRow::default() },
                 Item::Env(env) => ListRow { label: env_name(env), checked: Some(server.env.as_ref() == Some(env)), state, ..ListRow::default() },
                 Item::ForgetPassword => ListRow { icon: Some(Icon::Key), label: "Forget saved password", state, ..ListRow::default() },
                 Item::Remove => ListRow { icon: Some(Icon::Bin), label: if from_config(server) { "Hide from list…" } else { "Remove server…" }, destructive: true, state, ..ListRow::default() },
@@ -546,12 +546,12 @@ fn look_page(s: &Shell, t: &Theme, server: &Server, shown: &str) -> El {
         .flex_wrap()
         .gap(4.0)
         .role("radiogroup")
-        .label_static("Colour")
-        .children(HOST_COLORS.into_iter().enumerate().map(|(i, hex)| swatch(t, format!("color-{i}"), hex, format!("Colour {}", i + 1), is(hex))))
-        .children(MORE_COLORS.into_iter().enumerate().map(|(i, hex)| swatch(t, format!("more-{i}"), hex, format!("More colour {}", i + 1), is(hex))));
+        .label_static("Color")
+        .children(HOST_COLORS.into_iter().enumerate().map(|(i, hex)| swatch(t, format!("color-{i}"), hex, format!("Color {}", i + 1), is(hex))))
+        .children(MORE_COLORS.into_iter().enumerate().map(|(i, hex)| swatch(t, format!("more-{i}"), hex, format!("More color {}", i + 1), is(hex))));
     let hex = code_input(t, &state.hex, "#2389e2")
         .key("sm-hex")
-        .label_static("Your own colour")
+        .label_static("Your own color")
         .on_edit(|s: &mut Shell| &mut s.screens.server_menu.hex)
         .on_submit(|s: &mut Shell, _| s.server_menu_hex());
     let own_color = row()
@@ -575,7 +575,7 @@ fn look_page(s: &Shell, t: &Theme, server: &Server, shown: &str) -> El {
         .w_full()
         .padding(14.0)
         .gap(10.0)
-        .child(title(t, &format!("Icon and colour for {shown}")))
+        .child(title(t, &format!("Icon and color for {shown}")))
         .child(row().w_full().gap(4.0).items_center().child(auto).child(check))
         .child(icons)
         .child(colors)

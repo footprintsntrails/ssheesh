@@ -340,8 +340,9 @@ const REPO: &str = "https://github.com/footprintsntrails/ssheesh";
 /// 0.10's settings that no row shows: what it saved for itself (how far the hello got, which
 /// tips were seen, which places were taken out, sizes dragged by hand). They are kept and
 /// brought over all the same.
-pub const KEPT_UNSEEN: [&str; 9] =
-    ["onboarded", "onboardingVersion", "lastSeenVersion", "expanded", "hiddenPlaces", "previewWidth", "compactLast", "sidebarWidth", "welcomedHosts"];
+/// `gpuRendering` too: 1.0 draws the whole window with the GPU, so its switch had nothing to do.
+pub const KEPT_UNSEEN: [&str; 10] =
+    ["onboarded", "onboardingVersion", "lastSeenVersion", "expanded", "hiddenPlaces", "previewWidth", "compactLast", "sidebarWidth", "welcomedHosts", "gpuRendering"];
 
 /// Every row, section by section in the list's order.
 pub fn rows() -> &'static [Row] {
@@ -431,7 +432,7 @@ fn build() -> Vec<Row> {
             },
         )
         .hint("Under each server in the sidebar, or in a strip along the top. Never both.")
-        .later("Tabs run along the top for now. Tabs under each server come with the wide sidebar.")
+        .later("Tabs run along the top. Tabs under each server aren't built yet.")
         .saves(&["tabsPlacement"])
         .words("tab strip bar sidebar top"),
         Row::new(
@@ -527,7 +528,7 @@ fn build() -> Vec<Row> {
             },
         )
         .hint("Clean lines, or pixels like the >_< logo.")
-        .later("Lines for now. Pixel icons come later.")
+        .later("Lines only. Pixel icons aren't drawn yet.")
         .saves(&["iconPack"])
         .words("icon pack pixel line style look"),
         Row::new(
@@ -542,7 +543,7 @@ fn build() -> Vec<Row> {
             },
         )
         .hint("How busy each open server is, shown on its icon. Amber means a disk or memory is nearly full.")
-        .later("Comes later. The status bar shows the server on screen.")
+        .later("Not shown on the icons yet. The status bar shows the load of the server on screen.")
         .saves(&["railStatus"])
         .words("cpu memory busy meter stats"),
         Row::new("layout-ssh-config", Layout, "Servers from ~/.ssh/config", Buttons(&[("Choose…", Action::AddServer)]))
@@ -803,10 +804,6 @@ fn build() -> Vec<Row> {
         })
         .saves(&["idleSleep"])
         .words("idle afk sleep disconnect unused away tmux timeout"),
-        Row::new("term-gpu", Terminal, "Draw with the GPU", Switch { get: |st| st.get().gpu_rendering, set: |st, v| st.set(|s| s.gpu_rendering = v) })
-            .later("The whole window is drawn with the GPU now, so there is nothing to switch.")
-            .saves(&["gpuRendering"])
-            .words("webgl graphics blank render"),
         Row::new(
             "term-count-typing",
             Terminal,
@@ -840,7 +837,7 @@ fn build() -> Vec<Row> {
         Row::new(
             "term-welcome-parts",
             Terminal,
-            "SSHeesh's shows",
+            "SSHeesh's welcome shows",
             Toggles {
                 options: &[("logo", "Logo"), ("system", "System"), ("usage", "Memory and disk"), ("status", "Containers and updates")],
                 get: |st| st.get().welcome_parts.iter().map(|p| p.as_str().to_owned()).collect(),
@@ -1128,7 +1125,7 @@ mod tests {
     #[test]
     fn a_row_that_comes_later_says_so_in_one_line() {
         let later: Vec<&Row> = rows().iter().filter(|r| !r.works()).collect();
-        // Only what belongs to features still being built, and the GPU switch 1.0 has no use for.
+        // Only what belongs to features still being built.
         assert!(!later.is_empty() && later.len() <= 8, "{}", later.len());
         for row in later {
             let Status::Later(why) = row.status else { unreachable!() };
@@ -1284,7 +1281,7 @@ mod tests {
             assert!(terminal.contains(&key), "{key}");
         }
         // Every row, as 0.10's Reset: the ones another part of the app honours too.
-        for key in ["terminalFont", "gpuRendering", "countTyping", "terminalPadding", "idleSleep"] {
+        for key in ["terminalFont", "countTyping", "terminalPadding", "idleSleep"] {
             assert!(terminal.contains(&key), "{key}");
         }
         // What you made stays.

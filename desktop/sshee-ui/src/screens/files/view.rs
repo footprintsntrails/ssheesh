@@ -51,7 +51,9 @@ const TOOLBAR: f32 = 40.0;
 const SIZE_W: f32 = 76.0;
 const DATE_W: f32 = 132.0;
 const MODE_W: f32 = 90.0;
+/// The menu's least and most width: it widens to its longest line in between.
 const MENU_W: f32 = 232.0;
+const MENU_MAX_W: f32 = 360.0;
 /// The grip on the open file's left edge, dragged to change its width.
 const GRIP_W: f32 = 6.0;
 
@@ -142,9 +144,8 @@ pub struct Ui {
     pub(super) drop_over: bool,
     /// The open file's width when its edge was taken, and now, while it's dragged.
     grip: Option<(f64, f64)>,
-    /// The pane's width and the open file's beside the list, as last laid out.
+    /// The pane's width, as last laid out.
     pub(super) width: f32,
-    pub(super) preview_w: Option<f32>,
     /// How far the path is scrolled sideways by the wheel.
     path_x: f32,
 }
@@ -172,7 +173,6 @@ impl Default for Ui {
             drop_over: false,
             grip: None,
             width: 0.0,
-            preview_w: None,
             path_x: 0.0,
         }
     }
@@ -988,7 +988,7 @@ fn entry_row(s: &Shell, id: TabId, i: usize, t: &'static Theme) -> El {
     let active = s.bench.active_id() == Some(id) && s.window_focused;
     let blue = r.selected && active;
     let (ink, quiet) = if blue { (t.on_color, t.on_color.alpha(0.8)) } else { (t.l1, t.l2) };
-    let cols = Columns::at(list_width(state));
+    let cols = Columns::at(list_width(s, state));
     let name = e.name.clone();
     let mut line = list_row().role("row").label(s.text_shown(&e.name).into_owned());
     line = match (r.selected, active) {
@@ -1135,10 +1135,16 @@ fn pane_width(state: &super::State) -> f32 {
     }
 }
 
-/// The list's width: the pane's, less the open file's beside it.
-fn list_width(state: &super::State) -> f32 {
+/// The width the open file asks for: what its grip is being dragged to, else Settings'.
+fn wanted_preview(s: &Shell, state: &super::State) -> f64 {
+    state.ui.grip.map_or(s.settings.get().preview_width, |(_, now)| now)
+}
+
+/// The list's width: the pane's, less the open file's beside it, worked out the way the page
+/// lays them out (not from the last layout, which hasn't seen a file that just opened).
+fn list_width(s: &Shell, state: &super::State) -> f32 {
     let w = pane_width(state);
-    match state.editor.as_ref().and(state.ui.preview_w) {
+    match state.editor.as_ref().and_then(|_| layout::preview_width(w, wanted_preview(s, state))) {
         Some(p) => w - p,
         None => w,
     }
@@ -1147,7 +1153,7 @@ fn list_width(state: &super::State) -> f32 {
 fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
     let Some(state) = s.screens.files.get(&id) else { return el() };
     let b = &state.browser;
-    let cols = Columns::at(list_width(state));
+    let cols = Columns::at(list_width(s, state));
     let mut pane = col().key("files-list-pane").grow(1.0).min_w(220.0).h_full();
     let problem = b.problem();
     if let Some(Problem::Page { title, message, open_terminal }) = &problem {
@@ -1538,8 +1544,7 @@ pub fn page(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
     let id = tab.id;
     let Some(state) = s.screens.files.get(&id) else { return col().key("files").w_full().h_full() };
     let width = pane_width(state);
-    let wanted = state.ui.grip.map_or(s.settings.get().preview_width, |(_, now)| now);
-    let beside = layout::preview_width(width, wanted);
+    let beside = layout::preview_width(width, wanted_preview(s, state));
     let mut body = row().key("files-body").w_full().grow(1.0).min_h(0.0);
     match (preview(s, id, t, beside), beside) {
         // A pane too narrow for both: the open file takes it.
@@ -1548,10 +1553,8 @@ pub fn page(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
         (None, _) => body = body.child(list(s, id, t)),
     }
     col().key("files").w_full().h_full().child(toolbar(s, id, t, width)).child(body).on_layout(move |s: &mut Shell, rect: [f32; 4]| {
-        let wanted = s.settings.get().preview_width;
         if let Some(st) = s.screens.files.get_mut(&id) {
             st.ui.width = rect[2];
-            st.ui.preview_w = st.editor.as_ref().and_then(|_| layout::preview_width(rect[2], wanted));
         }
     })
 }
@@ -1576,14 +1579,20 @@ pub(super) fn shown(s: &Shell, q: &Confirm) -> Confirm {
 }
 
 /// A Files question as the kit's confirmation (`kit::dialog`): Cancel and its answer, keyed
-/// `files-question` with `question-no` and `question-yes`; Return answers, Esc cancels.
+/// `files-question` with `question-no` and `question-yes`; Esc cancels. Return answers, unless
+/// the answer is a dangerous one (Delete, Discard: they can't be undone), when Return cancels.
 pub(super) fn question(t: &'static Theme, q: &Confirm, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + 'static) -> El {
-    question_safe(t, q, false, yes, no)
+    question_safe(t, q, q.danger, yes, no)
+}
+
+/// The question's card as the kit draws it: Return presses Cancel when `safe`.
+fn look(q: &Confirm, safe: bool) -> dialog::Look {
+    dialog::Look::yes_no(q.title.clone(), q.body.clone(), q.confirm_label, q.danger, safe).lines(q.lines.clone()).keys("question-no", "question-yes")
 }
 
 /// [`question`] whose Return presses Cancel when `safe` (something private on its way out).
 fn question_safe(t: &'static Theme, q: &Confirm, safe: bool, yes: impl Fn(&mut Shell, &mut Tx) + 'static, no: impl Fn(&mut Shell, &mut Tx) + 'static) -> El {
-    let look = dialog::Look::yes_no(q.title.clone(), q.body.clone(), q.confirm_label, q.danger, safe).lines(q.lines.clone()).keys("question-no", "question-yes");
+    let look = look(q, safe);
     let (yes, no) = (std::rc::Rc::new(yes), std::rc::Rc::new(no));
     dialog::dialog(t, "files-question", &look, move |s: &mut Shell, tx: &mut Tx, i| if i == 1 { yes(s, tx) } else { no(s, tx) })
 }
@@ -1626,6 +1635,7 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     if let Some(open) = &state.ui.menu {
         let mut rows = Vec::new();
         let mut height = 12.0;
+        let mut width = MENU_W;
         for (i, r) in open.rows.iter().enumerate() {
             match r {
                 MenuRow::Separator => {
@@ -1640,6 +1650,7 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                         Some(true) => format!("✓ {label}"),
                         _ => label.into_owned(),
                     };
+                    width = width.max(menu_width(&label, item.hint));
                     let draw = if item.destructive { menu_row_destructive } else { menu_row };
                     let line = draw(t, &label, item.hint, if item.disabled { RowState::Off } else { RowState::Rest }).key(format!("menu-{i}"));
                     rows.push(if item.disabled {
@@ -1653,14 +1664,14 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
                 }
             }
         }
-        let card = popover(t, MENU_W).key("files-menu").child(menu(rows));
+        let card = popover(t, width).key("files-menu").child(menu(rows));
         // Under the toolbar button it came from, or at the pointer, moved in from the window's
         // edges.
         let card = match open.anchor {
             Some(anchor) => card.anchored(anchor, Side::Bottom, if anchor == "files-more" { Align::End } else { Align::Start }, 4.0),
             None => {
                 let [_, _, w, h] = cx.layout("window").unwrap_or([0.0, 0.0, 1280.0, 800.0]);
-                let x = open.at[0].min(w - MENU_W - 8.0).max(8.0);
+                let x = open.at[0].min(w - width - 8.0).max(8.0);
                 let y = open.at[1].min(h - height - 8.0).max(8.0);
                 card.absolute(x, y)
             }
@@ -1674,6 +1685,14 @@ pub fn overlay(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
         return peek(s, id, t);
     }
     None
+}
+
+/// The menu's width for a line reading `label`, with `keys` at its end: the words, the row's
+/// and the menu's insets and border, the key cap; between [`MENU_W`] and [`MENU_MAX_W`]
+/// (longer ones end in "…").
+fn menu_width(label: &str, keys: Option<&str>) -> f32 {
+    let cap = keys.map_or(0.0, |k| rune::text::advance(k, theme::KEY_CAP).max(8.0) + 10.0 + 2.0 + 8.0);
+    (rune::text::advance(label, theme::TEXT) + 16.0 + 2.0 * crate::kit::menu::PAD + 2.0 + cap + 4.0).ceil().clamp(MENU_W, MENU_MAX_W)
 }
 
 /// What a row of the list of places is.
@@ -1939,7 +1958,7 @@ fn peek(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
     Some(card.child(list).modal_tx(true, close))
 }
 
-/// "Copy to another folder or server": the server to copy to, the folder there, and Copy.
+/// "Copy to a folder or server": the server to copy to, the folder there, and Copy.
 fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
     let Some(copy) = s.screens.files.get(&id).and_then(|st| st.copy.as_ref()) else { return el() };
     let on_server = super::on_server(s, id);
@@ -1950,7 +1969,7 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
         tx.instant();
     };
-    let mut card = popover(t, 480.0).key("files-copy").padding(18.0).gap(8.0).role("dialog").label_static("Copy to another folder or server").child(
+    let mut card = popover(t, 480.0).key("files-copy").padding(18.0).gap(8.0).role("dialog").label_static("Copy to a folder or server").child(
         row().gap(10.0).items_center().child(el().size(30.0, 30.0).radius(15.0).fill(t.blue.alpha(0.15)).items_center().justify_center().child(icon(Icon::Copy, 14.0, t.blue))).child(
             col().grow(1.0).min_w(0.0).gap(2.0).child(text(ops::copy_title(&names, on_server)).font(theme::TITLE).color(t.l1).single_line().truncate()).child(
                 text(if names.len() > 1 { names.iter().take(4).cloned().collect::<Vec<_>>().join(", ") + if names.len() > 4 { "…" } else { "" } } else { s.text_shown(&paths::parent(&copy.paths[0])).into_owned() })
@@ -2036,5 +2055,26 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
             }
         }),
     );
-    el().key("files-copy-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).items_center().justify_center().child(card.modal_tx(false, close))
+    el().key("files-copy-layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(card.modal_tx(false, close))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sshee_app::files::{Entry, EntryKind};
+
+    /// What can't be undone never goes ahead on Return: Delete and Discard default to Cancel,
+    /// while Replace, which loses nothing it wasn't told to, keeps Return for its yes.
+    #[test]
+    fn return_never_deletes_or_discards() {
+        let file = Entry { name: "nginx.conf".into(), kind: EntryKind::File, is_link: false, size: 178, modified: 0, mode: "-rw-r--r--".into() };
+        let delete = ops::delete_question(&[&file], true);
+        for q in [delete, ops::discard_question("nginx.conf")] {
+            let look = look(&q, q.danger);
+            assert_eq!(look.default, Some(0), "{}", q.title);
+            assert_eq!(look.choices[0].key, "question-no");
+        }
+        let replace = ops::replace_question("“a” is there.", sshee_app::transfers::Kind::Upload);
+        assert_eq!(look(&replace, replace.danger).default, Some(1));
+    }
 }

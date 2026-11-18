@@ -10,7 +10,7 @@
 use rune::{col, row, spacer, text, El, Span, Tx};
 use sshee_app::changelog::{self, Block, Release};
 
-use super::checkup::{close_button, dialog};
+use super::checkup::{close_button, dialog, headed};
 use crate::icons::logo;
 use crate::kit::push::{push_button, Push};
 use crate::shell::Shell;
@@ -115,10 +115,9 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
     }
     let page = super::checkup::body("news-body")
         .gap(16.0)
-        .child(head)
         .child(notes)
         .child(row().w_full().child(spacer()).child(push_button(t, "Got it", Push::Primary, true).key("news-ok").default_button().on_press_tx(|s: &mut Shell, tx| s.close_whats_new(tx))));
-    Some(dialog(t, "news-scrim", "news", "What's new", WIDTH, page, |s: &mut Shell, tx| s.close_whats_new(tx)))
+    Some(dialog(t, "news-scrim", "news", "What's new", WIDTH, headed(head, page, 16.0), |s: &mut Shell, tx| s.close_whats_new(tx)))
 }
 
 /// "rebuilt from the ground up" → "Rebuilt from the ground up".

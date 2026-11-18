@@ -8,11 +8,11 @@ use std::f32::consts::FRAC_PI_2;
 
 use rune::{col, row, text, Color, El, Key, KeyEvent, Phase, TextEdit, Tx};
 use sshee_app::settings_store::looks::{self, Hsv, Resolved, COLOR_KEYS};
-use sshee_app::settings_store::schemes::parse_hex;
+use sshee_app::settings_store::schemes::{self, parse_hex};
 
 use crate::icons::Icon;
 use crate::kit::field::{code_input, field, input};
-use crate::kit::form::{form_group, form_heading, form_row, form_row_stacked, RowText};
+use crate::kit::form::{form_group, form_heading, form_row, RowText};
 use crate::kit::popup::{popup_button, popup_menu};
 use crate::kit::push::{icon_button, push_button, Push};
 use crate::looks::color;
@@ -319,22 +319,41 @@ fn dot(t: &Theme, fill: Color, size: f32, picked: bool) -> El {
 
 // ---------------------------------------------------------------- the colour picker
 
-/// The colour `key` stands for now: the accent, or a colour of the theme being edited.
+/// The two colours of the terminal's "Your own" scheme, as the picker knows them.
+pub(super) const TERM_BG: &str = "term-bg";
+pub(super) const TERM_FG: &str = "term-fg";
+
+/// The terminal's own background and text, solid: what's set, else a dark terminal's.
+pub(super) fn own_terminal(s: &Shell) -> (u32, u32) {
+    match schemes::resolve(schemes::OWN, s.settings.get().terminal_colors.as_ref()) {
+        schemes::Resolved::Own { background, foreground } => ((background << 8) | 0xff, (foreground << 8) | 0xff),
+        _ => (0x1c1c1eff, 0xebebf0ff),
+    }
+}
+
+/// The colour `key` stands for now: the accent, the terminal's own background or text, or a
+/// colour of the theme being edited.
 fn current(s: &Shell, key: &str) -> Option<u32> {
     if key == "accent" {
         return Some(looks::accent_swatch(&s.settings.get().accent));
+    }
+    if key == TERM_BG || key == TERM_FG {
+        let (bg, fg) = own_terminal(s);
+        return Some(if key == TERM_BG { bg } else { fg });
     }
     let id = s.screens.settings.looks.editing.as_ref()?;
     let theme = looks::resolve(id, &s.settings.get().custom_themes);
     Some(theme.colors[looks::key_index(key)?])
 }
 
-/// Opens the picker for `key`, or closes it.
-fn toggle_picker(s: &mut Shell, key: &'static str, tx: &mut Tx) {
+/// Opens the picker for `key`, or closes it. An opened one is scrolled into sight: in a short
+/// window it opens below the bottom edge.
+pub(super) fn toggle_picker(s: &mut Shell, key: &'static str, tx: &mut Tx) {
     if s.screens.settings.looks.picking.as_ref().is_some_and(|p| p.key == key) {
         s.screens.settings.looks.picking = None;
     } else if let Some(c) = current(s, key) {
         s.screens.settings.looks.picking = Some(Picking { key, hsv: looks::to_hsv(c), alpha: looks::alpha_of(c), draft: TextEdit::new(looks::to_hex(c)) });
+        tx.scroll_into_view(format!("picker-{key}"));
     }
     tx.instant();
 }
@@ -345,6 +364,19 @@ fn apply(s: &mut Shell, c: u32, tx: &mut Tx) {
     let key = p.key;
     if key == "accent" {
         s.change_settings(tx, |st| st.set(|v| v.accent = looks::to_hex(c | 0xff)));
+    } else if key == TERM_BG || key == TERM_FG {
+        // Picking one of them is choosing "Your own".
+        let (bg, fg) = own_terminal(s);
+        let (bg, fg) = if key == TERM_BG { (c | 0xff, fg) } else { (bg, c | 0xff) };
+        s.change_settings(tx, |st| {
+            st.set(|v| {
+                let mut own = v.terminal_colors.clone().unwrap_or_default();
+                own.background = looks::to_hex(bg);
+                own.foreground = looks::to_hex(fg);
+                v.terminal_colors = Some(own);
+                v.terminal_scheme = schemes::OWN.to_owned();
+            })
+        });
     } else if let Some(id) = s.screens.settings.looks.editing.clone() {
         s.change_settings(tx, |st| looks::set_color(st, &id, key, Some(c)));
     }
@@ -354,7 +386,7 @@ fn apply(s: &mut Shell, c: u32, tx: &mut Tx) {
 /// The picker moved: the colour from its hue, saturation, brightness and opacity.
 fn moved(s: &mut Shell, hsv: Hsv, alpha: f64, tx: &mut Tx) {
     let Some(p) = &mut s.screens.settings.looks.picking else { return };
-    let solid = p.key == "accent" || COLOR_KEYS.iter().any(|k| k.key == p.key && !k.alpha);
+    let solid = p.key == "accent" || p.key == TERM_BG || p.key == TERM_FG || COLOR_KEYS.iter().any(|k| k.key == p.key && !k.alpha);
     let alpha = if solid { 1.0 } else { alpha };
     p.hsv = hsv;
     p.alpha = alpha;
@@ -631,8 +663,9 @@ pub(super) fn editor(s: &Shell, t: &'static Theme) -> Vec<El> {
             control.child(rune::el().size(theme::FORM_CONTROL, theme::FORM_CONTROL))
         };
         let words = RowText { label: &label, help: Some(&help), later: None };
+        // The hex and the swatch stay where they are; an open picker goes under the row.
         rows.push(match picker(s, t, key) {
-            Some(open) => form_row_stacked(t, words, col().w_full().gap(8.0).child(control).child(open)).key(format!("row-{key}")),
+            Some(open) => col().w_full().child(form_row(t, words, control)).child(col().w_full().px(12.0).pb(12.0).child(open)).key(format!("row-{key}")),
             None => form_row(t, words, control).key(format!("row-{key}")),
         });
     }

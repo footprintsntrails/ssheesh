@@ -189,8 +189,8 @@ impl Shell {
         self.settings.get().sidebar_side == Side::Right
     }
 
-    /// Opens Settings over the page, at the section it was last on. Nothing has the keyboard
-    /// until a control is clicked or Tab is pressed: no terminal types behind it.
+    /// Opens Settings over the page, at the section it was last on, with the keyboard in its
+    /// search field: what's typed looks for a setting, and no terminal types behind it.
     pub fn open_settings(&mut self, tx: &mut Tx) {
         // The palette, a menu or a dialog it was opened from goes.
         self.screens.close_all();
@@ -199,6 +199,7 @@ impl Shell {
         state.sync(&self.settings);
         self.settle_in_place(tx);
         tx.blur();
+        tx.focus("settings-search", true);
         tx.instant();
     }
 

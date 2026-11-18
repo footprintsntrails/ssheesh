@@ -102,21 +102,25 @@ impl Shell {
     }
 
     /// The finding's Run: asks first, about the command on screen now.
-    fn checkup_run(&mut self, id: &str) {
+    /// Run…: the first question, under the `i`th card, with the keyboard on its Cancel.
+    fn checkup_run(&mut self, id: &str, i: usize, tx: &mut Tx) {
         let Some(command) = self.checkup_fix(id) else { return };
         self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(Gate::Confirm, command));
+        tx.focus(format!("fix-no-{i}"), true);
     }
 
     /// A yes to the question: the next one (Production), or the fix runs now. What runs is
     /// the command you were asked about; if a check that came back meanwhile offers another
     /// one, nothing runs, and the new command is shown to be run (and asked about) afresh.
-    fn checkup_yes(&mut self, id: &str) {
+    fn checkup_yes(&mut self, id: &str, i: usize, tx: &mut Tx) {
         let state = &self.screens.checkup;
         let (Some(server), Some(Run::Asking(gate, command))) = (state.open.clone(), state.runs.get(id).cloned()) else { return };
         let production = self.bench.server(&server).is_some_and(|s| s.is_prod());
         match checkup::after_yes(gate, production) {
             Some(next) => {
                 self.screens.checkup.runs.insert(id.to_owned(), Run::Asking(next, command));
+                // The second question starts on Cancel, not where the first one's yes was.
+                tx.focus(format!("fix-no-{i}"), true);
             }
             None => {
                 if self.checkup_fix(id).as_deref() != Some(command.as_str()) {
@@ -129,8 +133,10 @@ impl Shell {
         }
     }
 
-    fn checkup_no(&mut self, id: &str) {
+    /// Cancel: the question goes, and the keyboard goes back to the Run… it came from.
+    fn checkup_no(&mut self, id: &str, i: usize, tx: &mut Tx) {
         self.screens.checkup.runs.remove(id);
+        tx.focus(format!("fix-run-{i}"), true);
     }
 
     /// A fix that needs you: a new terminal on the server, the command typed and run there.
@@ -233,10 +239,14 @@ pub(crate) fn link(t: &Theme, words: &str) -> El {
     text(words).font(theme::CONTROL_TEXT).color(t.blue).single_line().role("button").label(words).focusable(true)
 }
 
-/// The scrim and the dialog in the middle of the window. Esc runs `close`.
+/// The space a dialog keeps from the window's top and bottom edges.
+const DIALOG_MARGIN: f32 = 24.0;
+
+/// The scrim and the dialog in the middle of the window, at most 680 points tall and never
+/// taller than the window less a margin (its body scrolls instead). Esc runs `close`.
 pub(crate) fn dialog(t: &Theme, scrim_key: &'static str, key: &'static str, label: &'static str, width: f32, content: El, close: impl Fn(&mut Shell, &mut Tx) + 'static) -> El {
-    let surface = popover(t, width).key(key).label_static(label).max_h(680.0).modal_tx(false, close).child(content);
-    el().key(scrim_key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(surface)
+    let surface = popover(t, width).key(key).label_static(label).max_h(680.0).shrink().min_h(0.0).modal_tx(false, close).child(content);
+    col().key(scrim_key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).py(DIALOG_MARGIN).fill(t.scrim()).items_center().justify_center().child(surface)
 }
 
 /// A dialog's body: padded, and scrolling when it's long.
@@ -244,20 +254,28 @@ pub(crate) fn body(key: &'static str) -> El {
     col().key(key).w_full().shrink().min_h(0.0).px(20.0).pt(18.0).pb(20.0).gap(14.0).scroll(ScrollSpec { stick_bottom: false })
 }
 
+/// A dialog's content: `head` (its title and close button) stays at the top while `body` (a
+/// [`body`], whose gap is `gap`) scrolls under it.
+pub(crate) fn headed(head: El, body: El, gap: f32) -> El {
+    col().w_full().shrink().min_h(0.0).child(col().w_full().px(20.0).pt(18.0).child(head)).child(body.pt(gap))
+}
+
 /// The question a fix asks before it runs: inside its card, so the command it is about stays
 /// in sight above it.
 fn question(t: &Theme, server_name: &str, gate: Gate, i: usize, id: &str) -> El {
-    let (title, line, yes, kind) = match gate {
-        Gate::Confirm => (checkup::confirm_title(server_name), None, "Run", Push::Primary),
-        Gate::Production => (checkup::production_title(server_name), Some(checkup::PRODUCTION_LINE), "Run on Production", Push::Destructive),
+    // Each question's yes has its own key, so the keyboard on the first one's yes doesn't stay
+    // on the second's.
+    let (title, line, yes, kind, yes_key) = match gate {
+        Gate::Confirm => (checkup::confirm_title(server_name), None, "Run", Push::Primary, format!("fix-yes-{i}")),
+        Gate::Production => (checkup::production_title(server_name), Some(checkup::PRODUCTION_LINE), "Run on Production", Push::Destructive, format!("fix-prod-{i}")),
     };
     let production = gate == Gate::Production;
     let (yes_id, no_id) = (id.to_owned(), id.to_owned());
-    let mut words = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(text(title).font(theme::TEXT_BOLD).color(if production { t.red } else { t.l1 }).wrap());
+    let mut words = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(text(title.clone()).font(theme::TEXT_BOLD).color(if production { t.red } else { t.l1 }).wrap());
     if let Some(line) = line {
         words = words.child(text(line).font(theme::NOTE).color(t.l2on).wrap());
     }
-    let mut yes_button = push_button(t, yes, kind, true).key(format!("fix-yes-{i}")).on_press_tx(move |s: &mut Shell, _| s.checkup_yes(&yes_id));
+    let mut yes_button = push_button(t, yes, kind, true).key(yes_key).on_press_tx(move |s: &mut Shell, tx| s.checkup_yes(&yes_id, i, tx));
     if !production {
         yes_button = yes_button.default_button();
     }
@@ -273,8 +291,9 @@ fn question(t: &Theme, server_name: &str, gate: Gate, i: usize, id: &str) -> El 
         .fill(if production { t.red.alpha(0.08) } else { t.blue.alpha(0.07) })
         .border(1.0, if production { t.red.alpha(0.35) } else { t.blue.alpha(0.3) })
         .role("alertdialog")
+        .label(title)
         .child(words)
-        .child(push_button(t, "Cancel", Push::Quiet, true).key(format!("fix-no-{i}")).on_press_tx(move |s: &mut Shell, _| s.checkup_no(&no_id)))
+        .child(push_button(t, "Cancel", Push::Quiet, true).key(format!("fix-no-{i}")).on_press_tx(move |s: &mut Shell, tx| s.checkup_no(&no_id, i, tx)))
         .child(yes_button)
 }
 
@@ -332,7 +351,7 @@ fn card(t: &Theme, s: &Shell, server: &str, server_name: &str, f: &Finding, i: u
                 push_button(t, if running { "Running…" } else { "Run…" }, Push::Quiet, !running && !s.screens.checkup.loading)
                     .key(format!("fix-run-{i}"))
                     .help(format!("Asks first, then runs it on {server_name}"))
-                    .on_press_tx(move |s: &mut Shell, _| s.checkup_run(&id)),
+                    .on_press_tx(move |s: &mut Shell, tx| s.checkup_run(&id, i, tx)),
             );
         }
         buttons = buttons.child(push_button(t, "Copy", Push::Quiet, true).key(format!("fix-copy-{i}")).on_press_tx(move |_: &mut Shell, tx| tx.copy(copy.clone())));
@@ -405,7 +424,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
     if prod {
         head = col().w_full().gap(8.0).child(head).child(row().ml(44.0).gap(6.0).items_center().child(chip(t, "Prod", t.red)).child(text("Fixes here ask twice.").font(theme::SMALL).color(t.l2).single_line()));
     }
-    let mut page = body("check-body").child(head);
+    let mut page = body("check-body");
 
     if server.is_empty() {
         page = page.child(picker(t, s));
@@ -441,5 +460,5 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
             page = page.child(cards);
         }
     }
-    Some(dialog(t, "check-scrim", "check-dialog", "Security check", WIDTH, page, |s: &mut Shell, tx| s.close_checkup(tx)))
+    Some(dialog(t, "check-scrim", "check-dialog", "Security check", WIDTH, headed(head, page, 14.0), |s: &mut Shell, tx| s.close_checkup(tx)))
 }

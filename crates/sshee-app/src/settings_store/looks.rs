@@ -299,13 +299,17 @@ pub fn background_name(on: usize) -> &'static str {
     }
 }
 
-/// Each text colour on each background it sits on, seen over the window, below 4.5:1 (0.10's
-/// `weakContrast`).
+/// Each text colour on each background the app draws it on, seen over the window, below 4.5:1
+/// (0.10's `weakContrast`). Raised controls (the picked segment, the picked toggle, the tab
+/// you're on in a light theme) only ever carry the main text, so only that is checked there.
 pub fn weak_contrast(colors: &Colors) -> Vec<Weak> {
     let window = colors[0] | 0xff;
     let mut out = vec![];
     for text in [4, 5, 6] {
         for on in [0, 1, 2, 10] {
+            if on == 2 && text != 4 {
+                continue;
+            }
             let ratio = contrast(over(colors[text], window), over(colors[on], window));
             if ratio < 4.5 {
                 out.push(Weak { text, on, ratio });
@@ -624,7 +628,15 @@ mod tests {
     #[test]
     fn hard_to_read_text_is_pointed_out() {
         assert!(weak_contrast(&built_in("midnight").unwrap()).is_empty());
-        assert!(weak_contrast(&built_in("ssheesh").unwrap()).iter().all(|w| w.on == 2), "only on the picked segment's grey");
+        // The shipped themes pass their own check, as they are drawn.
+        for id in ["ssheesh", "daylight", "graphite", "oled"] {
+            assert_eq!(weak_contrast(&built_in(id).unwrap()), [], "{id}");
+        }
+        // The picked segment's grey is checked with the main text, the one drawn on it.
+        let mut dim = built_in("ssheesh").unwrap();
+        dim[2] = 0xa1a1a6ff;
+        assert!(weak_contrast(&dim).iter().all(|w| w.text == 4 && w.on == 2));
+        assert!(!weak_contrast(&dim).is_empty());
         let mut grey = built_in("graphite").unwrap();
         grey[4] = 0x333333ff;
         let weak = weak_contrast(&grey);

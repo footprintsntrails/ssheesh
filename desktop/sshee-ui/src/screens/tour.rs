@@ -17,7 +17,7 @@ use sshee_app::palette::shortcut_label;
 use sshee_app::tour::{self, Hint, Moment, STEPS};
 use sshee_app::workbench::{Link, TabKind};
 
-use super::checkup::{close_button, dialog};
+use super::checkup::{close_button, dialog, headed};
 use crate::icons::{icon, Icon};
 use crate::kit::menu::key_cap;
 use crate::kit::push::{push_button, Push};
@@ -164,8 +164,8 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(spacer())
         .child(push_button(t, "Back", Push::Quiet, state.at > 0).key("tour-back").on_press_tx(|s: &mut Shell, tx| s.tour_step(-1, tx)))
         .child(push_button(t, if last { "Done" } else { "Next" }, Push::Primary, true).key("tour-next").default_button().on_press_tx(|s: &mut Shell, tx| s.tour_step(1, tx)));
-    let page = col().key("tour-body").w_full().px(20.0).pt(16.0).pb(18.0).gap(16.0).child(top).child(art).child(words).child(foot);
-    Some(dialog(t, "tour-scrim", "tour", "Tour", WIDTH, page, |s: &mut Shell, tx| s.close_tour(tx)))
+    let page = super::checkup::body("tour-body").pb(18.0).gap(16.0).child(art).child(words).child(foot);
+    Some(dialog(t, "tour-scrim", "tour", "Tour", WIDTH, headed(top, page, 16.0), |s: &mut Shell, tx| s.close_tour(tx)))
 }
 
 /// The hint on screen: at the bottom right, over the page, never taking the keyboard.

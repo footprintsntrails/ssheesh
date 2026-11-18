@@ -301,9 +301,30 @@ fn a_fix_runs_after_one_yes_and_production_asks_twice() {
     // Return doesn't press the Production yes.
     w.key(Key::Enter);
     assert_eq!(w.fixes(), 1);
-    w.click("fix-yes-0");
+    w.click("fix-prod-0");
     assert_eq!(w.fixes(), 2);
     assert!(matches!(&w.asks()[w.asks().len() - 2], Ask::Fix { server, command, .. } if server == WEB && command == "sudo ufw --force enable"));
+}
+
+/// Each question opens with the keyboard on its Cancel, inside the question: not on the
+/// Production yes (where the first question's yes was), not on Check again.
+#[test]
+fn the_questions_open_on_cancel() {
+    let mut w = Window::open();
+    let focused = |w: &Window| w.rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+    w.click("server-1");
+    w.click("check");
+    w.click("fix-run-0");
+    assert_eq!(focused(&w).as_deref(), Some("fix-no-0"));
+    let ask = w.rt.elements().into_iter().find(|e| e.key.as_deref() == Some("fix-ask-0")).expect("the question");
+    assert_eq!((ask.role, ask.label.as_deref()), ("alertdialog", Some("Run this on web-7731?")), "the question is named");
+    w.click("fix-yes-0");
+    assert!(w.has("fix-prod-0") && !w.has("fix-yes-0"), "the Production yes has its own key");
+    assert_eq!(focused(&w).as_deref(), Some("fix-no-0"));
+    // Space on the focused button cancels; nothing ran, and the keyboard is back on Run….
+    w.key(Key::Text(" ".into()));
+    assert!(!w.has("fix-ask-0") && w.fixes() == 0);
+    assert_eq!(focused(&w).as_deref(), Some("fix-run-0"));
 }
 
 /// A check that comes back between Run and the yes, offering another command: the yes runs

@@ -425,7 +425,7 @@ impl ServerStore {
             }
             Ask::SetColor { ref color, .. } => match sshee_app::labels::parse_color(color) {
                 Some(color) => looks(self, &ask, &|l, id| l.set_color(id, &color)),
-                None => Answer::failed(&ask, "That isn't a colour. Type it as #2389e2."),
+                None => Answer::failed(&ask, "That isn't a color. Type it as #2389e2."),
             },
             Ask::SetImage { ref path, .. } => match picture_from_file(path) {
                 Ok(url) => looks(self, &ask, &|l, id| l.set_image(id, Some(url.clone()))),

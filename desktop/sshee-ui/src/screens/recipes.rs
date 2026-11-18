@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rune::{col, el, row, spacer, text, El, TextEdit, Tx};
 use sshee_app::recipes::{self, book, done_in, field_error, field_values, fill_in_first, guess_os, missing, parse_public_key, progress, Ask, Ctx, Facts, FieldKind, Group, Os, Recipe, Reply, Step};
 
-use super::checkup::{body, close_button, command_block, dialog, header, note};
+use super::checkup::{body, close_button, command_block, dialog, header, headed, note};
 use crate::icons::{icon, Icon};
 use crate::kit::field::{code_input, field};
 use crate::kit::push::{choice, choices, icon_button, push_button, Push};
@@ -302,9 +302,8 @@ fn tag(t: &Theme, words: &str, ok: bool) -> El {
 fn list_page(t: &Theme, s: &Shell, server: &str, server_name: &str) -> El {
     let state = &s.screens.recipes;
     let (os, guessed) = state.os_of(server);
-    let mut page = body("recipes-body")
-        .child(header(t, Icon::Doc, "Recipes", &format!("{server_name} · step by step, and you run every command"), vec![close_button(t, "recipes-close").on_press_tx(|s: &mut Shell, tx| s.close_recipes(tx))]))
-        .child(os_switch(t, os, guessed));
+    let head = header(t, Icon::Doc, "Recipes", &format!("{server_name} · step by step, and you run every command"), vec![close_button(t, "recipes-close").on_press_tx(|s: &mut Shell, tx| s.close_recipes(tx))]);
+    let mut page = body("recipes-body").child(os_switch(t, os, guessed));
     let mut n = 0;
     for group in Group::ALL {
         let mut rows = col().w_full().gap(6.0);
@@ -339,7 +338,7 @@ fn list_page(t: &Theme, s: &Shell, server: &str, server_name: &str) -> El {
         }
         page = page.child(col().w_full().gap(8.0).child(text(group.label()).font(theme::GROUP_TITLE).color(t.l2).single_line().role("heading").level(2)).child(rows));
     }
-    page.child(text("Commands that change the system start with sudo, which runs them as root and may ask for your password. Nothing runs until you press Return in the terminal.").font(theme::SMALL).color(t.l2).wrap())
+    headed(head, page.child(text("Commands that change the system start with sudo, which runs them as root and may ask for your password. Nothing runs until you press Return in the terminal.").font(theme::SMALL).color(t.l2).wrap()), 14.0)
 }
 
 /// The key field: a key from this computer, or one pasted in.
@@ -581,8 +580,8 @@ fn recipe_page(t: &Theme, s: &Shell, server: &str, server_name: &str, r: &Recipe
         .on_press_tx(|s: &mut Shell, _| s.recipes_show(None))
         .child(icon(Icon::Back, 14.0, t.l2on))
         .child(text("All recipes").font(theme::CONTROL_TEXT).color(t.l2on).single_line().a11y_hidden());
+    let head = header(t, sign(r.id), r.title, &format!("{server_name} · you run every command yourself"), vec![close_button(t, "recipes-close").on_press_tx(|s: &mut Shell, tx| s.close_recipes(tx))]);
     let mut page = body("recipes-body")
-        .child(header(t, sign(r.id), r.title, &format!("{server_name} · you run every command yourself"), vec![close_button(t, "recipes-close").on_press_tx(|s: &mut Shell, tx| s.close_recipes(tx))]))
         .child(row().w_full().gap(8.0).items_center().child(back).child(spacer()).child(os_switch(t, os, guessed)))
         .child(col().w_full().gap(3.0).child(text(r.summary).font(theme::TEXT).color(t.l1).wrap()).child(text(format!("For: {}", r.who)).font(theme::NOTE).color(t.l2).wrap()));
     if !r.fields.is_empty() {
@@ -597,7 +596,7 @@ fn recipe_page(t: &Theme, s: &Shell, server: &str, server_name: &str, r: &Recipe
     if count > 0 {
         foot = foot.child(spacer()).child(push_button(t, "Start over", Push::Quiet, true).key("recipes-over").on_press_tx(|s: &mut Shell, _| s.recipes_start_over()));
     }
-    page.child(foot)
+    headed(head, page.child(foot), 14.0)
 }
 
 /// The dialog, when it's open and not stepped aside.
