@@ -149,6 +149,8 @@ pub enum Icon {
     Peek,
     /// Files: a new file.
     FilePlus,
+    /// A terminal asleep: let go of its connection while unused.
+    Moon,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -178,7 +180,7 @@ const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 77] = [
+    pub const ALL: [Icon; 78] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -256,10 +258,11 @@ impl Icon {
         Icon::More,
         Icon::Peek,
         Icon::FilePlus,
+        Icon::Moon,
     ];
 
     /// The signs that aren't a server's icon, for the component sheet.
-    pub const SIGNS: [Icon; 47] = [
+    pub const SIGNS: [Icon; 48] = [
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -307,6 +310,7 @@ impl Icon {
         Icon::More,
         Icon::Peek,
         Icon::FilePlus,
+        Icon::Moon,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -429,6 +433,7 @@ impl Icon {
             Icon::Shrink => (16.0, &[Path("M13.4 2.6 9.4 6.6M9.4 3.4v3.2h3.2M2.6 13.4l4-4M3.4 9.4h3.2v3.2")]),
             Icon::More => (16.0, &[Oval(3.6, 8.0, 0.5, 0.5), Oval(8.0, 8.0, 0.5, 0.5), Oval(12.4, 8.0, 0.5, 0.5)]),
             Icon::Peek => (16.0, &[Path("M3.8 4.4 7.4 8l-3.6 3.6M8.6 4.4 12.2 8l-3.6 3.6")]),
+            Icon::Moon => (16.0, &[Path("M13.4 9.6A5.6 5.6 0 1 1 6.4 2.6a4.4 4.4 0 0 0 7 7z")]),
             Icon::FilePlus => (16.0, &[Path("M9.2 1.9H4.6a1.4 1.4 0 0 0-1.4 1.4v9.4a1.4 1.4 0 0 0 1.4 1.4h6.8a1.4 1.4 0 0 0 1.4-1.4V5.5zM9.2 1.9v3.6h3.6M8 7.8v4M6 9.8h4")]),
         }
     }

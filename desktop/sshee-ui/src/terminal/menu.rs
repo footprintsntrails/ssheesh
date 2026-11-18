@@ -1,5 +1,5 @@
-//! A terminal's own menu, on the secondary button: copy, paste, select all, find, clear, and a
-//! new terminal on the same machine.
+//! A terminal's own menu, on the secondary button: copy, paste, select all, find, clear, a
+//! new terminal on the same machine, and Files at the shell's folder.
 //!
 //! It is drawn here, with the kit's menu rows, on every system: Rune's native pop-up menus
 //! exist on macOS and Windows only, and one menu that looks the same everywhere is less to
@@ -35,6 +35,8 @@ pub enum Pick {
     Find,
     Clear,
     NewTerminal,
+    /// Files at the folder the shell is in (0.10's "Browse files in this folder").
+    BrowseFiles,
 }
 
 /// The keys a row's cap shows, as the terminal reads them on `platform` (`sshee_term::input`).
@@ -51,6 +53,7 @@ pub(crate) fn keys_of(pick: Pick, platform: Platform) -> Option<&'static str> {
         Pick::Find => Some(if mac { "⌘F" } else { "Ctrl+Shift+F" }),
         Pick::Clear => mac.then_some("⌘K"),
         Pick::NewTerminal => Some(if mac { "⌘T" } else { "Ctrl+Shift+T" }),
+        Pick::BrowseFiles => None,
     }
 }
 
@@ -99,6 +102,7 @@ impl TermPane {
                 self.pull(tx);
             }
             Pick::NewTerminal => self.new_terminal_here(tx),
+            Pick::BrowseFiles => self.browse_files_here(tx),
         }
     }
 }
@@ -128,8 +132,9 @@ pub(crate) fn view<S: 'static>(pane: &TermPane, t: &'static Theme, get: impl Fn(
         row("menu-clear", "Clear", Pick::Clear, true),
         menu_separator(t),
         row("menu-new", "New terminal here", Pick::NewTerminal, true),
+        row("menu-browse", "Browse files in this folder", Pick::BrowseFiles, true),
     ];
-    let height = 6.0 * ROW + 2.0 * SEPARATOR;
+    let height = 7.0 * ROW + 2.0 * SEPARATOR;
     Some(context_menu(t, at, [w, h], WIDTH, height, rows).key("menu").modal_tx(true, move |s: &mut S, tx| {
         if let Some(pane) = get(s) {
             pane.close_menu(tx);

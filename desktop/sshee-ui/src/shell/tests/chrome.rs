@@ -170,6 +170,10 @@ fn the_status_bar_drops_vitals_before_tor() {
         });
     });
     w.settle();
+    // The vitals that no longer fit (beside "Not kept": this terminal isn't in tmux) fade out.
+    for _ in 0..30 {
+        w.rt.frame(1.0 / 60.0);
+    }
     let tor = w.rect("tor-time").expect("Tor's readout");
     assert!(tor[0] + tor[2] <= 900.0, "Tor's readout is cut at {tor:?}");
     assert!(w.rt.find("vital-0").is_some(), "every vital went");

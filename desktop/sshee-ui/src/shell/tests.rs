@@ -581,3 +581,6 @@ mod chrome;
 
 /// Every shortcut, everywhere, on both keyboards, and moved to other keys.
 mod hotkeys;
+/// What 0.10 had around a terminal: browse its folder, "Not kept", progress, asleep, paths at
+/// their lines, files dropped on it.
+mod ported;

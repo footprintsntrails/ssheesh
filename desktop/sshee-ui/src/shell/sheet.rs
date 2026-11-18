@@ -43,7 +43,7 @@ fn sample_tab(t: &Theme, key: &'static str, spec: Tab) -> El {
 }
 
 pub fn view(t: &'static Theme) -> El {
-    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, connecting: false, went_quiet: false, active: false, window_active: true, compact: false };
+    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, connecting: false, went_quiet: false, progress: None, active: false, window_active: true, compact: false };
     let term = Tab { icon: Icon::Terminal, name: "~/shop", server: Some("web-staging"), ..base.clone() };
     let tabs = vec![
         sample_tab(t, "t-rest", base.clone()),
@@ -52,6 +52,8 @@ pub fn view(t: &'static Theme) -> El {
         sample_tab(t, "t-wait", Tab { icon: Icon::Agent, name: "Migration 0042", server: Some("db-main"), prod: true, badge: Some(Badge::NeedsYou), ..base.clone() }),
         sample_tab(t, "t-re", Tab { badge: Some(Badge::Reconnecting), ..term.clone() }),
         sample_tab(t, "t-gone", Tab { badge: Some(Badge::Disconnected), ..term.clone() }),
+        sample_tab(t, "t-asleep", Tab { badge: Some(Badge::Asleep), ..term.clone() }),
+        sample_tab(t, "t-progress", Tab { progress: Some(sshee_term::osc::Progress { state: sshee_term::osc::ProgressState::Normal, value: 62.0 }), ..term.clone() }),
     ];
     let crowded = vec![
         group_name(t, "web-7731", true, true).key("g-1"),

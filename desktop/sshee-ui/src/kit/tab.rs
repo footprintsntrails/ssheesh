@@ -5,15 +5,18 @@
 //!   you're on, under the pointer on the others (its room is kept, so the tab keeps its width).
 //! - The tab you're on is a rounded lighter fill; under the pointer any other gets a fainter one.
 //! - In a window that isn't in front, the tab you're on goes quiet; "Prod" stays red.
+//! - A program's progress (OSC 9;4) is a small ring after the name, filling as it goes
+//!   (0.10 spun one); a terminal asleep is a quiet moon, not a warning.
 //! - When the row is crowded (`Tab::compact`), the server is named once before its group
 //!   instead of in every tab, and a long name fades out at its end.
 
 use rune::{text, Color, El, Tx};
 use sshee_app::workbench::Badge;
+use sshee_term::osc::{Progress, ProgressState};
 
 use crate::icons::{icon, Icon};
 use crate::kit::chip::prod_chip;
-use crate::kit::{dot, hollow_dot, progress_ring};
+use crate::kit::{dot, hollow_dot, progress_arc, progress_ring};
 use crate::theme::{self, Theme};
 
 /// What a tab shows.
@@ -32,6 +35,8 @@ pub struct Tab<'a> {
     pub connecting: bool,
     /// What ran in it went quiet while you weren't looking: a green check (0.10's).
     pub went_quiet: bool,
+    /// What the program in it says of its progress (OSC 9;4).
+    pub progress: Option<Progress>,
     /// The tab you're on.
     pub active: bool,
     /// The window is in front.
@@ -70,10 +75,18 @@ fn close_button<S: 'static>(t: &Theme, shown: bool, on_close: impl Fn(&mut S, &m
 /// over its neighbour.
 fn badge(t: &Theme, b: Badge, compact: bool) -> El {
     let row = rune::row().key("badge").gap(6.0).items_center();
+    if b == Badge::Asleep {
+        // Not trouble: a quiet moon, no words, what it means under the pointer.
+        let row = row.label_static(b.label()).child(icon(Icon::Moon, 11.0, t.l2));
+        return match b.hint() {
+            Some(hint) => row.help(hint),
+            None => row,
+        };
+    }
     let (mark, words) = match b {
         Badge::NeedsYou => (dot(7.0, t.orange_dot), text(b.label()).font(theme::NEEDS).color(t.orange)),
         Badge::Reconnecting => (progress_ring(10.0, 1.5, t.l2), text(b.label()).font(theme::TAB_STATE).color(t.l2on)),
-        Badge::Disconnected | Badge::Ended | Badge::Failed => (hollow_dot(8.0, 1.5, t.l2), text(b.label()).font(theme::TAB_STATE).color(t.l2on)),
+        Badge::Disconnected | Badge::Ended | Badge::Failed | Badge::Asleep => (hollow_dot(8.0, 1.5, t.l2), text(b.label()).font(theme::TAB_STATE).color(t.l2on)),
     };
     if compact {
         row.child(mark).label_static(b.label())
@@ -92,7 +105,7 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     let name_ink = match spec.badge {
         _ if quiet => t.l2,
         Some(Badge::NeedsYou) => t.l1,
-        Some(Badge::Reconnecting | Badge::Disconnected | Badge::Ended | Badge::Failed) if !active => t.l2,
+        Some(Badge::Reconnecting | Badge::Disconnected | Badge::Ended | Badge::Failed | Badge::Asleep) if !active => t.l2,
         _ if active => t.l1,
         _ => t.l2,
     };
@@ -111,6 +124,7 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
             (Some(server), Some(b)) => format!("{}, {server}, {}", spec.name, b.label()),
             (Some(server), None) if spec.connecting => format!("{}, {server}, connecting", spec.name),
             (Some(server), None) if spec.went_quiet => format!("{}, {server}, went quiet", spec.name),
+            (Some(server), None) if spec.progress.is_some() => format!("{}, {server}, {}", spec.name, progress_words(spec.progress)),
             (Some(server), None) if spec.working => format!("{}, {server}, working", spec.name),
             (Some(server), None) => format!("{}, {server}", spec.name),
             (None, Some(b)) => format!("{}, {}", spec.name, b.label()),
@@ -150,10 +164,42 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
         e = e.child(rune::row().key("connecting").items_center().label_static("Connecting").child(progress_ring(10.0, 1.5, t.l2)));
     } else if spec.went_quiet {
         e = e.child(rune::row().key("quiet").items_center().label_static("Went quiet").child(icon(Icon::Check, 12.0, t.green)));
+    } else if let Some(p) = spec.progress {
+        e = e.child(rune::row().key("progress").items_center().label(progress_words(Some(p))).child(progress_mark(t, p)));
     } else if spec.working {
         e = e.child(rune::row().key("working").items_center().label_static("Working").child(progress_ring(10.0, 1.5, t.l2)));
     }
     e.child(close_button(t, active, on_close))
+}
+
+/// What a program's progress says to a screen reader: "42% done", or "Working" when it can't
+/// tell how far it is.
+pub fn progress_words(p: Option<Progress>) -> String {
+    match p {
+        Some(Progress { state: ProgressState::Indeterminate, .. }) | None => "Working".to_owned(),
+        Some(Progress { state: ProgressState::Error, value }) => format!("Stopped with an error at {}%", value.round()),
+        Some(Progress { state: ProgressState::Paused, value }) => format!("Paused at {}%", value.round()),
+        Some(Progress { value, .. }) => format!("{}% done", value.round()),
+    }
+}
+
+/// The colour a program's progress is drawn in: blue as it goes, orange paused, red when it
+/// stopped with an error.
+pub fn progress_color(t: &Theme, state: ProgressState) -> Color {
+    match state {
+        ProgressState::Error => t.red,
+        ProgressState::Paused => t.orange,
+        ProgressState::Normal | ProgressState::Indeterminate => t.blue,
+    }
+}
+
+/// A program's progress after a tab's name: a ring filling as it goes, or going round when it
+/// can't say how far it is.
+fn progress_mark(t: &Theme, p: Progress) -> El {
+    match p.state {
+        ProgressState::Indeterminate => progress_ring(10.0, 1.5, t.l2),
+        state => progress_arc(10.0, 1.6, p.value / 100.0, progress_color(t, state), t.hair),
+    }
 }
 
 /// A group's name when the row is crowded: the server, once, before its tabs. `current`: the

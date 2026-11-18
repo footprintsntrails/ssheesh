@@ -80,6 +80,27 @@ pub fn progress_ring(size: f32, line: f32, color: Color) -> El {
     rune::icon(drawing, size).color(color).looping(rune::LoopSpec::rotation(RING_TURN)).a11y_hidden()
 }
 
+/// How far along something is, `fraction` of the way (0 to 1): a full circle in `track`, `size`
+/// points across with a `line`-point line, and over it an arc from twelve o'clock round
+/// clockwise, in `color`. A program's progress on its tab (OSC 9;4).
+pub fn progress_arc(size: f32, line: f32, fraction: f32, color: Color, track: Color) -> El {
+    let fraction = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 0.0 };
+    let fit = crate::svg::Fit::square(0.0, 0.0, 16.0, size);
+    // The circle's radius, on a 16-unit grid, with the line inside the square.
+    let r = 8.0 - 8.0 * line / size;
+    let circle = format!("M{} 8a{r} {r} 0 1 0 {} 0a{r} {r} 0 1 0 {} 0z", 8.0 - r, 2.0 * r, -2.0 * r);
+    let mut shape = rune::Shape::new().stroke_path(&crate::svg::path(&circle, fit), line, rune::LineCap::Round, track);
+    if fraction >= 0.999 {
+        shape = shape.stroke_path(&crate::svg::path(&circle, fit), line, rune::LineCap::Round, color);
+    } else if fraction > 0.0 {
+        let angle = fraction * std::f32::consts::TAU;
+        let (x, y) = (8.0 + r * angle.sin(), 8.0 - r * angle.cos());
+        let arc = format!("M8 {}A{r} {r} 0 {} 1 {x} {y}", 8.0 - r, u8::from(fraction > 0.5));
+        shape = shape.stroke_path(&crate::svg::path(&arc, fit), line, rune::LineCap::Round, color);
+    }
+    rune::canvas(shape).size(size, size).a11y_hidden()
+}
+
 /// A hollow circle: a connection that is gone.
 pub fn hollow_dot(size: f32, line: f32, color: Color) -> El {
     el().size(size, size).radius(size / 2.0).border(line, color).a11y_hidden()

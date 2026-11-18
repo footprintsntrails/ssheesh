@@ -113,6 +113,23 @@ const ENV: &str = "# Made-up values for the demo.\nAPP_ENV=production\nAPP_PORT=
 const NGINX: &str = "server {\n    listen 80;\n    server_name shop.example;\n    root /home/deploy/shop/releases/current/public;\n\n    location /api/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\n";
 const DEPLOY: &str = "#!/bin/sh\n# Puts a release live: ./deploy.sh 2024-10-12\nset -eu\nrelease=\"$1\"\ncd \"$HOME/shop/releases\"\ntest -d \"$release\" || { echo \"no such release: $release\" >&2; exit 1; }\nln -sfn \"$release\" current\nsudo systemctl reload shop\necho \"now serving $release\"\n";
 const CHANGELOG: &str = "# Changelog\n\n## 2024-10-12\n- Checkout: free shipping banner\n- Fixed the cart badge on small screens\n\n## 2024-10-05\n- New product page\n";
+/// The made-up source the staging worker's log names at a line (`src/db/orders.rs:88`): a
+/// Ctrl+click on it opens it scrolled to that line, marked.
+fn orders_rs() -> String {
+    let mut out = String::from("//! Orders, as the worker reads them. Made up for the demo.\n\nuse crate::db::Pool;\n\n");
+    for n in 1..=20 {
+        out.push_str(&format!("/// Step {n} of an order's way through the shop.\npub fn step_{n}(pool: &Pool) -> usize {{\n    pool.len() + {n}\n}}\n"));
+    }
+    // Line 88: the slow query the log warns about.
+    while out.lines().count() < 86 {
+        out.push('\n');
+    }
+    out.push_str("pub fn by_customer(pool: &Pool, id: u64) -> Vec<u64> {\n");
+    out.push_str("    let rows = pool.query(\"SELECT * FROM orders WHERE customer = $1\", id);\n");
+    out.push_str("    rows.ids()\n}\n");
+    out
+}
+
 const WORKER: &str = "# Made-up settings for the demo's worker.\nqueue = \"orders\"\nthreads = 4\nretry_after_s = 30\n";
 const THEIR_LINE: &str = "- Hotfix: prices round to two places (added on the server)\n";
 const ACCESS_LOG: &str = "203.0.113.50 - - [12/Oct/2024:13:58:01 +0000] \"GET / HTTP/1.1\" 200 5120\n203.0.113.51 - - [12/Oct/2024:13:58:07 +0000] \"GET /cart HTTP/1.1\" 200 2048\n203.0.113.50 - - [12/Oct/2024:13:59:40 +0000] \"POST /api/checkout HTTP/1.1\" 201 312\n";
@@ -413,6 +430,7 @@ impl DemoFiles {
                 let mut d = Disk::small("/home/deploy", &[("shop/", ""), ("README.md", "# shop (staging)\n\nWhat goes live next. Break things here first.\n"), ("deploy.sh", DEPLOY)]);
                 // The file the staging worker's log names (`demo.rs`): a Ctrl+click on it opens it.
                 d.file("/etc/shop/worker.toml", WORKER, NOW.now - DAY, "-rw-r--r--");
+                d.file("/home/deploy/shop/src/db/orders.rs", orders_rs(), NOW.now - DAY, "-rw-r--r--");
                 d
             }),
             (backups.to_owned(), Disk::small("/home/backup", &[("daily/", ""), ("weekly/", ""), ("restore.sh", "#!/bin/sh\n# Restores a dump: ./restore.sh daily/shop-db.sql.gz\nset -eu\necho \"restoring $1\"\n"), ("retention.txt", "daily: 7\nweekly: 8\n")])),
@@ -585,6 +603,14 @@ mod tests {
         let Answer::Listed { result: Ok((l, clock)), .. } = one(files, Want::List { ticket: 1, path: path.into() }) else { panic!("{path}") };
         assert_eq!(clock, NOW);
         l.entries.into_iter().map(|e| e.name).collect()
+    }
+
+    #[test]
+    fn the_line_the_staging_log_names_is_the_slow_query() {
+        let source = orders_rs();
+        let line = source.lines().nth(87).expect("line 88");
+        assert!(line.contains("SELECT * FROM orders WHERE customer"), "{line}");
+        assert!(source.lines().all(|l| l.len() < 90), "a line wraps in the preview");
     }
 
     #[test]

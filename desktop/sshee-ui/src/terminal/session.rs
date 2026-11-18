@@ -42,6 +42,8 @@ pub enum Step {
     PaneInfo { ticket: u64, info: Option<(bool, String)> },
     /// The agents the server has.
     Agents(Option<Vec<String>>),
+    /// The shell's folder, as tmux knows it, for what starts here (`Launch`).
+    Folder { ticket: u64, cwd: Option<String> },
 }
 
 /// A clicked path being followed to Files.
@@ -68,6 +70,10 @@ enum Launch {
     Here,
     /// An agent: typed here when the shell waits at its prompt, else in a new terminal beside.
     Agent(&'static str),
+    /// "Browse files in this folder": Files there.
+    Files,
+    /// Files dropped on the terminal: the upload's question starts at this folder.
+    Upload,
 }
 
 /// A pane's session state.
@@ -507,6 +513,7 @@ impl TermPane {
                 }
             },
             Step::PaneInfo { ticket, info } => self.launch_with(ticket, info, tx),
+            Step::Folder { ticket, cwd } => self.launch_with(ticket, cwd.map(|cwd| (false, cwd)), tx),
             Step::Agents(found) => {
                 let found = found.unwrap_or_default();
                 self.over.session.agents = Some(AgentKind::ALL.into_iter().filter(|a| found.iter().any(|f| f == a.command())).collect());
@@ -530,10 +537,26 @@ impl TermPane {
         self.start(Launch::Agent(agent.command()), tx);
     }
 
+    /// "Browse files in this folder": Files on this machine, at the folder this shell is in
+    /// (tmux says, on a server; else what the shell said, OSC 7).
+    pub fn browse_files_here(&mut self, tx: &mut Tx) {
+        self.start(Launch::Files, tx);
+    }
+
+    /// Files from another app were dropped on this server's terminal: the folder its shell is
+    /// in comes back as [`Wish::UploadFolder`], for the upload's question.
+    pub fn find_upload_folder(&mut self, tx: &mut Tx) {
+        self.start(Launch::Upload, tx);
+    }
+
     fn start(&mut self, launch: Launch, tx: &mut Tx) {
         let ticket = self.next_ticket();
+        let folder_only = matches!(launch, Launch::Files | Launch::Upload);
         self.over.session.launching = Some((ticket, launch));
-        if self.over.session.on_server && self.ask(Ask::PaneInfo, move |reply| Note::Session(Step::PaneInfo { ticket, info: info_of(reply) })) {
+        if self.over.session.on_server && folder_only && self.ask(Ask::Cwd, move |reply| Note::Session(Step::Folder { ticket, cwd: cwd_of(reply) })) {
+            return;
+        }
+        if self.over.session.on_server && !folder_only && self.ask(Ask::PaneInfo, move |reply| Note::Session(Step::PaneInfo { ticket, info: info_of(reply) })) {
             return;
         }
         // No tmux to ask: the folder the shell said (OSC 7), and no telling whether it's busy.
@@ -549,6 +572,8 @@ impl TermPane {
         }
         let shell = prompts::Shell::of(self.over.session.on_server, cfg!(windows));
         match (launch, info) {
+            (Launch::Files, info) => self.over.wish(Wish::BrowseFiles(info.map(|(_, cwd)| cwd))),
+            (Launch::Upload, info) => self.over.wish(Wish::UploadFolder(info.map(|(_, cwd)| cwd))),
             // Waiting at its prompt: typed here. Ctrl+E Ctrl+U first: anything half typed goes.
             (Launch::Agent(command), Some((true, _))) => {
                 let out = self.model.user_input_at(format!("\x05\x15{command}\r").as_bytes(), self.now());
@@ -559,7 +584,7 @@ impl TermPane {
             (launch, Some((_, cwd))) => {
                 let next = match launch {
                     Launch::Agent(command) => Some(command),
-                    Launch::Here => None,
+                    Launch::Here | Launch::Files | Launch::Upload => None,
                 };
                 match prompts::typed_cd(&cwd, shell, next) {
                     Some(command) => self.over.wish(Wish::NewTerminalWith { command, beside: next.is_some() }),

@@ -548,7 +548,7 @@ fn the_terminals_menu_opens_on_the_secondary_button() {
         let menu = run.rect("menu");
         assert_eq!((menu[0], menu[1]), (500.0, 300.0));
         assert_eq!(run.fill("menu"), if dark { "#2c2c2eff" } else { "#f6f6f8ff" });
-        for (key, label) in [("menu-copy", "Copy"), ("menu-paste", "Paste"), ("menu-select-all", "Select all"), ("menu-find", "Find"), ("menu-clear", "Clear"), ("menu-new", "New terminal here")] {
+        for (key, label) in [("menu-copy", "Copy"), ("menu-paste", "Paste"), ("menu-select-all", "Select all"), ("menu-find", "Find"), ("menu-clear", "Clear"), ("menu-new", "New terminal here"), ("menu-browse", "Browse files in this folder")] {
             assert!(run.element(key).is_some(), "{key}");
             assert!(run.tree_text.contains(&format!("\"{label}\"")), "{label}");
         }

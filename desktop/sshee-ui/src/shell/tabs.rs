@@ -197,6 +197,9 @@ pub enum TabPick {
     NewTerminal,
     /// Files on the tab's machine.
     Files,
+    /// A terminal's: Files at the folder its shell is in (0.10's "Browse files in this
+    /// folder").
+    BrowseFiles,
 }
 
 impl Shell {
@@ -454,6 +457,12 @@ impl Shell {
             TabPick::Below => self.show_beside(id, layout::Dir::Col, tx),
             TabPick::Apart => self.leave_pair(id, tx),
             TabPick::Duplicate => self.duplicate_tab(id, tx),
+            TabPick::BrowseFiles => {
+                if let Some(pane) = self.panes.get_mut(&id) {
+                    pane.browse_files_here(tx);
+                }
+                self.settle(tx);
+            }
             TabPick::NewTerminal | TabPick::Files => {
                 let Some(server) = self.bench.tab(id).map(|t| t.server.clone()) else { return };
                 if pick == TabPick::Files {
@@ -504,6 +513,11 @@ impl Shell {
                     changed = true;
                 }
                 Wish::OpenPath { path, line } => self.open_path(id, &path, line, tx),
+                Wish::BrowseFiles(folder) => {
+                    self.browse_files(id, folder, tx);
+                    changed = true;
+                }
+                Wish::UploadFolder(folder) => changed |= super::file_drop::folder_found(self, id, folder),
                 Wish::NewTerminalWith { command, beside } => {
                     crate::screens::prompts::new_terminal_with(self, id, command, beside, tx);
                     changed = true;
@@ -537,13 +551,24 @@ impl Shell {
 
     /// A click on a file's path in tab `from`'s terminal: `path` is absolute or starts at `~`,
     /// `line` is where in the file. The machine's Files tab shows the folder it is in with it
-    /// picked out, and opens it (a folder: goes into it), as 0.10's `openTerminalLink`. The
-    /// line isn't marked yet: the editor has no line marks.
+    /// picked out, and opens it (a folder: goes into it) scrolled to the line, marked, as
+    /// 0.10's `openTerminalLink`.
     pub fn open_path(&mut self, from: TabId, path: &str, line: Option<u32>, tx: &mut Tx) {
-        let _ = line;
         let Some(server) = self.bench.tab(from).map(|t| t.server.clone()) else { return };
         let id = self.open_files_on(&server, None, tx);
-        crate::screens::files::show_path(self, id, path);
+        crate::screens::files::show_path_at(self, id, path, line.map(|l| (l, l)));
+    }
+
+    /// "Browse files in this folder", from terminal `from`: Files on its machine, at the folder
+    /// its shell is in (`folder`, from tmux or OSC 7). Not known on a server: the home folder,
+    /// and a note that following the terminal needs tmux (0.10's words).
+    pub fn browse_files(&mut self, from: TabId, folder: Option<String>, tx: &mut Tx) {
+        let Some(server) = self.bench.tab(from).map(|t| t.server.clone()) else { return };
+        let local = self.bench.server(&server).is_none_or(|sv| sv.is_local());
+        self.open_files_on(&server, Some(folder.as_deref().unwrap_or("~")), tx);
+        if folder.is_none() && !local {
+            self.toast(super::notes::Toast::info("Opened your home folder").body("Following the terminal's folder needs tmux on the server."));
+        }
     }
 
     /// A terminal's shell is in `folder` now: its tab is named after it, unless something else
@@ -596,7 +621,8 @@ fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working:
     }
     if let Some(badge) = st.tab.badge() {
         let font = if badge == Badge::NeedsYou { theme::NEEDS } else { theme::TAB_STATE };
-        w += 7.0 + 16.0 + rune::text::advance(badge.label(), font);
+        // Asleep is its moon alone (`kit::tab`).
+        w += if badge == Badge::Asleep { 7.0 + 11.0 } else { 7.0 + 16.0 + rune::text::advance(badge.label(), font) };
     } else if working {
         w += 7.0 + 10.0;
     }
@@ -668,9 +694,15 @@ fn went_quiet(s: &Shell, st: &StripTab) -> bool {
     s.screens.agent.agents.attention(st.tab.id).is_some_and(|a| a.kind == sshee_term::attention::AttentionKind::Done)
 }
 
-/// A mark after the name (working, connecting, went quiet): the room one takes.
+/// What the program in the tab's terminal says of its progress (OSC 9;4).
+fn progress(s: &Shell, st: &StripTab) -> Option<sshee_term::osc::Progress> {
+    s.pane(st.tab.id).and_then(|p| p.progress())
+}
+
+/// A mark after the name (working, connecting, went quiet, a program's progress): the room
+/// one takes.
 fn marked(s: &Shell, st: &StripTab) -> bool {
-    working(s, st) || connecting(st) || went_quiet(s, st)
+    working(s, st) || connecting(st) || went_quiet(s, st) || progress(s, st).is_some()
 }
 
 /// How wide the row is with nothing squeezed, "+" included.
@@ -832,13 +864,14 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
             working: working(st),
             connecting: connecting(st),
             went_quiet: went_quiet(st),
+            progress: progress(s, st),
             active: st.active && !in_settings,
             window_active,
             compact,
         };
         // The whole name, which a crowded tab cuts, what a crowded tab's mark means, and what
         // else a tab can be asked to do.
-        let state = st.tab.badge().filter(|_| compact).map(|b| format!(" ({})", b.label())).unwrap_or_default();
+        let state = st.tab.badge().filter(|b| compact || *b == Badge::Asleep).map(|b| format!(" ({})", b.label())).unwrap_or_default();
         let tip = format!("{label} on {server}{state}. Right-click for more, middle-click to close");
         let mut e = tab(t, &spec, move |s: &mut Shell, tx| s.close_tab(id, tx))
             .key(format!("tab-{}", id.0))
@@ -1061,19 +1094,27 @@ fn tab_menu_items(s: &Shell, id: TabId) -> Vec<Option<MenuItem>> {
     } else {
         row("tab-beside", "Show beside this one", None, TabPick::SideBySide, beside)
     };
-    vec![
+    // A terminal's folder, in Files (its pane says where it is).
+    let browse = s.pane(id).is_some().then(|| row("tab-browse", "Browse files in this folder", None, TabPick::BrowseFiles, true)).flatten();
+    let mut items = vec![
         side,
         // Under the tab on screen, for any other tab (0.10's "Show below this one").
         row("tab-below", "Show below this one", None, TabPick::Below, beside && active != Some(id)),
         None,
         row("tab-new-terminal", "New terminal", keys(Shortcut::NewTerminal), TabPick::NewTerminal, true),
         row("tab-files", "Files", keys(Shortcut::OpenFiles), TabPick::Files, true),
+    ];
+    if browse.is_some() {
+        items.push(browse);
+    }
+    items.extend([
         row("tab-duplicate", "Duplicate tab", None, TabPick::Duplicate, true),
         None,
         row("tab-close", "Close tab", keys(Shortcut::CloseTab), TabPick::Close, true),
         row("tab-close-others", "Close other tabs", None, TabPick::CloseOthers, !layout::others(&s.bench, id).is_empty()),
         row("tab-close-right", "Close tabs to the right", None, TabPick::CloseRight, !layout::to_the_right(&s.bench, id).is_empty()),
-    ]
+    ]);
+    items
 }
 
 /// The list of all tabs, under its button: each by its name and machine, and what it says.

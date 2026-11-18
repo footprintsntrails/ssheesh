@@ -154,6 +154,11 @@ pub enum Wish {
     /// A clicked path that was found: Files shows `dir` beside the terminal, with `name`
     /// picked out and opened (`None`: the folder itself), at `lines` (first and last).
     ShowPath { dir: String, name: Option<String>, lines: Option<(u32, u32)> },
+    /// "Browse files in this folder": Files at the folder the shell is in, when it's known.
+    BrowseFiles(Option<String>),
+    /// Files dropped on this terminal wait for the folder its shell is in, to upload there
+    /// (`shell::file_drop`); `None` when it can't be known.
+    UploadFolder(Option<String>),
 }
 
 /// A pane's overlays' state.

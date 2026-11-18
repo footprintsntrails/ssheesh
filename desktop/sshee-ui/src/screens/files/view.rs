@@ -280,7 +280,59 @@ impl Ui {
 
 /// The open file's text: the interface's code style, on 18-point lines.
 fn code_style() -> TextStyle {
-    theme::CODE.lh(18.0)
+    theme::CODE.lh(LINE)
+}
+
+/// A line of the open file's text, in points.
+const LINE: f32 = 18.0;
+
+/// Where the text starts inside the field (its padding).
+const TEXT_PAD: f32 = 14.0;
+
+/// How far below the preview's top the first marked line lands: three lines of what comes
+/// before it stay in sight (0.10's).
+const MARK_AT: f32 = 3.0 * LINE;
+
+/// The open file's lines a path named (first and last), while they are still those lines:
+/// gone once the text is edited, as 0.10 did.
+pub(super) fn marked_lines(s: &Shell, tab: TabId) -> Option<(u32, u32)> {
+    let state = s.screens.files.get(&tab)?;
+    let editor = state.editor.as_ref()?;
+    let (path, lines) = state.marked.as_ref()?;
+    (*path == editor.path() && editor.text().is_some() && dirty(s, tab).is_none()).then_some(*lines)
+}
+
+/// The band behind marked lines: the accent, faintly, with a stronger edge on its left.
+fn band(t: &Theme) -> El {
+    el().fill(t.blue.alpha(0.10)).border_sides([0.0, 0.0, 0.0, 2.0], t.blue.alpha(0.7)).a11y_hidden()
+}
+
+/// The element a preview's marked lines are scrolled to, by what shows the file.
+fn marked_key(s: &Shell, tab: TabId) -> Option<String> {
+    let state = s.screens.files.get(&tab)?;
+    let editor = state.editor.as_ref()?;
+    let (first, _) = marked_lines(s, tab)?;
+    let markdown = kinds::is_markdown(editor.name()) && !state.ui.source;
+    Some(match editor.body() {
+        Body::Text { .. } if markdown => format!("md-band-{}", tab.0),
+        Body::Text { .. } if editor.can_edit() => format!("lines-band-{}", tab.0),
+        Body::Text { .. } => format!("line-{}", first.saturating_sub(1)),
+        _ => return None,
+    })
+}
+
+/// A file opened at some lines scrolls to them once its text is on screen (`files::tick`, at
+/// the start of a frame).
+pub(super) fn scroll_to_marked(s: &mut Shell, tx: &mut Tx) {
+    let due: Vec<TabId> = s.screens.files.iter().filter(|(_, st)| st.scroll_to_marked && st.editor.as_ref().is_some_and(|e| !e.is_loading())).map(|(id, _)| *id).collect();
+    for tab in due {
+        if let Some(key) = marked_key(s, tab) {
+            tx.scroll_key_to(key, MARK_AT);
+        }
+        if let Some(st) = s.screens.files.get_mut(&tab) {
+            st.scroll_to_marked = false;
+        }
+    }
 }
 
 /// After anything that may have changed the open file: the field takes the text the server
@@ -1588,6 +1640,11 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
     if let Some(size) = editor.size() {
         head = head.child(text(bytes(size)).key("preview-size").font(theme::LIST_NUMBER).color(t.l2).single_line());
     }
+    // Opened at some lines: which, in the accent.
+    let marked = marked_lines(s, id);
+    if let Some((first, last)) = marked {
+        head = head.child(text(sshee_app::prompts::lines_note(first, last)).key("preview-lines-note").font(theme::LIST_NUMBER).color(t.blue).single_line());
+    }
     head = head.child(spacer());
     if markdown || svg {
         // Formatted (drawn), or as text to edit.
@@ -1687,9 +1744,16 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         // Markdown, formatted: from what's typed, so an edit in Source shows here.
         Body::Text { .. } if markdown && !state.ui.source => {
             let source = if editor.can_edit() { state.ui.draft.text.as_str() } else { editor.text().unwrap_or_default() };
-            super::markdown_view::view(s, source, t).key("preview-markdown")
+            super::markdown_view::view(s, source, marked, &format!("md-band-{}", id.0), t).key("preview-markdown")
         }
         Body::Text { .. } if editor.can_edit() => col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            // The marked lines' band, behind the text.
+            col().w_full().children(marked.map(|(first, last)| {
+                band(t)
+                    .key(format!("lines-band-{}", id.0))
+                    .pin(Some(0.0), Some(TEXT_PAD + (first - 1) as f32 * LINE), Some(0.0), None)
+                    .h((last - first + 1) as f32 * LINE)
+            })).child(
             text_input(&state.ui.draft, code_style())
                 .key("preview-text")
                 .w_full()
@@ -1712,16 +1776,23 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                     }
                     false
                 }),
+            ),
         ),
         Body::Text { .. } => {
             let style = code_style();
             col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).py(10.0).scroll(ScrollSpec { stick_bottom: false }).child(
-                col().key("preview-lines").w_full().growth(GrowthSpec::default()).virtual_rows(state.ui.lines.len(), 18.0, |_: &Shell, i| format!("line-{i}").into(), move |s: &Shell, i| {
+                col().key("preview-lines").w_full().growth(GrowthSpec::default()).virtual_rows(state.ui.lines.len(), LINE, |_: &Shell, i| format!("line-{i}").into(), move |s: &Shell, i| {
                     let line = s.screens.files.get(&id).and_then(|st| {
                         let (a, b) = *st.ui.lines.get(i)?;
                         st.editor.as_ref()?.text()?.get(a..b)
                     });
-                    el().h(18.0).px(14.0).child(text(line.unwrap_or_default().trim_end_matches('\r')).font(style).color(t.l1).single_line())
+                    let row = el().h(LINE).px(14.0).child(text(line.unwrap_or_default().trim_end_matches('\r')).font(style).color(t.l1).single_line());
+                    // A marked line: the band behind it.
+                    let n = u32::try_from(i + 1).unwrap_or(u32::MAX);
+                    match marked_lines(s, id) {
+                        Some((first, last)) if (first..=last).contains(&n) => row.fill(t.blue.alpha(0.10)).border_sides([0.0, 0.0, 0.0, 2.0], t.blue.alpha(0.7)),
+                        _ => row,
+                    }
                 }),
             )
         }

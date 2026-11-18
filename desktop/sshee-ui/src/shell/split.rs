@@ -294,7 +294,9 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
             head = head.child(prod_chip(t, false));
         }
     }
-    // The AI agents this terminal can start, as in 0.10's header.
+    // Its shell isn't in tmux on the server, and the AI agents this terminal can start, as in
+    // 0.10's header.
+    head = head.children(super::pane_marks::not_kept(s, id, t));
     head = head.children(crate::screens::prompts::agent_starters(s, id, HEAD_BUTTON, t)).child(rune::spacer());
     let n = id.0;
     match zoomed {
@@ -347,12 +349,14 @@ fn side(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>, mixed: bool
             s,
             t,
             id,
-            rune::col().key(format!("pane-{n}")).w_full().grow(1.0).min_h(0.0).child(pane_view_with(
-                pane,
-                cx,
-                move |s: &mut Shell| s.panes.get_mut(&id),
-                |s: &mut Shell, ev, tx| s.shortcut(ev, tx),
-            )),
+            rune::col()
+                .key(format!("pane-{n}"))
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .child(pane_view_with(pane, cx, move |s: &mut Shell| s.panes.get_mut(&id), |s: &mut Shell, ev, tx| s.shortcut(ev, tx)))
+                // A program's progress, along the foot of the header (0.10's).
+                .children(super::pane_marks::progress_line(s, id, t)),
         ),
         None if tab.kind == TabKind::Terminal => rune::el().key("pane-pending").w_full().grow(1.0),
         None if tab.kind == TabKind::Files => rune::col().w_full().grow(1.0).min_h(0.0).child(screens::files::view(s, tab, t, cx)),
