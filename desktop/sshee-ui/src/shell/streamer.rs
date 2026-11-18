@@ -208,27 +208,34 @@ impl Shell {
     }
 }
 
-/// The eye in the top row. Struck through and lit while streamer mode is on.
-pub(crate) fn eye(s: &Shell, t: &'static Theme) -> El {
-    let on = s.streamer.on;
+/// While streamer mode is on, a quiet "Streamer mode" at the status bar's end that says so, and
+/// turns it off with a click. Off, nothing shows: the mode lives in Settings → Privacy, the
+/// palette and its shortcut, not in the window's chrome.
+pub(crate) fn status(s: &Shell, t: &'static Theme) -> Option<El> {
+    if !s.streamer.on {
+        return None;
+    }
     let keys = sshee_app::palette::shortcut_label(sshee_app::workbench::shortcuts::Shortcut::Streamer, s.options.mac_keys, &s.options.shortcuts).map(|k| format!(" ({k})")).unwrap_or_default();
-    let name = if on { format!("Streamer mode is on: names and secrets are hidden{keys}") } else { format!("Streamer mode: hide names and secrets{keys}") };
-    let mut e = rune::el()
-        .key("streamer")
-        .size(theme::CONTROL, theme::CONTROL)
-        .radius(theme::RADIUS)
-        .items_center()
-        .justify_center()
-        .press(t.down)
-        .focusable(true)
-        .role("switch")
-        .label_static("Streamer mode")
-        .help(name)
-        .on_press_tx(|s: &mut Shell, tx| s.toggle_streamer(tx))
-        .child(icon(if on { Icon::EyeOff } else { Icon::Eye }, theme::ICON, if on { t.l1 } else { t.l2 }));
-    e = if on { e.fill(t.selrail) } else { e.hover(t.hov2) };
-    e
+    Some(
+        rune::row()
+            .key("streamer")
+            .h_full()
+            .gap(5.0)
+            .items_center()
+            .cursor(rune::Cursor::Pointer)
+            .focusable(true)
+            .role("switch")
+            .checked(true)
+            .label_static("Streamer mode")
+            .help(format!("Streamer mode is on: names and secrets are hidden. Click to turn it off{keys}"))
+            .on_press_tx(|s: &mut Shell, tx| s.toggle_streamer(tx))
+            .child(icon(Icon::EyeOff, 12.0, t.l2))
+            .child(rune::text("Streamer mode").font(theme::STATUS).color(t.l2).single_line()),
+    )
 }
+
+/// What [`status`] takes of the status bar's width.
+pub(crate) const STATUS_WIDTH: f32 = 110.0;
 
 #[cfg(test)]
 mod tests {

@@ -357,14 +357,15 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .child(col().key("settings-rows").w_full().max_w(CONTENT_WIDTH + 56.0).px(28.0).pb(28.0).gap(10.0).children(body).on_layout(|s: &mut Shell, rect: [f32; 4]| {
             s.screens.settings.rows_width = rect[2];
         }));
-    row()
+    let page = row()
         .key("settings")
         .w_full()
         .h_full()
         .role("group")
         .label_static("Settings")
         .child(nav(s, t))
-        .child(col().key("settings-main").grow(1.0).min_w(0.0).h_full().child(head(s, t)).child(scroll))
+        .child(col().key("settings-main").grow(1.0).min_w(0.0).h_full().child(head(s, t)).child(scroll));
+    crate::kit::motion::enters(page, crate::kit::motion::Entrance::Page)
 }
 
 /// What Settings draws over the whole window: the open pop-up menu, under its button.

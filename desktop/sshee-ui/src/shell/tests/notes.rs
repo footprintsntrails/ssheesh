@@ -27,7 +27,10 @@ fn a_toast_shows_in_the_corner_and_leaves_by_itself() {
     });
     w.settle();
     assert!(w.tree().contains("Copied the path") && w.tree().contains("/srv/shop/deploy.sh"));
-    // Over the status bar, at the right.
+    // Over the status bar, at the right, once it has come in (`kit::motion`).
+    for _ in 0..15 {
+        w.rt.frame(1.0 / 60.0);
+    }
     let [x, y, width, height] = w.rect("toast-1").expect("the toast is drawn");
     assert_eq!(width, 300.0);
     assert!(x + width <= 1280.0 - 14.0 && y + height <= 800.0 - 24.0, "{x} {y} {width} {height}");

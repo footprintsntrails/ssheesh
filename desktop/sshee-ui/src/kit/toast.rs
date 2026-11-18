@@ -84,7 +84,7 @@ pub fn toast<S: 'static>(t: &Theme, key: &str, look: &Look, act: impl Fn(&mut S,
         head = head.child(push_button(t, label, Push::Quiet, true).key(format!("{key}-action")).on_press_tx(act));
     }
     head = head.child(cross(t).key(format!("{key}-close")).on_press_tx(close));
-    let mut card = popover(t, WIDTH).key(key).role("status").live_region(LiveRegion::Polite).px(12.0).py(9.0).gap(3.0).child(head);
+    let mut card = crate::kit::motion::enters(popover(t, WIDTH), crate::kit::motion::Entrance::Toast).key(key).role("status").live_region(LiveRegion::Polite).px(12.0).py(9.0).gap(3.0).child(head);
     if let Some(body) = look.body.filter(|b| !b.is_empty()) {
         // Under the title's words, not under the mark.
         let indent = if look.tone == Tone::Error { 20.0 } else { 0.0 };

@@ -256,6 +256,8 @@ pub struct Browser {
     future: Vec<String>,
     sort: Sort,
     show_hidden: bool,
+    /// "Show hidden files" was toggled here: that choice holds over [`Browser::hidden_by_default`].
+    hidden_chosen: bool,
     filter: String,
     /// The listing's entries in the sort's order (places in `listing.entries`).
     order: Vec<usize>,
@@ -287,6 +289,7 @@ impl Browser {
             future: Vec::new(),
             sort: Sort::default(),
             show_hidden: false,
+            hidden_chosen: false,
             filter: String::new(),
             order: Vec::new(),
             rows: Vec::new(),
@@ -604,10 +607,25 @@ impl Browser {
         self.show_hidden
     }
 
-    /// "Show hidden files": dot files are listed too.
+    /// "Show hidden files": dot files are listed too. Your choice: it holds over the default.
     pub fn set_show_hidden(&mut self, show: bool) {
         self.show_hidden = show;
+        self.hidden_chosen = true;
         self.sift();
+    }
+
+    /// Whether dot files show when nobody chose: yes for root, whose files mostly are. A choice
+    /// made with [`Browser::set_show_hidden`] stays as it is.
+    pub fn hidden_by_default(&mut self, show: bool) {
+        if !self.hidden_chosen && self.show_hidden != show {
+            self.show_hidden = show;
+            self.sift();
+        }
+    }
+
+    /// "Show hidden files" as it was chosen here, if it was.
+    pub fn hidden_choice(&self) -> Option<bool> {
+        self.hidden_chosen.then_some(self.show_hidden)
     }
 
     pub fn filter(&self) -> &str {
@@ -835,6 +853,15 @@ mod tests {
         assert_eq!(b.status().unwrap().items, "8 items");
         // An entry that isn't shown is still an entry.
         b.set_show_hidden(false);
+        // A choice holds over root's default; without one, root sees dot files.
+        b.hidden_by_default(true);
+        assert!(!b.show_hidden());
+        let mut fresh = Browser::new(WEB, "~");
+        fresh.hidden_by_default(true);
+        assert_eq!((fresh.show_hidden(), fresh.hidden_choice()), (true, None));
+        fresh.set_show_hidden(false);
+        fresh.hidden_by_default(true);
+        assert_eq!((fresh.show_hidden(), fresh.hidden_choice()), (false, Some(false)));
         assert!(b.entry(".env").is_some() && b.index_of(".env").is_none());
     }
 

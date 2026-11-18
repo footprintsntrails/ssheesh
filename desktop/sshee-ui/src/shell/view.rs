@@ -3,7 +3,7 @@
 //! ```text
 //! root   column, the frame's colour
 //! ├── bar      44 pt, moves the window: [window buttons' room | logo] [sidebar toggle]
-//! │            [bar-middle: title (name, address, Prod), tabs … +] [streamer mode] [the sidebar's foot,
+//! │            [bar-middle: title (name, address, Prod), tabs … +] [the sidebar's foot,
 //! │            while it is hidden] [room for Windows' buttons]
 //! └── body     row
 //!     ├── rail     52 pt of icons: [logo] search ─ this computer, servers, + … check, Tor, settings
@@ -141,9 +141,9 @@ fn bar(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
         .on_layout(|s: &mut Shell, [_, _, w, _]| s.bar_room = Some(w))
         .child(super::title::title(s, t, active, fit.address))
         .child(super::tabs::strip(s, t, active, fit));
-    // Then streamer mode's switch, and while the sidebar is hidden, its foot. What's left of
-    // the row moves the window, and Windows' buttons take its end.
-    bar.child(middle).child(super::streamer::eye(s, t)).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
+    // Then, while the sidebar is hidden, its foot. What's left of the row moves the window,
+    // and Windows' buttons take its end.
+    bar.child(middle).children(super::title::bar_tools(s, t)).child(el().key("bar-end").w(10.0 + insets.trailing).h_full())
 }
 
 /// The page: darker than the frame, its top-left corner rounded where it meets the sidebar.
@@ -279,6 +279,9 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         if let Some(latency) = tor {
             room -= status_tor_width(latency) + 2.0 * 20.0;
         }
+        if s.streamer.on {
+            room -= super::streamer::STATUS_WIDTH + 20.0;
+        }
         for (i, v) in vitals.items().iter().enumerate() {
             room -= status_item_width(&v.label, &v.value, v.warn) + if i > 0 { 20.0 } else { 0.0 };
             if room < 0.0 {
@@ -288,6 +291,8 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         }
     }
     bar = bar.child(spacer());
+    // Streamer mode, while it's on.
+    bar = bar.children(super::streamer::status(s, t));
     if let Some(latency_ms) = tor {
         bar = bar.child(status_tor(t, latency_ms).cursor(rune::Cursor::Pointer).on_press_tx(|s: &mut Shell, tx| s.toggle_tor(tx)));
     }

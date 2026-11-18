@@ -463,7 +463,7 @@ fn streamer_mode_hides_names_everywhere_at_once_and_shows_them_again() {
     w.plus_terminal();
     w.feed(2, b"deploy@web-7731:~$ ");
     assert!(!w.tree().contains("deploy@web-7731"));
-    // The eye again: everything is back.
+    // "Streamer mode" in the status bar turns it off: everything is back.
     w.click("streamer");
     assert!(!w.rt.state.streaming());
     let tree = w.tree();
@@ -831,7 +831,10 @@ fn streamer_mode_leaves_no_name_or_address_anywhere_in_the_window() {
     w.settle();
     assert!(w.tree().contains("Workspace for db-main"), "{}", w.tree());
     w.key(Key::Escape, "");
-    w.click("streamer");
+    // No eye in the top row: off, streamer mode shows nowhere in the window's chrome.
+    assert!(w.rt.find("streamer").is_none());
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
+    w.settle();
     let check = |w: &Window, place: &str| {
         let tree = w.tree();
         for name in HIDDEN {

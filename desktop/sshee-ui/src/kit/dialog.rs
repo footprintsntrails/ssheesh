@@ -24,6 +24,7 @@
 
 use rune::{col, el, row, spacer, text, El, Tx};
 
+use crate::kit::motion::{enters, Entrance};
 use crate::kit::popover::popover;
 use crate::kit::push::{push_button, Push};
 use crate::theme::{self, Theme};
@@ -123,13 +124,14 @@ pub fn card<S: 'static>(t: &Theme, key: &str, look: &Look, pick: impl Fn(&mut S,
         buttons = buttons.child(b);
     }
     let cancel = look.cancel;
-    card.child(buttons).modal_tx(false, move |s: &mut S, tx: &mut Tx| pick(s, tx, cancel))
+    enters(card.child(buttons).modal_tx(false, move |s: &mut S, tx: &mut Tx| pick(s, tx, cancel)), Entrance::Card)
 }
 
 /// The dialog over the window: the card in the middle of a dimmed layer that takes every
 /// click, keyed `<key>-layer`.
 pub fn dialog<S: 'static>(t: &Theme, key: &str, look: &Look, pick: impl Fn(&mut S, &mut Tx, usize) + Clone + 'static) -> El {
-    el().key(format!("{key}-layer")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(card(t, key, look, pick))
+    let layer = el().key(format!("{key}-layer")).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(card(t, key, look, pick));
+    enters(layer, Entrance::Scrim)
 }
 
 #[cfg(test)]

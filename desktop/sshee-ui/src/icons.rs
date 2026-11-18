@@ -18,7 +18,7 @@
 //! An icon's line stays [`theme::ICON_LINE`] points whatever its size, as the design's
 //! `non-scaling-stroke` does.
 
-use rune::{canvas, el, Color, El, LineCap, Shape};
+use rune::{canvas, el, Color, Cycle, El, LineCap, Shape};
 
 use crate::svg::{self, Fit};
 use crate::theme;
@@ -548,36 +548,76 @@ pub fn logo(size: f32) -> El {
 
 /// [`logo`] with its eyes as `eyes` has them: a shut eye is a flat line (0.10's `Logo`).
 pub fn logo_face(size: f32, eyes: LogoFace) -> El {
+    logo_frame(size, vec![canvas(logo_layer(size, true, Some(eyes), true))])
+}
+
+/// The logo at work, `size` points square: the loader where something takes a while (the
+/// security check, the first numbers of Stats, a file on its way). Its cursor, the green
+/// line under the eyes, blinks as a terminal's does, and now and then the face blinks too.
+/// Both are loops on Rune's render clock: frames only while it's on screen, none from the
+/// view. Under Reduce Motion Rune holds them still: the logo as it always is, eyes open.
+pub fn logo_loader(size: f32) -> El {
+    // Eyes open, shut for a moment near the end of each round, open again.
+    const OPEN: &[(f32, f32)] = &[(0.0, 1.0), (0.84, 1.0), (0.86, 0.0), (0.92, 0.0), (0.94, 1.0), (1.0, 1.0)];
+    const SHUT: &[(f32, f32)] = &[(0.0, 0.0), (0.84, 0.0), (0.86, 1.0), (0.92, 1.0), (0.94, 0.0), (1.0, 0.0)];
+    // The cursor: on half the round, dim (never quite gone) the other half.
+    const CURSOR: &[(f32, f32)] = &[(0.0, 1.0), (0.46, 1.0), (0.54, 0.18), (0.92, 0.18), (1.0, 1.0)];
+    let blink = |stops, still| Cycle { period: 2.8, phase: 0.0, stops, still, fps: Cycle::DISPLAY_RATE };
+    logo_frame(
+        size,
+        vec![
+            canvas(logo_layer(size, true, None, false)),
+            canvas(logo_layer(size, false, Some(LogoFace::Open), false)).cycle(blink(OPEN, 1.0)),
+            canvas(logo_layer(size, false, Some(LogoFace::Blink), false)).cycle(blink(SHUT, 0.0)),
+            canvas(logo_layer(size, false, None, true)).cycle(Cycle { period: 1.1, phase: 0.0, stops: CURSOR, still: 1.0, fps: Cycle::DISPLAY_RATE }),
+        ],
+    )
+}
+
+/// The logo's drawing, `size` points square: its title band and three dots, its eyes as
+/// `eyes` has them, its green cursor, each when asked for.
+fn logo_layer(size: f32, band: bool, eyes: Option<LogoFace>, mouth: bool) -> Shape {
     let fit = Fit::square(8.0, 8.0, 184.0, size);
     let at = |p: [f32; 2]| [p[0] * fit.scale + fit.dx, p[1] * fit.scale + fit.dy];
     let hex = |h: &str| rune::color::hex(h).expect("a colour written here");
-    let (body, band, dot, eye, mouth) = (hex("#232428"), hex("#2f3136"), hex("#5c5f67"), hex("#f2f0ea"), hex("#4eba65"));
+    let (band_ink, dot, eye, cursor) = (hex("#2f3136"), hex("#5c5f67"), hex("#f2f0ea"), hex("#4eba65"));
     let rect = |x: f32, y: f32, w: f32, h: f32| vec![at([x, y]), at([x + w, y]), at([x + w, y + h]), at([x, y + h])];
-    let mut face = Shape::new()
+    let mut face = Shape::new();
+    if band {
         // The title band: the window's top 38 units (its round corners are the element's clip).
-        .fill(rect(8.0, 8.0, 184.0, 38.0), band);
-    for cx in [35.0, 52.0, 69.0] {
-        face = face.fill_path(&svg::path(&data(Oval(cx, 27.0, 5.5, 5.5)), fit), dot);
+        face = face.fill(rect(8.0, 8.0, 184.0, 38.0), band_ink);
+        for cx in [35.0, 52.0, 69.0] {
+            face = face.fill_path(&svg::path(&data(Oval(cx, 27.0, 5.5, 5.5)), fit), dot);
+        }
     }
-    // A shut eye: 0.10's `M32 112 L61 112`, a 20-unit line with square ends.
-    let shut = |x0: f32, x1: f32| rect(x0 - 10.0, 102.0, x1 - x0 + 20.0, 20.0);
-    face = match eyes {
-        LogoFace::Blink => face.fill(shut(32.0, 61.0), eye),
-        _ => face.fill(chevron([[32.0, 86.0], [61.0, 112.0], [32.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye),
-    };
-    face = match eyes {
-        LogoFace::Open => face.fill(chevron([[168.0, 86.0], [139.0, 112.0], [168.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye),
-        _ => face.fill(shut(139.0, 168.0), eye),
-    };
-    face = face.fill(rect(76.0, 140.0, 48.0, 20.0), mouth);
-    let radius = 44.0 * fit.scale;
+    if let Some(eyes) = eyes {
+        // A shut eye: 0.10's `M32 112 L61 112`, a 20-unit line with square ends.
+        let shut = |x0: f32, x1: f32| rect(x0 - 10.0, 102.0, x1 - x0 + 20.0, 20.0);
+        face = match eyes {
+            LogoFace::Blink => face.fill(shut(32.0, 61.0), eye),
+            _ => face.fill(chevron([[32.0, 86.0], [61.0, 112.0], [32.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye),
+        };
+        face = match eyes {
+            LogoFace::Open => face.fill(chevron([[168.0, 86.0], [139.0, 112.0], [168.0, 138.0]], 20.0).into_iter().map(at).collect::<Vec<_>>(), eye),
+            _ => face.fill(shut(139.0, 168.0), eye),
+        };
+    }
+    if mouth {
+        face = face.fill(rect(76.0, 140.0, 48.0, 20.0), cursor);
+    }
+    face
+}
+
+/// The logo's dark rounded square with `layers` over it, and the faint ring that keeps its
+/// edge on a dark frame.
+fn logo_frame(size: f32, layers: Vec<El>) -> El {
+    let radius = 44.0 * size / 184.0;
     el().size(size, size)
         .radius(radius)
-        .fill(body)
+        .fill(rune::color::hex("#232428").expect("a colour written here"))
         .clip_rounded(radius)
         .a11y_hidden()
-        .child(canvas(face).absolute(0.0, 0.0).size(size, size))
-        // The faint ring that keeps the dark mark's edge on a dark frame.
+        .children(layers.into_iter().map(|l| l.absolute(0.0, 0.0).size(size, size)))
         .child(el().absolute(0.0, 0.0).size(size, size).radius(radius).border(1.0, Color::WHITE.alpha(0.16)))
 }
 

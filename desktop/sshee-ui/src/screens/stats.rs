@@ -201,12 +201,14 @@ pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
     let page = col().key("stats").w_full().h_full().child(bar);
     // Why there are no numbers: a machine that can't say, one not connected yet.
     let Some(v) = vitals else {
-        let (title, message, terminal) = match s.screens.machines.get(&server) {
-            Some(Err(message)) => ("No stats here", message.clone(), false),
-            _ if !watched(s, &server) => ("Connect first", "Stats come over the server's own connection. Open a terminal to connect, and they show up here.".to_owned(), true),
-            _ => ("Looking…", "The first numbers come in a moment.".to_owned(), false),
+        let (title, message, terminal, waiting) = match s.screens.machines.get(&server) {
+            Some(Err(message)) => ("No stats here", message.clone(), false, false),
+            _ if !watched(s, &server) => ("Connect first", "Stats come over the server's own connection. Open a terminal to connect, and they show up here.".to_owned(), true, false),
+            _ => ("Looking…", "The first numbers come in a moment.".to_owned(), false, true),
         };
-        let mut parts = vec![icon(Icon::Stats, 28.0, t.l2), text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(message).font(theme::NOTE).color(t.l2).max_w(380.0).align(Align::Center)];
+        // On its way: the logo at work; otherwise the page's sign.
+        let sign = if waiting { crate::icons::logo_loader(28.0) } else { icon(Icon::Stats, 28.0, t.l2) };
+        let mut parts = vec![sign, text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(message).font(theme::NOTE).color(t.l2).max_w(380.0).align(Align::Center)];
         if terminal {
             parts.push(push_button(t, "Open a terminal", Push::Primary, true).key("stats-open-terminal").mt(6.0).on_press_tx(move |s: &mut Shell, tx| {
                 s.bench.open(TabKind::Terminal, &server);

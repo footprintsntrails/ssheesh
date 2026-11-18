@@ -7,7 +7,7 @@ use rune::{col, row, text, El, TextEdit, Tx};
 use sshee_app::workbench::Badge;
 
 use super::state::Shell;
-use crate::icons::{icon, logo, Icon};
+use crate::icons::{icon, logo, logo_loader, Icon};
 use crate::kit::button::toolbar_button;
 use crate::kit::chip::prod_chip;
 use crate::kit::field::{input, search_field};
@@ -77,6 +77,10 @@ pub fn view(t: &'static Theme) -> El {
         logo(24.0),
         logo(32.0),
         logo(56.0),
+        // The loaders: the logo at work, and the plain ring where the logo would be odd.
+        logo_loader(16.0).key("loader-16"),
+        logo_loader(28.0).key("loader-28"),
+        crate::kit::progress_ring(14.0, 1.6, t.l2).key("ring-14"),
     ];
     let question = popover(t, 340.0)
         .key("pop")

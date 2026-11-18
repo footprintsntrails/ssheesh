@@ -314,7 +314,7 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
         assert_eq!(run.rect("status"), [52.0, 776.0, 1228.0, 24.0], "{theme}");
         assert_eq!(run.rect("settings-nav")[2], 232.0, "{theme}");
         assert_eq!(run.fill("window"), format!("{frame}ff"), "{theme}");
-        // The list: ten sections, Layout first and picked in the selection's blue.
+        // The list: ten sections, Layout first and picked in the theme's quiet fill.
         for (n, (id, name)) in [
             ("layout", "Layout"),
             ("appearance", "Appearance"),
@@ -334,19 +334,19 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
             let (_, y) = centre(&run, &format!("nav-{id}"));
             assert_eq!(y, FIRST_SECTION + SECTION_ROW * n as f64, "{theme}: {name}");
         }
-        assert_eq!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
+        assert_eq!(run.fill("nav-layout"), if theme == "dark" { "#ffffff24" } else { "#0000001f" }, "{theme}");
         // Rows with their words and controls; one that comes later says so.
         for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Tabs run along the top. Tabs under each server aren't built yet.", "Search"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
-        // The picture: the page's colour, a box of rows on it, the picked section's blue, and
+        // The picture: the page's colour, a box of rows on it, the picked section not blue, and
         // a switch that is on in the system's green.
         let px = run.pixels();
         assert_eq!(at(&px, 1250, 400), page, "{theme}: the page");
         assert_eq!(at(&px, 26, 500), frame, "{theme}: the sidebar");
         let [x, y, w, _] = run.rect("layout-tab-server");
         assert_eq!(at(&px, (x + w / 2.0) as u32, (y + 4.0) as u32), group, "{theme}: a row's box");
-        assert_eq!(at(&px, 262, 106), "#0071e3", "{theme}: the picked section");
+        assert_ne!(at(&px, 262, 106), "#0071e3", "{theme}: the picked section");
         let [sx, sy, sw, sh] = run.rect("layout-tab-server-control");
         let green = if theme == "dark" { [0x30, 0xd1, 0x58] } else { [0x34, 0xc7, 0x59] };
         assert!(near(&px, [sx as u32, sy as u32, (sx + sw) as u32, (sy + sh) as u32], green) > 100, "{theme}: the switch isn't green");
@@ -556,7 +556,7 @@ fn streamer_mode_hides_every_name_the_window_draws() {
         for name in ["web-7731", "web-staging", "backups", "db-main", "203.0.113", "deploy"] {
             assert!(!run.tree_text.contains(name), "{name} is still in the tree");
         }
-        // The switch says it's on.
+        // The status bar says it's on.
         assert_eq!(run.label("streamer"), "Streamer mode");
         assert!(run.tree_text.contains("Streamer mode is on"));
     });
@@ -585,7 +585,7 @@ fn a_tab_has_a_menu_and_a_crowded_row_has_a_list() {
         assert!(run.element("tab-3").is_none(), "the agent's tab should be out of sight");
         assert!(run.tree_text.contains("Migration 0042, db-main, Needs you"));
         let window = run.rect("window");
-        for key in ["tab-26", "tab-list", "new-tab", "streamer"] {
+        for key in ["tab-26", "tab-list", "new-tab"] {
             let r = run.rect(key);
             assert!(r[0] >= 0.0 && r[0] + r[2] <= window[2], "{key} is off the window: {r:?}");
         }
@@ -1342,8 +1342,8 @@ fn stats_has_graphs_meters_and_programs_in_both_appearances() {
         }
         let px = run.pixels();
         let graph = run.rect("stat-cpu");
-        // The graph's line: the page's quiet ink, never blue.
-        assert_eq!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x00, 0x71, 0xe3]), 0, "{theme}");
+        // The graph's line: in the accent, as 0.10 drew it.
+        assert!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x00, 0x71, 0xe3]) > 0, "{theme}");
         assert_eq!(at(&px, 1270, 790), page, "{theme}");
     }
 }

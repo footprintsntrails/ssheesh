@@ -280,7 +280,8 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .modal_tx(true, |s: &mut Shell, tx| s.close_tunnels(tx))
         .child(page)
         .child(foot);
-    Some(rune::el().key("tunnels-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(dialog))
+    let dialog = crate::kit::motion::enters(dialog, crate::kit::motion::Entrance::Card);
+    Some(crate::kit::motion::enters(rune::el().key("tunnels-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(dialog), crate::kit::motion::Entrance::Scrim))
 }
 
 /// "2 on", "None on".

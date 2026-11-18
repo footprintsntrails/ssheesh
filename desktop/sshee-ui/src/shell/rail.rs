@@ -116,9 +116,18 @@ fn home(s: &Shell, t: &Theme) -> El {
         .child(s.app_logo(24.0, t))
 }
 
-/// A row of the list: an icon and words. `selected`: the server on screen.
-fn list_row(t: &Theme, glyph: Icon, name: &str, selected: bool) -> El {
-    let ink = if selected { t.l1 } else { t.l2 };
+/// The ink of a list row's icon: quiet, a step brighter on the server on screen.
+fn list_ink(t: &Theme, selected: bool) -> rune::Color {
+    if selected {
+        t.l1
+    } else {
+        t.l2
+    }
+}
+
+/// A row of the list: an icon (a drawing of the caller's: a server's own, `list_ink` for a
+/// sign) and words. `selected`: the server on screen.
+fn list_row(t: &Theme, glyph: El, name: &str, selected: bool) -> El {
     let mut r = row()
         .w_full()
         .h(LIST_ROW)
@@ -131,7 +140,7 @@ fn list_row(t: &Theme, glyph: Icon, name: &str, selected: bool) -> El {
         .focusable(true)
         .role("button")
         .label(name)
-        .child(icon(glyph, theme::ICON_RAIL, ink))
+        .child(glyph)
         .child(text(name.to_owned()).key("name").font(theme::TEXT).color(t.l1).single_line().truncate_fade().shrink());
     if selected {
         r = r.fill(t.selrail);
@@ -153,7 +162,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         rail = rail.child(if wide { row().w_full().child(home(s, t).help_side(side)) } else { home(s, t).help_side(side) });
     }
     rail = rail.child(if wide {
-        list_row(t, Icon::Search, "Search", false).key("search").help("Search servers, tabs, files and commands").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
+        list_row(t, icon(Icon::Search, theme::ICON_RAIL, list_ink(t, false)), "Search", false).key("search").help("Search servers, tabs, files and commands").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
     } else {
         rail_button(t, Icon::Search, "Search", RailState::Plain, false).key("search").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
     });
@@ -186,9 +195,10 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         let waiting = s.bench.server_needs_you(&key);
         let name = s.server_shown(&key, &server.name).into_owned();
         let menu = key.clone();
-        let glyph = Icon::for_server(&server.icon);
         let mut b = if wide {
-            let mut r = list_row(t, glyph, &name, selected);
+            // Its picture, else its icon in the colour you picked, else quiet, as in the rail.
+            let drawn = crate::screens::server_menu::glyph(s, server, theme::ICON_RAIL, list_ink(t, selected));
+            let mut r = list_row(t, drawn, &name, selected);
             if server.is_prod() {
                 r = r.child(prod_chip(t, false));
             }
@@ -223,7 +233,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
     if new > 0 {
         let words = format!("{new} new in ~/.ssh/config · Review");
         let note = if wide {
-            list_row(t, Icon::Doc, &words, false)
+            list_row(t, icon(Icon::Doc, theme::ICON_RAIL, list_ink(t, false)), &words, false)
         } else {
             rail_button(t, Icon::Doc, &words, RailState::Plain, false).child(
                 el().absolute(theme::RAIL_BUTTON - 15.0, 1.0).h(14.0).min_w(14.0).px(3.0).radius(7.0).fill(t.blue).items_center().justify_center().a11y_hidden().child(

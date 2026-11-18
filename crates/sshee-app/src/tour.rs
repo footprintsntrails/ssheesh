@@ -53,8 +53,9 @@ pub struct Step {
     pub keys: Option<Shortcut>,
 }
 
-/// The tour, in order.
-pub const STEPS: [Step; 6] = [
+/// The tour, in order. Streamer mode isn't one of its cards: it's for the few who stream, and
+/// it lives in Settings → Privacy, the palette and its shortcut.
+pub const STEPS: [Step; 5] = [
     Step {
         id: "find",
         title: "Find anything",
@@ -89,13 +90,6 @@ pub const STEPS: [Step; 6] = [
         body: "Show two tabs of a server side by side, and go back to one at a time.",
         detail: "Right-click a tab for more.",
         keys: Some(Shortcut::SideBySide),
-    },
-    Step {
-        id: "streamer",
-        title: "Streaming? Hide it all",
-        body: "One switch hides server names, addresses and users everywhere, before anyone sees them.",
-        detail: "No account, no cloud: your servers and keys stay on this computer.",
-        keys: Some(Shortcut::Streamer),
     },
 ];
 

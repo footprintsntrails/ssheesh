@@ -482,7 +482,8 @@ fn in_your_list(state: &State, t: &Theme, shown_host: &str) -> El {
                 .help(name)
                 .on_press_tx(move |s: &mut Shell, _| {
                     let st = &mut s.screens.add_server;
-                    let color = st.look.as_ref().map(|l| l.color.clone()).unwrap_or_else(|| HOST_COLORS[0].to_owned());
+                    // An icon alone picks no colour: it stays quiet.
+                    let color = st.look.as_ref().map(|l| l.color.clone()).unwrap_or_default();
                     st.look = Some(PickedLook { icon: id.to_owned(), color, image: None });
                     st.icons_open = false;
                 })
@@ -748,5 +749,6 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut rune::Cx<Shell>) -> Option<El
         })
         .child(page)
         .child(foot);
-    Some(rune::el().key("add-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(dialog))
+    let dialog = crate::kit::motion::enters(dialog, crate::kit::motion::Entrance::Card);
+    Some(crate::kit::motion::enters(rune::el().key("add-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(dialog), crate::kit::motion::Entrance::Scrim))
 }

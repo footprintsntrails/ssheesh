@@ -14,9 +14,12 @@ pub const TILE_WIDTH: f32 = 104.0;
 pub const TILE_ICON: f32 = 48.0;
 
 /// What a tile shows.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Default)]
 pub struct Tile<'a> {
     pub icon: Option<Icon>,
+    /// A drawing of the caller's in the icon's place, 22 points square: a server's picture, or
+    /// its icon in its own colour.
+    pub glyph: Option<El>,
     pub name: &'a str,
     /// A label under the name, and whether it's the red one ("Prod"); the others are quiet.
     pub label: Option<(&'a str, bool)>,
@@ -35,10 +38,12 @@ pub struct Tile<'a> {
 }
 
 /// The tile. The caller adds its key and `.on_press_tx(..)`.
-pub fn tile(t: &Theme, spec: &Tile) -> El {
+pub fn tile(t: &Theme, spec: Tile) -> El {
     let mut square = rune::el().size(TILE_ICON, TILE_ICON).radius(12.0).items_center().justify_center();
     square = if spec.dashed { square.border(1.0, t.hair).border_dash(4.0, 3.0) } else { square.fill(spec.tint.map_or(t.hov2, |c| c.alpha(0.16))).border(1.0, t.rim) };
-    if let Some(glyph) = spec.icon {
+    if let Some(drawn) = spec.glyph {
+        square = square.child(drawn);
+    } else if let Some(glyph) = spec.icon {
         square = square.child(icon(glyph, 22.0, if spec.dashed { t.l2 } else { t.l2on }));
     }
     if spec.waiting {

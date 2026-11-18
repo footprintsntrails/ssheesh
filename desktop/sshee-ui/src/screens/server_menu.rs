@@ -5,7 +5,7 @@
 //! Development label; forgetting its saved password; and taking it out of the list, asked by
 //! name first.
 //!
-//! One popover with four pages, at the point that was clicked:
+//! One popover with three pages, at the point that was clicked:
 //!
 //! ```text
 //! server-menu    modal: Esc and a click outside close it
@@ -13,8 +13,10 @@
 //!   Rename   sm-name (a field), sm-cancel, sm-save
 //!   Look     sm-auto, sm-check · icon-<id> × 30 · color-0 … 5, more-0 … 11, sm-hex ·
 //!            sm-picture, sm-no-picture · sm-error · sm-done
-//!   Remove   "Remove web-7731?", sm-cancel (Return), sm-remove
 //! ```
+//!
+//! Removing a server and forgetting its password ask first, in the window's own question in
+//! the middle (`Shell::confirm`): "Remove web-7731?", dialog-no (Return), dialog-yes.
 //!
 //! Nothing here saves: each change is asked of the backend (`sshee_app::servers::Ask`), which
 //! keeps it and sends the list back. A change that fails says so: on the page while the menu
@@ -41,7 +43,7 @@ use crate::kit::list::{list_row, list_rule, ListRow};
 use crate::kit::menu::RowState;
 use crate::kit::popover::popover;
 use crate::kit::push::{icon_button, push_button, Push};
-use crate::shell::{Shell, Toast};
+use crate::shell::{Confirm, Shell, Toast};
 use crate::theme::{self, Theme};
 
 /// Which page the popover shows.
@@ -51,7 +53,6 @@ pub enum Page {
     Menu,
     Rename,
     Look,
-    Remove,
 }
 
 /// The menu, open on one server.
@@ -261,13 +262,26 @@ impl Shell {
                 menu.name.focused = true;
                 tx.instant();
             }
-            Item::Look | Item::Remove => {
+            Item::Remove => {
+                // Asked in the middle of the window, by the name it shows (streamer mode's
+                // "Server 2"); Return is Cancel: taking a server away is never the easy key.
+                let (question, meaning, button) = removal(&self.server_shown(&key, &server.name), from_config(&server));
+                let mut ask = Confirm::new(question, meaning, button);
+                if !from_config(&server) {
+                    ask = ask.destructive(false);
+                }
+                self.close_server_menu(tx);
+                self.confirm(ask, move |s, _| {
+                    s.backend_mut().servers(Ask::Remove { server: key });
+                });
+            }
+            Item::Look => {
                 let streaming = self.streaming();
                 let menu = &mut self.screens.server_menu;
                 if let Some(open) = &mut menu.open {
-                    open.page = if item == Item::Look { Page::Look } else { Page::Remove };
+                    open.page = Page::Look;
                 }
-                let color = menu.faces.get(&key).map(|f| f.look.color.clone()).unwrap_or_default();
+                let color = menu.faces.get(&key).filter(|f| f.look.own_color).map(|f| f.look.color.clone()).unwrap_or_default();
                 menu.hex = TextEdit::new(if streaming { String::new() } else { color });
                 tx.instant();
             }
@@ -278,8 +292,12 @@ impl Shell {
                 self.close_server_menu(tx);
             }
             Item::ForgetPassword => {
-                self.backend_mut().servers(Ask::ForgetPassword { server: key });
+                let name = self.server_shown(&key, &server.name).into_owned();
+                let ask = Confirm::new(format!("Forget the saved password for {name}?"), "You'll type it again the next time you connect.", "Forget").destructive(false);
                 self.close_server_menu(tx);
+                self.confirm(ask, move |s, _| {
+                    s.backend_mut().servers(Ask::ForgetPassword { server: key });
+                });
             }
         }
     }
@@ -322,13 +340,6 @@ impl Shell {
         }
     }
 
-    fn server_menu_remove(&mut self, tx: &mut Tx) {
-        if let Some(server) = self.screens.server_menu.open.as_ref().map(|o| o.server.clone()) {
-            self.backend_mut().servers(Ask::Remove { server });
-        }
-        self.close_server_menu(tx);
-    }
-
     /// A change from the menu didn't work: on its page while it's open on that server, else a
     /// toast.
     pub(crate) fn server_menu_refused(&mut self, server: &str, doing: &str, why: &str) {
@@ -364,17 +375,25 @@ pub fn linked(s: &mut Shell, tab: TabId) {
     }
 }
 
-/// A server's icon `size` points square, as the sidebar and the menus draw it: its picture
-/// (never in streamer mode), else its icon in its colour; `ink` for a machine without a face
-/// (this computer).
+/// A server's icon `size` points square, as the sidebar, the main menu's tiles and the menus
+/// draw it: its picture (never in streamer mode), else its icon in the colour you picked for
+/// it, else in `ink`, the quiet grey of where it's drawn (0.10's `HostIcon`, without the
+/// colour 0.10 made up from its name).
 pub fn glyph(s: &Shell, server: &Server, size: f32, ink: Color) -> El {
-    let key = server.key();
-    let state = &s.screens.server_menu;
-    if let (Some(pixels), false) = (state.pictures.get(&key), s.streaming()) {
+    glyph_of(s, &server.key(), &server.icon, size, ink)
+}
+
+/// [`glyph`] for the server keyed `key`, whose icon's id is `icon_id`.
+pub fn glyph_of(s: &Shell, key: &str, icon_id: &str, size: f32, ink: Color) -> El {
+    if let (Some(pixels), false) = (s.screens.server_menu.pictures.get(key), s.streaming()) {
         return rune::el().size(size, size).radius(size * 0.22).clip_rounded(size * 0.22).pixels_fit(pixels, SurfaceFit::Fill).a11y_hidden();
     }
-    let color = state.faces.get(&key).and_then(|f| rune::color::hex(&f.look.color)).unwrap_or(ink);
-    icon(Icon::for_server(&server.icon), size, color)
+    icon(Icon::for_server(icon_id), size, own_color(s, key).unwrap_or(ink))
+}
+
+/// The colour you picked for a server, if you picked one.
+pub fn own_color(s: &Shell, key: &str) -> Option<Color> {
+    s.screens.server_menu.faces.get(key).filter(|f| f.look.own_color).and_then(|f| rune::color::hex(&f.look.color))
 }
 
 /// "Choose a picture…": the system's picker, then the backend makes the file a small square icon.
@@ -495,7 +514,8 @@ fn look_page(s: &Shell, t: &Theme, server: &Server, shown: &str) -> El {
     let has_picture = look.image.is_some();
     // With "Automatic" or a picture, no icon or colour is marked as picked.
     let picked = look.picked && !has_picture;
-    let ink = rune::color::hex(&look.color).unwrap_or(t.l2);
+    // The icons in the colour you picked; without one, quiet.
+    let ink = rune::color::hex(&look.color).filter(|_| look.own_color).unwrap_or(t.l2);
 
     let words = automatic_words(look.guessed.as_deref(), state.watch.is_looking(&key), state.unchecked.contains(&key));
     let auto_icon = look.guessed.as_deref().unwrap_or("server");
@@ -540,7 +560,7 @@ fn look_page(s: &Shell, t: &Theme, server: &Server, shown: &str) -> El {
         icons = icons.child(b);
     }
     let own = look.color.as_str();
-    let is = |hex: &str| picked && own.eq_ignore_ascii_case(hex);
+    let is = |hex: &str| picked && look.own_color && own.eq_ignore_ascii_case(hex);
     let colors = row()
         .w_full()
         .flex_wrap()
@@ -587,28 +607,6 @@ fn look_page(s: &Shell, t: &Theme, server: &Server, shown: &str) -> El {
     page.child(row().w_full().justify_end().child(push_button(t, "Done", Push::Primary, true).key("sm-done").default_button().on_press_tx(|s: &mut Shell, tx| s.close_server_menu(tx))))
 }
 
-fn remove_page(t: &Theme, server: &Server, shown: &str) -> El {
-    let hide = from_config(server);
-    let (question, meaning, button) = removal(shown, hide);
-    let confirm = push_button(t, button, if hide { Push::Primary } else { Push::Destructive }, true).key("sm-remove").on_press_tx(|s: &mut Shell, tx| s.server_menu_remove(tx));
-    col()
-        .w_full()
-        .padding(14.0)
-        .gap(8.0)
-        .child(title(t, &question))
-        .child(text(meaning).font(theme::NOTE).color(t.l2).w_full().wrap())
-        .child(
-            row()
-                .w_full()
-                .mt(6.0)
-                .gap(8.0)
-                .justify_end()
-                // Return is Cancel: taking a server away is never the easy key.
-                .child(push_button(t, "Cancel", Push::Quiet, true).key("sm-cancel").autofocus().default_button().on_press_tx(|s: &mut Shell, tx| s.close_server_menu(tx)))
-                .child(confirm),
-        )
-}
-
 /// The menu, when it's open: a last child of the window's root.
 pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
     let open = s.screens.server_menu.open.as_ref()?;
@@ -623,7 +621,6 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
         }
         Page::Rename => (rename_page(t, &shown, s.streaming(), &s.screens.server_menu.name), 300.0, 170.0),
         Page::Look => (look_page(s, t, server, &shown), 296.0, 470.0),
-        Page::Remove => (remove_page(t, server, &shown), 320.0, 140.0),
     };
     // At the pointer, pulled in from the window's far edges.
     let [w, h] = cx.layout_size("window").unwrap_or([crate::shell::SIZE.0, crate::shell::SIZE.1]);

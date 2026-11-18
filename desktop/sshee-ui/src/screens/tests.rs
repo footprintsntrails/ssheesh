@@ -348,7 +348,10 @@ fn the_palette_opens_by_its_shortcuts_and_by_the_servers_name() {
     w.key(Key::Escape, "");
     w.click("search");
     assert!(w.rt.state.screens.palette.open);
-    // It hangs under the title, like an address bar.
+    // It hangs under the title, like an address bar, once its entrance (`kit::motion`) is over.
+    for _ in 0..15 {
+        w.rt.frame(1.0 / 60.0);
+    }
     let (bar, palette) = (w.rt.presented("title").unwrap().0, w.rt.presented("palette").unwrap().0);
     assert!((palette[0] - bar[0]).abs() < 1.0 && palette[1] >= bar[1] + bar[3], "{bar:?} {palette:?}");
     assert_eq!(palette[2], 560.0);
@@ -658,17 +661,19 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     assert_eq!(w.rt.state.screens.home.colors[DB], "#7e8590");
     w.click("sm-done");
     assert!(w.rt.state.screens.server_menu.open.is_none());
-    // Remove: asked by name; Return is Cancel.
+    // Remove: asked by name, in the middle of the window over a dimmed page, the menu gone;
+    // Return is Cancel.
     w.right_click("server-2");
     w.click("sm-12");
+    assert!(w.rt.state.screens.server_menu.open.is_none() && w.has("dialog-layer"));
     let tree = w.tree();
-    assert!(tree.contains("Remove Main database?") && tree.contains("Nothing changes on the server."), "{tree}");
+    assert!(tree.contains("Remove Main database?") && tree.contains("Only removes it from SSHeesh. Nothing changes on the server."), "{tree}");
     w.key(Key::Enter, "");
-    assert!(w.rt.state.screens.server_menu.open.is_none());
+    assert!(!w.has("dialog-layer"));
     assert_eq!(w.servers().len(), 3);
     w.right_click("server-2");
     w.click("sm-12");
-    w.click("sm-remove");
+    w.click("dialog-yes");
     assert_eq!(w.servers(), ["This computer", "web-7731"]);
     assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));
 }

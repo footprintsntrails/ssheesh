@@ -376,7 +376,9 @@ fn plus_opens_terminals_and_files_here_or_on_another_machine() {
 fn plus_names_machines_as_streamer_mode_shows_them() {
     let mut w = linux();
     w.click("server-1");
-    w.click("streamer");
+    // Streamer mode on, as its shortcut or the palette turns it on.
+    w.rt.update(|s, tx| s.toggle_streamer(tx));
+    w.settle();
     w.click("new-tab");
     assert!(!w.tree().contains("db-main"), "{}", w.tree());
     w.click("nt-server-2");
