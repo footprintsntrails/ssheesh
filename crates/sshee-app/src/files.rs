@@ -33,8 +33,9 @@ pub use protocol::{Answer, Ask, Reply, SaveFailure, Want};
 pub const MAX_EDIT: u64 = 128 * 1024;
 /// The biggest text shown at all: sshee-core's `MAX_TEXT`.
 pub const MAX_TEXT: u64 = 2 * 1024 * 1024;
-/// The biggest picture read to be shown. Bigger ones are for downloading.
-pub const MAX_IMAGE: u64 = 16 * 1024 * 1024;
+/// The biggest picture read to be shown, as in 0.10 (`MAX_PICTURE`). Bigger ones are for
+/// downloading.
+pub const MAX_IMAGE: u64 = 128 * 1024 * 1024;
 
 /// What an entry of a folder is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +211,17 @@ impl Tickets {
     }
 }
 
+/// Settings → Terminal → "Disconnect unused terminals" covers Files too: a Files tab on a
+/// server, off screen and with nothing of its own running, lets go of its connection once it's
+/// been unused for the same `minutes` (`None`: the setting is off). It signs in again by itself
+/// the next time it's on screen.
+pub fn sleeps_now(on_server: bool, on_screen: bool, busy: bool, idle_secs: f64, minutes: Option<f64>) -> bool {
+    match minutes {
+        Some(m) if m > 0.0 => on_server && !on_screen && !busy && idle_secs >= m * 60.0,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
@@ -238,6 +250,18 @@ mod tests {
         assert!(!of(FailureKind::NotFound).is_offline() && !of(FailureKind::Failed).is_offline());
         assert!(of(FailureKind::Auth).needs_terminal() && of(FailureKind::HostKey).needs_terminal());
         assert!(!of(FailureKind::Network).needs_terminal());
+    }
+
+    #[test]
+    fn an_unused_files_tab_off_screen_lets_go_after_the_terminals_time() {
+        let twenty = Some(20.0);
+        assert!(sleeps_now(true, false, false, 20.0 * 60.0, twenty));
+        assert!(!sleeps_now(true, false, false, 20.0 * 60.0 - 1.0, twenty), "not yet");
+        assert!(!sleeps_now(true, true, false, 3600.0, twenty), "on screen: it's in use");
+        assert!(!sleeps_now(true, false, true, 3600.0, twenty), "a transfer or a change still runs");
+        assert!(!sleeps_now(false, false, false, 3600.0, twenty), "this computer has no connection to let go of");
+        assert!(!sleeps_now(true, false, false, 1e9, None), "the setting is off");
+        assert!(!sleeps_now(true, false, false, 1e9, Some(0.0)));
     }
 
     #[test]

@@ -182,9 +182,10 @@ fn thread_name(want: &Want) -> &'static str {
         Want::CopyTo { .. } => "files-copy",
         Want::Delete { .. } => "files-delete",
         Want::Extract { .. } => "files-unpack",
-        Want::Download { .. } | Want::DownloadHere { .. } => "files-download",
+        Want::Download { .. } | Want::DownloadInto { .. } => "files-download",
         Want::Upload { .. } => "files-upload",
         Want::CancelTransfer { .. } => "files-stop",
+        Want::LetGo => "files-let-go",
     }
 }
 
@@ -211,6 +212,14 @@ impl Files {
         // Stopping is a flag the transfer's own thread sees; its end is that thread's answer.
         if let Want::CancelTransfer { id } = ask.want {
             self.work.running.lock().unwrap().stop(id);
+            return;
+        }
+        // An unused Files tab lets go of its server's connection; nothing is answered.
+        if ask.want == Want::LetGo {
+            if let Some(target) = target {
+                let env = self.work.env.clone();
+                let _ = std::thread::Builder::new().name(thread_name(&ask.want).into()).spawn(move || core::let_go(&target, &env));
+            }
             return;
         }
         let Some(remote) = self.remote.clone() else { return };
@@ -366,10 +375,13 @@ fn answer(want: &Want, target: Option<&Target>, work: &Work, report: &(impl Fn(A
             }
             Answer::Moved { from: from.clone(), to: to.clone(), moved, taken, failure: stopped }
         }
-        Want::Download { id, items } | Want::DownloadHere { id, items } => {
-            // Dragged out of the window: where it was let go, when the system says (0.10.14).
-            let here = matches!(want, Want::DownloadHere { .. }).then(sshee_core::drop_folder::folder_under_pointer).flatten().filter(|d| d.is_dir());
-            let into = here.as_ref().unwrap_or(&work.downloads);
+        Want::Download { id, items } | Want::DownloadInto { id, items, .. } => {
+            // Dragged out of the window: where it was let go, as the system said then (0.10.14).
+            let here = match want {
+                Want::DownloadInto { into, .. } => Some(into).filter(|d| d.is_dir()),
+                _ => None,
+            };
+            let into = here.unwrap_or(&work.downloads);
             let result = transfer(*id, work, report, |xfer| {
                 let t = on()?;
                 std::fs::create_dir_all(into)?;
@@ -401,6 +413,7 @@ fn answer(want: &Want, target: Option<&Target>, work: &Work, report: &(impl Fn(A
         }
         // Handled before a thread is made (`Files::ask`); a transfer's end is its own answer.
         Want::CancelTransfer { id } => Answer::Downloaded { id: *id, result: Err(Failure::new(FailureKind::Cancelled, "Cancelled.")) },
+        Want::LetGo => unreachable!("Files::ask_to lets go without an answer"),
     }
 }
 

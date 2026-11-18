@@ -442,6 +442,9 @@ impl DemoFiles {
     /// Everything one request is answered with, in order (a transfer: its progress, then its
     /// end). Empty for a request whose answer comes later, when something else happens.
     pub fn answer(&mut self, ask: &Ask) -> Vec<Reply> {
+        if ask.want == Want::LetGo {
+            return Vec::new();
+        }
         if let Want::CancelTransfer { id } = ask.want {
             let stopped = failure(FailureKind::Cancelled, "Cancelled.");
             return self.endless.remove(&id).map(|(tab, server)| Reply { tab, server, answer: Answer::Downloaded { id, result: Err(stopped) } }).into_iter().collect();
@@ -459,13 +462,13 @@ impl DemoFiles {
                 Want::Delete { dir, names } => Answer::Deleted { dir, deleted: Vec::new(), failed: names.into_iter().map(|n| (n, gone())).collect() },
                 Want::Extract { dir, name } => Answer::Extracted { dir, name, result: Err(gone()) },
                 Want::Move { from, to, .. } => Answer::Moved { from, to, moved: Vec::new(), taken: Vec::new(), failure: Some(gone()) },
-                Want::Download { id, .. } | Want::DownloadHere { id, .. } => Answer::Downloaded { id, result: Err(gone()) },
+                Want::Download { id, .. } | Want::DownloadInto { id, .. } => Answer::Downloaded { id, result: Err(gone()) },
                 Want::Upload { id, paths, dir, overwrite } => Answer::Uploaded { id, paths, dir, overwrite, result: Err(gone()) },
                 Want::Peek { path } => Answer::Peeked { asked: path, result: Err(gone()) },
                 Want::MakeFile { path } => Answer::MadeFile { path, result: Err(gone()) },
                 Want::Archive { dir, names, archive } => Answer::Archived { dir, archive, count: names.len(), result: Err(gone()) },
                 Want::CopyTo { id, to, paths, dir, overwrite } => Answer::CopiedTo { id, to, paths, dir, overwrite, result: Err(gone()) },
-                Want::CancelTransfer { .. } => return Vec::new(),
+                Want::CancelTransfer { .. } | Want::LetGo => return Vec::new(),
             };
             return vec![ask.reply(answer)];
         };
@@ -526,7 +529,7 @@ impl DemoFiles {
                 }
                 answers.push(Answer::Moved { from, to, moved, taken, failure: stopped });
             }
-            Want::Download { id, items } | Want::DownloadHere { id, items } => {
+            Want::Download { id, items } | Want::DownloadInto { id, items, .. } => {
                 let total: u64 = items.iter().filter_map(|i| disk.nodes.get(&i.path)).map(|n| n.size.unwrap_or(n.bytes.len() as u64)).sum();
                 if items.iter().any(|i| i.path == ENDLESS) {
                     // 38% and 1.2 MB/s, for as long as anyone looks: two measures a second
@@ -550,7 +553,7 @@ impl DemoFiles {
                 let result = disk.upload(&names, &dir, overwrite);
                 answers.push(Answer::Uploaded { id, paths, dir, overwrite, result });
             }
-            Want::CancelTransfer { .. } => {}
+            Want::CancelTransfer { .. } | Want::LetGo => {}
         }
         answers.into_iter().map(|a| ask.reply(a)).collect()
     }

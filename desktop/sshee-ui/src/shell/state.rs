@@ -201,6 +201,13 @@ pub trait Backend {
         let _ = ask;
     }
 
+    /// The folder on this computer under the pointer, outside the window, where the system can
+    /// say (Windows: the desktop or an Explorer window): rows dragged out of Files and let go
+    /// there download into it. Asked the moment they're let go. `None`: into Downloads.
+    fn folder_under_pointer(&mut self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// A Containers tab asks for a look or a start, stop or restart. Done on a thread of its
     /// own; the answer comes back through [`Remote::containers`].
     fn containers(&mut self, ask: sshee_app::containers::Ask) {
@@ -931,8 +938,8 @@ impl Shell {
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         // The screens' own clockwork: who started to wait, a server's card coming up.
         let ticked = crate::screens::home::tick(self, clock, tx);
-        // A folder pointed at in Files is listed ahead.
-        crate::screens::files::tick(self, clock, tx);
+        // A folder pointed at in Files is listed ahead; a picture it opened is decoded.
+        let pictured = crate::screens::files::tick(self, clock, tx);
         // A hint whose moment came; "Add a server" opened from the welcome, at its list.
         let ticked = crate::screens::tour::tick(self, clock) | crate::screens::welcome::tick(self) | ticked;
         let winked = crate::looks::tick_logo(self, clock, tx);
@@ -974,7 +981,7 @@ impl Shell {
         // Toasts whose time is up (`notes.rs`), and the tray's list of who needs you.
         let notes = super::notes::tick(self, clock, tx);
         self.sync_waiting();
-        changed || ticked || agents || winked || notes || tor
+        changed || ticked || agents || winked || notes || tor || pictured
     }
 
     /// A pane's burst is held until `at` (`Model::set_hold_waker`): poll then, draw nothing now.

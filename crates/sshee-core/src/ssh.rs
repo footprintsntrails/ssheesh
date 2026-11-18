@@ -236,6 +236,30 @@ pub fn close_shared(env: &SshEnv, tor: bool) {
     }
 }
 
+/// Ends the shared connection to `t` (see `SshEnv::control_dir`) right away, as a terminal
+/// that goes unused does with its own: the next command signs in again. Nothing to end where
+/// connections aren't shared (Windows, or a path too long for a socket). A session still on it
+/// ends with it, so ask only when nothing else of the window uses this server.
+pub fn let_go(t: &SshTarget, env: &SshEnv) {
+    if !cfg!(unix) || env.control_dir.is_none() {
+        return;
+    }
+    let mut cmd = Command::new(ssh_program());
+    cmd.args(let_go_args(t, env));
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    hide_console(&mut cmd);
+    if let Ok(mut child) = cmd.spawn() {
+        let _ = child.wait();
+    }
+}
+
+/// `ssh -O exit` with the options every command to `t` uses, so it names the same socket.
+fn let_go_args(t: &SshTarget, env: &SshEnv) -> Vec<String> {
+    let mut a = common_args(t, env);
+    a.extend(["-O".into(), "exit".into(), "--".into(), t.destination.clone()]);
+    a
+}
+
 pub fn expand_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
@@ -834,6 +858,17 @@ mod tests {
     /// The value of option `key` in ssh arguments.
     fn option<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
         args.windows(2).find_map(|w| (w[0] == "-o").then(|| w[1].strip_prefix(key)?.strip_prefix('=')).flatten())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn letting_go_ends_the_same_shared_connection_commands_use() {
+        let t = SshTarget { destination: "web-7731".into(), user: Some("deploy".into()), port: Some(2222), ..Default::default() };
+        let env = SshEnv { control_dir: Some("/home/me/.sshee/cm".into()), askpass: None };
+        let a = let_go_args(&t, &env);
+        assert_eq!(option(&a, "ControlPath"), option(&common_args(&t, &env), "ControlPath"));
+        assert!(a.windows(2).any(|w| w == ["-p", "2222"]) && a.windows(2).any(|w| w == ["-l", "deploy"]));
+        assert_eq!(&a[a.len() - 4..], ["-O", "exit", "--", "web-7731"]);
     }
 
     #[cfg(unix)]

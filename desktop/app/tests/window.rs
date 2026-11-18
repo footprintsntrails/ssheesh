@@ -996,7 +996,8 @@ fn files_move_by_dragging_rename_and_upload() {
         Value::Array(e)
     };
     let Some(run) = run("files-dragging", &["--demo"], Some(drag(false))) else { return };
-    assert!(run.tree_text.contains("Let go to move deploy.sh here"), "the folder under the pointer doesn't take the file");
+    assert!(run.tree_text.contains("Move to logs"), "the folder under the pointer doesn't take the file");
+    assert!(run.element("files-drag-card").is_some(), "no card flies with the pointer");
     let Some(run) = self::run("files-dropped", &["--demo"], Some(drag(true))) else { return };
     for said in ["Moved deploy.sh to logs", "Undo", "7 items, 4 hidden"] {
         assert!(run.tree_text.contains(said), "{said} isn't in the tree");
@@ -1021,6 +1022,142 @@ fn files_move_by_dragging_rename_and_upload() {
     ]);
     let Some(run) = self::run("files-upload", &["--demo"], Some(script)) else { return };
     for said in ["Uploaded notes.txt", "notes.txt", "9 items, 4 hidden"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+}
+
+#[test]
+fn the_disk_in_the_path_goes_to_the_top_and_the_path_stays() {
+    // The disk at the start of the path, twice (the second time it's where you are), then
+    // into "home": the path still shows as folders, never a field holding "/".
+    let script = json!([
+        tap(0.3, "tab-2"),
+        tap(0.8, "crumb-0"),
+        tap(1.3, "crumb-0"),
+        // At the top there's no "..": "home" is the first row.
+        { "t": 1.8, "type": "double-click", "x": 300.0, "y": 127.0 },
+        end(2.4)
+    ]);
+    let Some(run) = run("files-disk", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-path-field").is_none(), "the disk turned the path into a field");
+    assert!(run.element("crumb-1").is_some(), "the path isn't drawn as folders");
+    assert_eq!(run.label("crumb-0"), "Top of the disk");
+    assert!(run.tree_text.contains("deploy"), "not in /home");
+}
+
+#[test]
+fn the_path_field_gives_way_to_a_click_elsewhere() {
+    // A click into the path types there; a click on a row ends that and selects the row.
+    let script = json!([tap(0.3, "tab-2"), tap(0.8, "files-path-space"), { "t": 1.3, "type": "tap", "x": 300.0, "y": 231.0 }, end(1.9)]);
+    let Some(run) = run("files-path-away", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-path-field").is_none(), "still typing in the path");
+    assert!(run.element("crumb-1").is_some(), "the path isn't drawn as folders again");
+    assert!(run.tree_text.contains("1 selected, 256 B"), "the click didn't select the row");
+    // While typing, a double click on a folder still opens it, and the path follows.
+    let script = json!([tap(0.3, "tab-2"), tap(0.8, "files-path-space"), { "t": 1.3, "type": "double-click", "x": 300.0, "y": 153.0 }, end(2.0)]);
+    let Some(run) = self::run("files-path-open", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-path-field").is_none(), "still typing in the path");
+    assert!(run.tree_text.contains("shop-db.sql.gz"), "the folder didn't open");
+    assert!(run.tree_text.contains("backups"), "the path doesn't show the folder");
+}
+
+#[test]
+fn rows_dragged_onto_the_path_out_of_the_window_or_dropped_from_outside() {
+    let files = tap(0.3, "tab-2");
+    // deploy.sh dragged onto "home" in the path: a card flies with it saying where it goes,
+    // and letting go moves it there.
+    let onto_path = |up: bool| {
+        let mut e = vec![
+            files.clone(),
+            json!({ "t": 0.8, "type": "down", "x": 300.0, "y": 231.0 }),
+            json!({ "t": 0.9, "type": "move", "x": 310.0, "y": 200.0 }),
+            json!({ "t": 1.0, "type": "move", "key": "crumb-1" }),
+        ];
+        if up {
+            e.push(json!({ "t": 1.2, "type": "up", "key": "crumb-1" }));
+        }
+        e.push(end(1.8));
+        Value::Array(e)
+    };
+    let Some(run) = run("files-drag-path", &["--demo"], Some(onto_path(false))) else { return };
+    assert!(run.element("files-drag-card").is_some(), "no card flies with the pointer");
+    assert!(run.tree_text.contains("Move to home"), "the card doesn't say where it goes");
+    let Some(run) = self::run("files-drag-path-dropped", &["--demo"], Some(onto_path(true))) else { return };
+    for said in ["Moved deploy.sh to home", "7 items, 4 hidden"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    // Out past the window's edge: the window says letting go downloads, and letting go asks
+    // first, naming where it lands.
+    let out = |up: bool| {
+        let mut e = vec![
+            files.clone(),
+            json!({ "t": 0.8, "type": "down", "x": 300.0, "y": 231.0 }),
+            json!({ "t": 0.9, "type": "move", "x": 700.0, "y": 300.0 }),
+            json!({ "t": 1.0, "type": "move", "x": 1400.0, "y": 300.0 }),
+        ];
+        if up {
+            e.push(json!({ "t": 1.2, "type": "up", "x": 1400.0, "y": 300.0 }));
+        }
+        e.push(end(1.8));
+        Value::Array(e)
+    };
+    let Some(run) = self::run("files-drag-out", &["--demo"], Some(out(false))) else { return };
+    assert!(run.element("files-drag-out").is_some(), "nothing says letting go downloads");
+    assert!(run.tree_text.contains("Let go to download deploy.sh"), "nothing says letting go downloads");
+    let Some(run) = self::run("files-drag-out-asks", &["--demo"], Some(out(true))) else { return };
+    for said in ["Download “deploy.sh” to Downloads?", "From web-7731, into your Downloads folder."] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    assert!(run.element("transfer-1").is_none(), "it downloaded before asking");
+    // A file from another app dropped on the logs folder goes into logs, not the folder on
+    // screen.
+    let script = json!([files, { "t": 0.8, "drop_files": { "paths": ["/home/dev/notes.txt"], "at": [300.0, 179.0], "hover": 0.3 } }, end(1.8)]);
+    let Some(run) = self::run("files-drop-on-folder", &["--demo"], Some(script)) else { return };
+    assert!(run.tree_text.contains("Uploaded notes.txt"), "nothing was uploaded");
+    assert!(run.tree_text.contains("8 items, 4 hidden"), "it landed in the folder on screen");
+}
+
+#[test]
+fn files_peek_a_file_places_ticks_picture_sizes_and_the_copy_dialog_as_in_0_10() {
+    let files = tap(0.3, "tab-2");
+    // → on shop looks inside, beside its »; ↑ goes to its last row, a file, and Return opens it
+    // beside the list while the tab stays in deploy.
+    let script = json!([
+        files.clone(),
+        { "t": 0.8, "type": "tap", "x": 300.0, "y": 205.0 },
+        press(1.0, "Right", false, false, false),
+        press(1.3, "Up", false, false, false),
+        press(1.6, "Enter", false, false, false),
+        end(2.4)
+    ]);
+    let Some(run) = run("files-peek-file", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-preview").is_some(), "the file didn't open");
+    assert!(run.tree_text.contains("package.json"), "not the file picked");
+    assert!(run.element("crumb-3").is_none(), "the tab went into shop");
+    // The list of places, right-clicked: a tick for each place and for recent folders.
+    let script = json!([files.clone(), tap(0.8, "files-places"), { "t": 1.2, "type": "tap", "key": "place-1", "button": "secondary" }, end(1.8)]);
+    let Some(run) = self::run("files-places-menu", &["--demo"], Some(script)) else { return };
+    assert!(run.element("files-place-menu").is_some(), "no menu");
+    for said in ["Hide Disk", "Recent folders", "Logs", "Config"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    // A picture: its size in pixels and in bytes under it, and drawn no bigger than it is.
+    let script = json!([files.clone(), { "t": 0.8, "type": "double-click", "x": 300.0, "y": 257.0 }, end(1.8)]);
+    let Some(run) = self::run("files-picture", &["--demo"], Some(script)) else { return };
+    assert!(run.tree_text.contains("48 × 48 · 6.9 KB"), "no size under the picture");
+    let [_, _, w, h] = run.rect("preview-picture-box");
+    assert!(w <= 48.0 && h <= 48.0, "drawn bigger than it is: {w}×{h}");
+    // Copy to another folder or server: from where, which server is this one, and never into
+    // the folder they're in.
+    let script = json!([
+        files,
+        { "t": 0.8, "type": "secondary-click", "x": 300.0, "y": 231.0 },
+        tap(1.2, "menu-5"),
+        tap(1.7, "copy-to-host-demo-web"),
+        end(2.3)
+    ]);
+    let Some(run) = self::run("files-copy-here", &["--demo"], Some(script)) else { return };
+    for said in ["From web-7731", "this one", "They're already in this folder. Pick another one.", "Folder on the server"] {
         assert!(run.tree_text.contains(said), "{said} isn't in the tree");
     }
 }

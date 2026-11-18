@@ -70,6 +70,14 @@ fn ssh_only(target: &Target) -> Option<&SshTarget> {
     }
 }
 
+/// A Files tab went unused: the shared connection to its server ends (`ssh::let_go`). On
+/// this computer there's none.
+pub fn let_go(target: &Target, env: &SshEnv) {
+    if let Some(t) = ssh_only(target) {
+        crate::ssh::let_go(t, env);
+    }
+}
+
 // ---------------------------------------------------------------- listing
 
 pub fn list(target: &Target, env: &SshEnv, path: &str) -> Result<DirListing, OpError> {
