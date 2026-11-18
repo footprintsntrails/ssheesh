@@ -359,14 +359,19 @@ fn status_bar(s: &Shell, t: &'static Theme) -> El {
         if not_kept.is_some() {
             room -= super::pane_marks::status_width() + 20.0;
         }
+        let mut shown = 0;
         for (i, v) in vitals.items().iter().enumerate() {
             room -= status_item_width(&v.label, &v.value, v.warn) + if i > 0 { 20.0 } else { 0.0 };
             if room < 0.0 {
                 break;
             }
             numbers = numbers.child(status_item(t, &v.label, &v.value, v.warn).key(format!("vital-{i}")));
+            shown += 1;
         }
-        bar = bar.child(numbers);
+        // Too narrow for even the first: no empty button that lights up under the pointer.
+        if shown > 0 {
+            bar = bar.child(numbers);
+        }
     }
     bar = bar.child(spacer());
     // The terminal on screen's shell isn't in tmux on the server (a pane beside another says

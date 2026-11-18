@@ -186,6 +186,12 @@ fn the_status_bar_drops_vitals_before_tor() {
         let r = w.rect(&format!("vital-{i}")).unwrap();
         assert!(r[0] + r[2] <= w.rect("tor-time").unwrap()[0]);
     }
+    // Too narrow for even the first: no empty button is left to light up under the pointer.
+    w.resize(240.0, 600.0);
+    for _ in 0..30 {
+        w.rt.frame(1.0 / 60.0);
+    }
+    assert!(w.rt.find("vital-0").is_none() && w.rt.find("status-vitals").is_none());
 }
 
 #[test]

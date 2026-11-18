@@ -323,3 +323,35 @@ fn dockers_tiles_have_a_question_mark_that_says_what_each_is() {
     assert!(w.has("disk-docker-about"));
     assert_eq!(crate::screens::help::heard(&w.rt, "Docker's disk use").as_deref(), Some(crate::screens::help::DOCKER_DISK));
 }
+
+#[test]
+fn the_question_under_a_bottom_card_scrolls_into_sight() {
+    let mut w = Window::open();
+    w.open_on(STAGING);
+    let inside = |w: &Window, key: &str| {
+        let body = w.rt.presented("disk-body").expect("the dialog's body").0;
+        let r = w.rt.presented(key).unwrap_or_else(|| panic!("no {key}")).0;
+        (r[1] >= body[1] - 0.5 && r[1] + r[3] <= body[1] + body[3] + 0.5, body[1] + body[3] - (r[1] + r[3]))
+    };
+    // A window short enough that the last card's Run… is the last thing in sight: its
+    // question opens below the fold.
+    let mut height = 800.0;
+    while height > 300.0 {
+        w.rt.set_viewport((1280.0, height), 1.0);
+        w.settle();
+        if let (true, room) = inside(&w, "clean-run-1") {
+            if room < 30.0 {
+                break;
+            }
+        }
+        height -= 10.0;
+    }
+    assert!(height > 300.0, "no height leaves Run… last in sight");
+    w.click("clean-run-1");
+    for _ in 0..60 {
+        w.rt.frame(1.0 / 60.0);
+    }
+    let (seen, _) = inside(&w, "clean-ask-1");
+    assert!(seen, "the question isn't in sight");
+    assert_eq!(w.focused().as_deref(), Some("clean-no-1"));
+}

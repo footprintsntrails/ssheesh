@@ -165,7 +165,7 @@ impl Shell {
     fn disk_run(&mut self, id: &str, i: usize, tx: &mut Tx) {
         let Some(command) = self.screens.disk.command(id) else { return };
         self.screens.disk.runs.insert(id.to_owned(), Run::Asking(Gate::Confirm, command));
-        tx.focus(format!("clean-no-{i}"), true);
+        ask_here(i, tx);
     }
 
     /// A yes: the next question (Production), or the cleanup runs now. What runs is the
@@ -178,7 +178,7 @@ impl Shell {
         match gate::after_yes(at, production) {
             Some(next) => {
                 self.screens.disk.runs.insert(id.to_owned(), Run::Asking(next, command));
-                tx.focus(format!("clean-no-{i}"), true);
+                ask_here(i, tx);
             }
             None => {
                 let state = &mut self.screens.disk;
@@ -209,6 +209,13 @@ impl Shell {
         self.screens.disk = State::default();
         self.run_in_new_terminal(&server, &command, true, tx);
     }
+}
+
+/// A question under the `i`th card: in sight (a bottom card's opens below the fold), with the
+/// keyboard on its Cancel.
+fn ask_here(i: usize, tx: &mut Tx) {
+    tx.focus(format!("clean-no-{i}"), true);
+    tx.scroll_into_view_in("disk-body", format!("clean-ask-{i}"));
 }
 
 /// The backend's answer, on the UI thread.

@@ -224,6 +224,9 @@ pub struct Row {
     pub adds: &'static [&'static str],
     /// A choice's labels on a Mac, where they differ (a key's name), in the options' order.
     pub mac_labels: Option<&'static [&'static str]>,
+    /// A choice's labels while this holds, where the settings change what an option means
+    /// (Compact mode's "Tab bar" is the top bar once tabs go under each server).
+    pub labels_when: Option<(Get<bool>, &'static [&'static str])>,
     /// Other ways people might say it, for search.
     pub words: &'static str,
     /// Only on this system.
@@ -246,6 +249,7 @@ impl Row {
             saves: &[],
             adds: &[],
             mac_labels: None,
+            labels_when: None,
             words: "",
             only: None,
             when: None,
@@ -289,6 +293,11 @@ impl Row {
         self
     }
 
+    const fn labels_when(mut self, when: Get<bool>, labels: &'static [&'static str]) -> Row {
+        self.labels_when = Some((when, labels));
+        self
+    }
+
     const fn words(mut self, words: &'static str) -> Row {
         self.words = words;
         self
@@ -325,8 +334,11 @@ impl Row {
 
     /// A choice's labels as `keyboard`'s system names them, in the options' order. Empty for
     /// a row that isn't a choice.
-    pub fn choice_labels(&self, keyboard: Keyboard) -> Vec<&'static str> {
+    pub fn choice_labels(&self, store: &SettingsStore, keyboard: Keyboard) -> Vec<&'static str> {
         let Control::Choice { options, .. } = self.control else { return vec![] };
+        if let Some((_, labels)) = self.labels_when.filter(|(when, labels)| labels.len() == options.len() && when(store)) {
+            return labels.to_vec();
+        }
         match self.mac_labels.filter(|labels| keyboard.mac() && labels.len() == options.len()) {
             Some(labels) => labels.to_vec(),
             None => options.iter().map(|(_, label)| *label).collect(),
@@ -550,6 +562,9 @@ fn build() -> Vec<Row> {
         )
         .group("Window")
         .hint("What hides until you point at the window's edge. Both hides the vitals too.")
+        // With the tabs under each server, the bar along the top holds no tabs: as in 0.10,
+        // the option is named for what it hides.
+        .labels_when(|st| st.get().tabs_placement == TabsPlacement::Sidebar, &["Off", "Sidebar", "Top bar", "Both"])
         .saves(&["compactMode"])
         .words("zen focus hide toolbar tab bar sidebar minimal"),
         Row::new(
@@ -561,7 +576,7 @@ fn build() -> Vec<Row> {
         .group("Window")
         .hint_by(|st, on| {
             format!(
-                "CPU, memory, network and disk under your tabs. {} shows and hides it.",
+                "CPU, memory, network and disk in the status bar. {} shows and hides them.",
                 keymap::shortcut_label("vitals", on, &st.get().shortcuts)
             )
         })
@@ -1001,7 +1016,7 @@ fn build() -> Vec<Row> {
         Row::new("privacy-network", Privacy, "What SSHeesh connects to", Control::Special(Special::Network)).words("network telemetry tracking internet"),
         // ------------------------------------------------------------------ Files
         Row::new("files-editor", Files, "Open files in", Control::Special(Special::ExternalEditor))
-            .hint("“Open in” edits a copy of a server's file here; every save goes back.")
+            .hint("The app a server's file opens in from Files. It edits a copy on this computer, and every save goes back to the server.")
             .adds(&["externalEditor"])
             .words("editor external vs code vscode zed sublime open in app"),
         // ------------------------------------------------------------------ Agents and notifications
@@ -1136,9 +1151,9 @@ mod tests {
         let program = row("term-program-clipboard").unwrap();
         assert_eq!((copy.group, program.group), (Some("Copying"), Some("Copying")));
         assert!(copy.works() && program.works());
-        assert_eq!(copy.choice_labels(Keyboard::Other), ["When I select text", "Only with Ctrl+Shift+C"]);
-        assert_eq!(copy.choice_labels(Keyboard::Windows), ["When I select text", "Only with Ctrl+Shift+C"]);
-        assert_eq!(copy.choice_labels(Keyboard::Mac), ["When I select text", "Only with ⌘C"]);
+        assert_eq!(copy.choice_labels(&st, Keyboard::Other), ["When I select text", "Only with Ctrl+Shift+C"]);
+        assert_eq!(copy.choice_labels(&st, Keyboard::Windows), ["When I select text", "Only with Ctrl+Shift+C"]);
+        assert_eq!(copy.choice_labels(&st, Keyboard::Mac), ["When I select text", "Only with ⌘C"]);
         // The first choice is 0.10's default; the second is its `copyOnSelect` off.
         let Control::Choice { get, set, .. } = copy.control else { panic!() };
         assert_eq!(get(&st), "select");
@@ -1164,7 +1179,17 @@ mod tests {
         st.reset(&reset_keys(Section::Terminal));
         assert!(st.copy_on_select() && st.program_clipboard());
         // A row that isn't a choice has no labels.
-        assert!(program.choice_labels(Keyboard::Mac).is_empty());
+        assert!(program.choice_labels(&st, Keyboard::Mac).is_empty());
+    }
+
+    #[test]
+    fn compact_modes_bar_is_named_for_what_it_holds() {
+        let mut st = store();
+        let compact = row("layout-compact").unwrap();
+        assert_eq!(compact.choice_labels(&st, Keyboard::Other), ["Off", "Sidebar", "Tab bar", "Both"]);
+        // Tabs under each server: the bar along the top holds no tabs, as 0.10 said.
+        st.set(|s| s.tabs_placement = TabsPlacement::Sidebar);
+        assert_eq!(compact.choice_labels(&st, Keyboard::Mac), ["Off", "Sidebar", "Top bar", "Both"]);
     }
 
     #[test]
