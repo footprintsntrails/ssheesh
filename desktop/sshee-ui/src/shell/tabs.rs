@@ -978,6 +978,10 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
         }
         for pick in group {
             let state = if menu.hot == Some(n) { RowState::Hot } else { RowState::Rest };
+            let tint = match &pick {
+                NewPick::Machine(server) => crate::screens::server_menu::own_color(s, server),
+                _ => None,
+            };
             let (key, label, glyph, tail, caps) = match &pick {
                 NewPick::Terminal(_) => match &on {
                     Some(name) => ("nt-terminal".to_owned(), format!("New terminal on {name}"), Icon::Terminal, "", None),
@@ -994,7 +998,7 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
                 }
                 NewPick::Back => ("nt-back".to_owned(), "Back".to_owned(), Icon::Back, "", None),
             };
-            let spec = ListRow { icon: Some(glyph), label: &label, tail, keys: caps.as_deref(), state, ..ListRow::default() };
+            let spec = ListRow { icon: Some(glyph), tint, label: &label, tail, keys: caps.as_deref(), state, ..ListRow::default() };
             let i = n;
             let mut row = list_row(t, &spec)
                 .key(key)
