@@ -185,9 +185,15 @@ pub fn remove(list: &mut Snippets, id: &str) {
     list.snippets.retain(|s| s.id != id);
 }
 
-/// The tab the fill-in form asks the server's containers for (a `containers::Ask` is
-/// addressed to a tab, and no tab has this number): its answer comes back to the form.
-pub const FORM_TAB: crate::workbench::TabId = crate::workbench::TabId(u64::MAX);
+/// The tab the main window's fill-in form asks the server's containers for (a
+/// `containers::Ask` is addressed to a tab, and no tab has this number, the last of the
+/// window's range): its answer comes back to the form. Another window's is [`form_tab`].
+pub const FORM_TAB: crate::workbench::TabId = form_tab(0);
+
+/// [`FORM_TAB`] in window `window`'s range of tab ids, so the answer finds that window.
+pub const fn form_tab(window: u16) -> crate::workbench::TabId {
+    crate::workbench::TabId::in_window(window, u64::MAX)
+}
 
 /// One container a `{{container}}` blank offers: its name, and how the list shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
