@@ -70,7 +70,7 @@ Tabs on top or under each server, one tab at a time or several side by side, and
 
 **It's convenient from the first minute.** Paste a whole `ssh` command and every field fills in; your `~/.ssh/config`, keys and agent just work. Bring your servers over from SSHeesh 0.10, XPipe, PuTTY and other SSH apps when you add one. Errors come in plain words, and every command SSHeesh suggests says what it does.
 
-<!-- onboarding shot goes here -->
+<p align="center"><img src="docs/screenshots/1.0/welcome.png" alt="The welcome at a first start, page 1 of 4: Your servers, with rows to bring over a server from SSHeesh 0.10, pick from 2 in ~/.ssh/config, or add another by hand, and a note that nothing connects yet and everything stays on this computer"></p>
 
 **You make it yours.** SSHeesh Default (a warm dark with a soft green), Daylight, Midnight, Graphite and OLED, each editable down to every color; any accent color and your own terminal colors; your own keyboard shortcuts; server icons in lines or pixels, in any color, or your own picture; and the welcome a server greets you with.
 
