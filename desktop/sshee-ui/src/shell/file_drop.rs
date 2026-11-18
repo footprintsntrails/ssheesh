@@ -106,7 +106,7 @@ pub(crate) fn folder_found(s: &mut Shell, id: TabId, folder: Option<String>) -> 
     let Some(ask) = s.upload.as_mut().filter(|a| a.tab == id && a.finding) else { return false };
     ask.finding = false;
     // The server's own `~` is found when the upload lists it.
-    ask.folder = TextEdit::new(folder.unwrap_or_else(|| "~".to_owned()));
+    ask.folder = TextEdit::new(dropped::start_folder(folder));
     true
 }
 
@@ -123,6 +123,15 @@ fn send(s: &mut Shell, tx: &mut Tx) {
 fn cancel(s: &mut Shell, tx: &mut Tx) {
     if s.upload.take().is_some() {
         s.settle(tx);
+    }
+}
+
+/// The folder field's text, for Rune to edit; the window's spare one when the question closed
+/// under an edit already on its way (never read).
+fn folder_field(s: &mut Shell) -> &mut TextEdit {
+    match s.upload.as_mut() {
+        Some(ask) => &mut ask.folder,
+        None => &mut s.upload_spare,
     }
 }
 
@@ -146,10 +155,7 @@ pub(crate) fn dialog(s: &Shell, t: &'static Theme) -> Option<El> {
     let input = code_input(t, &ask.folder, hint)
         .key("upload-folder")
         .label_static("Into this folder")
-        .on_edit(|s: &mut Shell| match s.upload.as_mut() {
-            Some(ask) => &mut ask.folder,
-            None => spare(),
-        })
+        .on_edit(folder_field)
         .on_submit(send);
     let mut folder = field(t, input, false);
     if ask.finding {
@@ -174,7 +180,17 @@ pub(crate) fn dialog(s: &Shell, t: &'static Theme) -> Option<El> {
     Some(enters(layer, Entrance::Scrim))
 }
 
-/// A field to edit when the question closed under an edit already on its way.
-fn spare() -> &'static mut TextEdit {
-    Box::leak(Box::new(TextEdit::new("")))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An edit that lands after the question closed goes to the window's one spare field,
+    /// not to a new one each time (which was never freed).
+    #[test]
+    fn an_edit_after_the_question_closed_goes_to_the_one_spare_field() {
+        let mut s = super::super::blank();
+        let spare: *const TextEdit = &s.upload_spare;
+        assert!(std::ptr::eq(folder_field(&mut s), spare));
+        assert!(std::ptr::eq(folder_field(&mut s), spare));
+    }
 }

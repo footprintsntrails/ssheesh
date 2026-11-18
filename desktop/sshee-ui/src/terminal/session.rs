@@ -106,6 +106,9 @@ pub struct Session {
     shown_seconds: Option<u64>,
     /// "Reconnecting…" is due (connecting again for longer than a moment).
     pub(crate) rejoin_shown: bool,
+    /// Text was on screen when connecting began: connecting again ("Try again"), not a first
+    /// connect, whose password prompt is output too.
+    over_text: bool,
 }
 
 /// What the pane shows over its text about its session, if anything.
@@ -139,6 +142,7 @@ impl TermPane {
         s.since = clock;
         s.shown_seconds = None;
         s.rejoin_shown = false;
+        s.over_text = self.last_output.is_some();
         // Waking ends when the session is anywhere but on its way back.
         if !matches!(self.status, LinkStatus::Connecting | LinkStatus::Rejoining { .. }) {
             s.waking = false;
@@ -179,7 +183,7 @@ impl TermPane {
             LinkStatus::Rejoining { .. } if s.rejoin_shown => Some(Card::Rejoining),
             // Connecting again over what's on screen ("Try again"), as a reconnect does. With
             // nothing on screen it's "Connecting to …" instead (`connecting.rs`).
-            LinkStatus::Connecting if s.rejoin_shown && self.last_output.is_some() => Some(Card::Rejoining),
+            LinkStatus::Connecting if s.rejoin_shown && s.over_text => Some(Card::Rejoining),
             LinkStatus::Gone { note } => {
                 let (title, body, again) = prompts::stopped(Some(note));
                 Some(Card::Stopped { title, body, again, review: prompts::about_identity(note), failed: true })
@@ -224,7 +228,11 @@ impl TermPane {
                     tx.wake_after(Duration::from_secs_f64(0.25));
                 }
             }
-            LinkStatus::Rejoining { .. } | LinkStatus::Connecting if !self.over.session.rejoin_shown => {
+            // Connecting counts only over text already on screen: a first connect's password
+            // prompt is output too, and "Reconnecting…" mustn't cover it.
+            LinkStatus::Rejoining { .. } | LinkStatus::Connecting
+                if !self.over.session.rejoin_shown && (self.over.session.over_text || matches!(self.status, LinkStatus::Rejoining { .. })) =>
+            {
                 let due = since + prompts::REJOIN_DELAY;
                 if clock + 1e-6 >= due {
                     self.over.session.rejoin_shown = true;
@@ -665,6 +673,38 @@ fn agents_of(reply: Option<Reply>) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pane() -> TermPane {
+        let status: crate::terminal::StatusSink = std::sync::Arc::new(|_| {});
+        TermPane::new(Box::new(crate::terminal::NoLink), status, crate::terminal::PaneOptions::default())
+    }
+
+    fn after_a_while(pane: &mut TermPane) -> Option<Card> {
+        let clock = pane.clock + prompts::REJOIN_DELAY + 1.0;
+        pane.clock = clock;
+        pane.poll_session(clock, &mut Tx::default());
+        pane.card()
+    }
+
+    /// A first connect prints ssh's password prompt while still connecting: no "Reconnecting…"
+    /// over it.
+    #[test]
+    fn a_first_connects_password_prompt_is_not_covered() {
+        let mut pane = pane();
+        pane.set_status(LinkStatus::Connecting);
+        pane.last_output = Some(std::time::Instant::now());
+        assert_eq!(after_a_while(&mut pane), None);
+        assert!(!pane.over.session.rejoin_shown);
+    }
+
+    /// "Try again" over a terminal with text: connecting again reads as reconnecting.
+    #[test]
+    fn connecting_again_over_text_says_reconnecting() {
+        let mut pane = pane();
+        pane.last_output = Some(std::time::Instant::now());
+        pane.set_status(LinkStatus::Connecting);
+        assert_eq!(after_a_while(&mut pane), Some(Card::Rejoining));
+    }
 
     #[test]
     fn an_old_status_word_reads_as_a_line() {

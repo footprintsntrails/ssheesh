@@ -920,17 +920,22 @@ fn forward_host(hosts: &[String]) -> String {
     if addrs.iter().any(reaches_loopback) {
         return "127.0.0.1".into();
     }
-    let unmapped = |a: &String| match a.parse::<Ipv6Addr>().ok().and_then(|v6| v6.to_ipv4_mapped()) {
-        Some(v4) => v4.to_string(),
-        None => a.clone(),
-    };
-    let addrs: Vec<String> = addrs.iter().map(unmapped).collect();
-    addrs
+    // Only addresses: the listing is the server's word, and a name or anything else in it
+    // isn't somewhere a tunnel should lead. Written the one way (`::ffff:a.b.c.d` as a.b.c.d).
+    let ips: Vec<IpAddr> = addrs
         .iter()
-        .find(|a| a.parse::<Ipv4Addr>().is_ok())
-        .or_else(|| addrs.first())
-        .cloned()
-        .unwrap_or_else(|| "127.0.0.1".into())
+        .filter_map(|a| a.parse::<IpAddr>().ok())
+        .map(|ip| match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+            v4 => v4,
+        })
+        .collect();
+    // The server's own loopback first (::1, 127.0.0.53), then IPv4.
+    ips.iter()
+        .find(|ip| ip.is_loopback())
+        .or_else(|| ips.iter().find(|ip| ip.is_ipv4()))
+        .or_else(|| ips.first())
+        .map_or_else(|| "127.0.0.1".into(), IpAddr::to_string)
 }
 
 /// The host part of a URL for `forward_host`'s address.
@@ -1261,6 +1266,12 @@ mod tests {
         assert_eq!(forward_host(&hosts(&["127.0.0.53%lo"])), "127.0.0.53");
         assert_eq!(forward_host(&hosts(&["[::ffff:127.0.0.1]"])), "127.0.0.1");
         assert_eq!(forward_host(&hosts(&["[::ffff:10.1.2.3]"])), "10.1.2.3");
+        // The server's own loopback before its network's address.
+        assert_eq!(forward_host(&hosts(&["198.51.100.4", "[::1]"])), "::1");
+        // The listing is the server's word: a name, or anything but an address, isn't
+        // somewhere to lead.
+        assert_eq!(forward_host(&hosts(&["intranet.example", "198.51.100.4"])), "198.51.100.4");
+        assert_eq!(forward_host(&hosts(&["-oProxyCommand=x"])), "127.0.0.1");
     }
 
     const SS: &str = r#"@@root@@

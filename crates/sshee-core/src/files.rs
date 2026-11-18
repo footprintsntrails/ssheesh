@@ -2437,15 +2437,18 @@ pub(crate) fn is_windows_device(name: &str) -> bool {
 }
 
 /// The name a server's file gets on this computer, or None if it can't have
-/// one. On Windows `\` and `:` are path syntax, so a Linux file named
+/// one. Control characters and the marks that reverse how a name reads
+/// become `_` everywhere: the server picks the name, and
+/// `invoice\u{202e}txt.exe` would show in a file manager as a text file.
+/// On Windows `\` and `:` are path syntax, so a Linux file named
 /// `x\..\..\AppData\…\Startup\evil.bat` would otherwise land in Startup:
-/// there they, the other characters Windows refuses and the marks that
-/// reverse how a name reads become `_`, and a device's name gets a `_` in
-/// front. Whatever is left must be one plain name inside the download folder.
+/// there they and the other characters Windows refuses become `_` too, and a
+/// device's name gets a `_` in front. Whatever is left must be one plain name
+/// inside the download folder.
 fn local_name(name: &str, windows: bool) -> Option<String> {
-    let mut name = name.to_string();
+    let mut name: String = name.chars().map(|c| if c.is_control() || is_bidi_control(c) { '_' } else { c }).collect();
     if windows {
-        name = name.chars().map(|c| if c < ' ' || is_bidi_control(c) || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+        name = name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
         // Windows drops trailing dots and spaces, which would make ".." of "...".
         name.truncate(name.trim_end_matches(['.', ' ']).len());
         if is_windows_device(&name) {
@@ -3343,6 +3346,12 @@ mod tests {
         }
         // Elsewhere only `/` separates, and base_name already took the last part.
         assert_eq!(local_name(r"a\b:c", false).unwrap(), r"a\b:c");
+        // The marks and control characters go there too: the name reads as it is.
+        assert_eq!(local_name("invoice\u{202e}txt.exe", false).unwrap(), "invoice_txt.exe");
+        for odd in ['\u{202a}', '\u{2066}', '\u{2069}', '\u{200e}', '\u{200f}', '\u{061c}', '\n', '\u{1b}', '\u{7f}', '\u{85}'] {
+            assert_eq!(local_name(&format!("a{odd}b"), false).unwrap(), "a_b", "{odd:?}");
+            assert_eq!(local_name(&format!("a{odd}b"), true).unwrap(), "a_b", "{odd:?}");
+        }
         assert_eq!(local_name("..", false), None);
         assert_eq!(local_name(".", false), None);
         assert_eq!(local_name("", false), None);

@@ -145,15 +145,30 @@ fn write_staged(places: &Places, program: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Puts the staged build in place of the program, keeping the program as `<name>.old`.
-/// On failure the program is where it was.
-pub fn install(places: &Places) -> Result<(), String> {
+/// Whether the staged build is still the one checked (its SHA-256, `sha256`), read again.
+fn unchanged(places: &Places, sha256: &str) -> Result<(), String> {
+    match fs::read(&places.new) {
+        Ok(bytes) if super::verify::sha256_hex(&bytes).eq_ignore_ascii_case(sha256) => Ok(()),
+        Ok(_) => Err("the new build changed after it was checked".into()),
+        Err(e) => Err(format!("the new build can't be read: {e}")),
+    }
+}
+
+/// Puts the staged build in place of the program, keeping the program as `<name>.old`. The
+/// staged build is read again right before it takes the program's name, and must still be
+/// the one checked (`sha256`, recorded when it was staged). On failure the program is where
+/// it was.
+pub fn install(places: &Places, sha256: &str) -> Result<(), String> {
     if !places.new.is_file() {
         return Err("the new build isn't next to this one any more".into());
     }
     remove(&places.old).map_err(|e| format!("the build from before can't be cleared away: {e}"))?;
     if cfg!(windows) {
         retrying(|| fs::rename(&places.exe, &places.old)).map_err(|e| format!("this build can't step aside: {e}"))?;
+        if let Err(e) = unchanged(places, sha256) {
+            let _ = retrying(|| fs::rename(&places.old, &places.exe));
+            return Err(e);
+        }
         if let Err(e) = retrying(|| fs::rename(&places.new, &places.exe)) {
             let _ = retrying(|| fs::rename(&places.old, &places.exe));
             return Err(format!("the new build can't take its place: {e}"));
@@ -163,6 +178,10 @@ pub fn install(places: &Places) -> Result<(), String> {
         if fs::hard_link(&places.exe, &places.old).is_err() {
             fs::copy(&places.exe, &places.old).and_then(|_| fs::File::open(&places.old)?.sync_all()).map_err(|e| format!("this build can't be kept: {e}"))?;
             make_runnable(&places.old, &places.exe).map_err(|e| e.to_string())?;
+        }
+        if let Err(e) = unchanged(places, sha256) {
+            let _ = fs::remove_file(&places.old);
+            return Err(e);
         }
         if let Err(e) = fs::rename(&places.new, &places.exe) {
             let _ = fs::remove_file(&places.old);
@@ -313,7 +332,7 @@ mod tests {
     #[test]
     fn install_puts_the_new_build_in_place_and_keeps_the_old() {
         let (_dir, places) = folder("ssheesh-preview");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         assert_eq!(read(&places.exe), "the new build");
         assert_eq!(read(&places.old), "the build from before");
         assert!(!places.new.exists());
@@ -324,14 +343,31 @@ mod tests {
             assert_eq!(fs::metadata(&places.old).unwrap().permissions().mode() & 0o777, 0o750);
         }
         // Without a staged build there's nothing to install, and the program stays.
-        assert!(install(&places).is_err());
+        assert!(install(&places, &checked()).is_err());
         assert_eq!(read(&places.exe), "the new build");
+    }
+
+    /// The SHA-256 recorded when `folder`'s new build was staged.
+    fn checked() -> String {
+        super::super::verify::sha256_hex(b"the new build")
+    }
+
+    /// Changed after it was checked (between "Restart to update" and the swap): it doesn't
+    /// take the program's place, and the program stays as it was.
+    #[test]
+    fn a_staged_build_changed_after_its_check_is_not_installed() {
+        let (_dir, places) = folder("ssheesh-preview");
+        fs::write(&places.new, b"something else").unwrap();
+        assert_eq!(install(&places, &checked()), Err("the new build changed after it was checked".into()));
+        assert_eq!(read(&places.exe), "the build from before");
+        assert!(!places.old.exists());
+        assert_eq!(read(&places.new), "something else");
     }
 
     #[test]
     fn roll_back_puts_the_old_build_back() {
         let (_dir, places) = folder("ssheesh-preview");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         roll_back(&places).unwrap();
         assert_eq!(read(&places.exe), "the build from before");
         assert!(!places.old.exists() && !places.failed.exists());
@@ -346,7 +382,7 @@ mod tests {
         fs::write(&places.part, b"cut off").unwrap();
         clean(&places, true);
         assert!(places.new.exists() && !places.part.exists());
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         clean(&places, false);
         assert!(!places.old.exists() && !places.new.exists());
         assert_eq!(read(&places.exe), "the new build");
@@ -386,7 +422,7 @@ mod tests {
     fn a_build_that_says_it_started_stays() {
         let (dir, places) = folder("ssheesh-preview");
         let marker = dir.path().join("started-125");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         let trial = watch(&places, &marker, Duration::from_secs(5), POLL, |exe| {
             assert_eq!(read(exe), "the new build");
             Ok(fake(&marker, Some(3), None))
@@ -398,7 +434,7 @@ mod tests {
     #[test]
     fn a_build_that_closes_at_once_is_rolled_back() {
         let (dir, places) = folder("ssheesh-preview");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         let trial = watch(&places, &dir.path().join("started-125"), Duration::from_secs(5), POLL, |_| Ok(fake(&dir.path().join("started-125"), None, Some(2))));
         assert_eq!(trial, Trial::RolledBack("it closed as it started".into()));
         assert_eq!(read(&places.exe), "the build from before");
@@ -407,7 +443,7 @@ mod tests {
     #[test]
     fn a_build_that_says_nothing_in_time_is_stopped_and_rolled_back() {
         let (dir, places) = folder("ssheesh-preview");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         let mut killed = false;
         let trial = watch(&places, &dir.path().join("started-125"), Duration::from_millis(30), POLL, |_| {
             Ok(KillSpy { inner: fake(&dir.path().join("started-125"), None, None), killed: &mut killed })
@@ -435,7 +471,7 @@ mod tests {
     #[test]
     fn a_build_that_cant_be_started_is_rolled_back() {
         let (dir, places) = folder("ssheesh-preview");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         let trial = watch::<Fake>(&places, &dir.path().join("started-125"), Duration::from_secs(5), POLL, |_| Err(std::io::Error::other("not a program")));
         assert_eq!(trial, Trial::RolledBack("it couldn't be started: not a program".into()));
         assert_eq!(read(&places.exe), "the build from before");
@@ -444,7 +480,7 @@ mod tests {
     #[test]
     fn with_nothing_to_go_back_to_the_new_build_stays() {
         let (dir, places) = folder("ssheesh-preview");
-        install(&places).unwrap();
+        install(&places, &checked()).unwrap();
         fs::remove_file(&places.old).unwrap();
         let trial = watch(&places, &dir.path().join("started-125"), Duration::from_secs(5), POLL, |_| Ok(fake(&dir.path().join("started-125"), None, Some(1))));
         assert!(matches!(trial, Trial::Stuck(_)));
@@ -470,7 +506,7 @@ mod tests {
             }
             let places = Places::of(&exe);
             stage(&places, script.as_bytes()).unwrap();
-            install(&places).unwrap();
+            install(&places, &super::super::verify::sha256_hex(script.as_bytes())).unwrap();
             let trial = watch(&places, &marker, Duration::from_secs(20), Duration::from_millis(20), launch);
             if started {
                 assert_eq!(trial, Trial::Started);

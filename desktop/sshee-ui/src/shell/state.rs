@@ -437,6 +437,8 @@ pub struct Shell {
     pub(crate) drop_over: Option<TabId>,
     /// Files dropped on a server's terminal, asking which folder they go to (`file_drop.rs`).
     pub(crate) upload: Option<super::file_drop::UploadAsk>,
+    /// Where an edit to the upload's folder lands when the question closed under it: never read.
+    pub(crate) upload_spare: rune::TextEdit,
     /// The native window, once it's made: where it is, for `place.rs`.
     pub(crate) window: Option<rune::WindowHandle>,
     /// Terminal tabs restored from the last run whose pane hasn't been made yet.
@@ -493,6 +495,7 @@ impl Shell {
             streamer: Default::default(),
             drop_over: None,
             upload: None,
+            upload_spare: rune::TextEdit::new(""),
             window: None,
             opened_before: Vec::new(),
         };

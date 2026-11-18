@@ -235,6 +235,11 @@ impl Tunnels {
             self.states.insert(to.id.clone(), State::Starting);
             return Ok((vec![Ask::Start { id: to.id, host: host.to_owned(), forward }], None));
         }
+        // The address comes from the server's own listing: a temporary tunnel leads only to
+        // the server itself. Somewhere else is a tunnel to add by hand, address in view.
+        if !on_the_server(&app.remote_host) {
+            return Err(elsewhere(&app.remote_host, app.port));
+        }
         let port = port(&self.claimed())?;
         let id = self.new_id();
         let forward = local(port, &app.remote_host, app.port);
@@ -351,17 +356,24 @@ impl Tunnels {
     }
 
     /// A server left the list: its tunnels stop and are forgotten (0.10's
-    /// `forgetHostTunnels`). Nothing to do when it had none.
+    /// `forgetHostTunnels`), the temporary ones to its web apps too, with its last look.
+    /// The list is kept again only when it had saved ones; nothing to do when it had none.
     pub fn forget(&mut self, host: &str) -> Vec<Ask> {
-        let Some(list) = self.saved.by_host.shift_remove(host) else { return vec![] };
-        let mut asks: Vec<Ask> = list
-            .iter()
-            .map(|t| {
-                self.states.remove(&t.id);
-                Ask::Stop { id: t.id.clone() }
+        self.scans.remove(host);
+        let saved = self.saved.by_host.shift_remove(host);
+        let temp = self.temp.shift_remove(host).unwrap_or_default();
+        let ids: Vec<String> = saved.iter().flatten().map(|t| t.id.clone()).chain(temp.into_iter().map(|t| t.id)).collect();
+        let mut asks: Vec<Ask> = ids
+            .into_iter()
+            .map(|id| {
+                self.states.remove(&id);
+                self.opening.remove(&id);
+                Ask::Stop { id }
             })
             .collect();
-        asks.push(Ask::Save(self.saved.clone()));
+        if saved.is_some() {
+            asks.push(Ask::Save(self.saved.clone()));
+        }
         asks
     }
 
@@ -444,6 +456,23 @@ pub fn describe(forward: &Forward) -> String {
             let there = if host == SERVER || host == "localhost" { format!("the server's port {remote}") } else { format!("port {remote} on {host}, reached through the server") };
             format!("localhost:{port} on this computer opens {there}.")
         }
+    }
+}
+
+/// An address on the server itself: its loopback (127.0.0.1, ::1, 127.0.0.53), or none
+/// given (the server, as [`remote_host`] reads it).
+pub fn on_the_server(host: &str) -> bool {
+    let bare = host.trim().trim_start_matches('[').trim_end_matches(']');
+    bare.is_empty() || bare.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Why "Open" on an app that listens only on another address makes no tunnel: the address,
+/// shown only when it is one.
+fn elsewhere(host: &str, port: u16) -> String {
+    let bare = host.trim().trim_start_matches('[').trim_end_matches(']');
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(ip) => format!("It listens only on {ip}, not on the server itself. To reach it anyway, add a tunnel to {ip} port {port} yourself."),
+        Err(_) => "It listens only on an address that isn't the server itself, so SSHeesh won't open a tunnel to it.".to_owned(),
     }
 }
 
@@ -667,6 +696,28 @@ mod tests {
         assert!(t.forget("demo-web").is_empty());
     }
 
+    /// Its temporary tunnels to web apps stop and go too, with its last look; the saved list
+    /// isn't written again when it had none there.
+    #[test]
+    fn a_server_taken_out_of_the_list_stops_its_web_app_tunnels() {
+        let mut t = Tunnels::default();
+        t.save("web-7731", None, "", local(5432, SERVER, 5432));
+        t.deliver(Reply::Scanned { host: "web-4410".into(), result: Ok(Scan { apps: vec![], curl: true }) });
+        t.open_app("web-4410", &WebApp { port: 3000, remote_host: SERVER.into(), ..WebApp::default() }, true, |_| Ok(13000)).unwrap();
+        let id = t.temp_of("web-4410")[0].id.clone();
+        assert!(t.opening.contains_key(&id) && t.states.contains_key(&id));
+        assert_eq!(t.forget("web-4410"), vec![Ask::Stop { id: id.clone() }]);
+        assert!(t.temp_of("web-4410").is_empty());
+        assert!(!t.scans.contains_key("web-4410") && !t.opening.contains_key(&id) && !t.states.contains_key(&id));
+        assert_eq!(t.of("web-7731").len(), 1, "another server's tunnels stay");
+        // Saved and temporary: both stop, and the list is kept once.
+        t.open_app("web-7731", &WebApp { port: 8080, remote_host: SERVER.into(), ..WebApp::default() }, false, |_| Ok(18080)).unwrap();
+        let asks = t.forget("web-7731");
+        assert_eq!(asks.len(), 3);
+        assert!(matches!(&asks[2], Ask::Save(list) if list.by_host.is_empty()));
+        assert!(t.temp.is_empty() && t.states.is_empty());
+    }
+
     #[test]
     fn switching_editing_and_removing_tell_the_backend() {
         let mut t = Tunnels::default();
@@ -778,6 +829,30 @@ mod tests {
         let kept = t.of("demo-web")[0].id.clone();
         assert!(matches!(&t.stop_app("demo-web", &kept)[0], Ask::Stop { .. }));
         assert!(!t.of("demo-web")[0].on);
+    }
+
+    /// What listens where comes from the server: a temporary tunnel leads only to the
+    /// server's own loopback, never to another address it names.
+    #[test]
+    fn a_temporary_tunnel_leads_only_to_the_server_itself() {
+        let mut t = Tunnels::default();
+        for host in ["127.0.0.1", "::1", "127.0.0.53"] {
+            let app = WebApp { port: 3000, remote_host: host.into(), web: true, ..WebApp::default() };
+            assert!(t.open_app("web-7731", &app, true, |_| Ok(13000)).is_ok(), "{host}");
+            t.forget("web-7731");
+        }
+        let app = WebApp { port: 9100, remote_host: "198.51.100.4".into(), web: true, ..WebApp::default() };
+        let why = t.open_app("web-7731", &app, true, |_| panic!("no port asked")).unwrap_err();
+        assert!(why.contains("198.51.100.4") && why.contains("9100"), "{why}");
+        let odd = WebApp { port: 80, remote_host: "intranet.example\u{202e}".into(), ..WebApp::default() };
+        let why = t.open_app("web-7731", &odd, true, |_| panic!("no port asked")).unwrap_err();
+        assert!(!why.contains("intranet"), "{why}");
+        assert!(t.temp.is_empty() && t.states.is_empty() && t.opening.is_empty());
+        // One added by hand still opens.
+        t.save("web-7731", None, "", local(19100, "198.51.100.4", 9100));
+        let (asks, _) = t.open_app("web-7731", &app, true, |_| panic!("no port asked")).unwrap();
+        assert!(asks.is_empty(), "it's starting already");
+        assert_eq!(t.opening.get("tun-1").map(String::as_str), Some("http://localhost:19100/"));
     }
 
     #[test]

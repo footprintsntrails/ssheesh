@@ -115,9 +115,41 @@ pub fn local_name(path: &str) -> &str {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// Unicode's bidirectional controls (and the marks that act as ones): invisible, and able to
+/// make text read in another order than it is (`invoice\u{202e}txt.exe`).
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Whether text has anything that isn't what it shows: a control character or a bidi one.
+pub fn has_hidden(text: &str) -> bool {
+    text.chars().any(|c| c.is_control() || is_bidi_control(c))
+}
+
+/// Text with what wouldn't show as itself made visible: a control character or a bidi one
+/// becomes `�`, so a name reads as the characters it has.
+pub fn shown_plainly(text: &str) -> std::borrow::Cow<'_, str> {
+    if has_hidden(text) {
+        std::borrow::Cow::Owned(text.chars().map(|c| if c.is_control() || is_bidi_control(c) { '\u{fffd}' } else { c }).collect())
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_characters_are_found_and_shown() {
+        assert!(!has_hidden("/home/deploy/отчёт 2026.txt"));
+        for odd in ["/srv/\u{1b}[31mx", "/srv/a\nb", "/srv/\u{202e}gpj.exe", "/srv/\u{2066}x", "/srv/\u{200f}", "/srv/\u{061c}", "/srv/\u{85}"] {
+            assert!(has_hidden(odd), "{odd:?}");
+        }
+        assert_eq!(shown_plainly("invoice\u{202e}txt.exe"), "invoice\u{fffd}txt.exe");
+        assert_eq!(shown_plainly("a\tb\u{7}"), "a\u{fffd}b\u{fffd}");
+        assert!(matches!(shown_plainly("notes.md"), std::borrow::Cow::Borrowed("notes.md")));
+    }
 
     fn labels(path: &str) -> Vec<(String, String)> {
         crumbs(path).into_iter().map(|c| (c.label, c.path)).collect()

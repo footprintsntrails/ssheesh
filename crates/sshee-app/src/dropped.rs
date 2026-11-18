@@ -108,15 +108,40 @@ pub fn names_line(names: &[String]) -> Option<String> {
     Some(if names.len() > 4 { format!("{shown} and {} more", names.len() - 4) } else { shown })
 }
 
-/// The folder an upload goes to, as typed: trimmed, `None` while empty. A server's own `~`
-/// stays for the backend to find (it lists it first).
+/// The folder an upload goes to, as typed: trimmed, `None` while empty, or while it has a
+/// control or bidi character (what isn't what it shows). A server's own `~` stays for the
+/// backend to find (it lists it first).
 pub fn folder(typed: &str) -> Option<&str> {
-    Some(typed.trim()).filter(|t| !t.is_empty())
+    Some(typed.trim()).filter(|t| !t.is_empty() && !crate::paths::has_hidden(t))
+}
+
+/// Where the upload's question starts: the folder the terminal's shell is in, as the server
+/// said it (tmux, OSC 7), else home. The server's word: a folder with a control or bidi
+/// character in it, which could show as another one, isn't taken.
+pub fn start_folder(found: Option<String>) -> String {
+    found.filter(|f| !f.trim().is_empty() && !crate::paths::has_hidden(f)).unwrap_or_else(|| "~".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The terminal's folder comes from the server: one that could show as another isn't
+    /// where the question starts.
+    #[test]
+    fn the_upload_starts_in_the_terminals_folder_only_as_it_shows() {
+        assert_eq!(start_folder(Some("/srv/www".into())), "/srv/www");
+        assert_eq!(start_folder(Some("/home/deploy/отчёты".into())), "/home/deploy/отчёты");
+        assert_eq!(start_folder(None), "~");
+        assert_eq!(start_folder(Some(String::new())), "~");
+        for odd in ["/srv/\u{202e}www", "/srv/www\n", "/srv/\u{1b}]8;;x", "/home/\u{2067}a", "/home/\u{200e}a", "/home/\u{061c}a"] {
+            assert_eq!(start_folder(Some(odd.into())), "~", "{odd:?}");
+        }
+        // As typed: trimmed, and nothing hidden left inside.
+        assert_eq!(folder("  /srv/www\n"), Some("/srv/www"));
+        assert_eq!(folder("/srv/\u{202e}www"), None);
+        assert_eq!(folder("/srv/a\u{7}b"), None);
+    }
 
     #[test]
     fn names_are_quoted_for_the_shell_that_reads_them() {
