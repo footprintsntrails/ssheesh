@@ -27,6 +27,27 @@ pub const MAX_POLL_SECS: f64 = 60.0;
 pub const DOCKER_INSTALL: &str = "curl -fsSL https://get.docker.com | sudo sh";
 /// The button that offers a terminal to sign in or confirm the server in.
 pub const OPEN_TERMINAL: &str = "Open a terminal";
+/// How long a look may go unanswered before the tab says so, in seconds: a look that never
+/// answers ends in "Couldn't look for containers" and Try again, never an endless wait.
+pub const LOOK_TIMEOUT_SECS: f64 = 30.0;
+/// What a look that went unanswered says.
+pub const NO_ANSWER: &str = "The server didn't answer within 30 seconds. It may be busy, or the connection dropped.";
+
+/// The short guide an empty list offers: each step's title, its command and what it does.
+pub const FIRST_CONTAINER: [(&str, &str, &str); 2] = [
+    (
+        "Start one container",
+        "docker run -d --name hello -p 8080:80 nginx",
+        "Downloads the nginx web server and runs it in the background under the name hello. Port 8080 on the server leads to port 80 inside it, so http://your-server:8080 shows its welcome page.",
+    ),
+    (
+        "Or start a whole project",
+        "docker compose up -d",
+        "Run it in a folder with a docker-compose.yml file: it starts every container the file describes, in the background, and they show up here under the project's name.",
+    ),
+];
+/// Under the guide's steps.
+pub const FIRST_CONTAINER_AFTER: &str = "New containers show up here within 10 seconds. To remove hello again: docker rm -f hello";
 
 /// One container, as sshee-core's `containers::list` gives it.
 #[derive(Debug, Clone, PartialEq)]
@@ -397,7 +418,8 @@ impl Board {
         self.loading
     }
 
-    /// A look came back. An answer to an older ticket is dropped. A failure keeps the list
+    /// A look came back. An answer to an older ticket is dropped; one to the newest ticket
+    /// counts even after [`Board::no_answer`] gave up on it. A failure keeps the list
     /// shown last: the machine can't be asked right now, which says nothing of its containers.
     pub fn listed(&mut self, ticket: u64, result: Result<ContainerList, Failure>) -> bool {
         if ticket != self.ticket {
@@ -415,6 +437,19 @@ impl Board {
                 self.failures += 1;
             }
         }
+        true
+    }
+
+    /// The look on its way went unanswered for [`LOOK_TIMEOUT_SECS`]: it counts as a failed
+    /// one, so the tab says so and offers Try again. Its answer still counts if it comes late.
+    /// False when no look was on its way.
+    pub fn no_answer(&mut self) -> bool {
+        if !self.loading {
+            return false;
+        }
+        self.loading = false;
+        self.failure = Some(Failure::new(FailureKind::Failed, NO_ANSWER));
+        self.failures += 1;
         true
     }
 
@@ -741,6 +776,35 @@ mod tests {
         let Want::List { ticket } = b.list() else { unreachable!() };
         b.listed(ticket, Err(Failure::new(FailureKind::Auth, "Permission denied")));
         assert!(matches!(b.problem(), Some(Problem::Page { open_terminal: true, .. })));
+    }
+
+    #[test]
+    fn docker_with_no_containers_is_an_empty_list_not_a_wait() {
+        let b = board(vec![]);
+        assert!(!b.is_first_look() && !b.is_loading());
+        assert_eq!(b.problem(), None);
+        assert_eq!(b.empty().map(|(said, _)| said), Some("No containers yet"));
+        assert_eq!(b.summary(), None);
+    }
+
+    #[test]
+    fn a_look_that_never_answers_ends_in_a_page_with_try_again() {
+        let mut b = Board::default();
+        assert!(!b.no_answer(), "nothing on its way");
+        let Want::List { ticket } = b.list() else { unreachable!() };
+        assert!(b.no_answer());
+        assert!(!b.is_first_look() && !b.is_loading());
+        assert!(matches!(b.problem(), Some(Problem::Page { ref title, ref message, .. }) if title == "Couldn't look for containers" && message == NO_ANSWER));
+        assert_eq!(b.next_look_in(), 2.0 * POLL_SECS, "it waits longer, as after any failure");
+        // The answer, late, still counts.
+        assert!(b.listed(ticket, Ok(ContainerList { engines: vec![Engine::Docker], ..ContainerList::default() })));
+        assert_eq!(b.problem(), None);
+        assert!(b.empty().is_some());
+        // Over a list seen before, it's a line, not a page.
+        let mut b = board(vec![c("web", None, "running", "Up 1 hour", "")]);
+        b.list();
+        b.no_answer();
+        assert!(matches!(b.problem(), Some(Problem::Note { ref text, .. }) if text.contains(NO_ANSWER)));
     }
 
     #[test]

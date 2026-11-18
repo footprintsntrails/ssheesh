@@ -43,6 +43,11 @@ pub struct State {
     pub board: Board,
     /// When the next look is due, on the window's clock; `None`: now (or one is on its way).
     due: Option<f64>,
+    /// When the look on its way was first seen waiting, on the window's clock: past
+    /// [`rules::LOOK_TIMEOUT_SECS`] it counts as unanswered.
+    asked: Option<f64>,
+    /// The empty list's guide to a first container is open.
+    guide: bool,
 }
 
 fn ask(s: &mut Shell, tab: TabId, want: Want) {
@@ -55,19 +60,38 @@ pub fn refresh(s: &mut Shell, tab: TabId) {
     let Some(state) = s.screens.containers.get_mut(&tab) else { return };
     let want = state.board.list();
     state.due = None;
+    state.asked = None;
     ask(s, tab, want);
 }
 
 /// Every frame: a Containers tab on screen that has no look yet, or whose next look is due,
-/// asks for one. True when something changed on screen.
-pub(crate) fn tick(s: &mut Shell, clock: f64) -> bool {
+/// asks for one; a look unanswered for [`rules::LOOK_TIMEOUT_SECS`] gives up and says so.
+/// True when something changed on screen.
+pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut Tx) -> bool {
     let shown: Vec<TabId> = s.tabs_on_screen().into_iter().filter(|id| s.bench.tab(*id).is_some_and(|t| t.kind == TabKind::Containers)).collect();
     let mut changed = false;
     for id in shown {
         let state = s.screens.containers.entry(id).or_default();
-        if !state.board.is_loading() && state.due.is_none_or(|due| clock >= due) {
+        if state.board.is_loading() {
+            // A look asked by a button is timed from the first frame that sees it waiting.
+            let Some(asked) = state.asked else {
+                state.asked = Some(clock);
+                tx.wake_at(clock + rules::LOOK_TIMEOUT_SECS);
+                continue;
+            };
+            if clock >= asked + rules::LOOK_TIMEOUT_SECS && state.board.no_answer() {
+                let due = clock + state.board.next_look_in();
+                (state.asked, state.due) = (None, Some(due));
+                tx.wake_at(due);
+                changed = true;
+            }
+        } else if state.due.is_none_or(|due| clock >= due) {
             changed |= state.board.is_first_look();
             refresh(s, id);
+            if let Some(st) = s.screens.containers.get_mut(&id).filter(|st| st.board.is_loading()) {
+                st.asked = Some(clock);
+                tx.wake_at(clock + rules::LOOK_TIMEOUT_SECS);
+            }
         }
     }
     changed
@@ -94,6 +118,7 @@ pub fn deliver(s: &mut Shell, reply: Reply, tx: &mut Tx) {
     match reply.answer {
         Answer::Listed { ticket, result } => {
             if state.board.listed(ticket, result) {
+                state.asked = None;
                 let due = tx.clock() + state.board.next_look_in();
                 state.due = Some(due);
                 tx.wake_at(due);
@@ -186,7 +211,7 @@ fn page(s: &Shell, id: TabId, t: &'static Theme, title: &str, message: &str, com
             }
         }));
     }
-    buttons = buttons.child(push_button(t, "Look again", Push::Quiet, true).key("containers-try-again").on_press_tx(move |s: &mut Shell, tx| {
+    buttons = buttons.child(push_button(t, "Try again", Push::Quiet, true).key("containers-try-again").on_press_tx(move |s: &mut Shell, tx| {
         refresh(s, id);
         tx.instant();
     }));
@@ -311,18 +336,43 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
     }
     if let Some((said, how)) = board.empty() {
-        out = out.child(
-            col()
-                .key("containers-empty")
-                .w_full()
-                .items_center()
-                .gap(4.0)
-                .pt(64.0)
-                .child(text(said).font(theme::TEXT).color(t.l2on).single_line())
-                .child(text(how).font(theme::NOTE).color(t.l2).single_line()),
-        );
+        let open = s.screens.containers.get(&id).is_some_and(|st| st.guide);
+        let mut empty = col()
+            .key("containers-empty")
+            .w_full()
+            .items_center()
+            .gap(4.0)
+            .pt(64.0)
+            .child(text(said).font(theme::TEXT).color(t.l2on).single_line())
+            .child(text(how).font(theme::NOTE).color(t.l2).single_line())
+            .child(push_button(t, if open { "Hide the guide" } else { "How to run a first container" }, Push::Quiet, true).key("containers-guide").mt(8.0).on_press_tx(move |s: &mut Shell, tx| {
+                if let Some(st) = s.screens.containers.get_mut(&id) {
+                    st.guide = !st.guide;
+                }
+                tx.instant();
+            }));
+        if open {
+            empty = empty.child(guide(s, id, t));
+        }
+        out = out.child(empty);
     }
     out
+}
+
+/// The empty list's short guide: one container, or a Compose project, each with its command.
+fn guide(s: &Shell, id: TabId, t: &'static Theme) -> El {
+    let mut steps = col().key("containers-guide-steps").gap(16.0).mt(12.0).items_center().max_w(480.0);
+    for (n, (title, command, explain)) in rules::FIRST_CONTAINER.iter().enumerate() {
+        steps = steps.child(
+            col()
+                .gap(6.0)
+                .items_center()
+                .child(text(*title).font(theme::TEXT_BOLD).color(t.l1).single_line())
+                .child(text(*explain).font(theme::NOTE).color(t.l2).max_w(460.0).align(Align::Center))
+                .child(command_box(s, id, t, command, &format!("containers-guide-{n}"))),
+        );
+    }
+    steps.child(text(rules::FIRST_CONTAINER_AFTER).font(theme::NOTE).color(t.l2).max_w(460.0).align(Align::Center))
 }
 
 /// The tab's page.

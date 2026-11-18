@@ -139,6 +139,14 @@ impl Backend for Live {
         self.inner.edit(ask);
     }
 
+    fn containers(&mut self, ask: sshee_app::containers::Ask) {
+        self.inner.containers(ask);
+    }
+
+    fn stats(&mut self, ask: sshee_app::stats::Ask) {
+        self.inner.stats(ask);
+    }
+
     fn notify(&mut self, tab: &sshee_app::workbench::Tab, note: &sshee_term::attention::Notification) {
         self.inner.notify(tab, note);
     }
@@ -275,4 +283,26 @@ fn main() {
         Launch { bench, backend: Box::new(Live { inner, update: update::Updater::new(arrival) }), options: Options { native_title_bar, place, ..options } }
     };
     shell::run(launch);
+}
+
+#[cfg(test)]
+mod tests {
+    /// The names of the `fn`s in the block that starts at `head`, up to its closing brace.
+    fn fns_of(source: &str, head: &str) -> Vec<String> {
+        let block = source.split_once(head).map(|(_, rest)| rest).unwrap_or_else(|| panic!("no {head}"));
+        let block = &block[..block.find("\n}\n").unwrap_or(block.len())];
+        block.lines().filter_map(|l| l.trim().strip_prefix("fn ")).map(|f| f.split(['(', '<']).next().unwrap_or_default().to_owned()).collect()
+    }
+
+    /// `Live` wraps the live backend: a request it doesn't pass on falls to the trait's
+    /// default, which drops it. Containers and Stats once waited forever that way.
+    #[test]
+    fn live_passes_every_request_to_the_live_backend() {
+        let wanted = fns_of(include_str!("../../sshee-ui/src/shell/state.rs"), "pub trait Backend");
+        let passed = fns_of(include_str!("main.rs"), "impl Backend for Live {");
+        // The demo's own: Live's sessions aren't replays.
+        let missing: Vec<_> = wanted.iter().filter(|f| !passed.contains(f) && f.as_str() != "replays").collect();
+        assert!(wanted.len() > 20, "{wanted:?}");
+        assert!(missing.is_empty(), "Live doesn't pass these on: {missing:?}");
+    }
 }
