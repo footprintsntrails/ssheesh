@@ -281,7 +281,7 @@ fn list_page(t: &Theme, s: &Shell) -> El {
     let here = s.bench.current_key();
     let on = here.map(|k| server_name(s, k));
     let sub = match &on {
-        Some(name) => format!("Run in the terminal of {name}. In the palette too: type cmd:"),
+        Some(name) => format!("Run in the terminal of {name}. In the command bar too: type cmd:"),
         None => "Commands you keep. Open a server to run one there.".to_owned(),
     };
     let head = header(t, Icon::Terminal, "Snippets", &sub, vec![close_button(t, "snip-close").on_press_tx(|s: &mut Shell, tx| s.close_snippets(tx))]);

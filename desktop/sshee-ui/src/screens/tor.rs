@@ -240,8 +240,8 @@ pub fn status(s: &Shell) -> Status {
 /// The onion's tooltip, and what a screen reader says of it: the state, and what a click does.
 pub fn button_help(s: &Shell) -> String {
     let st = status(s);
-    let does = if st.switched_on() { "click to turn it off" } else { "click to turn it on" };
-    format!("{}: {does}, right-click for more", sshee_app::tor::rail_help(&st))
+    let does = if st.switched_on() { "Click to turn it off" } else { "Click to turn it on" };
+    format!("{}. {does}, right-click for more", sshee_app::tor::rail_help(&st))
 }
 
 /// The popover, beside the sidebar's onion while it's open.

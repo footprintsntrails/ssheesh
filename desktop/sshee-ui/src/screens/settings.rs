@@ -495,7 +495,7 @@ pub fn overlay(s: &Shell, t: &'static Theme) -> Option<El> {
         return Some(editor_menu(s, t, key));
     }
     let Control::Choice { options, get, set, .. } = row.control else { return None };
-    let labels = row.choice_labels(keyboard(s));
+    let labels = row.choice_labels(&s.settings, keyboard(s));
     let now = get(&s.settings);
     let selected = options.iter().position(|(value, _)| *value == now);
     Some(popup_menu(

@@ -40,7 +40,8 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         } else {
             stop.opacity(0.4)
         };
-        // How far it got: a quiet track, filled from the left. A size not known yet shows a third.
+        // How far it got: a quiet track, filled from the left in the accent, as a terminal's
+        // progress is (`kit::tab::progress_color`). A size not known yet shows a third.
         let filled = card.fraction.map_or(1.0 / 3.0, |f| f.clamp(0.0, 1.0) as f32);
         let mut foot = row().w_full().gap(8.0).child(text(&card.line).font(theme::STATUS_VALUE).color(t.l2).single_line().truncate().grow(1.0).min_w(0.0));
         if let Some(rate) = &card.rate {
@@ -57,7 +58,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
                     text(s.text_shown(&card.label).into_owned()).font(theme::TAB_NAME).color(t.l1).single_line().truncate().grow(1.0).min_w(0.0),
                 ).child(stop),
             )
-            .child(el().w_full().h(4.0).radius(2.0).fill(t.hov2).child(el().w_frac(filled).h(4.0).radius(2.0).fill(if card.waiting { t.l2 } else { t.l1 })))
+            .child(el().w_full().h(4.0).radius(2.0).fill(t.hov2).child(el().w_frac(filled).h(4.0).radius(2.0).fill(if card.waiting { t.l2 } else { t.blue })))
             .child(foot);
         if let Some(cleaned) = &card.cleaned {
             body = body.child(text(s.text_shown(cleaned).into_owned()).font(theme::SMALL).color(t.l2).single_line().truncate());

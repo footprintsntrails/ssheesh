@@ -28,7 +28,6 @@ use indexmap::IndexMap;
 use rune::{col, row, text, Cx, El, Key, KeyEvent, ScrollSpec, Tx};
 use sshee_app::home::{Arrow, Home, Spot, Waits};
 use sshee_app::labels::env_short;
-use sshee_app::model::EnvLabel;
 use sshee_app::palette::shortcut_label;
 use sshee_app::workbench::shortcuts::Shortcut;
 use sshee_app::workbench::{ServerKey, TabKind};
@@ -267,7 +266,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         let name = s.server_shown(&server.server, &server.name);
         // Its picture, else its icon in the colour you picked, washed over its square; else quiet.
         let color = crate::screens::server_menu::own_color(s, &server.server);
-        let label = server.env.as_ref().map(|env| (env_short(env), *env == EnvLabel::Prod));
+        let label = server.env.as_ref().map(|env| (env_short(env), crate::kit::chip::env_color(t, env)));
         let spec = Tile {
             icon: Some(Icon::for_server(&server.icon)),
             // A picture fills the square, as an app's icon does; an icon sits in it.

@@ -656,7 +656,7 @@ impl Sources {
             out.push((Source::Old, plural(self.old.len(), "server", "servers")));
         }
         if !self.config.is_empty() {
-            out.push((Source::SshConfig, if self.config_new > 0 { format!("{} new", self.config_new) } else { plural(self.config.len(), "server", "servers") }));
+            out.push((Source::SshConfig, if self.config_new > 0 { plural(self.config_new, "new server", "new servers") } else { plural(self.config.len(), "server", "servers") }));
         }
         if !self.xpipe.is_empty() {
             out.push((Source::Xpipe, plural(self.xpipe.len(), "new server", "new servers")));
@@ -1257,7 +1257,7 @@ mod tests {
         s.xpipe_through_jump = 3;
         s.old = vec![c("backups"), c("web-staging")];
         let offers: Vec<(Source, String)> = s.offers();
-        assert_eq!(offers, [(Source::Old, "2 servers".to_owned()), (Source::SshConfig, "1 new".to_owned()), (Source::Xpipe, "1 new server".to_owned())]);
+        assert_eq!(offers, [(Source::Old, "2 servers".to_owned()), (Source::SshConfig, "1 new server".to_owned()), (Source::Xpipe, "1 new server".to_owned())]);
         assert_eq!(s.title(Source::Xpipe), "Found 1 new server in XPipe");
         assert_eq!(s.title(Source::Old), "Found 2 servers in SSHeesh 0.10");
         assert_eq!(

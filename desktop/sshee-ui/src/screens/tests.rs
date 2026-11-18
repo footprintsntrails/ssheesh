@@ -530,6 +530,12 @@ fn the_form_says_what_is_wrong_and_asks_nothing_of_the_backend() {
     let mut w = Window::open(false);
     w.key(Key::Command('n'), "cs");
     assert!(w.rt.state.screens.add_server.open);
+    // Address, port and user in one line: the "?" after "Port" doesn't push its field down.
+    let top = |key: &str| w.rt.presented(key).unwrap_or_else(|| panic!("no {key}")).0[1];
+    let address = top("add-address");
+    for key in ["add-port", "add-user"] {
+        assert!((top(key) - address).abs() < 0.5, "{key} at {} beside the address at {address}", top(key));
+    }
     // Nothing typed: the button is off, and Return adds nothing.
     w.key(Key::Enter, "");
     assert!(w.rt.state.screens.add_server.open);

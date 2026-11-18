@@ -153,7 +153,8 @@ pub fn pane_view_with<S: 'static>(
     let preedit = pane.ime.preedit().zip(pane.anchor);
     // The cursor blinks by leaving the tree for half of each beat (poll keeps the beat): an
     // element in an `instant_changes` subtree goes and comes back at once.
-    if in_view && lit && preedit.is_none() {
+    // Not under "Connecting to …": nothing is there to type into yet.
+    if in_view && lit && preedit.is_none() && pane.connecting().is_none() {
         let (text, width, _) = view.shown_char(cursor.line, cursor.col);
         term = term.child(cursor_el(pane, &palette, &m, cursor.shape, cell_xy(&m, inset, pane.options.padding, cursor.line, cursor.col), text, width));
     }

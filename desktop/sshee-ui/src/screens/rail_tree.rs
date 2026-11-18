@@ -339,7 +339,8 @@ pub fn tree(s: &Shell, t: &'static Theme, index: usize, server: &str, indent: f3
                     .gap(6.0)
                     .items_center()
                     .help("Docker Compose project")
-                    .child(icon(Icon::Folder, 12.0, t.l2))
+                    // Its name alone, as the Containers tab heads a project: a folder here would
+                    // read as the Files tab beside it.
                     .child(text(s.text_shown(project).into_owned()).font(theme::SMALL).color(t.l2).single_line().truncate().shrink()),
             );
         }

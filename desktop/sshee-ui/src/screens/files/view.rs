@@ -1440,7 +1440,9 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
         .h(ROW)
         .items_center()
         .gap(8.0)
-        .pl(16.0 + theme::ICON + 8.0 + 12.0 + 8.0)
+        // Over the names: a row's margin and padding, its icon and the gap after it (the »
+        // follows a folder's name, so there's no column for it).
+        .pl(16.0 + theme::ICON + 8.0)
         .pr(16.0)
         .border_sides([0.0, 0.0, 1.0, 0.0], t.hair2)
         .child(header_cell(t, "sort-name", "Name", on(SortKey::Name), SortKey::Name, id).grow(1.0))
@@ -2540,7 +2542,10 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
             let k = key.clone();
             let mut chip = row().key(format!("copy-to-{}", key.replace(':', "-"))).h(28.0).px(10.0).gap(6.0).radius(8.0).items_center().role("radio").label(name.clone());
             chip = if on { chip.fill(t.blue.alpha(0.14)).border(1.0, t.blue) } else { chip.fill(t.code).border(1.0, t.hair).hover(t.hov) };
-            chip = chip.child(icon(Icon::Server, 13.0, if on { t.blue } else { t.l2on })).child(text(name).font(theme::CONTROL_TEXT).color(t.l1).single_line().max_w(180.0).truncate());
+            // Each server's own icon, as the sidebar draws it.
+            let icon_id = s.bench.server(&key).map(|sv| sv.icon.clone()).unwrap_or_default();
+            let glyph = crate::screens::server_menu::glyph_of(s, &key, &icon_id, 13.0, if on { t.blue } else { t.l2on });
+            chip = chip.child(glyph).child(text(name).font(theme::CONTROL_TEXT).color(t.l1).single_line().max_w(180.0).truncate());
             // The server the files are on: a copy there goes to another folder.
             if key == here {
                 chip = chip.child(text("this one").font(theme::NOTE).color(t.l2).single_line());

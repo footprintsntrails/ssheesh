@@ -53,10 +53,10 @@ fn palette(s: &Shell, t: &Theme) -> Palette {
 fn control_width(s: &Shell, r: &'static Row) -> Option<f32> {
     let words = |labels: &[&str], font, pad: f32, gap: f32| labels.iter().map(|l| rune::text::advance(l, font) + pad).sum::<f32>() + gap * labels.len().saturating_sub(1) as f32;
     match r.control {
-        Control::Choice { look: ChoiceLook::Segmented, .. } => Some(words(&r.choice_labels(keyboard(s)), theme::CONTROL_TEXT, 20.0, 0.0) + 4.0),
+        Control::Choice { look: ChoiceLook::Segmented, .. } => Some(words(&r.choice_labels(&s.settings, keyboard(s)), theme::CONTROL_TEXT, 20.0, 0.0) + 4.0),
         Control::Choice { look: ChoiceLook::Popup, options, get, .. } => {
             let now = get(&s.settings);
-            let labels = r.choice_labels(keyboard(s));
+            let labels = r.choice_labels(&s.settings, keyboard(s));
             let shown = options.iter().position(|(value, _)| *value == now).and_then(|at| labels.get(at).copied()).unwrap_or(now.as_str());
             Some(rune::text::advance(shown, theme::TEXT) + 32.0)
         }
@@ -83,14 +83,14 @@ fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
             })
         }
         Control::Choice { look: ChoiceLook::Segmented, options, get, set } => {
-            let labels = r.choice_labels(keyboard(s));
+            let labels = r.choice_labels(&s.settings, keyboard(s));
             let now = get(store);
             let selected = options.iter().position(|(value, _)| *value == now);
             segmented(t, r.label, &labels, selected, on, move |s: &mut Shell, i, tx| s.change_settings(tx, |st| set(st, options[i].0))).key(key)
         }
         Control::Choice { look: ChoiceLook::Popup, options, get, .. } => {
             let now = get(store);
-            let labels = r.choice_labels(keyboard(s));
+            let labels = r.choice_labels(&s.settings, keyboard(s));
             let shown = options.iter().position(|(value, _)| *value == now).and_then(|at| labels.get(at).copied()).unwrap_or(now.as_str());
             let row_key = r.key;
             // A long value is drawn whole: its row puts it under the words, at the row's width.
