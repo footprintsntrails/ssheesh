@@ -356,8 +356,10 @@ pub struct Shell {
     keyboard: Option<TabId>,
     /// The machine the backend was last told to watch.
     watching: Option<ServerKey>,
-    /// The width the row of tabs has, from layout.
-    pub(crate) strip_width: Option<f32>,
+    /// The width the title and the row of tabs share in the top bar, from layout.
+    pub(crate) bar_room: Option<f32>,
+    /// The status bar's width, from layout: the vital signs that fit in it are shown.
+    pub(crate) status_room: Option<f32>,
     /// Panes run on Rune's clock from this instant (replays).
     clock_base: Option<Instant>,
     /// The tabs as the backend was last told to keep them.
@@ -398,7 +400,9 @@ fn link_of(status: &LinkStatus) -> Link {
         LinkStatus::Connected { durable } => Link::Connected { durable: *durable },
         LinkStatus::Reconnecting { .. } => Link::Reconnecting,
         LinkStatus::Waiting { .. } => Link::Disconnected,
-        LinkStatus::Gone { .. } | LinkStatus::Ended { .. } => Link::Ended,
+        // Signing in failed: the tab says what the card over the terminal does.
+        LinkStatus::Gone { .. } => Link::Failed,
+        LinkStatus::Ended { .. } => Link::Ended,
         LinkStatus::Retrying { .. } | LinkStatus::Rejoining { .. } => Link::Reconnecting,
         LinkStatus::Asleep => Link::Disconnected,
         LinkStatus::HostKey(_) => Link::Connecting,
@@ -428,7 +432,8 @@ impl Shell {
             window_focused: true,
             keyboard: None,
             watching: None,
-            strip_width: None,
+            bar_room: None,
+            status_room: None,
             clock_base,
             sides: Default::default(),
             rail: Default::default(),
@@ -668,7 +673,7 @@ impl Shell {
 
     /// A click on a tab. A tab whose connection is gone tries again.
     pub fn focus_tab(&mut self, id: TabId, tx: &mut Tx) {
-        let again = self.bench.tab(id).is_some_and(|t| matches!(t.link, Link::Disconnected | Link::Ended));
+        let again = self.bench.tab(id).is_some_and(|t| matches!(t.link, Link::Disconnected | Link::Ended | Link::Failed));
         self.bench.focus(id);
         self.settle(tx);
         if again {

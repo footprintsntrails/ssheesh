@@ -153,8 +153,10 @@ pub enum Link {
     Reconnecting,
     /// It didn't come back, or it sleeps: a click or a key tries again.
     Disconnected,
-    /// The shell ended, or never started.
+    /// The shell ended.
     Ended,
+    /// It never connected: signing in failed ("Couldn't connect"); a click tries again.
+    Failed,
 }
 
 /// What a tab says after its name, if anything.
@@ -165,6 +167,8 @@ pub enum Badge {
     Reconnecting,
     Disconnected,
     Ended,
+    /// Signing in failed, as the card over the terminal says.
+    Failed,
 }
 
 impl Badge {
@@ -174,6 +178,7 @@ impl Badge {
             Badge::Reconnecting => "Reconnecting…",
             Badge::Disconnected => "Disconnected",
             Badge::Ended => "Ended",
+            Badge::Failed => "Couldn't connect",
         }
     }
 }
@@ -222,6 +227,7 @@ impl Tab {
             Link::Reconnecting => Some(Badge::Reconnecting),
             Link::Disconnected => Some(Badge::Disconnected),
             Link::Ended => Some(Badge::Ended),
+            Link::Failed => Some(Badge::Failed),
             Link::Idle | Link::Connecting | Link::Connected { .. } => None,
         }
     }
@@ -1411,6 +1417,7 @@ mod tests {
         assert_eq!(badge(&mut w, Link::Reconnecting), Some("Reconnecting…"));
         assert_eq!(badge(&mut w, Link::Disconnected), Some("Disconnected"));
         assert_eq!(badge(&mut w, Link::Ended), Some("Ended"));
+        assert_eq!(badge(&mut w, Link::Failed), Some("Couldn't connect"));
         // A tab that's gone is ignored.
         w.set_link(TabId(999), Link::Ended);
     }

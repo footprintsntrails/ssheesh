@@ -15,7 +15,7 @@
 //! └── rail-edge    drag to resize, double-click for the first width
 //! ```
 
-use rune::{col, el, row, spacer, text, Drag, El, Phase, Tx};
+use rune::{col, el, row, spacer, text, Drag, El, Phase, Side, Tx};
 use sshee_app::model::SidebarMode;
 use sshee_app::workbench::layout::sidebar;
 use sshee_app::workbench::Tor;
@@ -142,18 +142,20 @@ fn list_row(t: &Theme, glyph: Icon, name: &str, selected: bool) -> El {
 /// The sidebar.
 pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
     let wide = s.sidebar_wide();
+    // Tooltips open beside the sidebar, over the page, so they never cover the next button.
+    let side = tip_side(s);
     let width = s.sidebar_width();
     let mut rail = col().key("rail").w(width).h_full().gap(3.0).pt(2.0).pb(8.0);
     rail = if wide { rail.px(8.0) } else { rail.items_center() };
     let mac = s.options.frame == Frame::Mac;
     if mac {
         // Elsewhere the logo is in the bar, above this column.
-        rail = rail.child(if wide { row().w_full().child(home(s, t)) } else { home(s, t) });
+        rail = rail.child(if wide { row().w_full().child(home(s, t).help_side(side)) } else { home(s, t).help_side(side) });
     }
     rail = rail.child(if wide {
-        list_row(t, Icon::Search, "Search", false).key("search").help("Search servers, tabs, files and commands").on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
+        list_row(t, Icon::Search, "Search", false).key("search").help("Search servers, tabs, files and commands").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
     } else {
-        rail_button(t, Icon::Search, "Search", RailState::Plain, false).key("search").on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
+        rail_button(t, Icon::Search, "Search", RailState::Plain, false).key("search").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_palette("", tx))
     });
     rail = if wide {
         rail.child(
@@ -169,6 +171,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
                     .role("button")
                     .label_static("Add a server")
                     .help("Add a server")
+                    .help_side(side)
                     .on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx))
                     .child(icon(Icon::Plus, 14.0, t.l2on)),
             ),
@@ -213,7 +216,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         rail = rail.child(b);
     }
     if !wide {
-        rail = rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
+        rail = rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
     }
     // New hosts in ~/.ssh/config: a quiet note, not a dialog (0.10's `ConfigNotice`).
     let new = s.screens.home.config_new;
@@ -228,7 +231,7 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
                 ),
             )
         };
-        rail = rail.child(note.key("config-new").help(words.clone()).label(words).on_press_tx(|s: &mut Shell, tx| s.review_config(tx)));
+        rail = rail.child(note.key("config-new").help(words.clone()).help_side(side).label(words).on_press_tx(|s: &mut Shell, tx| s.review_config(tx)));
     }
     let tor = match s.bench.tor() {
         Tor::Off => RailState::Plain,
@@ -247,6 +250,8 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
             .on_press_tx(|s: &mut Shell, tx| s.toggle_settings(tx)),
     ];
     rail = rail.child(spacer());
+    // In a row at the foot of the list, its tooltips open above it; in the rail, beside it.
+    let foot = foot.map(|b| b.help_side(if wide { Side::Top } else { side }));
     rail = if wide { rail.child(row().key("rail-foot").gap(2.0).children(foot)) } else { rail.children(foot) };
     // The edge facing the page: drag to resize, double-click for the first width.
     let right = s.sidebar_at_right();
@@ -260,4 +265,13 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         .on_drag(|s: &mut Shell, d, tx| s.rail_drag(d, tx));
     let edge = if right { edge.pin(Some(0.0), Some(0.0), None, Some(0.0)) } else { edge.pin(None, Some(0.0), Some(0.0), Some(0.0)) };
     rail.child(edge)
+}
+
+/// The side a sidebar button's tooltip opens on: away from the window's edge, over the page.
+pub(crate) fn tip_side(s: &Shell) -> Side {
+    if s.sidebar_at_right() {
+        Side::Left
+    } else {
+        Side::Right
+    }
 }

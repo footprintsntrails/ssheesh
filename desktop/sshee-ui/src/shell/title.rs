@@ -134,14 +134,34 @@ impl Shell {
     }
 }
 
-/// The title: the machine on screen, its address, and "Prod".
-pub(crate) fn title(s: &Shell, t: &'static Theme, active: bool) -> El {
+/// What the title says: the machine's name, "Prod", and the address it may show after them
+/// (none in streamer mode or for this computer).
+fn parts(s: &Shell) -> (std::borrow::Cow<'_, str>, bool, Option<String>) {
     let (name, prod) = s.bench.window_title();
     let key = s.bench.current_key();
     let name = s.server_shown(key.unwrap_or("local"), name);
-    // Its address after its name, quieter; none in streamer mode, for this computer, or while
-    // the row of tabs is crowded (the tabs need the room more).
-    let address = key.and_then(|k| s.bench.server(k)).filter(|sv| !sv.is_local() && !s.streaming() && !s.row.crowded()).map(|sv| sv.address.clone()).filter(|a| !a.is_empty());
+    let address = key.and_then(|k| s.bench.server(k)).filter(|sv| !sv.is_local() && !s.streaming()).map(|sv| sv.address.clone()).filter(|a| !a.is_empty());
+    (name, prod, address)
+}
+
+/// How wide the title is without its address, its margins counted, and how much its address
+/// adds, when it has one: for sharing the bar with the tabs (`tabs::fit`).
+pub(crate) fn widths(s: &Shell) -> (f32, Option<f32>) {
+    let (name, prod, address) = parts(s);
+    let mut w = 2.0 + 10.0 + 12.0 + rune::text::advance(&name, theme::TEXT_BOLD);
+    if prod {
+        w += 8.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
+    }
+    (w, address.map(|a| 8.0 + rune::text::advance(&a, theme::TAB_SERVER)))
+}
+
+/// The title: the machine on screen, its address, and "Prod". `with_address`: there's room
+/// for the address, the tabs taken care of first (`tabs::fit`).
+pub(crate) fn title(s: &Shell, t: &'static Theme, active: bool, with_address: bool) -> El {
+    let key = s.bench.current_key();
+    // Its address after its name, quieter, while the row of tabs has room to spare.
+    let (name, prod, address) = parts(s);
+    let address = address.filter(|_| with_address);
     let help = match key {
         Some(_) => "New terminal, Files, copy the address".to_owned(),
         None => s.text_shown(&sshee_app::palette::placeholder(&s.bench)).into_owned(),

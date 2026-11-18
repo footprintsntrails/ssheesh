@@ -568,3 +568,6 @@ mod more;
 
 /// Toasts and confirmations.
 mod notes;
+
+/// The top bar's title and tabs sharing their room, the status bar, the sidebar's tooltips.
+mod chrome;
