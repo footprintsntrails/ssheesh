@@ -419,7 +419,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> Option<El> {
 
     let surface = popover(t, WIDTH)
         .key("palette")
-        .label_static("Command palette")
+        .label_static("Command bar")
         .max_h(520.0)
         .modal_tx(true, |s: &mut Shell, tx| s.close_palette(tx))
         .child(field)

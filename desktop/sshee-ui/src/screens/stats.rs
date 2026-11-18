@@ -9,7 +9,7 @@
 //! ├── table      CPU       38%           ╱╲__╱╲___╱‾‾╲_____
 //! │              Memory    60%           ███████████░░░░░░░
 //! │              …
-//! │              stats-disk-tools: "Free up space…" under the disks (a server's)
+//! │              stats-disk-tools: "Free up disk space" under the disks (a server's)
 //! ├── about      web-7731, Linux 6.8.0, up 37 d 5 h
 //! └── programs   Busiest programs: name, CPU, memory
 //! ```
@@ -236,7 +236,7 @@ pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
         let there = server.clone();
         table = table.child(
             row().key("stats-disk-tools").w_full().py(10.0).pl(16.0 + LABEL_W + 16.0).pr(16.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair2).child(
-                push_button(t, "Free up space…", Push::Quiet, true)
+                push_button(t, "Free up disk space", Push::Quiet, true)
                     .key("stats-free-space")
                     .help("What takes up the disks, and what's safe to clean up")
                     .on_press_tx(move |s: &mut Shell, tx| s.open_disk(&there, tx)),

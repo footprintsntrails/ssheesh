@@ -23,8 +23,9 @@ pub struct Tile<'a> {
     /// its icon in its own colour.
     pub glyph: Option<El>,
     pub name: &'a str,
-    /// A label under the name, and whether it's the red one ("Prod"); the others are quiet.
-    pub label: Option<(&'a str, bool)>,
+    /// A label under the name, in its colour (`kit::chip::env_color`): "Prod" red, "Staging"
+    /// amber, as the sidebar, the title and a split's header draw it.
+    pub label: Option<(&'a str, Color)>,
     /// A faint wash of the server's own colour over the square.
     pub tint: Option<Color>,
     /// The key that opens it, in a cap at the tile's corner.
@@ -92,8 +93,8 @@ pub fn tile(t: &Theme, spec: Tile) -> El {
         .label(spec.name)
         .child(square)
         .child(name);
-    if let Some((label, red)) = spec.label {
-        e = e.child(chip(t, label, if red { t.red } else { t.l2 }).key("env").mt(-3.0));
+    if let Some((label, color)) = spec.label {
+        e = e.child(chip(t, label, color).key("env").mt(-3.0));
     }
     if let Some(key) = spec.key {
         e = e.child(key_cap(t, key, false).key("key").absolute(7.0, 7.0));

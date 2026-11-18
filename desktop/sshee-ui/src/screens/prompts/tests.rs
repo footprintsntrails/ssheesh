@@ -342,6 +342,8 @@ fn an_empty_terminal_says_where_it_connects_until_the_shell_prints() {
     assert!(w.rt.find("connect-screen").is_some());
     let tree = w.tree();
     assert!(tree.contains("Connecting to web-7731…") && tree.contains("Through Tor"), "{tree}");
+    // No cursor in the empty terminal under it: nothing is there to type into yet.
+    assert!(w.rt.find("cursor").is_none(), "a cursor under \"Connecting to\"");
     // In: tmux starts on the server, and it says so until the shell draws.
     w.session(0).lock().unwrap().phase = None;
     w.status(0, LinkStatus::Connected { durable: true });
@@ -350,6 +352,7 @@ fn an_empty_terminal_says_where_it_connects_until_the_shell_prints() {
     w.print(0, b"deploy@web-7731:~$ ");
     assert!(w.rt.find("connect-screen").is_none(), "gone the moment the shell prints");
     assert!(!w.tree().contains("Connecting to"));
+    assert!(w.rt.find("cursor").is_some(), "the cursor comes with the shell");
 }
 
 #[test]

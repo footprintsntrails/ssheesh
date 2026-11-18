@@ -703,7 +703,7 @@ fn form_page(s: &Shell, state: &State, t: &Theme) -> El {
                 col()
                     .gap(4.0)
                     .w(76.0)
-                    .child(row().gap(2.0).items_center().child(text("Port").font(theme::SMALL).color(t.l2).single_line().a11y_hidden()).child(super::help::tip(s, t, "add-port-about", "the port", super::help::PORT)))
+                    .child(row().gap(2.0).items_center().child(text("Port").font(theme::SMALL).color(t.l2).single_line().a11y_hidden()).child(super::help::tip(s, t, "add-port-about", "the port", super::help::PORT).my(-3.0)))
                     .child(field(t, port, bad_port)),
             )
             .child(labelled(t, "User", field(t, user, false)).w(120.0)),

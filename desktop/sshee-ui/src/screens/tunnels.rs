@@ -285,7 +285,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
                 .shrink()
                 .min_w(0.0)
                 .gap(1.0)
-                .child(text("Tunnels").font(theme::TITLE).color(t.l1).single_line().role("heading").level(1))
+                .child(text("Web apps and tunnels").font(theme::TITLE).color(t.l1).single_line().role("heading").level(1))
                 .child(text(name).key("tunnels-sub").font(theme::NOTE).color(t.l2).single_line().truncate()),
         );
     let loading = st.tunnels.scans.get(&host).is_some_and(|l| l.loading);
@@ -373,7 +373,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(push_button(t, "Done", Push::Quiet, true).key("tunnels-done").on_press_tx(|s: &mut Shell, tx| s.close_tunnels(tx)));
     let dialog = popover(t, WIDTH)
         .key("tunnels-dialog")
-        .label_static("Tunnels")
+        .label_static("Web apps and tunnels")
         .max_h(640.0)
         .focusable(true)
         .no_focus_ring()
@@ -487,7 +487,7 @@ fn app_row(s: &Shell, t: &'static Theme, host: &str, app: &WebApp, key: &str) ->
         .gap(1.0)
         .child(text(name.clone()).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate())
         .child(text(s.text_shown(&app_facts(app)).into_owned()).font(theme::SMALL).color(t.l2).single_line().truncate());
-    let mut line = row().w_full().gap(10.0).items_center().child(icon(if app.web { Icon::Globe } else { Icon::Link }, 15.0, if app.web { t.blue } else { t.l2 })).child(about);
+    let mut line = row().w_full().gap(10.0).items_center().child(icon(if app.web { Icon::Globe } else { Icon::Link }, 15.0, t.l2on)).child(about);
     let mut buttons = row().gap(4.0).items_center();
     match (&to, active) {
         (Some(to), true) => {
@@ -521,7 +521,9 @@ fn app_row(s: &Shell, t: &'static Theme, host: &str, app: &WebApp, key: &str) ->
         _ => {
             let open = app.clone();
             let (label, kind, help) = if app.web {
-                ("Open", Push::Primary, format!("Opens the server's port {} in your browser", app.port))
+                // Quiet, as Connect is: a list of blue buttons would shout, and none is the
+                // dialog's one way on.
+                ("Open", Push::Quiet, format!("Opens the server's port {} in your browser", app.port))
             } else {
                 ("Connect", Push::Quiet, format!("Makes the server's port {} work on this computer, at localhost", app.port))
             };

@@ -258,14 +258,16 @@ pub(crate) fn body(key: &'static str) -> El {
 /// A dialog's content: `head` (its title and close button) stays at the top while `body` (a
 /// [`body`], whose gap is `gap`) scrolls under it. A line under the head marks where the body
 /// goes under it, and the body ends with room under its last card: a scroll's own bottom
-/// padding isn't scrolled to.
+/// padding isn't scrolled to. That room (the gap and `dialog-end`) is the body's bottom
+/// padding, so a body that doesn't scroll ends the same 20 points under its buttons as its
+/// sides, not twice that.
 pub(crate) fn headed(t: &Theme, head: El, body: El, gap: f32) -> El {
     col()
         .w_full()
         .shrink()
         .min_h(0.0)
         .child(col().w_full().px(20.0).pt(18.0).pb(14.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair).child(head))
-        .child(body.pt(gap).child(el().key("dialog-end").w_full().h(6.0).a11y_hidden()))
+        .child(body.pt(gap).pb(0.0).child(el().key("dialog-end").w_full().h((20.0 - gap).max(0.0)).a11y_hidden()))
 }
 
 /// The question a fix asks before it runs: inside its card, so the command it is about stays

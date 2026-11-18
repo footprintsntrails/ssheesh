@@ -10,6 +10,9 @@ use crate::kit::dot;
 use crate::kit::menu::{key_cap, RowState};
 use crate::theme::{self, Theme};
 
+/// How much of a row's name stays whole while its note shrinks beside it.
+const LABEL_KEPT: f32 = 220.0;
+
 /// What a row shows.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListRow<'a> {
@@ -66,7 +69,13 @@ pub fn list_row(t: &Theme, spec: &ListRow) -> El {
         };
         row = row.child(icon(glyph, theme::ICON, ink));
     }
-    let label = text(spec.label).key("label").font(if spec.mono { theme::CODE } else { theme::TEXT }).color(ink).single_line().truncate().shrink();
+    let font = if spec.mono { theme::CODE } else { theme::TEXT };
+    let mut label = text(spec.label).key("label").font(font).color(ink).single_line().truncate().shrink();
+    if !spec.note.is_empty() {
+        // The note gives way first: a name is cut only once the note is gone, so "Restart a
+        // service" never ends in "…" beside a whole command.
+        label = label.min_w(rune::text::advance(spec.label, font).min(LABEL_KEPT));
+    }
     row = row.child(label);
     if !spec.note.is_empty() {
         row = row.child(text(spec.note).key("note").font(theme::NOTE).color(quiet).single_line().truncate().shrink().min_w(0.0));

@@ -401,7 +401,7 @@ fn leftovers(s: &Shell, t: &'static Theme) -> El {
                     }
                     tx.instant();
                 }))
-                .child(push_button(t, "Upload", Push::Quiet, true).key("leftovers-upload").default_button().on_press_tx(|s: &mut Shell, tx| {
+                .child(push_button(t, "Upload", Push::Primary, true).key("leftovers-upload").default_button().on_press_tx(|s: &mut Shell, tx| {
                     for l in s.screens.edits.leftovers_done() {
                         ask(s, EditAsk::ResumeLeftover { id: l.id, host: l.host });
                     }

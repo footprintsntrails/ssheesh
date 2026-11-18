@@ -344,8 +344,8 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
         // The picked section is a quiet fill, not the accent blue, and it differs from the rest.
         assert_ne!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
         assert_ne!(run.fill("nav-layout"), run.fill("nav-terminal"), "{theme}");
-        // Rows with their words and controls; one that comes later says so.
-        for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Tabs run along the top. Tabs under each server aren't built yet.", "Search"] {
+        // Rows with their words and controls.
+        for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Where tabs go", "Under each server", "Search"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
         // The picture: the page's colour, a box of rows on it, the picked section's quiet fill, and
@@ -926,6 +926,8 @@ fn files_lists_opens_and_asks_in_both_appearances() {
         let Some(run) = run(&format!("files-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
         assert_eq!(run.rect("files-toolbar"), [52.0, 44.0, 1228.0, 40.0], "{theme}");
         assert_eq!(run.rect("files-status")[3], 24.0, "{theme}");
+        // "Name" stands over the names: a row's padding, its icon (18 pt) and the gap after it.
+        assert_eq!(run.rect("sort-name")[0], run.rect("row-0")[0] + 10.0 + 18.0 + 8.0, "{theme}");
         for said in ["Folder path", "backups", "logs", "shop", "deploy.sh", "nginx.conf", "README.md", "8 items, 4 hidden", "1 selected, 256 B", "Today 11:02", "Oct 10", "Bookmarks: go to a place", "Upload files"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
@@ -1549,7 +1551,7 @@ fn stats_has_graphs_meters_and_programs_in_both_appearances() {
             "Network",
             "November: ↓ 96 GB  ↑ 31 GB",
             "/srv/shop: 211 GB of 500 GB",
-            "Free up space…",
+            "Free up disk space",
             "web-7731, Linux 6.8.0-45-generic, up 37 d 5 h",
             "Busiest programs",
             "node",
