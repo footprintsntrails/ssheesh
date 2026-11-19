@@ -84,7 +84,7 @@ fn end(t: f64) -> Value {
 #[test]
 fn the_onion_opens_tor_beside_the_sidebar_in_both_appearances() {
     for theme in ["dark", "light"] {
-        let Some(run) = run(&format!("tor-on-{theme}"), theme, json!([{ "t": 0.3, "type": "tap", "key": "tor", "button": "secondary" }, end(1.0)])) else { return };
+        let Some(run) = run(&format!("tor-on-{theme}"), theme, json!([tap(0.3, "tor"), end(1.0)])) else { return };
         assert!(run.says("Tor is on") && run.says("84 ms round trip"), "{theme}: {}", run.tree_text);
         // "Tor 84 ms" in the status bar, as the design has it.
         assert!(run.element("tor-time").is_some(), "{theme}");
@@ -101,9 +101,29 @@ fn the_onion_opens_tor_beside_the_sidebar_in_both_appearances() {
 }
 
 #[test]
+fn a_secondary_click_opens_tor_too() {
+    let Some(run) = run("tor-secondary-dark", "dark", json!([{ "t": 0.3, "type": "tap", "key": "tor", "button": "secondary" }, end(1.0)])) else { return };
+    assert!(run.element("tor-panel").is_some() && run.says("Tor is on"), "{}", run.tree_text);
+}
+
+/// The demo has terminals, Files and a tunnel on servers: switched off, Tor asks first.
+#[test]
+fn switching_tor_off_with_servers_open_asks_first_in_both_appearances() {
+    for theme in ["dark", "light"] {
+        let Some(run) = run(&format!("tor-ask-{theme}"), theme, json!([tap(0.3, "tor"), tap(0.6, "tor-switch"), end(1.2)])) else { return };
+        assert!(run.element("dialog").is_some() && run.element("tor-panel").is_none(), "{theme}: {}", run.tree_text);
+        assert!(run.says("Reconnect without Tor?") && run.says("will reconnect directly, and those servers will see your own address"), "{theme}: {}", run.tree_text);
+        // Nothing switched yet.
+        assert!(run.element("tor-time").is_some(), "{theme}");
+    }
+}
+
+#[test]
 fn switched_off_tor_says_so_and_the_status_bar_lets_go() {
-    let Some(run) = run("tor-off-dark", "dark", json!([tap(0.3, "tor"), { "t": 0.6, "type": "tap", "key": "tor", "button": "secondary" }, end(1.2)])) else { return };
+    let script = json!([tap(0.3, "tor"), tap(0.6, "tor-switch"), tap(1.0, "dialog-yes"), tap(1.4, "tor"), end(2.0)]);
+    let Some(run) = run("tor-off-dark", "dark", script) else { return };
     assert!(run.says("Tor is off") && run.says("your own address"), "{}", run.tree_text);
+    assert!(run.element("dialog").is_none() && run.element("tor-panel").is_some());
     assert!(run.element("tor-time").is_none() && run.element("tor-log").is_none());
 }
 

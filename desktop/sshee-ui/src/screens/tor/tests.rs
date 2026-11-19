@@ -176,15 +176,18 @@ impl Window {
 fn the_onion_opens_tor_and_its_switch_starts_it() {
     let mut w = Window::open();
     assert!(!w.has("tor-panel"));
-    // A right click opens the popover alone.
+    // A right click opens the popover.
     w.right_click("tor");
     assert!(w.has("tor-panel") && w.tree().contains("Tor is off"));
     // The log is read as it opens; off, it isn't shown.
     assert_eq!(w.told.lock().unwrap().logs, 1);
     assert!(!w.has("tor-log"));
     w.key(Key::Escape);
-    // A click turns Tor on, as 0.10's button did, and opens the popover to watch the start.
+    // A click opens it too, and turns nothing on: its switch does, and it stays open to
+    // watch the start.
     w.click("tor");
+    assert!(w.has("tor-panel") && w.told.lock().unwrap().tor.is_empty());
+    w.click("tor-switch");
     assert_eq!(w.told.lock().unwrap().tor, [TorCommand::On]);
     assert!(w.has("tor-panel"));
 
@@ -357,6 +360,7 @@ fn tor_says_what_it_did_in_toasts() {
     let titles = |w: &Window| w.rt.state.screens.notes.titles().iter().map(|t| t.to_string()).collect::<Vec<_>>();
     // Turned on: said once it is.
     w.click("tor");
+    w.click("tor-switch");
     w.backend(|r| r.tor_status(Status::Starting { percent: 20, note: None }));
     assert!(titles(&w).is_empty());
     w.backend(|r| r.tor_status(Status::On));
@@ -427,4 +431,127 @@ fn the_list_from_last_time_arrives_with_its_states() {
     assert!(w.tree().contains("Grafana") && w.tree().contains("Port 3000 on this computer is already in use."));
     w.click("tunnel-a-retry");
     assert!(matches!(w.told.lock().unwrap().tunnels.last(), Some(TunnelAsk::Start { id, .. }) if id == "a"));
+}
+
+#[test]
+fn a_click_or_space_on_the_onion_opens_tor_and_switches_nothing() {
+    let mut w = Window::open();
+    w.click("tor");
+    assert!(w.has("tor-panel"));
+    // A second click closes it.
+    w.click("tor");
+    assert!(!w.has("tor-panel"));
+    // From the keyboard: Space on the onion, as on every button (Return is the default
+    // button's, as on a Mac: the window doesn't use `Cx::web_focus`).
+    w.rt.update(|_, tx| tx.focus("tor", true));
+    w.settle();
+    w.key(Key::Text(" ".into()));
+    assert!(w.has("tor-panel"));
+    w.key(Key::Escape);
+    assert!(!w.has("tor-panel"));
+    assert!(w.told.lock().unwrap().tor.is_empty());
+    assert!(crate::screens::tor::button_help(&w.rt.state).starts_with("Tor: off. Click"));
+}
+
+/// Tor on, with a terminal and Files open on web-7731.
+fn on_with_tabs_open() -> Window {
+    let mut w = Window::open();
+    w.click("server-1");
+    w.rt.update(|s, _| {
+        s.bench.open(sshee_app::workbench::TabKind::Files, "host:web");
+    });
+    w.backend(|r| r.tor_status(Status::On));
+    w
+}
+
+#[test]
+fn turning_tor_off_with_tabs_open_on_servers_asks_first() {
+    let mut w = on_with_tabs_open();
+    let links = |w: &Window| w.rt.state.bench.tabs().iter().map(|t| t.link).collect::<Vec<_>>();
+    let before = links(&w);
+    w.click("tor");
+    w.click("tor-switch");
+    // Asked, in the popover's place; nothing switched, nothing reconnected.
+    let q = w.rt.state.screens.notes.question().cloned().expect("a question");
+    assert_eq!(q.title, "Reconnect without Tor?");
+    assert_eq!(q.body, "1 terminal and 1 Files tab on servers will reconnect directly, and those servers will see your own address instead of a Tor one.");
+    assert_eq!(q.yes, "Reconnect without Tor");
+    assert!(q.destructive && q.safe_default, "red, and Return means Cancel");
+    assert!(w.has("dialog") && !w.has("tor-panel"));
+    assert!(w.told.lock().unwrap().tor.is_empty());
+    assert_eq!(links(&w), before);
+
+    // Return is Cancel: Tor stays on.
+    w.key(Key::Enter);
+    assert!(!w.has("dialog"));
+    assert!(w.told.lock().unwrap().tor.is_empty());
+    assert_eq!(w.rt.state.bench.tor(), Tor::On { latency_ms: None });
+    // Esc too.
+    w.click("tor");
+    w.click("tor-switch");
+    w.key(Key::Escape);
+    assert!(!w.has("dialog") && w.told.lock().unwrap().tor.is_empty());
+
+    // The yes turns it off.
+    w.click("tor");
+    w.click("tor-switch");
+    w.click("dialog-yes");
+    assert!(!w.has("dialog"));
+    assert_eq!(w.told.lock().unwrap().tor, [TorCommand::Off]);
+}
+
+#[test]
+fn settings_and_the_palette_ask_the_same_question() {
+    let mut w = on_with_tabs_open();
+    w.rt.update(|s, tx| s.switch_tor(tx));
+    w.settle();
+    assert_eq!(w.rt.state.screens.notes.question().map(|q| q.title.as_str()), Some("Reconnect without Tor?"));
+    w.click("dialog-no");
+    assert!(w.told.lock().unwrap().tor.is_empty());
+}
+
+#[test]
+fn turning_tor_off_with_nothing_going_through_it_doesnt_ask() {
+    let mut w = Window::open();
+    // This computer's terminal doesn't go through Tor.
+    w.click("server-0");
+    w.backend(|r| r.tor_status(Status::On));
+    w.click("tor");
+    w.click("tor-switch");
+    assert!(w.rt.state.screens.notes.question().is_none());
+    assert_eq!(w.told.lock().unwrap().tor, [TorCommand::Off]);
+
+    // Nor does a server's terminal that already goes around it.
+    let mut w = Window::open();
+    w.click("server-1");
+    let tab = w.rt.state.bench.active_id().unwrap();
+    w.backend(move |r| {
+        r.tor_status(Status::On);
+        r.through_tor(tab, false);
+    });
+    w.rt.update(|s, tx| s.switch_tor(tx));
+    w.settle();
+    assert!(w.rt.state.screens.notes.question().is_none());
+    assert_eq!(w.told.lock().unwrap().tor, [TorCommand::Off]);
+}
+
+#[test]
+fn turning_tor_on_with_tabs_open_doesnt_ask() {
+    let mut w = Window::open();
+    w.click("server-1");
+    w.click("tor");
+    w.click("tor-switch");
+    assert!(w.rt.state.screens.notes.question().is_none());
+    assert_eq!(w.told.lock().unwrap().tor, [TorCommand::On]);
+}
+
+#[test]
+fn what_goes_through_tor_is_said_in_words() {
+    use crate::screens::tor::Through;
+    let through = |terminals, files, other_tabs, tunnels| Through { terminals, files, other_tabs, tunnels }.words();
+    assert_eq!(through(2, 0, 0, 0), "2 terminals");
+    assert_eq!(through(1, 1, 0, 0), "1 terminal and 1 Files tab");
+    assert_eq!(through(3, 2, 1, 1), "3 terminals, 2 Files tabs, 1 other tab and 1 tunnel");
+    assert_eq!(through(0, 0, 0, 2), "2 tunnels");
+    assert!(Through::default().is_empty());
 }

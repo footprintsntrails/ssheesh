@@ -134,8 +134,8 @@ impl Shell {
         }
     }
 
-    /// A button of the sidebar's foot, from the top row. Settings opens or closes; Tor goes on
-    /// or off as the sidebar's onion does (`Shell::tor_button`). The security check has no
+    /// A button of the sidebar's foot, from the top row. Settings opens or closes; Tor's
+    /// popover opens as the sidebar's onion does (`Shell::tor_button`). The security check has no
     /// screen yet: the button is drawn, as the sidebar's is, and does what the sidebar's does
     /// once that lands.
     pub fn foot_tool(&mut self, tool: FootTool, tx: &mut Tx) {
