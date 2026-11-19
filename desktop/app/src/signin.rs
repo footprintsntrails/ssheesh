@@ -35,6 +35,37 @@ use sshee_core::secrets::{answers, PasswordFor, Secret};
 /// The longest prompt line kept while connecting; ssh's are far shorter.
 const LINE_MAX: usize = 512;
 
+/// A line OpenSSH itself prints while it signs in (`line` without escapes, trimmed and in
+/// lower case), matched whole as OpenSSH words it, never by how it starts: a banner or a
+/// login script printing "Warning: …" is other output, not ssh's.
+fn ssh_own_line(line: &str) -> bool {
+    const EXACT: [&str; 4] = [
+        // sshconnect2.c, after a wrong password.
+        "permission denied, please try again.",
+        // sshconnect2.c (OpenSSH 10.1), when the server offers no post-quantum key exchange.
+        "** warning: connection is not using a post-quantum key exchange algorithm.",
+        "** this session may be vulnerable to \"store now, decrypt later\" attacks.",
+        "** the server may need to be upgraded. see https://openssh.com/pq.html",
+    ];
+    if EXACT.contains(&line) {
+        return true;
+    }
+    let plain = |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_control() || c.is_whitespace() || c == '\'');
+    let word = |s: &str, more: &[char]| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || more.contains(&c));
+    // sshconnect.c: "Warning: Permanently added '<host>' (<key type>) to the list of known hosts."
+    let added = line
+        .strip_prefix("warning: permanently added '")
+        .and_then(|r| r.strip_suffix(") to the list of known hosts."))
+        .and_then(|r| r.split_once("' ("))
+        .is_some_and(|(host, kind)| plain(host) && word(kind, &['-']));
+    // sshconnect2.c, as the last try fails: "<who>: Permission denied (publickey,password).",
+    // from an older ssh without "<who>: ".
+    let denied = line.strip_suffix(").").and_then(|r| r.split_once("permission denied (")).is_some_and(|(who, methods)| {
+        (who.is_empty() || who.strip_suffix(": ").is_some_and(plain)) && word(methods, &[',', '-', '@', '.'])
+    });
+    added || denied
+}
+
 /// One terminal's sign-in, from its session's start to the shell being up.
 #[derive(Default)]
 pub struct Watch {
@@ -113,12 +144,12 @@ impl Watch {
     }
 
     /// The line the cursor is on, as it ends, is one ssh itself prints while it signs in:
-    /// nothing, this server's password prompt (answered, or asked again), "Permission
-    /// denied", or one of its warnings (a host added to known_hosts, "** WARNING: connection
-    /// is not using a post-quantum key exchange", ...).
+    /// nothing, this server's password prompt (answered, or asked again), or one of ssh's own
+    /// lines worded word for word as ssh words them ([`ssh_own_line`]: a host added to
+    /// known_hosts, "Permission denied, please try again.", the post-quantum warning).
     fn is_ssh_line(&self) -> bool {
         let t = sshee_core::strip_ansi(&self.line).trim().to_lowercase();
-        t.is_empty() || self.asks_strictly() || t.starts_with("permission denied") || t.starts_with("warning:") || t.starts_with("** ")
+        t.is_empty() || self.asks_strictly() || ssh_own_line(&t)
     }
 
     /// For the window's offer to save the password: ssh asks, on the line it is on now, for
@@ -369,6 +400,37 @@ mod tests {
         // A line far longer than ssh's.
         let long = format!("{}\r\ndeploy@203.0.113.17's password: ", "x".repeat(LINE_MAX + 1));
         assert_eq!(offered(target(), &[&long]), None);
+    }
+
+    #[test]
+    fn only_ssh_own_warnings_word_for_word_still_offer_the_strip() {
+        let prompt = "deploy@203.0.113.17's password: ";
+        // What ssh prints before the prompt: the strip is still offered.
+        for line in [
+            "Warning: Permanently added '203.0.113.17' (ED25519) to the list of known hosts.",
+            "Warning: Permanently added '[web-7731.example.net]:2222' (ECDSA) to the list of known hosts.",
+            "** WARNING: connection is not using a post-quantum key exchange algorithm.\r\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\r\n** The server may need to be upgraded. See https://openssh.com/pq.html",
+            "\x1b[1mWarning: Permanently added '203.0.113.17' (RSA) to the list of known hosts.\x1b[0m",
+        ] {
+            assert_eq!(offered(target(), &[&format!("{line}\r\n"), prompt]), Some(1), "{line}");
+        }
+        // A banner or a login script printing what only starts like ssh's lines, then a
+        // perfect prompt: that isn't ssh asking.
+        for line in [
+            "Warning: x",
+            "Warning: this server is monitored",
+            "** Welcome **",
+            "** WARNING: connection is not using a post-quantum key exchange algorithm. Sign in below",
+            "Warning: Permanently added 'a b' (ED25519) to the list of known hosts.",
+            "Warning: Permanently added '203.0.113.17' (ED25519) to the list of known hosts. Sign in again",
+            "Permission denied: type your password again",
+            "deploy@203.0.113.17: Permission denied (sign in again below).",
+        ] {
+            assert_eq!(offered(target(), &[&format!("{line}\r\n"), prompt]), None, "{line}");
+        }
+        // ssh's own last refusal, whole.
+        assert!(ssh_own_line("deploy@203.0.113.17: permission denied (publickey,password)."));
+        assert!(ssh_own_line("permission denied (publickey,keyboard-interactive)."));
     }
 
     #[test]
