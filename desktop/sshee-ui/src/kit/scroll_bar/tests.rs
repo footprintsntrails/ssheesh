@@ -201,9 +201,13 @@ mod window {
         assert_eq!(first_row(&rt), 0);
         // At rest, out of the way: nothing drawn, nothing to press.
         assert!(thumb(&rt).1 < 0.01, "the bar shows at rest");
-        // The pointer over the list brings it up: a thumb as long as the share in view, against
-        // the right edge, at the top.
+        // Over the middle of the list it stays out of the way, as a Mac's does.
         rt.pointer_move(x + w / 2.0, y + h / 2.0);
+        settle(&mut rt);
+        assert!(thumb(&rt).1 < 0.01, "the bar shows for the pointer over the middle of the list");
+        // Coming to the edge brings it up: a thumb as long as the share in view, against the
+        // right edge, at the top.
+        rt.pointer_move(x + w - 6.0, y + h / 2.0);
         settle(&mut rt);
         let (r, opacity) = thumb(&rt);
         assert!(opacity > 0.99, "no bar under the pointer: {opacity}");
@@ -286,10 +290,14 @@ mod window {
         settle(&mut rt);
         assert_eq!(rt.state.0, [3], "the press didn't reach the row");
         assert_eq!(top(&rt), at_rest, "the press paged the list");
-        // Shown by the pointer and faded after it left: the same, a faded bar takes nothing.
-        rt.pointer_move(x + w / 2.0, py);
+        // The pointer over the row, short of the edge, leaves it hidden: a press there is the row's.
+        rt.pointer_move(x + w - 40.0, py);
         settle(&mut rt);
-        assert!(thumb(&rt).1 > 0.99, "the pointer over the list didn't bring the bar up");
+        assert!(thumb(&rt).1 < 0.01, "the bar came up for a pointer short of the edge");
+        // Shown by the pointer at the edge and faded after it left: a faded bar takes nothing.
+        rt.pointer_move(x + w - 6.0, py);
+        settle(&mut rt);
+        assert!(thumb(&rt).1 > 0.99, "the pointer at the edge didn't bring the bar up");
         rt.pointer_move(x + w + 100.0, py);
         settle(&mut rt);
         assert!(thumb(&rt).1 < 0.01, "the bar stays after the pointer left");

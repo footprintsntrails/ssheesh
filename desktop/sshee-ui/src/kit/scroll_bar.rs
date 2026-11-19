@@ -36,6 +36,8 @@ use visibility::{BarState, Event as BarEvent, Follow, Opacity};
 
 /// The strip along the edge that takes presses (and widens the thumb under the pointer).
 pub const STRIP: f32 = 12.0;
+/// How close to the edge a bar runs along the pointer must come for it to show.
+const REVEAL: f32 = 2.0 * STRIP;
 /// The thumb's gap from the viewport's edge.
 const EDGE: f32 = 3.0;
 /// The thumb across, at rest and under the pointer: the terminal's.
@@ -378,7 +380,15 @@ impl Bar {
         let at = self.pos.get();
         let (len, shows) = track_len(at, self.axis);
         let a = self.axis.along();
-        let near = shows && p.is_some();
+        // Shown only as the pointer comes to the edge it runs along (as a Mac's do), never just
+        // for being over the list: a shown bar takes presses in its strip, which would take a
+        // row's own button at its end.
+        let near = shows
+            && p.is_some_and(|p| {
+                let across = if self.axis.x { p.y } else { p.x };
+                let edge = at.viewport[1 - a];
+                (edge - REVEAL..=edge).contains(&across)
+            });
         let over = near
             && p.is_some_and(|p| {
                 let (across, along) = if self.axis.x { (p.y, p.x) } else { (p.x, p.y) };
