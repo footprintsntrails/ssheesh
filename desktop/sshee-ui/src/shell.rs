@@ -36,9 +36,11 @@ pub use desktop::{WindowAsk, WindowControl};
 pub use notes::{Confirm, Toast, ToastId};
 pub use state::{Backend, Options, Post, Remote, Shell};
 
-/// The window's title (taskbar, window list). Never a server's name: window lists and Rune's
-/// traces carry it.
+/// The window's title (taskbar, window list) for test builds. Never a server's name: window
+/// lists and Rune's traces carry it.
 pub const TITLE: &str = "SSHeesh Preview";
+/// The released 1.x's title: SSHeesh, as 0.10.
+pub const RELEASE_TITLE: &str = "SSHeesh";
 
 /// The window's first size, the design's.
 pub const SIZE: (f32, f32) = (1280.0, 800.0);
@@ -85,7 +87,7 @@ fn window_app(options: &mut Options) -> App<Shell> {
         setup: Some(|s, waker| s.set_waker(waker)),
         poll: Some(|s, clock, tx| s.poll(clock, tx)),
         on_key: Some(|s, ev, tx| s.key(ev, tx)),
-        ..AppSpec::new(TITLE, SIZE, blank, view::view)
+        ..AppSpec::new(if options.build.release { RELEASE_TITLE } else { TITLE }, SIZE, blank, view::view)
     };
     // The top row is the title bar: macOS keeps its traffic lights over its start, Windows
     // gets Rune's minimize, maximize and close at its end, Linux keeps the system's frame.

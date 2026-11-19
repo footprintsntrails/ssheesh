@@ -279,6 +279,13 @@ impl Updater {
         if !still_staged(&places, &staged) {
             return Err("the new build changed after it was checked".into());
         }
+        // Windows, installed: the new build is started as the installer of the update, as
+        // 0.10's updater starts it (`setup.rs`); it waits for this one to close, takes its
+        // place, updates "Installed apps" and starts.
+        if crate::setup::installed_dir().is_some() {
+            return crate::setup::start_update(&places.new);
+        }
+        let _ = std::fs::create_dir_all(&folder).and_then(|_| std::fs::write(folder.join(OWN_OLD), b""));
         swap::install(&places, &staged.sha256)?;
         let mut helper = Command::new(&places.old);
         helper.arg(WATCH_FLAG).arg(&places.exe).arg(&staged.token).arg("--").args(std::env::args_os().skip(1));
@@ -300,6 +307,7 @@ impl Updater {
 /// Clears what an update left: the build from before, a write cut off, markers, and a staged
 /// build that's no longer for this one (version `own`; `None` for a copy that doesn't update).
 fn tidy(folder: &Path, places: &Places, own: Option<&str>) {
+    keep_0_10(folder, places, std::time::SystemTime::now());
     let keep = staged(folder).is_some_and(|s| own.is_some_and(|own| s.fits(own)) && !failed(folder).contains(&s.token));
     swap::clean(places, keep);
     if !keep {
@@ -428,18 +436,72 @@ fn look(folder: &Path, places: &Places, build: &Build, channel: Channel, act: Ac
     if !swap::writable(places) {
         return by_hand(ByHand::Folder);
     }
+    // A Mac app updates as a whole: its signature covers the bundle, and a new program inside
+    // the old one would break it (and the Keychain's trust with it). Until 1.x swaps whole
+    // bundles as 0.10's updater does, the line offers the download.
+    if in_app_bundle(&places.exe) {
+        return by_hand(ByHand::Failed("A Mac app is replaced as a whole: download the new version and put it in Applications.".into()));
+    }
     let archive = http::get(&found.asset.url, found.asset.size, route)?;
     if let Err(refused) = verify::check_with(&archive, &found.asset, found.key, &found.parts) {
         eprintln!("ssheesh-preview: {version} wasn't installed: {refused}");
         return by_hand(ByHand::Mismatch);
     }
-    let program = archive::program(&archive, platform.packing(), platform.program())?;
+    let name = if channel == Channel::Canary { platform.program() } else { platform.release_program() };
+    let program = archive::program(&archive, platform.packing(), name)?;
     drop(archive);
     if let Err(e) = swap::stage(places, &program) {
         return by_hand(ByHand::Failed(e.to_string()));
     }
     save_staged(folder, &Staged { token: found.token.clone(), version: version.clone(), sha256: verify::sha256_hex(&program), replaces: found.replaces.clone() }).map_err(|e| e.to_string())?;
     Ok(Some(ready(version)))
+}
+
+/// Whether `exe` runs from inside a macOS app bundle (`….app/Contents/MacOS/<program>`).
+fn in_app_bundle(exe: &Path) -> bool {
+    let mut up = exe.ancestors().skip(1);
+    matches!((up.next(), up.next(), up.next()), (Some(macos), Some(contents), Some(app))
+        if macos.file_name().is_some_and(|n| n == "MacOS") && contents.file_name().is_some_and(|n| n == "Contents") && app.extension().is_some_and(|e| e == "app"))
+}
+
+/// Marks the build from before (`<name>.old`) as this updater's own, set aside by "Restart
+/// to update": the next start clears it. Without the mark, a `<name>.old.exe` beside a portable
+/// copy is 0.10's, left by 0.10's own portable update when it swapped 1.x in.
+const OWN_OLD: &str = "old-is-ours";
+/// 0.10's portable copy, kept for going back (plan §6.3), and since when.
+const PREVIOUS_SINCE: &str = "previous-since";
+const KEEP_PREVIOUS: Duration = Duration::from_secs(30 * 24 * 3600);
+
+/// "SSHeesh.exe" → "SSHeesh.previous.exe".
+fn previous_portable(places: &Places) -> PathBuf {
+    let stem = places.exe.file_stem().unwrap_or_default().to_string_lossy();
+    match places.exe.extension() {
+        Some(ext) => places.exe.with_file_name(format!("{stem}.previous.{}", ext.to_string_lossy())),
+        None => places.exe.with_file_name(format!("{stem}.previous")),
+    }
+}
+
+/// A portable copy on Windows that 0.10 updated to 1.x: 0.10 is beside it as `<name>.old.exe`.
+/// It's kept as `<name>.previous.exe` for 30 days rather than cleared as an update's leftover,
+/// then goes. Elsewhere, and for the installed copy (`setup`'s `previous\`), nothing to do.
+fn keep_0_10(folder: &Path, places: &Places, now: std::time::SystemTime) {
+    let ours = folder.join(OWN_OLD);
+    if cfg!(windows) && !ours.exists() && places.old.is_file() && crate::setup::installed_dir().is_none() {
+        let previous = previous_portable(places);
+        if !previous.exists() && std::fs::rename(&places.old, &previous).is_ok() {
+            let secs = now.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default();
+            let _ = std::fs::create_dir_all(folder);
+            let _ = std::fs::write(folder.join(PREVIOUS_SINCE), secs.to_string());
+        }
+    }
+    let _ = std::fs::remove_file(&ours);
+    let since = std::fs::read_to_string(folder.join(PREVIOUS_SINCE)).ok().and_then(|t| t.trim().parse::<u64>().ok());
+    if let Some(since) = since.map(|s| std::time::UNIX_EPOCH + Duration::from_secs(s)) {
+        if now.duration_since(since).is_ok_and(|d| d >= KEEP_PREVIOUS) {
+            let _ = std::fs::remove_file(previous_portable(places));
+            let _ = std::fs::remove_file(folder.join(PREVIOUS_SINCE));
+        }
+    }
 }
 
 /// A helper outlives the window: on Windows, without a console and outside its process group.
@@ -592,6 +654,42 @@ mod tests {
         // Once this build is as new, it goes.
         tidy(&folder, &places, Some("1.0.0-canary.131"));
         assert!(!places.new.exists() && staged(&folder).is_none());
+    }
+
+    #[test]
+    fn only_a_program_inside_a_mac_app_is_in_a_bundle() {
+        assert!(in_app_bundle(Path::new("/Applications/SSHeesh.app/Contents/MacOS/ssheesh")));
+        assert!(!in_app_bundle(Path::new("/Users/p/Downloads/ssheesh")));
+        assert!(!in_app_bundle(Path::new("/opt/Contents/MacOS/ssheesh")));
+    }
+
+    #[test]
+    fn a_portable_copy_keeps_0_10_for_30_days_and_its_own_old_build_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("canary");
+        let places = Places::of(&dir.path().join("SSHeesh.exe"));
+        std::fs::write(&places.exe, b"1.0.0").unwrap();
+        std::fs::write(&places.old, b"0.10.14").unwrap();
+        let now = std::time::SystemTime::now();
+        keep_0_10(&folder, &places, now);
+        if cfg!(windows) {
+            assert_eq!(std::fs::read(previous_portable(&places)).unwrap(), b"0.10.14");
+            assert!(!places.old.exists());
+            keep_0_10(&folder, &places, now + Duration::from_secs(29 * 24 * 3600));
+            assert!(previous_portable(&places).exists());
+            keep_0_10(&folder, &places, now + Duration::from_secs(31 * 24 * 3600));
+            assert!(!previous_portable(&places).exists());
+        } else {
+            // Elsewhere a `.old` is only ever this updater's.
+            assert!(places.old.exists() && !previous_portable(&places).exists());
+        }
+        // The updater's own build from before is left to `swap::clean`.
+        std::fs::write(&places.old, b"1.0.0").unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(OWN_OLD), b"").unwrap();
+        keep_0_10(&folder, &places, now);
+        assert!(places.old.exists() && !folder.join(OWN_OLD).exists());
+        assert_eq!(previous_portable(&places).file_name().unwrap(), "SSHeesh.previous.exe");
     }
 
     #[test]

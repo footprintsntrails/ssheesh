@@ -79,7 +79,7 @@ impl Glue {
         if headless() {
             return None;
         }
-        let app = AppInfo::preview();
+        let app = app_info();
         let mut desktop = Desktop::system(app.clone(), sink(remote.clone()));
         match tray(&app, sink(remote)) {
             Ok(tray) => desktop.set_tray(tray),
@@ -106,18 +106,30 @@ impl Glue {
 
 /// The tab a Windows toast's link names (also one that started the app).
 pub fn tab_of_link(link: &str) -> Option<TabId> {
-    sshee_desktop::link::tab_of(&AppInfo::preview().scheme, link).map(TabId)
+    sshee_desktop::link::tab_of(&app_info().scheme, link).map(TabId)
 }
 
 /// Whether a launch argument is a notification's link (Windows starts the app with it).
 pub fn is_link(arg: &str) -> bool {
-    arg.to_ascii_lowercase().starts_with(&format!("{}://", AppInfo::preview().scheme))
+    arg.to_ascii_lowercase().starts_with(&format!("{}://", app_info().scheme))
 }
 
 /// This copy's single-instance name (Windows: a toast's click starts the program again, and
 /// the running one must receive it).
 pub fn instance_id() -> String {
-    AppInfo::preview().id
+    app_info().id
+}
+
+/// Who this copy is to the system. The released 1.x is SSHeesh, as 0.10 was: its
+/// AppUserModelID is the one 0.10's Start menu shortcut carries (the installer keeps it,
+/// `setup::names::APP_ID`), and a toast's link is `ssheesh://`. Test builds stay "SSHeesh
+/// Preview", beside it.
+pub fn app_info() -> AppInfo {
+    if crate::update::build().release {
+        AppInfo { name: "SSHeesh".into(), id: crate::setup::names::APP_ID.into(), scheme: "ssheesh".into() }
+    } else {
+        AppInfo::preview()
+    }
 }
 
 #[cfg(test)]

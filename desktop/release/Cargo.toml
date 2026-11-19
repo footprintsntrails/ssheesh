@@ -1,0 +1,24 @@
+[package]
+name = "ssheesh-release"
+version = "1.0.0"
+description = "SSHeesh's release steps: minisign signatures with the version in them, latest.json for 0.10, update-v1.json for 1.x, and the check of both before they're published"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No Rune and no network: the release workflow builds this in a job of its own, without secrets,
+# and the signing job only runs it.
+[dependencies]
+# Signing as minisign does (Ed25519 over BLAKE2b-512, the key file's scrypt), and checking what
+# was signed with the checker 0.10 and 1.x use.
+ed25519-dalek = "2"
+blake2 = "0.10"
+scrypt = { version = "0.11", default-features = false }
+minisign-verify = "0.3"
+base64 = "0.22"
+sha2 = "0.10"
+serde_json = "1"
+semver = "1"
+# The Mac's .app.tar.gz, read as 0.10's updater reads it.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+tar = { version = "0.4", default-features = false }

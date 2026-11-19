@@ -11,6 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agents;
+mod appimage;
 mod args;
 mod bookmarks;
 mod containers;
@@ -23,6 +24,7 @@ mod live;
 mod recipes;
 mod servers;
 mod settings;
+mod setup;
 mod signin;
 mod tabs;
 mod update;
@@ -250,11 +252,18 @@ fn main() {
     if let Some(code) = sshee_core::secrets::askpass_main() {
         std::process::exit(code);
     }
+    // Windows: this program is also its installer (0.10's update starts it with NSIS's flags),
+    // the RunOnce entry that finishes a replacement, and its uninstaller (`setup.rs`).
+    if let Some(code) = setup::main() {
+        std::process::exit(code);
+    }
     // An update started this, the build from before, to start the new one and
     // put this one back if it doesn't start.
     if let Some(code) = update::watch_main() {
         std::process::exit(code);
     }
+    // Linux: what 0.10's AppImage left in the environment, pointing into its vanished mount.
+    appimage::clean();
     // What the update before this start said (taken out of the environment while this is
     // still the only thread).
     let arrival = update::arrival();
@@ -267,6 +276,11 @@ fn main() {
     // The shells the terminals start get the environment this was started with, less Rune's
     // own two switches.
     let _ = sshee_core::session::set_child_env(sshee_core::session::ChildEnv { set: scrubbed.removed, remove: scrubbed.kept });
+
+    // The installed release on Windows: the version an update kept goes after 30 days.
+    if update::build().release {
+        setup::app_started();
+    }
 
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = match Args::of_launch(&raw, shell::extra_args()) {
