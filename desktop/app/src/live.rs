@@ -1283,6 +1283,7 @@ mod tests {
             xpipe: vec![],
             apps: sshee_core::other_apps::Places::under(&root.join("home")),
             old_labels: Box::new(|| None),
+            shares_old_keychain: false,
         };
         let store = Arc::new(Mutex::new(ServerStore::open(places, Arc::new(MemoryKeychain::default()))));
         let add = |address: &str, password: Option<&str>| {
