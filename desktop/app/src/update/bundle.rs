@@ -17,8 +17,10 @@
 //!    requirement (the Keychain's trust follows it). It then waits as `.SSHeesh-update`, a
 //!    hidden folder without `.app`, so Launch Services never takes it for a second SSHeesh.
 //! 3. **Install** ([`install`], on "Restart to update"): the staged bundle is hashed again and
-//!    must be the one checked; this app steps aside as `.SSHeesh-previous` (kept, unlike 0.10's
-//!    updater, which deleted it right after the swap), and the new one takes its name.
+//!    must be the one checked, and passes the same check again (bundle id, program, version,
+//!    signature: the digest alone sits in a file this user can write); this app steps aside
+//!    as `.SSHeesh-previous` (kept, unlike 0.10's updater, which deleted it right after the
+//!    swap), and the new one takes its name.
 //! 4. **Trial**: the helper (`update::watch_main`) starts the new app with `open -n` and gives
 //!    it a minute to say it started; if it doesn't, [`roll_back`] puts the previous one back.
 //! 5. **Clean** ([`clean`], [`keep_previous`]): leftovers go at the next start; the previous
@@ -214,19 +216,83 @@ fn stage_in(bundle: &Bundle, archive: &[u8], expect: &Expect<'_>, codesign: &imp
     digest(&bundle.staged).map_err(failed)
 }
 
+/// How much an archive may unpack to.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    /// The files' bytes, all together, as each entry says (a PAX `size` included).
+    bytes: u64,
+    /// Entries, folders included: the app has a few hundred.
+    entries: u64,
+    /// The whole unpacked tar stream, headers and padding included: a hard bound on what is
+    /// written whatever the headers claim.
+    stream: u64,
+}
+
+const LIMITS: Limits = Limits { bytes: MOST_BYTES, entries: 50_000, stream: MOST_BYTES + 64 * 1024 * 1024 };
+
+const TOO_BIG: &str = "unpacks too big";
+
+/// A reader that fails, rather than ends, once more than `left` bytes come through it: a
+/// gzip that inflates past it is refused, never written out.
+struct Capped<R> {
+    inner: R,
+    left: u64,
+    /// Set once it failed for the cap (tar's own errors don't carry the reason through).
+    tripped: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl<R: std::io::Read> std::io::Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.left == 0 {
+            // Exactly at the cap is fine; one byte more isn't.
+            let mut one = [0u8; 1];
+            return match self.inner.read(&mut one)? {
+                0 => Ok(0),
+                _ => {
+                    self.tripped.set(true);
+                    Err(std::io::Error::other(TOO_BIG))
+                }
+            };
+        }
+        let want = buf.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+        let n = self.inner.read(&mut buf[..want])?;
+        self.left -= n as u64;
+        Ok(n)
+    }
+}
+
 /// Unpacks `archive` into the empty folder `into`: folders and plain files only, all under one
 /// folder at the top named `*.app`, nothing outside `into`, at most [`MOST_BYTES`] in all, no
 /// set-id or world-writable modes. Returns the top folder's name.
 fn unpack(archive: &[u8], into: &Path) -> Result<String, Unstaged> {
+    unpack_within(archive, into, LIMITS)
+}
+
+fn unpack_within(archive: &[u8], into: &Path, limits: Limits) -> Result<String, Unstaged> {
     let bad = |why: String| Unstaged::Refused(format!("the archive {why}"));
-    let unpacks = |e: std::io::Error| Unstaged::Refused(format!("the archive doesn't unpack: {e}"));
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    let tripped = std::rc::Rc::new(std::cell::Cell::new(false));
+    let unpacks = |e: std::io::Error| {
+        if tripped.get() {
+            Unstaged::Refused(format!("the archive {TOO_BIG}"))
+        } else {
+            Unstaged::Refused(format!("the archive doesn't unpack: {e}"))
+        }
+    };
+    let mut tar = tar::Archive::new(Capped { inner: flate2::read::GzDecoder::new(archive), left: limits.stream, tripped: tripped.clone() });
     tar.set_preserve_permissions(false);
     tar.set_unpack_xattrs(false);
     let mut top: Option<String> = None;
     let mut total: u64 = 0;
+    let mut count: u64 = 0;
     for entry in tar.entries().map_err(unpacks)? {
         let mut entry = entry.map_err(unpacks)?;
+        count += 1;
+        if count > limits.entries {
+            return Err(bad("has too many files".into()));
+        }
         let path = entry.path().map_err(unpacks)?.into_owned();
         let mut parts = Vec::new();
         for c in path.components() {
@@ -249,9 +315,10 @@ fn unpack(archive: &[u8], into: &Path) -> Result<String, Unstaged> {
         if !(kind.is_file() || kind.is_dir()) {
             return Err(bad(format!("has a link or a special file: {}", path.display())));
         }
-        total = total.saturating_add(entry.header().size().unwrap_or(0));
-        if total > MOST_BYTES {
-            return Err(bad("unpacks too big".into()));
+        // What `unpack_in` writes: the size a PAX header gives, not the plain header's field.
+        total = total.saturating_add(entry.size());
+        if total > limits.bytes {
+            return Err(bad(TOO_BIG.into()));
         }
         if !entry.unpack_in(into).map_err(unpacks)? {
             return Err(bad(format!("has a path that leaves its folder: {}", path.display())));
@@ -391,9 +458,11 @@ pub fn check(new_app: &Path, expect: &Expect<'_>, current: &Path, codesign: &imp
 }
 
 /// Puts the staged bundle in place of the app, keeping the app as `bundle.previous`. The
-/// staged bundle must still have `digest`, recorded when it was staged. On failure the app is
-/// where it was.
-pub fn install(bundle: &Bundle, digest: &str) -> Result<(), String> {
+/// staged bundle must still have `digest`, recorded when it was staged, and pass the whole
+/// [`check`] again, right before it moves: the digest sits in a file this user can write, so
+/// only the check says the bundle is ours, this version and signed as this app is. On failure
+/// the app is where it was.
+pub fn install(bundle: &Bundle, digest: &str, expect: &Expect<'_>, codesign: &impl Codesign) -> Result<(), String> {
     if !bundle.staged.is_dir() {
         return Err("the new version isn't next to this one any more".into());
     }
@@ -404,6 +473,7 @@ pub fn install(bundle: &Bundle, digest: &str) -> Result<(), String> {
         Ok(_) => return Err("the new version changed after it was checked".into()),
         Err(e) => return Err(format!("the new version can't be read: {e}")),
     }
+    check(&bundle.staged, expect, &bundle.app, codesign).map_err(|e| format!("the new version isn't the one to install: {e}"))?;
     fs::rename(&bundle.app, &bundle.previous).map_err(|e| format!("this version can't step aside: {e}"))?;
     if let Err(e) = fs::rename(&bundle.staged, &bundle.app) {
         let _ = fs::rename(&bundle.previous, &bundle.app);
@@ -807,7 +877,7 @@ mod tests {
             assert_eq!(fs::metadata(b.staged.join("Contents/MacOS/ssheesh")).unwrap().permissions().mode() & 0o777, 0o755);
             assert_eq!(fs::metadata(&b.staged).unwrap().permissions().mode() & 0o777, 0o755);
         }
-        install(&b, &digest).unwrap();
+        install(&b, &digest, &EXPECT, &unsigned()).unwrap();
         assert_eq!(program_of(&b.app), "version 1.0.1");
         assert_eq!(program_of(&b.previous), "version 1.0.0");
         assert!(!b.staged.exists());
@@ -816,7 +886,7 @@ mod tests {
         left.sort();
         assert_eq!(left, [".SSHeesh-previous", "SSHeesh.app"]);
         // Without a staged bundle there's nothing to install, and the app stays.
-        assert!(install(&b, &digest).is_err());
+        assert!(install(&b, &digest, &EXPECT, &unsigned()).is_err());
         assert_eq!(program_of(&b.app), "version 1.0.1");
     }
 
@@ -879,7 +949,7 @@ mod tests {
         let (_dir, b) = applications();
         let digest = stage(&b, &app_archive("1.0.1", b"version 1.0.1"), &EXPECT, &unsigned()).unwrap();
         fs::write(b.staged.join("Contents/MacOS/ssheesh"), b"something else").unwrap();
-        assert_eq!(install(&b, &digest), Err("the new version changed after it was checked".into()));
+        assert_eq!(install(&b, &digest, &EXPECT, &unsigned()), Err("the new version changed after it was checked".into()));
         assert_eq!(program_of(&b.app), "version 1.0.0");
         assert!(!b.previous.exists());
         // A mode alone changes the digest too.
@@ -887,15 +957,132 @@ mod tests {
         #[cfg(unix)]
         {
             set_mode(&b.staged.join("Contents/Resources/icon.icns"), 0o755).unwrap();
-            assert!(install(&b, &digest).is_err());
+            assert!(install(&b, &digest, &EXPECT, &unsigned()).is_err());
         }
+    }
+
+    /// staged.json is this user's to write: a bundle swapped in after staging, with its digest
+    /// written there to match, still has to pass the whole check.
+    #[test]
+    fn a_bundle_swapped_after_staging_with_a_forged_digest_is_refused() {
+        type Swap = (&'static str, fn(&Path), FakeSign);
+        let swaps: [Swap; 4] = [
+            ("another app", |s| fs::write(s.join("Contents/Info.plist"), plist("1.0.1").replace(BUNDLE_ID, "com.example.other")).unwrap(), signed(true)),
+            ("an older version", |s| fs::write(s.join("Contents/Info.plist"), plist("0.9.0")).unwrap(), signed(true)),
+            ("no program", |s| fs::remove_file(s.join("Contents/MacOS/ssheesh")).unwrap(), signed(true)),
+            ("not signed as this app", |s| fs::write(s.join("Contents/MacOS/ssheesh"), b"something else").unwrap(), signed(false)),
+        ];
+        for (what, swap, sign) in swaps {
+            let (_dir, b) = applications();
+            stage(&b, &app_archive("1.0.1", b"version 1.0.1"), &EXPECT, &signed(true)).unwrap();
+            swap(&b.staged);
+            let forged = digest(&b.staged).unwrap();
+            match install(&b, &forged, &EXPECT, &sign) {
+                Err(e) => assert!(e.starts_with("the new version isn't the one to install"), "{what}: {e}"),
+                Ok(()) => panic!("{what}: installed"),
+            }
+            assert_eq!(program_of(&b.app), "version 1.0.0", "{what}");
+            assert!(!b.previous.exists() && b.staged.exists(), "{what}");
+        }
+        // The real one passes, codesign asked again at install.
+        let (_dir, b) = applications();
+        let digest = stage(&b, &app_archive("1.0.1", b"version 1.0.1"), &EXPECT, &signed(true)).unwrap();
+        let sign = signed(true);
+        install(&b, &digest, &EXPECT, &sign).unwrap();
+        assert_eq!(sign.asked.get(), 1);
+        assert_eq!(program_of(&b.app), "version 1.0.1");
+    }
+
+    /// Writes a PAX extended header carrying `records` ahead of the next entry.
+    fn pax(builder: &mut tar::Builder<flate2::write::GzEncoder<Vec<u8>>>, records: &[(&str, &str)]) {
+        let mut data = Vec::new();
+        for (key, value) in records {
+            let body = format!(" {key}={value}\n");
+            // The record's length counts its own digits.
+            let mut len = body.len() + 1;
+            while format!("{len}{body}").len() != len {
+                len += 1;
+            }
+            data.extend_from_slice(format!("{len}{body}").as_bytes());
+        }
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::XHeader);
+        header.set_path("PaxHeaders/x").unwrap();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append(&header, &data[..]).unwrap();
+    }
+
+    fn file_header(name: &str, size: u64) -> tar::Header {
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_path(name).unwrap();
+        header.set_size(size);
+        header.set_mode(0o644);
+        header.set_cksum();
+        header
+    }
+
+    fn written(root: &Path) -> u64 {
+        walk(root).unwrap().iter().filter(|(_, m)| m.is_file()).map(|(_, m)| m.len()).sum()
+    }
+
+    const SMALL: Limits = Limits { bytes: 64 * 1024, entries: 10, stream: 1024 * 1024 };
+
+    #[test]
+    fn a_pax_size_bigger_than_its_header_counts_and_is_refused() {
+        // The plain header says 0 bytes; the PAX record says 1 MB, which is what unpacks.
+        let body = vec![0u8; 1024 * 1024];
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        pax(&mut builder, &[("size", &body.len().to_string())]);
+        builder.append(&file_header("SSHeesh.app/Contents/MacOS/ssheesh", 0), &body[..]).unwrap();
+        let archive = builder.into_inner().unwrap().finish().unwrap();
+        // It really does unpack to the PAX size: the plain header can't be what's counted.
+        let dir = tempfile::tempdir().unwrap();
+        unpack_within(&archive, dir.path(), Limits { bytes: u64::MAX, entries: 10, stream: u64::MAX }).unwrap();
+        assert_eq!(written(dir.path()), body.len() as u64);
+        let dir = tempfile::tempdir().unwrap();
+        match unpack_within(&archive, dir.path(), SMALL) {
+            Err(Unstaged::Refused(e)) => assert!(e.contains("too big"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(written(dir.path()), 0, "nothing of it written");
+    }
+
+    #[test]
+    fn an_archive_inflating_past_its_stream_cap_is_refused_while_it_unpacks() {
+        // Within the files' limit, past the whole stream's: refused as it inflates.
+        let archive = archive_of(&[("SSHeesh.app/Contents/MacOS/ssheesh", &[7u8; 300 * 1024], 0o755)]);
+        let dir = tempfile::tempdir().unwrap();
+        match unpack_within(&archive, dir.path(), Limits { bytes: u64::MAX, entries: 10, stream: 64 * 1024 }) {
+            Err(Unstaged::Refused(e)) => assert!(e.contains("too big"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(written(dir.path()) <= 64 * 1024);
+        // The same archive within its caps unpacks.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(unpack_within(&archive, dir.path(), Limits { bytes: u64::MAX, entries: 10, stream: 1024 * 1024 }).unwrap(), "SSHeesh.app");
+    }
+
+    #[test]
+    fn an_archive_with_too_many_entries_is_refused() {
+        let names: Vec<String> = (0..11).map(|i| format!("SSHeesh.app/Contents/Resources/{i}")).collect();
+        let files: Vec<(&str, &[u8], u32)> = names.iter().map(|n| (n.as_str(), &b"x"[..], 0o644)).collect();
+        let dir = tempfile::tempdir().unwrap();
+        match unpack_within(&archive_of(&files), dir.path(), SMALL) {
+            Err(Unstaged::Refused(e)) => assert!(e.contains("too many"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+        let dir = tempfile::tempdir().unwrap();
+        assert!(unpack_within(&archive_of(&files[..10]), dir.path(), SMALL).is_ok());
     }
 
     #[test]
     fn roll_back_puts_the_previous_app_back() {
         let (dir, b) = applications();
         let digest = stage(&b, &app_archive("1.0.1", b"version 1.0.1"), &EXPECT, &unsigned()).unwrap();
-        install(&b, &digest).unwrap();
+        install(&b, &digest, &EXPECT, &unsigned()).unwrap();
         roll_back(&b).unwrap();
         assert_eq!(program_of(&b.app), "version 1.0.0");
         assert!(!b.previous.exists() && !b.failed.exists());
@@ -925,7 +1112,7 @@ mod tests {
             let (dir, b) = applications();
             let marker = dir.path().join("started-1.0.1");
             let digest = stage(&b, &app_archive("1.0.1", b"version 1.0.1"), &EXPECT, &unsigned()).unwrap();
-            install(&b, &digest).unwrap();
+            install(&b, &digest, &EXPECT, &unsigned()).unwrap();
             let trial = swap::watch(&b, &marker, Duration::from_secs(5), poll, |app| {
                 assert_eq!(app, b.app, "the app is started, not the program in it");
                 Ok(Fake(0, says.then(|| marker.clone())))
@@ -946,7 +1133,7 @@ mod tests {
         let (dir, b) = applications();
         let folder = dir.path().join("canary");
         let digest = stage(&b, &app_archive("1.0.1", b"version 1.0.1"), &EXPECT, &unsigned()).unwrap();
-        install(&b, &digest).unwrap();
+        install(&b, &digest, &EXPECT, &unsigned()).unwrap();
         let now = SystemTime::now();
         note_previous(&folder, now);
         keep_previous(&folder, &b, now + Duration::from_secs(29 * 24 * 3600));
@@ -966,13 +1153,13 @@ mod tests {
         fs::create_dir(&b.part).unwrap();
         clean(&b, true);
         assert!(b.staged.exists() && !b.part.exists());
-        install(&b, &digest).unwrap();
+        install(&b, &digest, &EXPECT, &unsigned()).unwrap();
         fs::create_dir(&b.failed).unwrap();
         clean(&b, false);
         assert!(!b.failed.exists() && b.previous.exists());
         // A second update replaces the previous version with this one.
         let digest = stage(&b, &app_archive("1.0.1", b"version 1.0.2"), &EXPECT, &unsigned()).unwrap();
-        install(&b, &digest).unwrap();
+        install(&b, &digest, &EXPECT, &unsigned()).unwrap();
         assert_eq!(program_of(&b.previous), "version 1.0.1");
         assert_eq!(program_of(&b.app), "version 1.0.2");
     }

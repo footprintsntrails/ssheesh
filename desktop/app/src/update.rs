@@ -326,8 +326,12 @@ fn restart_app(folder: &Path, places: &Places, app: &Bundle, staged: &Staged) ->
     let mut helper = Command::new(&places.exe);
     helper.arg(WATCH_FLAG).arg(app.exe()).arg(&staged.token).arg("--").args(std::env::args_os().skip(1));
     helper.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    // Checked again as it was staged: our bundle id, the program every 1.x keeps, the version
+    // staged (which `Staged::fits` holds newer than this one) and this app's signature.
+    let program = Platform::current().map_or("ssheesh", Platform::release_program);
+    let expect = bundle::Expect { bundle_id: bundle::BUNDLE_ID, program, version: &staged.version };
     let mut child = helper.spawn().map_err(|e| format!("the helper that starts it didn't start: {e}"))?;
-    if let Err(e) = bundle::install(app, &staged.sha256) {
+    if let Err(e) = bundle::install(app, &staged.sha256, &expect, &bundle::System) {
         let _ = child.kill();
         let _ = child.wait();
         return Err(e);

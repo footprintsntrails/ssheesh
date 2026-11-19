@@ -508,8 +508,10 @@ impl Seek for Jumping {
     }
 }
 
-/// The most of a file's Cues read.
-const MAX_CUES: u64 = 16 * 1024 * 1024;
+/// The most of a file's Cues read: an hour's video with a cue each second takes tens of
+/// kilobytes. Its children are walked without being collected (`ebml_children`), so this is
+/// about all the Cues cost, with what they hold (16 bytes a cue point).
+const MAX_CUES: u64 = 4 * 1024 * 1024;
 
 fn ebml_id(r: &mut dyn ReadSeek) -> Option<u32> {
     let mut b = [0u8; 1];
@@ -558,15 +560,20 @@ fn ebml_uint(bytes: &[u8]) -> u64 {
     bytes.iter().take(8).fold(0, |n, &b| (n << 8) | u64::from(b))
 }
 
-/// The children of a master element's data: (id, data).
-fn ebml_children(bytes: &[u8]) -> Vec<(u32, &[u8])> {
-    let mut out = Vec::new();
+/// The children of a master element's data: (id, data), read as they're asked for, so a
+/// crafted element of millions of tiny children builds nothing.
+fn ebml_children(bytes: &[u8]) -> impl Iterator<Item = (u32, &[u8])> {
     let mut at = 0;
-    while let Some((id, start, end)) = ebml_at(bytes, at) {
-        out.push((id, &bytes[start..end]));
+    std::iter::from_fn(move || {
+        let (id, start, end) = ebml_at(bytes, at)?;
         at = end;
-    }
-    out
+        Some((id, &bytes[start..end]))
+    })
+}
+
+/// The data of `parent`'s first child with `id`.
+fn ebml_child(parent: &[u8], id: u32) -> Option<&[u8]> {
+    ebml_children(parent).find(|(i, _)| *i == id).map(|(_, data)| data)
 }
 
 /// A Matroska file's Cues as (time, cluster's place in the file), and where its first
@@ -597,9 +604,8 @@ fn read_cues(file: &mut dyn ReadSeek) -> (Vec<(u64, u64)>, Option<u64>) {
                     Read::take(&mut *file, want).read_to_end(&mut head).ok()?;
                     (head.len() as u64 == want).then_some(())?;
                     for (id, seek) in ebml_children(&head) {
-                        let fields = ebml_children(seek);
-                        let target = fields.iter().find(|(i, _)| *i == 0x53AB).map(|f| f.1);
-                        let place = fields.iter().find(|(i, _)| *i == 0x53AC).map(|f| ebml_uint(f.1));
+                        let target = ebml_child(seek, 0x53AB);
+                        let place = ebml_child(seek, 0x53AC).map(ebml_uint);
                         if id == 0x4DBB && target == Some(&[0x1C, 0x53, 0xBB, 0x6B]) {
                             cues_at = place.map(|p| segment + p);
                         }
@@ -630,9 +636,8 @@ fn read_cues(file: &mut dyn ReadSeek) -> (Vec<(u64, u64)>, Option<u64>) {
             if id != 0xBB {
                 continue;
             }
-            let fields = ebml_children(point);
-            let time = fields.iter().find(|(i, _)| *i == 0xB3).map(|f| ebml_uint(f.1));
-            let place = fields.iter().find(|(i, _)| *i == 0xB7).and_then(|p| ebml_children(p.1).into_iter().find(|(i, _)| *i == 0xF1)).map(|f| ebml_uint(f.1));
+            let time = ebml_child(point, 0xB3).map(ebml_uint);
+            let place = ebml_child(point, 0xB7).and_then(|p| ebml_child(p, 0xF1)).map(ebml_uint);
             if let (Some(time), Some(place)) = (time, place) {
                 cues.push((time, segment.saturating_add(place)));
             }
@@ -724,6 +729,9 @@ impl Mkv {
             if !video && Some(self.frame.track) != self.audio_track {
                 continue;
             }
+            // matroska-demuxer 0.8 takes no limit for a block: it allocates the size a block
+            // claims, refusing only one larger than what's left of the file. So a block is
+            // bounded by the file, and refused here, after it was read, past MAX_PACKET.
             if self.frame.data.len() as u64 > MAX_PACKET {
                 return Err(Problem::TooBig("A picture in this video is too big to play here.".into()));
             }
@@ -834,6 +842,41 @@ mod tests {
         let p = d.packet().unwrap().unwrap();
         assert!(p.video && p.key && p.pts == 1.0, "{p:?}");
         assert_eq!(d.seek(0.3).unwrap(), 0.0);
+    }
+
+    /// A Matroska file with Cues of `body` and one empty cluster after them.
+    fn mkv_with_cues(body: &[u8]) -> (Vec<u8>, u64) {
+        let mut f = vec![0x1A, 0x45, 0xDF, 0xA3, 0x80];
+        f.extend_from_slice(&[0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        let segment = f.len() as u64;
+        f.extend_from_slice(&[0x1C, 0x53, 0xBB, 0x6B, 0x01]);
+        f.extend_from_slice(&(body.len() as u64).to_be_bytes()[1..]);
+        f.extend_from_slice(body);
+        f.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75, 0x80]);
+        (f, segment)
+    }
+
+    /// One cue point (time 5, cluster at 9), then `voids` empty Void elements: the most
+    /// children for the bytes.
+    fn cues_body(voids: usize) -> Vec<u8> {
+        let mut body = vec![0xBB, 0x88, 0xB3, 0x81, 5, 0xB7, 0x83, 0xF1, 0x81, 9];
+        body.extend(std::iter::repeat_n([0xEC, 0x80], voids).flatten());
+        body
+    }
+
+    #[test]
+    fn cues_of_millions_of_tiny_elements_build_nothing_and_past_the_cap_are_left_out() {
+        // Right at the cap: two million children, walked without being collected.
+        let at_cap = cues_body((MAX_CUES as usize - 10) / 2);
+        assert_eq!(at_cap.len() as u64, MAX_CUES);
+        let (file, segment) = mkv_with_cues(&at_cap);
+        assert_eq!(read_cues(&mut std::io::Cursor::new(file)).0, vec![(5, segment + 9)]);
+        // A byte past it: the Cues aren't read at all (seeking then starts from the first
+        // cluster).
+        let (file, _) = mkv_with_cues(&cues_body((MAX_CUES as usize - 10) / 2 + 1));
+        let (cues, first) = read_cues(&mut std::io::Cursor::new(file));
+        assert!(cues.is_empty());
+        assert!(first.is_some());
     }
 
     #[test]
