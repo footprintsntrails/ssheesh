@@ -40,6 +40,7 @@ use crate::kit::form::form_group;
 use crate::kit::popup::popup_menu;
 use crate::kit::push::{icon_button, push_button, Push};
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// The list of sections' width.
@@ -479,7 +480,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
             }
         })
         .child(nav(s, t))
-        .child(col().key("settings-main").grow(1.0).min_w(0.0).h_full().child(head(s, t)).child(scroll));
+        .child(col().key("settings-main").grow(1.0).min_w(0.0).h_full().child(head(s, t)).child(scroll.scroll_bars(t)));
     crate::kit::motion::enters(page, crate::kit::motion::Entrance::Page)
 }
 

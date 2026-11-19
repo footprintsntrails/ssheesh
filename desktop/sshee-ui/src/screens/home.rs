@@ -37,6 +37,7 @@ use crate::kit::list::{list_row, ListRow};
 use crate::kit::menu::{key_cap, RowState};
 use crate::kit::tile::{tile, Tile, TILE_ICON, TILE_WIDTH};
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// The gap between two tiles.
@@ -407,4 +408,5 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         .label_static("Main menu")
         .on_layout(|s: &mut Shell, [_, _, _, h]| s.screens.home.height = h)
         .child(column)
+        .scroll_bars(t)
 }

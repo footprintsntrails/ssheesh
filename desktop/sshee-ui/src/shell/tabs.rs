@@ -1043,7 +1043,7 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
         .no_focus_ring()
         .on_key(|s: &mut Shell, ev, tx| s.new_tab_key(ev, tx))
         // A long list of servers scrolls inside the room the window leaves it.
-        .child(rune::col().key("new-tab-rows").w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(rows))
+        .child(crate::kit::scroll_bar::ScrollBars::scroll_bars(rune::col().key("new-tab-rows").w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(rows), t))
         .modal_tx(true, |s: &mut Shell, tx| s.close_tab_overlays(tx))
 }
 
@@ -1183,6 +1183,6 @@ fn tab_list(s: &Shell, t: &'static Theme) -> El {
         .key("tab-list-menu")
         .anchored_fit("tab-list", Side::Bottom, Align::End, 6.0)
         // A long list scrolls inside the room the window leaves it.
-        .child(rune::col().key("tab-list-rows").w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(menu(rows)))
+        .child(crate::kit::scroll_bar::ScrollBars::scroll_bars(rune::col().key("tab-list-rows").w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(menu(rows)), t))
         .modal_tx(true, |s: &mut Shell, tx| s.close_tab_overlays(tx))
 }

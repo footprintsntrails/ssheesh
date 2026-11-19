@@ -35,6 +35,7 @@ use crate::kit::push::{icon_button, push_button, Push};
 use crate::kit::segmented::segmented;
 use crate::kit::switch::switch;
 use crate::shell::{Remote, Shell, Toast};
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 const WIDTH: f32 = 560.0;
@@ -379,7 +380,7 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .focusable(true)
         .no_focus_ring()
         .modal_tx(true, |s: &mut Shell, tx| s.close_tunnels(tx))
-        .child(col().key("tunnels-body").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(page))
+        .child(col().key("tunnels-body").w_full().shrink().min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(page).scroll_bars(t))
         .child(foot);
     let dialog = crate::kit::motion::enters(dialog, crate::kit::motion::Entrance::Card);
     Some(crate::kit::motion::enters(rune::el().key("tunnels-scrim").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).fill(t.scrim()).items_center().justify_center().child(dialog), crate::kit::motion::Entrance::Scrim))

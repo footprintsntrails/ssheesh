@@ -28,6 +28,7 @@ licence. Rune's own crate is built from `vendor/rune`: a copy of `crates/rune` a
 | File | From | Licence |
 |---|---|---|
 | `sshee-ui/src/terminal/glyphs.rs` | xterm.js, `addon-webgl/src/CustomGlyphs.ts` (box drawing, block elements, Powerline separators), reworked onto whole device pixels | MIT, notice at the top of the file |
+| `sshee-ui/src/kit/scroll_bar.rs` and `scroll_bar/visibility.rs` | Rune's `rune-kit` crate, `src/scroll_bar.rs`, `scroll_bar/press.rs`, `scroll_bar/visibility.rs` and `grip.rs` at the rev `Cargo.toml` pins, cut down to one look with a horizontal bar added | MIT (Rune's), said at the top of the file |
 
 `crates/sshee-term` (outside this folder) ports xterm.js's key encoders the same way.
 

@@ -32,6 +32,7 @@ use crate::kit::push::{push_button, Push};
 use crate::kit::switch::switch;
 use crate::screens::settings::TorCommand;
 use crate::shell::{Remote, Shell};
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// The popover's width.
@@ -302,7 +303,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
         for (i, line) in d.log.iter().enumerate() {
             log = log.child(text(line.as_str()).key(format!("tor-log-{i}")).font(theme::CODE).color(t.l2on).wrap().w_full());
         }
-        panel = panel.child(col().w_full().gap(4.0).child(text("Log").font(theme::GROUP_TITLE).color(t.l2).single_line().role("heading").level(2)).child(log));
+        panel = panel.child(col().w_full().gap(4.0).child(text("Log").font(theme::GROUP_TITLE).color(t.l2).single_line().role("heading").level(2)).child(log.scroll_bars(t)));
     }
 
     // What can be done, by state.

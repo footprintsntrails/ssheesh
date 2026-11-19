@@ -27,6 +27,7 @@ use crate::icons::{icon, Icon};
 use crate::kit::popover::popover;
 use crate::kit::push::{push_button, Push};
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// Your lines in the comparison: a touch heavier than the server's.
@@ -369,6 +370,7 @@ fn comparison(s: &Shell, c: &edit::Comparison, t: &'static Theme) -> El {
         .role("table")
         .label_static("Yours and the server's, line by line")
         .child(lines)
+        .scroll_bars(t)
 }
 
 fn leftovers(s: &Shell, t: &'static Theme) -> El {
