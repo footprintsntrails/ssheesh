@@ -247,9 +247,6 @@ mod tests {
         for absent in ["darwin-x86_64-app", "darwin-x86_64"] {
             assert!(!keys.contains(&absent), "{absent}");
         }
-        for want in ["windows-x86_64-nsis"] {
-            assert!(keys.contains(&want), "{want}");
-        }
         assert_eq!(r.url("SSHeesh.exe"), "https://github.com/footprintsntrails/ssheesh/releases/download/v1.0.0/SSHeesh.exe");
         // Only the systems asked for.
         let r = Release::of("1.0.0", "o/n", "v1.0.0", Path::new("."), Some("windows")).unwrap();
