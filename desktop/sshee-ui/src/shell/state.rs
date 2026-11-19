@@ -971,9 +971,12 @@ impl Shell {
         self.settle(tx);
     }
 
-    /// A click on a tab. A tab whose connection is gone tries again.
+    /// A click on a tab. One asleep (it let go of an unused connection) wakes, as a key in it
+    /// would. One whose connection dropped or ended doesn't connect by itself: its card says
+    /// what happened and waits for its Reconnect (or a key typed in it), as Settings →
+    /// Reconnect "Ask first" promises.
     pub fn focus_tab(&mut self, id: TabId, tx: &mut Tx) {
-        let again = self.bench.tab(id).is_some_and(|t| matches!(t.link, Link::Disconnected | Link::Asleep | Link::Ended | Link::Failed));
+        let again = self.bench.tab(id).is_some_and(|t| t.link == Link::Asleep);
         self.bench.focus(id);
         self.settle(tx);
         if again {

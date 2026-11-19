@@ -473,7 +473,7 @@ fn the_sidebar_hides_and_the_terminal_takes_its_room() {
 }
 
 #[test]
-fn a_tab_says_when_its_connection_drops_and_a_click_tries_again() {
+fn a_tab_says_when_its_connection_drops_and_waits_for_reconnect() {
     let mut w = linux();
     w.click("server-1");
     w.click("server-2");
@@ -487,7 +487,11 @@ fn a_tab_says_when_its_connection_drops_and_a_click_tries_again() {
     status(LinkStatus::Waiting { note: "disconnected".into() });
     w.settle();
     assert!(w.tree().contains("Disconnected"));
+    // Going to it asks first: the card, its Reconnect, nothing sent until it's pressed.
     w.click(&format!("tab-{}", first.id.0));
+    assert_eq!(w.written(0), "");
+    assert!(w.tree().contains("Reconnect"), "{}", w.tree());
+    w.click("card-reconnect");
     assert_eq!(w.written(0), "<reconnect>");
 }
 

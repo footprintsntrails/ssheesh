@@ -587,10 +587,14 @@ pub fn logo_face(size: f32, eyes: LogoFace) -> El {
 /// it" in the logo's own drawing: the title band's three dots light up in the logo's green one
 /// after another, as a typing "…" does, while the eyes, now two square pupils, glance up to one
 /// side and then the other under a raised eyebrow, and the green cursor of a mouth sits to
-/// one side ("hmm?"). All are
+/// one side ("hmm?"); under 24 points, where those would be smudges, the logo keeps its own
+/// face and only the dots move ([`small_loader`]). All are
 /// loops on Rune's render clock: frames only while it's on screen, none from the view. Under
 /// Reduce Motion Rune holds them still: the first dot lit, the eyes up to the left.
 pub fn logo_loader(size: f32) -> El {
+    if size < THINKING_FROM {
+        return small_loader(size);
+    }
     // The dots: each lit for its third of the round, fading in and out a little.
     const DOT0: &[(f32, f32)] = &[(0.0, 1.0), (0.28, 1.0), (0.36, 0.0), (0.92, 0.0), (1.0, 1.0)];
     const DOT1: &[(f32, f32)] = &[(0.0, 0.0), (0.28, 0.0), (0.36, 1.0), (0.61, 1.0), (0.69, 0.0), (1.0, 0.0)];
@@ -610,6 +614,28 @@ pub fn logo_loader(size: f32) -> El {
             canvas(thinking_layer(size, Thinking::Eyes(-1.0))).cycle(eyes(LEFT, 1.0)),
             canvas(thinking_layer(size, Thinking::Eyes(1.0))).cycle(eyes(RIGHT, 0.0)),
             canvas(thinking_layer(size, Thinking::Mouth)),
+        ],
+    )
+}
+
+/// Smaller than this, the thinking face's pupils and eyebrow are a pixel or two and read as
+/// smudges: [`small_loader`] draws the logo as it is, with its dots lighting in turn.
+const THINKING_FROM: f32 = 24.0;
+
+/// The loader in a tab, a list's line or beside a word: the logo's own face, and its three
+/// title-band dots lit one after another, as a typing "…" is.
+fn small_loader(size: f32) -> El {
+    const DOT0: &[(f32, f32)] = &[(0.0, 1.0), (0.28, 1.0), (0.36, 0.0), (0.92, 0.0), (1.0, 1.0)];
+    const DOT1: &[(f32, f32)] = &[(0.0, 0.0), (0.28, 0.0), (0.36, 1.0), (0.61, 1.0), (0.69, 0.0), (1.0, 0.0)];
+    const DOT2: &[(f32, f32)] = &[(0.0, 0.0), (0.61, 0.0), (0.69, 1.0), (0.92, 1.0), (1.0, 0.0)];
+    let dots = |stops, still| Cycle { period: 1.2, phase: 0.0, stops, still, fps: Cycle::DISPLAY_RATE };
+    logo_frame(
+        size,
+        vec![
+            canvas(logo_layer(size, true, Some(LogoFace::Open), true)),
+            canvas(thinking_layer(size, Thinking::Dot(0))).cycle(dots(DOT0, 1.0)),
+            canvas(thinking_layer(size, Thinking::Dot(1))).cycle(dots(DOT1, 0.0)),
+            canvas(thinking_layer(size, Thinking::Dot(2))).cycle(dots(DOT2, 0.0)),
         ],
     )
 }
