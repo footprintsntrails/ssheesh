@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 — every server comes along
+
+- **All your servers from 0.10 are here.** The first time 1.0.1 starts, every server 0.10 had moves over by itself, nothing to pick: saved passwords, labels, icons and colours with them, and the servers from your SSH config that 0.10 showed. One you brought over by hand already isn't doubled.
+- **Drag your servers into your own order.** Hold a server in the sidebar and drag it up or down; a line shows where it lands, and the order stays after a restart.
+- **Another server in + opens beside it.** Point at a server in the + menu and its New terminal and Files slide out next to it.
+- **A dropped connection waits for you.** Going back to a tab whose connection dropped no longer reconnects it by itself: it says what happened and reconnects when you press Reconnect or type in it, unless Settings say to always reconnect automatically.
+- **Small loading signs are clean again.** In tabs and lists the logo keeps its face and only its three dots light in turn.
+
 ## 1.0.0 — rebuilt from the ground up
 
 - **A new SSHeesh, drawn by itself.** The window no longer runs inside a web browser: it's one program, written in Rust, that draws every pixel itself. It starts faster, uses less memory, and typing in a terminal reaches the screen sooner.
