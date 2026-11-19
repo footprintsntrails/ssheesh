@@ -178,6 +178,8 @@ pub struct Ui {
     picture: Option<(u64, rune::image::Image)>,
     /// The squares under a picture's see-through parts, at the size the picture is drawn.
     checker: Option<([u32; 2], rune::image::Image)>,
+    /// The open video, playing or ready to (`super::video`).
+    video: Option<super::video::Playing>,
     /// The open picture was decoded when last looked.
     decoded: bool,
     pictures: Option<rune::ImageCache>,
@@ -219,6 +221,7 @@ impl Default for Ui {
             last_menu_at: [0.0, 0.0],
             picture: None,
             checker: None,
+            video: None,
             decoded: false,
             pictures: None,
             path_edit: None,
@@ -255,12 +258,25 @@ impl Ui {
         self.path_edit.as_ref().filter(|e| e.focused)
     }
 
-    /// The open picture was decoded since the last look: it's drawn again, now with its size.
+    /// The open picture was decoded since the last look, or the open video moved on: it's
+    /// drawn again (a picture now with its size, a video with its state and time).
     pub(super) fn picture_decoded(&mut self) -> bool {
         let ready = self.picture.as_ref().is_some_and(|(_, p)| p.is_ready());
         let news = ready && !self.decoded;
         self.decoded = ready;
-        news
+        news || self.video.as_mut().is_some_and(|v| v.moved_on())
+    }
+
+    /// The open video's player.
+    pub(super) fn video(&self) -> Option<&super::video::Playing> {
+        self.video.as_ref()
+    }
+
+    /// The tab went out of sight: a video playing in it pauses.
+    pub(super) fn hidden(&self) {
+        if let Some(v) = &self.video {
+            v.pause();
+        }
     }
 
     /// What a yes to the question on screen would do.
@@ -344,6 +360,15 @@ pub fn sync(s: &mut Shell) {
     let waker = s.waker();
     for state in s.screens.files.values_mut() {
         let ui = &mut state.ui;
+        // A video plays while its file is the one open; anything else stops it.
+        match (state.editor.as_ref().map(|e| e.body()), &waker) {
+            (Some(Body::Video(file)), Some(waker)) => {
+                if !ui.video.as_ref().is_some_and(|v| v.plays(file)) {
+                    ui.video = Some(super::video::Playing::open(file, waker.clone()));
+                }
+            }
+            _ => ui.video = None,
+        }
         let Some(editor) = &state.editor else {
             if ui.draft_of.take().is_some() {
                 ui.draft = TextEdit::new("");
@@ -825,6 +850,14 @@ pub fn key(s: &mut Shell, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if state.ui.naming.is_some() || state.ui.draft.focused || state.ui.filter.focused || state.ui.typing_path().is_some() || state.ui.confirm.is_some() || state.ui.menu.is_some() || state.replace.is_some() || state.paste.is_some() || state.copy.is_some() {
         return false;
+    }
+    // Space plays and pauses the open video, as in a browser's player.
+    if let (Key::Text(typed), Some(video)) = (&ev.key, state.ui.video()) {
+        if typed == " " && !ev.mods.cmd && !ev.mods.alt && !state.ui.places && state.peek.is_none() {
+            video.toggle();
+            tx.instant();
+            return true;
+        }
     }
     if state.ui.places {
         return places_key(s, tab, ev, tx);
@@ -1809,29 +1842,44 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
             ).scroll_bars(t)
         }
         Body::Image(_) => picture(),
-        _ => {
-            let (title, line) = editor.message(on_server).unwrap_or_default();
-            let mut said = vec![text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(line).font(theme::NOTE).color(t.l2).max_w(340.0).align(Align::Center)];
-            let mut buttons = row().gap(8.0).mt(6.0);
-            if let (false, Some(label)) = (matches!(editor.body(), Body::Failed(_)), &open_in) {
-                let n = name.clone();
-                buttons = buttons.child(push_button(t, label, Push::Quiet, true).key("preview-open-in").on_press_tx(move |s: &mut Shell, tx| {
-                    super::edit::open_in(s, id, &n, None);
-                    tx.instant();
-                }));
+        // A video: its picture and controls, once its first picture is decoded; why not, when
+        // it can't be played (with the same ways on as any file that can't be shown).
+        Body::Video(_) => match state.ui.video.as_ref().map(|v| (v, v.view())) {
+            Some((v, view)) if !matches!(view.status, sshee_media::Status::Opening | sshee_media::Status::Failed) => super::video::view(s, id, t, v, &name),
+            Some((_, view)) if view.status == sshee_media::Status::Failed => {
+                let why = view.problem.map(|p| p.to_string()).unwrap_or_default();
+                cant_show(s, id, t, &name, on_server, &open_in, sshee_app::files::Editor::cant_play(&why, on_server), true)
             }
-            if on_server {
-                let n = editor.path();
-                buttons = buttons.child(push_button(t, "Download", Push::Quiet, true).key("preview-get").on_press_tx(move |s: &mut Shell, tx| {
-                    super::download_file(s, id, &n);
-                    tx.instant();
-                }));
-            }
-            said.push(buttons);
-            centered(said)
-        }
+            _ => centered(vec![crate::icons::logo_loader(20.0), text("Loading…").font(theme::NOTE).color(t.l2).single_line()]),
+        },
+        _ => cant_show(s, id, t, &name, on_server, &open_in, editor.message(on_server).unwrap_or_default(), !matches!(editor.body(), Body::Failed(_))),
     };
     Some(pane.child(body))
+}
+
+/// Instead of a file that can't be shown: why, and the ways on (`open`: "Open in <editor>";
+/// on a server, the download).
+#[allow(clippy::too_many_arguments)]
+fn cant_show(s: &Shell, id: TabId, t: &'static Theme, name: &str, on_server: bool, open_in: &Option<String>, (title, line): (String, String), open: bool) -> El {
+    let Some(editor) = s.screens.files.get(&id).and_then(|st| st.editor.as_ref()) else { return centered(Vec::new()) };
+    let mut said = vec![text(title).font(theme::TEXT_BOLD).color(t.l1).single_line(), text(line).font(theme::NOTE).color(t.l2).max_w(340.0).align(Align::Center)];
+    let mut buttons = row().gap(8.0).mt(6.0);
+    if let (true, Some(label)) = (open, open_in) {
+        let n = name.to_owned();
+        buttons = buttons.child(push_button(t, label, Push::Quiet, true).key("preview-open-in").on_press_tx(move |s: &mut Shell, tx| {
+            super::edit::open_in(s, id, &n, None);
+            tx.instant();
+        }));
+    }
+    if on_server {
+        let n = editor.path();
+        buttons = buttons.child(push_button(t, "Download", Push::Quiet, true).key("preview-get").on_press_tx(move |s: &mut Shell, tx| {
+            super::download_file(s, id, &n);
+            tx.instant();
+        }));
+    }
+    said.push(buttons);
+    centered(said)
 }
 
 /// Points of one square under a see-through picture.

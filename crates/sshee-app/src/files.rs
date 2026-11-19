@@ -25,7 +25,7 @@ pub use browser::{Browser, Load, Problem, Row, Sort, SortKey};
 pub use editor::{Body, Choice, Editor, ReadOnly};
 pub use format::{bytes, modified_text, percent, rate};
 pub use kinds::{archive_kind, can_unpack, glyph, media_kind, opens_as, ArchiveKind, Glyph, MediaKind, Opens};
-pub use protocol::{Answer, Ask, Reply, SaveFailure, Want};
+pub use protocol::{Answer, Ask, Reply, SaveFailure, VideoFile, VideoSource, Want};
 
 /// The biggest text the editor opens for editing. Rune's text field shapes the whole text
 /// again on every key (about 12 ms at 50 KB, 46 ms at 200 KB), so above this a file is shown

@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use sshee_app::files::protocol::{Answer, Ask, Reply, SaveFailure, Want};
+use sshee_app::files::protocol::{Answer, Ask, Reply, SaveFailure, VideoFile, VideoSource, Want};
 use sshee_app::files::{Clock, Entry, EntryKind, Failure, FailureKind, Listing, Stamp, TextFile, MAX_TEXT};
 use sshee_app::paths;
 use sshee_app::transfers::{Progress, TransferId};
@@ -130,7 +130,35 @@ fn orders_rs() -> String {
     out
 }
 
-const WORKER: &str = "# Made-up settings for the demo's worker.\nqueue = \"orders\"\nthreads = 4\nretry_after_s = 30\n";
+/// A made-up clip (6 s, 640 × 360, H.264 High and AAC, 80 KB, no metadata), made with
+///
+/// ```text
+/// ffmpeg -f lavfi -i "gradients=s=640x360:c0=0x2b6cb0:c1=0x38a169:c2=0x805ad5:c3=0xd69e2e:n=4:speed=0.02:rate=30:duration=6" \
+///   -f lavfi -i "sine=frequency=220:duration=6:sample_rate=44100" -f lavfi -i "sine=frequency=277.18:duration=6:sample_rate=44100" \
+///   -f lavfi -i "sine=frequency=329.63:duration=6:sample_rate=44100" \
+///   -filter_complex "[1][2][3]amix=inputs=3,volume=0.6,afade=t=in:d=0.5,afade=t=out:st=5.2:d=0.8[a];[0]fade=t=out:st=5.4:d=0.6[v]" \
+///   -map "[v]" -map "[a]" -c:v libx264 -profile:v high -preset slow -crf 30 -bf 2 -g 60 -pix_fmt yuv420p \
+///   -bsf:v filter_units=remove_types=6 -c:a aac -b:a 48k -ac 2 -map_metadata -1 -fflags +bitexact \
+///   -flags:v +bitexact -flags:a +bitexact -movflags +faststart promo.mp4
+/// ```
+const PROMO: &[u8] = include_bytes!("media/promo.mp4");
+
+/// A demo file's bytes, as the player reads a video.
+struct InMemory(Vec<u8>);
+
+impl VideoSource for InMemory {
+    fn size(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read_at(&self, at: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        let Some(rest) = usize::try_from(at).ok().and_then(|at| self.0.get(at..)) else { return Ok(0) };
+        let n = rest.len().min(buf.len());
+        buf[..n].copy_from_slice(&rest[..n]);
+        Ok(n)
+    }
+}
+
+const WORKER: &str ="# Made-up settings for the demo's worker.\nqueue = \"orders\"\nthreads = 4\nretry_after_s = 30\n";
 const THEIR_LINE: &str = "- Hotfix: prices round to two places (added on the server)\n";
 const ACCESS_LOG: &str = "203.0.113.50 - - [12/Oct/2024:13:58:01 +0000] \"GET / HTTP/1.1\" 200 5120\n203.0.113.51 - - [12/Oct/2024:13:58:07 +0000] \"GET /cart HTTP/1.1\" 200 2048\n203.0.113.50 - - [12/Oct/2024:13:59:40 +0000] \"POST /api/checkout HTTP/1.1\" 201 312\n";
 
@@ -193,6 +221,8 @@ impl Disk {
         d.file(&at("nginx.conf"), NGINX, NOW.now - 30 * DAY, "-rw-r--r--");
         d.file(&at("deploy.sh"), DEPLOY, NOW.now - 7 * DAY, "-rwxr-xr-x");
         d.file(&at("logo.png"), logo_png(), NOW.now - 200 * DAY, "-rw-r--r--");
+        // The made-up promo the shop's site shows: six seconds of moving colour and a chord.
+        d.file(&at("shop/releases/2024-10-12/public/promo.mp4"), PROMO, NOW.now - 3 * HOUR, "-rw-r--r--");
         d.file(&at("shop-2024-10-05.tar.gz"), Vec::new(), NOW.now - 7 * DAY, "-rw-r--r--");
         d.nodes.get_mut(&at("shop-2024-10-05.tar.gz")).expect("just made").size = Some(4_404_019);
         for folder in ["shop", "logs", "backups"] {
@@ -274,6 +304,12 @@ impl Disk {
 
     pub fn read_image(&self, path: &str) -> Result<Vec<u8>, Failure> {
         self.file_at(path).map(|n| n.bytes.clone())
+    }
+
+    /// A video, played from its bytes as a server's is from its connection.
+    pub fn open_video(&self, path: &str) -> Result<VideoFile, Failure> {
+        let bytes = self.file_at(path)?.bytes.clone();
+        Ok(VideoFile(std::sync::Arc::new(InMemory(bytes))))
     }
 
     /// sshee-core's `save_guarded`, in memory: only over the file the stamp was taken of, and
@@ -474,6 +510,7 @@ impl DemoFiles {
                 Want::List { ticket, path } => Answer::Listed { ticket, asked: path, result: Err(gone()) },
                 Want::Read { ticket, path } => Answer::Read { ticket, path, result: Err(gone()) },
                 Want::ReadImage { ticket, path } => Answer::Image { ticket, path, result: Err(gone()) },
+                Want::OpenVideo { ticket, path } => Answer::Video { ticket, path, result: Err(gone()) },
                 Want::Save { ticket, path, .. } => Answer::Saved { ticket, path, result: Err(SaveFailure::Failed(gone())) },
                 Want::MakeDir { path } => Answer::MadeDir { path, result: Err(gone()) },
                 Want::Rename { from, to } => Answer::Renamed { from, to, result: Err(gone()) },
@@ -519,6 +556,7 @@ impl DemoFiles {
             Want::List { ticket, path } => answers.push(Answer::Listed { ticket, result: disk.list(&path).map(|l| (l, NOW)), asked: path }),
             Want::Read { ticket, path } => answers.push(Answer::Read { ticket, result: disk.read(&path), path }),
             Want::ReadImage { ticket, path } => answers.push(Answer::Image { ticket, result: disk.read_image(&path), path }),
+            Want::OpenVideo { ticket, path } => answers.push(Answer::Video { ticket, result: disk.open_video(&path), path }),
             Want::Save { ticket, path, text, expected } => answers.push(Answer::Saved { ticket, result: disk.save(&path, &text, expected.as_ref()), path }),
             Want::MakeDir { path } => answers.push(Answer::MadeDir { result: disk.make_dir(&path), path }),
             Want::Rename { from, to } => answers.push(Answer::Renamed { result: disk.rename(&from, &to), from, to }),
@@ -667,7 +705,9 @@ mod tests {
         let files = demo();
         for (server, disk) in &files.disks {
             for (path, node) in &disk.nodes {
-                let text = String::from_utf8_lossy(&node.bytes);
+                // The clip's bytes are pictures and sound, made by the command at `PROMO`: any
+                // byte may be '@' there.
+                let text = if node.bytes == PROMO { String::new().into() } else { String::from_utf8_lossy(&node.bytes) };
                 for real in ["/root", "ghp_", "sk_live", "BEGIN OPENSSH", "BEGIN RSA"] {
                     assert!(!path.contains(real) && !text.contains(real), "{server} {path}");
                 }
@@ -696,6 +736,22 @@ mod tests {
         // Asked for as text, it's binary.
         let Answer::Read { result: Ok((file, _)), .. } = one(&mut files, Want::Read { ticket: 1, path: "/home/deploy/logo.png".into() }) else { panic!() };
         assert!(file.binary && file.content.is_none());
+    }
+
+    #[test]
+    fn the_promo_opens_to_play_and_reads_in_pieces() {
+        let mut files = demo();
+        let Answer::Video { result: Ok(video), .. } = one(&mut files, Want::OpenVideo { ticket: 1, path: "/home/deploy/shop/releases/2024-10-12/public/promo.mp4".into() }) else { panic!() };
+        assert_eq!(video.size(), PROMO.len() as u64);
+        assert!(PROMO.len() < 300 * 1024, "the demo's clip stays small");
+        let mut head = [0u8; 8];
+        assert_eq!(video.0.read_at(0, &mut head).unwrap(), 8);
+        assert_eq!(&head[4..8], b"ftyp");
+        let mut tail = [0u8; 8];
+        assert_eq!(video.0.read_at(video.size() - 3, &mut tail).unwrap(), 3);
+        assert_eq!(video.0.read_at(video.size() + 10, &mut tail).unwrap(), 0);
+        let Answer::Video { result: Err(f), .. } = one(&mut files, Want::OpenVideo { ticket: 2, path: "/home/deploy/gone.mp4".into() }) else { panic!() };
+        assert_eq!(f.kind, FailureKind::NotFound);
     }
 
     #[test]

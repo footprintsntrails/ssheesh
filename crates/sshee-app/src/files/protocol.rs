@@ -45,6 +45,8 @@ pub enum Want {
     Read { ticket: u64, path: String },
     /// A picture's bytes, up to [`super::MAX_IMAGE`].
     ReadImage { ticket: u64, path: String },
+    /// A video, opened to be read in pieces as it plays: [`Answer::Video`].
+    OpenVideo { ticket: u64, path: String },
     /// Saves `text` as the file at `path`, only over the file `expected` was taken of; with no
     /// stamp, only where there's no file yet.
     Save { ticket: u64, path: String, text: String, expected: Option<Stamp> },
@@ -111,6 +113,7 @@ pub enum Answer {
     Peeked { asked: String, result: Result<(Listing, Clock), Failure> },
     Read { ticket: u64, path: String, result: Result<(TextFile, Stamp), Failure> },
     Image { ticket: u64, path: String, result: Result<Vec<u8>, Failure> },
+    Video { ticket: u64, path: String, result: Result<VideoFile, Failure> },
     /// The stamp of what was saved, for the next save.
     Saved { ticket: u64, path: String, result: Result<Stamp, SaveFailure> },
     MadeDir { path: String, result: Result<(), Failure> },
@@ -133,6 +136,37 @@ pub enum Answer {
     Uploaded { id: TransferId, paths: Vec<PathBuf>, dir: String, overwrite: bool, result: Result<(), Failure> },
     /// A copy to another server ended. The request's fields come back, as for an upload.
     CopiedTo { id: TransferId, to: ServerKey, paths: Vec<String>, dir: String, overwrite: bool, result: Result<(), Failure> },
+}
+
+/// Where a video's bytes come from: this computer's file, or a server's over a connection
+/// kept for it (sshee-core's `MediaFile`), or the demo's bytes.
+pub trait VideoSource: Send + Sync {
+    fn size(&self) -> u64;
+    /// Up to `buf.len()` bytes from `at`; fewer only at the end of the file.
+    fn read_at(&self, at: u64, buf: &mut [u8]) -> std::io::Result<usize>;
+}
+
+/// An open video, as the preview plays it. Closing the preview drops the last of it, and a
+/// server's connections with it. Two are equal when they're the same opening.
+#[derive(Clone)]
+pub struct VideoFile(pub std::sync::Arc<dyn VideoSource>);
+
+impl VideoFile {
+    pub fn size(&self) -> u64 {
+        self.0.size()
+    }
+}
+
+impl PartialEq for VideoFile {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for VideoFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "VideoFile({} bytes)", self.size())
+    }
 }
 
 impl Ask {

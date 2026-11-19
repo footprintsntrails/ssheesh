@@ -13,11 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use sshee_app::files::protocol::{Answer, Ask, Item, Reply, SaveFailure, Want};
+use sshee_app::files::protocol::{Answer, Ask, Item, Reply, SaveFailure, VideoFile, VideoSource, Want};
 use sshee_app::files::{Clock, Entry, EntryKind, Failure, FailureKind, Listing, Stamp, TextFile, MAX_IMAGE};
 use sshee_app::transfers::{Cleaning, Progress, TransferId};
 use sshee_core::error::{ErrorCode, OpError};
 use sshee_core::files as core;
+use sshee_core::media::MediaFile;
 use sshee_core::ssh::{SshEnv, Target};
 use sshee_ui::shell::Remote;
 
@@ -175,7 +176,7 @@ pub struct Files {
 fn thread_name(want: &Want) -> &'static str {
     match want {
         Want::List { .. } | Want::Peek { .. } => "files-list",
-        Want::Read { .. } | Want::ReadImage { .. } => "files-read",
+        Want::Read { .. } | Want::ReadImage { .. } | Want::OpenVideo { .. } => "files-read",
         Want::Save { .. } => "files-save",
         Want::MakeDir { .. } | Want::MakeFile { .. } | Want::Rename { .. } | Want::Move { .. } => "files-change",
         Want::Archive { .. } => "files-pack",
@@ -271,6 +272,7 @@ impl FailedWith for Answer {
             Answer::CopiedTo { id, to, paths, dir, overwrite, .. } => Answer::CopiedTo { id, to, paths, dir, overwrite, result: Err(failure) },
             Answer::Read { ticket, path, .. } => Answer::Read { ticket, path, result: Err(failure) },
             Answer::Image { ticket, path, .. } => Answer::Image { ticket, path, result: Err(failure) },
+            Answer::Video { ticket, path, .. } => Answer::Video { ticket, path, result: Err(failure) },
             Answer::Saved { ticket, path, .. } => Answer::Saved { ticket, path, result: Err(SaveFailure::Failed(failure)) },
             Answer::MadeDir { path, .. } => Answer::MadeDir { path, result: Err(failure) },
             Answer::Renamed { from, to, .. } => Answer::Renamed { from, to, result: Err(failure) },
@@ -280,6 +282,24 @@ impl FailedWith for Answer {
             Answer::Uploaded { id, paths, dir, overwrite, .. } => Answer::Uploaded { id, paths, dir, overwrite, result: Err(failure) },
             other @ (Answer::Deleted { .. } | Answer::Progress { .. }) => other,
         }
+    }
+}
+
+/// A video open for the preview: sshee-core's `MediaFile` (0.10's player read it the same
+/// way), read where the player asks. A server's file comes over connections kept open while
+/// it plays; dropping the last of it ends them.
+struct Video(MediaFile);
+
+impl VideoSource for Video {
+    fn size(&self) -> u64 {
+        self.0.size()
+    }
+
+    fn read_at(&self, at: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        let got = self.0.read_at(at, buf.len() as u64).map_err(|e| std::io::Error::other(e.message))?;
+        let n = got.len().min(buf.len());
+        buf[..n].copy_from_slice(&got[..n]);
+        Ok(n)
     }
 }
 
@@ -314,6 +334,10 @@ fn answer(want: &Want, target: Option<&Target>, work: &Work, report: &(impl Fn(A
         Want::ReadImage { ticket, path } => {
             let result = on().and_then(|t| core::read_stamped(t, env, path, MAX_IMAGE)).map(|(bytes, _)| bytes).map_err(failure);
             Answer::Image { ticket: *ticket, path: path.clone(), result }
+        }
+        Want::OpenVideo { ticket, path } => {
+            let result = on().and_then(|t| MediaFile::open(t, env, path)).map(|f| VideoFile(Arc::new(Video(f)))).map_err(failure);
+            Answer::Video { ticket: *ticket, path: path.clone(), result }
         }
         Want::Save { ticket, path, text, expected } => {
             let expected = expected.as_ref().map(core_stamp);

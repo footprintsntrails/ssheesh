@@ -126,3 +126,55 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Video in Files (`media/`)
+
+The preview's player decodes with crates built into the program, so nothing has to be
+installed to watch a video. Their licences let them be combined with ours: the MPL-2.0 ones are
+used unchanged, as crates.io publishes them (their source is there).
+
+| Crate | What for | Licence |
+|---|---|---|
+| `openh264` 0.9, `openh264-sys2` 0.9 | H.264. The crate compiles Cisco's OpenH264 (C++, the upstream rev in its `upstream/VERSION`) into the program; its notice is below | BSD-2-Clause |
+| `rusty_vp9` 0.3 | VP9 | Apache-2.0 |
+| `mp4` 0.14 | MP4 and MOV indexes | MIT |
+| `matroska-demuxer` 0.8 | Matroska and WebM | Zlib OR MIT OR Apache-2.0 |
+| `symphonia-core`, `symphonia-codec-aac`, `symphonia-codec-vorbis` 0.5.5 | AAC and Vorbis sound | MPL-2.0 |
+| `opuscule` 0.2 | Opus sound | MPL-2.0 |
+| `cpal` 0.15 (macOS and Windows) | The sound: Core Audio and WASAPI | Apache-2.0 |
+| `libloading` 0.8 (Linux) | The sound: ALSA's `libasound.so.2`, opened when a video plays | ISC |
+
+H.264 is covered by patents in some countries. Cisco pays the licence for the OpenH264 binaries it
+builds and hands out itself; a copy compiled from its source, as here, isn't covered by that.
+
+The demo's clip (`app/src/demo/media/promo.mp4`) and the tests' clips (`media/fixtures/`) were
+made for SSHeesh with ffmpeg from its test sources (moving colour, sine tones); the commands are
+beside them in the code.
+
+OpenH264's notice, as `openh264-sys2` ships it (`upstream/LICENSE`):
+
+```
+Copyright (c) 2013, Cisco Systems
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

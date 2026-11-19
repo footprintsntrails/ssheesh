@@ -11,6 +11,7 @@ patched crates stay out of the 0.10 app in the root workspace); build and test f
 | `crates/sshee-term` (root) | no | the terminal without a screen: engine, keys, secrets, selection |
 | `crates/sshee-app` (root) | no | the app's state without screens. `workbench` is what the window shows and does: servers, the row of tabs, the tab on screen, shortcuts, vital signs, saved tabs. `model`, `import`, `legacy` are 0.10's stores and bringing them over. `settings_store` is a running 1.0's settings: the file, the catalogue of rows, the shortcut and scheme tables |
 | `crates/sshee-desktop` (root) | no | outside the window: system notifications whose click comes back (D-Bus, WinRT toasts, `UNUserNotificationCenter`), the tray's menu, the macOS menu bar item |
+| `desktop/media` (`sshee-media`) | no | Files' video player: MP4 and WebM read, H.264, VP9, AAC, Opus and Vorbis decoded, the sound played, all on its own thread; pictures go to a `Screen` (sshee-ui puts them on a Rune `NativeSurface`) |
 | `desktop/sshee-ui` | **yes** | everything drawn: `theme` (tokens), `icons`, `kit` (components), `terminal` (the pane), `shell` (the window), `screens` (one module per screen). It doesn't depend on sshee-core |
 | `desktop/app` (`ssheesh-preview`) | through sshee-ui | `main`: which copy this is (`AppIdentity::preview`), ssh's helper roles (Tor proxy, askpass), and the window's backend: `live.rs` on sshee-core, `demo.rs` on made-up data |
 | `desktop/proto` (`ssheesh-proto`) | through sshee-ui | the terminal prototype: one window, one pane, the meter |
