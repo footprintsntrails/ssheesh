@@ -3,7 +3,8 @@
 //! can't start). The switch, how far a start has got and what holds it up, the round trip
 //! through Tor, the last lines of its log, new routes, and starting afresh. A click on the
 //! onion opens it; its switch turns Tor on or off. Off while terminals, Files or tunnels go
-//! through Tor, it asks first ("Reconnect without Tor?"): they'd reconnect directly.
+//! through Tor, in this window or any other (Tor is one for all), it asks first ("Reconnect
+//! without Tor?"): they'd reconnect directly.
 //!
 //! ```text
 //! tor-panel        modal: Esc and a click outside close it
@@ -266,7 +267,8 @@ pub fn button_help(s: &Shell) -> String {
 
 /// What goes through Tor now and would reconnect around it were Tor turned off: terminals on
 /// servers (but those that already go around it, [`State::direct`]), the other tabs on
-/// servers, and the tunnels that are on.
+/// servers, and the tunnels that are on. Tor is one for every window: [`Through::of`] counts
+/// every window's tabs, each as its window last told the others ([`sync`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Through {
     pub terminals: usize,
@@ -277,7 +279,19 @@ pub struct Through {
 }
 
 impl Through {
+    /// Everything that goes through Tor, in every window: this one's tabs and tunnels (the
+    /// list of tunnels is one, the same in every window), and the other windows' tabs.
     pub fn of(s: &Shell) -> Through {
+        let mut through = Through::here(s);
+        let elsewhere = s.shared().through_elsewhere();
+        through.terminals += elsewhere.terminals;
+        through.files += elsewhere.files;
+        through.other_tabs += elsewhere.other_tabs;
+        through
+    }
+
+    /// This window's tabs that go through Tor, and the tunnels.
+    pub fn here(s: &Shell) -> Through {
         use sshee_app::tunnels::State as Tunnel;
         let mut through = Through::default();
         for tab in s.bench.tabs() {
@@ -313,6 +327,14 @@ impl Through {
             Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
         }
     }
+}
+
+/// Tells the other windows what of this one's goes through Tor (`Shared::note_through`), for
+/// the question any of them asks before Tor goes off: after every change and every frame's
+/// poll, as the tray's list of who needs you is told.
+pub(crate) fn sync(s: &Shell) {
+    let mine = Through { tunnels: 0, ..Through::here(s) };
+    s.shared().note_through(mine);
 }
 
 /// The question before Tor goes off while something goes through it; `None` when nothing

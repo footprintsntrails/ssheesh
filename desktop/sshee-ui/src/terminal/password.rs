@@ -12,15 +12,20 @@
 //! It shows only while the line the cursor is on is ssh's password prompt
 //! (`sshee_app::servers::asks_for_password`: never a key's passphrase, a host key's question
 //! or a code) and the session is still connecting: once the shell is up, a prompt there is a
-//! program's (sudo's), never offered. Typing into the terminal works as ever; the strip just
-//! goes when the prompt does.
+//! program's (sudo's), never offered. And only while the session's link says ssh asks for
+//! this server's own password ([`TermLink::password_prompt`]): worded exactly as ssh words
+//! it for the configured user and host, with no jump host on the way (whose prompt would be
+//! saved as this server's), and nothing but ssh's own lines printed before it this attempt
+//! (a server that signed in by key runs login scripts that could print a fake one). Typing
+//! into the terminal works as ever; the strip just goes when the prompt does.
 //!
 //! Save sends the password and Return to the waiting prompt (nothing is echoed, logged or
 //! drawn) and keeps it, in memory only, until the server lets the terminal in: then the window
 //! asks the backend to keep it in the keychain (`Wish::SavePassword`, `Ask::SavePassword`).
-//! One the server refuses, ssh asks again: it is dropped, never saved, and the strip says so.
-//! The field is a secure one (no screen reader, trace or tree holds it), wiped when the
-//! password is sent or the prompt goes.
+//! One the server refuses, ssh asks again (a new prompt on a new line, as the link counts
+//! them): it is dropped, never saved, and the strip says so. The field is a secure one (no
+//! screen reader, trace or tree holds it), its text wiped from memory when the password is
+//! sent or the prompt goes; so is the copy written to the session.
 
 use rune::{row, text, text_input, El, Key, TextEdit, Tx};
 use sshee_app::servers::{asks_for_password, Password};
@@ -47,16 +52,27 @@ pub struct Strip {
     shown: bool,
     /// The password sent to the prompt, kept until the server lets the terminal in.
     sent: Option<Password>,
-    /// The newest output when it was sent: a prompt under newer output is ssh asking again.
-    output_then: Option<std::time::Instant>,
+    /// Which prompt it answered ([`TermLink::password_prompt`]): a later one is ssh asking
+    /// again, the server having refused it.
+    ///
+    /// [`TermLink::password_prompt`]: super::TermLink::password_prompt
+    answered: u32,
     /// The server refused the one sent here, and ssh asks again.
     refused: bool,
 }
 
 impl Default for Strip {
     fn default() -> Strip {
-        Strip { saved: false, field: TextEdit::default().secure(), shown: false, sent: None, output_then: None, refused: false }
+        Strip { saved: false, field: TextEdit::default().secure(), shown: false, sent: None, answered: 0, refused: false }
     }
+}
+
+/// What was typed in a secure `field`, moved (never copied) into a [`Password`], which wipes
+/// it from memory when it goes; the field starts empty again. Rune's `TextEdit` wipes its own
+/// text, and its undo steps', when it's dropped: emptying a field is replacing it.
+pub(crate) fn take_password(field: &mut TextEdit) -> Password {
+    let mut old = std::mem::replace(field, TextEdit::default().secure());
+    Password::new(std::mem::take(&mut old.text))
 }
 
 impl TermPane {
@@ -66,13 +82,16 @@ impl TermPane {
         self.over.password.saved = saved;
     }
 
-    /// ssh asks for a password on the line the cursor is on, while the session connects to a
-    /// server.
-    pub(crate) fn at_password_prompt(&self) -> bool {
+    /// ssh asks for this server's own password on the line the cursor is on, while the
+    /// session connects to a server: which such prompt it is this attempt (the link's count).
+    pub(crate) fn password_prompt(&self) -> Option<u32> {
         if !self.over.session.on_server || !matches!(self.status, LinkStatus::Connecting | LinkStatus::Rejoining { .. }) {
-            return false;
+            return None;
         }
-        self.view.borrow().cursor_row_text().is_some_and(|line| asks_for_password(&line))
+        if !self.view.borrow().cursor_row_text().is_some_and(|line| asks_for_password(&line)) {
+            return None;
+        }
+        self.link.password_prompt()
     }
 
     /// Whether the strip shows.
@@ -83,16 +102,17 @@ impl TermPane {
     /// The strip's part of every poll: whether it shows, and a password sent from it saved
     /// once the server let the terminal in. True when what is drawn changed.
     pub(crate) fn poll_password(&mut self) -> bool {
-        let at_prompt = self.at_password_prompt();
-        let printed_since = self.last_output != self.over.password.output_then;
+        let prompt = self.password_prompt();
+        let at_prompt = prompt.is_some();
         let p = &mut self.over.password;
         let mut save = None;
         if p.sent.is_some() {
             match self.status {
                 LinkStatus::Connected { .. } => save = p.sent.take(),
-                // ssh printed something (its new line, "Permission denied") and asks again: the
-                // server refused it. Dropped, never saved.
-                LinkStatus::Connecting | LinkStatus::Rejoining { .. } if at_prompt && printed_since => {
+                // ssh asks again, on a new line after the answer ("Permission denied" between):
+                // the server refused it. Dropped, never saved. The same prompt drawn again (a
+                // console's repaint) is no new one.
+                LinkStatus::Connecting | LinkStatus::Rejoining { .. } if prompt.is_some_and(|n| n > p.answered) => {
                     p.sent = None;
                     p.refused = true;
                 }
@@ -103,7 +123,8 @@ impl TermPane {
         }
         let shows = at_prompt && !p.saved && p.sent.is_none();
         if !shows && p.shown {
-            // Answered in the terminal, or the session moved on: what was typed here goes.
+            // Answered in the terminal, or the session moved on: what was typed here goes
+            // (the old field wipes it as it's dropped).
             p.field = TextEdit::default().secure();
             p.refused = false;
         }
@@ -118,15 +139,16 @@ impl TermPane {
     /// The strip's Save, and Return in its field: the password answers the prompt, and the
     /// terminal has the keyboard again.
     pub(crate) fn send_password(&mut self, tx: &mut Tx) {
-        if !self.over.password.shown || self.over.password.field.text.is_empty() || !self.at_password_prompt() {
+        let Some(prompt) = self.password_prompt() else { return };
+        if !self.over.password.shown || self.over.password.field.text.is_empty() {
             return;
         }
         let p = &mut self.over.password;
-        let password = Password::new(p.field.text.as_str());
-        p.field = TextEdit::default().secure();
-        p.output_then = self.last_output;
+        let password = take_password(&mut p.field);
+        p.answered = prompt;
         p.refused = false;
         p.shown = false;
+        // Written straight from the password (no copy here), then Return.
         self.link.write(password.expose().as_bytes());
         self.link.write(b"\r");
         self.over.password.sent = Some(password);

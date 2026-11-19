@@ -38,6 +38,7 @@ use sshee_app::workbench::{SavedTabs, Server, Tab, TabId};
 
 use super::desktop::Waiting;
 use super::state::{Backend, Options, Remote, Shell};
+use crate::screens::tor::Through;
 use crate::terminal::TermLink;
 
 /// A change for one window, run on the UI thread; true when it must draw again.
@@ -222,11 +223,13 @@ struct Seen {
     agents: Vec<Server>,
     waiting: Vec<Waiting>,
     shown: bool,
+    /// Its tabs that go through Tor (tunnels aside: their list is every window's).
+    through: Through,
 }
 
 impl Default for Seen {
     fn default() -> Seen {
-        Seen { watch: None, agents: Vec::new(), waiting: Vec::new(), shown: true }
+        Seen { watch: None, agents: Vec::new(), waiting: Vec::new(), shown: true, through: Through::default() }
     }
 }
 
@@ -332,6 +335,26 @@ impl Shared {
         core.backend.agents_on(&agents);
         core.backend.waiting_changed(&waiting);
         core.backend.window_shown(shown);
+    }
+
+    /// What of this window's goes through Tor now (`screens::tor::sync`).
+    pub(crate) fn note_through(&self, through: Through) {
+        if let Some(seen) = self.core.borrow_mut().seen(self.no) {
+            seen.through = through;
+        }
+    }
+
+    /// What goes through Tor in every other open window, as each last said: Tor is one for
+    /// all, and turning it off reconnects theirs too.
+    pub(crate) fn through_elsewhere(&self) -> Through {
+        let core = self.core.borrow();
+        let mut all = Through::default();
+        for seen in core.windows.iter().filter(|(n, _)| **n != self.no).map(|(_, seen)| &seen.through) {
+            all.terminals += seen.terminals;
+            all.files += seen.files;
+            all.other_tabs += seen.other_tabs;
+        }
+        all
     }
 
     fn backend(&self) -> std::cell::RefMut<'_, Box<dyn Backend>> {
@@ -673,6 +696,7 @@ mod tests {
         tabs_kept: usize,
         placed: usize,
         snippets_kept: usize,
+        tor: Vec<crate::screens::settings::TorCommand>,
     }
 
     struct Link(Arc<Mutex<bool>>);
@@ -723,6 +747,9 @@ mod tests {
         }
         fn welcome(&mut self) -> bool {
             true
+        }
+        fn tor(&mut self, command: crate::screens::settings::TorCommand) {
+            self.0.lock().unwrap().tor.push(command);
         }
         fn replays(&self) -> bool {
             true
@@ -942,6 +969,45 @@ mod tests {
         t.second.backend_mut().watch(Some(&servers[2]));
         let w = t.world.lock().unwrap();
         assert_eq!((w.agents.len(), w.waiting.len(), w.watching.len()), (agents, waits, watched));
+    }
+
+    /// Tor is one for every window: turned off from a window with nothing on a server, it
+    /// still asks about another window's terminals, and Cancel leaves them on Tor.
+    #[test]
+    fn turning_tor_off_asks_about_every_windows_tabs() {
+        use crate::screens::settings::TorCommand;
+        use crate::screens::tor::Through;
+        let mut t = Two::open();
+        t.settle();
+        let remote = t.backend_remote();
+        remote.tor_status(sshee_app::tor::Status::On);
+        t.settle();
+        // The main window's own terminal closes: only the second's goes through Tor.
+        t.main.close_active(&mut Tx::default());
+        assert!(Through::here(&t.main).is_empty());
+        t.main.switch_tor(&mut Tx::default());
+        let q = t.main.screens.notes.question().cloned().expect("asked about the other window's terminal");
+        assert!(q.body.starts_with("1 terminal on servers will reconnect directly"), "{}", q.body);
+        // Cancel: Tor stays on, nothing reconnects or ends.
+        t.main.answer(false, &mut Tx::default());
+        assert!(t.main.screens.notes.question().is_none());
+        assert!(t.world.lock().unwrap().tor.is_empty());
+        let theirs = t.second.bench.active_id().unwrap();
+        assert!(!t.world.lock().unwrap().terminals.iter().filter(|(id, _)| *id == theirs).any(|(_, e)| *e.lock().unwrap()));
+        // The other window's Files tab counts too, and so does what this one opens again.
+        t.second.open_files(&mut Tx::default());
+        t.main.go_to(WEB, &mut Tx::default());
+        t.second.switch_tor(&mut Tx::default());
+        let q = t.second.screens.notes.question().cloned().expect("a question");
+        assert!(q.body.starts_with("2 terminals and 1 Files tab on servers"), "{}", q.body);
+        t.second.answer(false, &mut Tx::default());
+        assert!(t.world.lock().unwrap().tor.is_empty());
+        // The second window closed, and this one's tab with it: nothing goes through Tor.
+        t.main.close_active(&mut Tx::default());
+        t.second.close();
+        t.main.switch_tor(&mut Tx::default());
+        assert!(t.main.screens.notes.question().is_none());
+        assert_eq!(t.world.lock().unwrap().tor, [TorCommand::Off]);
     }
 
     #[test]

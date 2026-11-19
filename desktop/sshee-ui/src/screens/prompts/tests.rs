@@ -22,6 +22,32 @@ struct Seen {
     did: Vec<String>,
     /// What the session says it's doing while it connects.
     phase: Option<crate::terminal::connecting::Phase>,
+    /// ssh's prompts for the server's password so far, each on a new line, as a live link
+    /// counts them (`app/src/signin.rs`), and the one asking now.
+    prompts: u32,
+    asks: Option<u32>,
+    /// The link says the prompt on screen isn't this server's own (a jump host on the way, or
+    /// a login script printed one).
+    not_ssh: bool,
+}
+
+impl Seen {
+    /// What the program printed, for the link's count of ssh's prompts: one on a new line
+    /// is a new one; the same line drawn again is the same.
+    fn printed(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes);
+        let new_line = text.contains('\n');
+        let tail = text.rsplit('\n').next().unwrap_or_default();
+        let tail = tail.rsplit('\r').next().unwrap_or_default();
+        if sshee_app::servers::asks_for_password(tail) {
+            if new_line || self.asks.is_none() {
+                self.prompts += 1;
+            }
+            self.asks = Some(self.prompts);
+        } else if new_line || !tail.trim().is_empty() && !tail.starts_with('\x1b') {
+            self.asks = None;
+        }
+    }
 }
 
 struct FakeLink(Arc<Mutex<Seen>>);
@@ -53,6 +79,10 @@ impl TermLink for FakeLink {
     }
     fn phase(&self) -> Option<crate::terminal::connecting::Phase> {
         self.0.lock().unwrap().phase
+    }
+    fn password_prompt(&self) -> Option<u32> {
+        let seen = self.0.lock().unwrap();
+        seen.asks.filter(|_| !seen.not_ssh)
     }
 }
 
@@ -149,6 +179,7 @@ impl Window {
     fn print(&mut self, n: usize, bytes: &[u8]) {
         let model = self.session(n).lock().unwrap().model.clone().unwrap();
         let now = self.rt.state.active_pane().unwrap().now();
+        self.session(n).lock().unwrap().printed(bytes);
         model.feed_at(bytes, now);
         self.frames(4);
     }
@@ -484,6 +515,45 @@ fn no_strip_for_a_passphrase_a_key_question_a_saved_password_or_a_shell() {
     w.status(0, LinkStatus::Connected { durable: true });
     w.print(0, b"\r\n[sudo] password for deploy: ");
     assert!(w.rt.find("pw-strip").is_none(), "sudo's prompt");
+}
+
+#[test]
+fn no_strip_when_the_link_says_the_prompt_isnt_the_servers_own() {
+    // A jump host on the way, or a server that signed in by key and whose login script
+    // printed a prompt like ssh's: the line reads like one, the link knows better.
+    let mut w = Window::on_web();
+    w.session(0).lock().unwrap().not_ssh = true;
+    w.status(0, LinkStatus::Connecting);
+    w.print(0, b"deploy@203.0.113.17's password: ");
+    assert!(w.rt.find("pw-strip").is_none(), "{}", w.tree());
+    // Typing in the terminal answers it, as ever.
+    w.key(Key::Text("x".into()));
+    assert_eq!(w.written(0), "x");
+    // The next attempt's own prompt is offered.
+    w.session(0).lock().unwrap().not_ssh = false;
+    w.status(0, LinkStatus::Rejoining { attempt: 2 });
+    w.print(0, b"\r\ndeploy@203.0.113.17's password: ");
+    assert!(w.rt.find("pw-strip").is_some(), "{}", w.tree());
+}
+
+#[test]
+fn a_good_password_is_not_judged_refused_by_the_prompt_drawn_again() {
+    use sshee_app::servers::{Ask, Password};
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.print(0, b"deploy@203.0.113.17's password: ");
+    w.click("pw-strip-field");
+    w.key(Key::Text("right".into()));
+    w.key(Key::Enter);
+    assert_eq!(w.written(0), "right\r");
+    // A console repaints the prompt's line (Windows' does) while the server checks: more
+    // output, the cursor still on the prompt, but no new prompt.
+    w.print(0, b"\x1b[?25l");
+    w.print(0, b"\rdeploy@203.0.113.17's password: \x1b[?25h");
+    assert!(!w.tree().contains(crate::terminal::password::REFUSED), "{}", w.tree());
+    w.print(0, b"\r\n");
+    w.status(0, LinkStatus::Connected { durable: true });
+    assert_eq!(saved(&w), [Ask::SavePassword { server: "host:web".into(), password: Password::new("right"), remember: true }]);
 }
 
 #[test]
