@@ -1833,10 +1833,12 @@ fn shift_click_on_a_server_opens_it_in_a_window_of_its_own() {
     display.xdotool(&["mousemove", "--window", &main, &((x + w / 2.0) as u32).to_string(), &((y + h / 2.0) as u32).to_string()]);
     let pause = || std::thread::sleep(std::time::Duration::from_millis(500));
     pause();
+    // On a busy machine a software frame can take seconds: Shift is held well before and after
+    // the click, so the window has drawn a frame with it down either side of the press.
     display.xdotool(&["keydown", "shift"]);
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(5));
     display.xdotool(&["click", "1"]);
-    pause();
+    std::thread::sleep(std::time::Duration::from_secs(3));
     display.xdotool(&["keyup", "shift"]);
     let both = display.windows(2, 60);
     if both.len() < 2 {
