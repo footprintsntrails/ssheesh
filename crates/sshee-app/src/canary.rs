@@ -125,6 +125,12 @@ pub enum ByHand {
     NoKey,
     /// The folder this copy runs from can't be written.
     Folder,
+    /// A Mac app whose folder this user can't write (Applications set up by another
+    /// administrator): it can't replace itself.
+    AppFolder,
+    /// A Mac app run from a disk image or from where it was downloaded (macOS then runs it from
+    /// a hidden read-only copy): it updates itself once it's in Applications.
+    MoveToApplications,
     /// The download didn't match what was published, or its signature didn't check out.
     Mismatch,
     /// Putting it in place failed: the reason, one plain line.
@@ -137,6 +143,8 @@ impl ByHand {
             ByHand::Unsigned => "It isn't signed, so it isn't installed by itself.".into(),
             ByHand::NoKey => "This copy can't check its signature, so it isn't installed by itself.".into(),
             ByHand::Folder => "The folder this copy runs from can't be written.".into(),
+            ByHand::AppFolder => "SSHeesh can't replace itself in its folder, which belongs to another user: download it and put it in Applications.".into(),
+            ByHand::MoveToApplications => "Move SSHeesh to Applications and it will update itself; until then, download it.".into(),
             ByHand::Mismatch => "The download didn't match what was published, so it wasn't installed.".into(),
             ByHand::Failed(why) => format!("It didn't install: {why}"),
         }
@@ -318,6 +326,11 @@ mod tests {
         let unsigned = Notice::ByHand { version: "1.0.0-canary.125".into(), why: ByHand::Unsigned };
         assert!(unsigned.text().contains("isn't signed"));
         assert_eq!(unsigned.buttons(), [Button::Download, Button::Later]);
+        // A Mac app that can't replace itself says what to do about it.
+        let moved = Notice::ByHand { version: "1.0.1".into(), why: ByHand::MoveToApplications };
+        assert_eq!(moved.text(), "SSHeesh 1.0.1 is out. Move SSHeesh to Applications and it will update itself; until then, download it.");
+        assert_eq!(moved.buttons(), [Button::Download, Button::Later]);
+        assert!(Notice::ByHand { version: "1.0.1".into(), why: ByHand::AppFolder }.text().contains("belongs to another user"));
         let back = Notice::RolledBack { version: "1.0.0-canary.125".into() };
         assert_eq!(back.buttons(), [Button::Ok]);
         assert_eq!(back.version(), "1.0.0-canary.125");

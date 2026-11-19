@@ -23,15 +23,20 @@
 //!    only offers the download page.
 //! 5. The program comes out of the archive (`archive.rs`) and waits next to this one as
 //!    `<name>.new` (`swap.rs`); the line says it's ready (`sshee-ui`'s `screens::canary`).
+//!    A Mac app instead unpacks the whole `SSHeesh.app` beside itself and checks it (bundle
+//!    id, program, version, `codesign`; `bundle.rs`); one that's translocated, on a disk
+//!    image or in a folder it can't write only offers the download, saying why.
 //! 6. "Restart to update": the new build takes the program's name, this one keeps a second
 //!    name, and a helper (this same old program, [`watch_main`]) waits for the window to
 //!    close, starts the new build, and puts the old one back if the new one doesn't say it
-//!    started within a minute. The tabs come back as at any start (`tabs.json`).
+//!    started within a minute. The tabs come back as at any start (`tabs.json`). A Mac app
+//!    steps aside as a whole (kept 30 days) and the new one starts through `open -n`.
 //!
 //! What is staged, and what failed here, is kept by a *token*: the run for a test build, the
 //! version for a release. Older test builds pass a run as the token, so the two still talk.
 
 pub mod archive;
+pub mod bundle;
 pub mod channel;
 pub mod http;
 pub mod manifest;
@@ -51,6 +56,7 @@ use sshee_app::model::UpdateMode;
 use sshee_app::settings_store::SettingsStore;
 use sshee_ui::shell::Remote;
 
+use bundle::Bundle;
 use channel::Source;
 use manifest::{Asset, Manifest, Platform};
 use release::{Offer, Release, Seen};
@@ -169,9 +175,13 @@ fn save_staged(folder: &Path, s: &Staged) -> std::io::Result<()> {
     sshee_app::settings_store::write_atomic(&folder.join("staged.json"), v.to_string().as_bytes())
 }
 
-/// Whether the build at `places.new` is still the one that was checked.
+/// Whether the build waiting is still the one that was checked: the program at `places.new`,
+/// or for a Mac app the whole bundle staged beside it (`bundle::digest`).
 fn still_staged(places: &Places, s: &Staged) -> bool {
-    std::fs::read(&places.new).is_ok_and(|b| verify::sha256_hex(&b) == s.sha256)
+    match Bundle::containing(&places.exe) {
+        Some(app) => bundle::digest(&app.staged).is_ok_and(|d| d == s.sha256),
+        None => std::fs::read(&places.new).is_ok_and(|b| verify::sha256_hex(&b) == s.sha256),
+    }
 }
 
 /// What this start was told by the update before it (read once, while the program is still
@@ -285,6 +295,10 @@ impl Updater {
         if crate::setup::installed_dir().is_some() {
             return crate::setup::start_update(&places.new);
         }
+        // macOS: the whole app is replaced (`bundle.rs`).
+        if let Some(app) = Bundle::containing(&places.exe) {
+            return restart_app(&folder, &places, &app, &staged);
+        }
         let _ = std::fs::create_dir_all(&folder).and_then(|_| std::fs::write(folder.join(OWN_OLD), b""));
         swap::install(&places, &staged.sha256)?;
         let mut helper = Command::new(&places.old);
@@ -304,12 +318,36 @@ impl Updater {
     }
 }
 
+/// A Mac app's "Restart to update". The helper is this same program, started from where it is
+/// before the app moves (so it never runs from the renamed previous version); then the new app
+/// takes this one's place, this one kept beside it for 30 days. Should the swap fail, the helper
+/// is stopped before it starts anything, and the app is where it was.
+fn restart_app(folder: &Path, places: &Places, app: &Bundle, staged: &Staged) -> Result<(), String> {
+    let mut helper = Command::new(&places.exe);
+    helper.arg(WATCH_FLAG).arg(app.exe()).arg(&staged.token).arg("--").args(std::env::args_os().skip(1));
+    helper.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = helper.spawn().map_err(|e| format!("the helper that starts it didn't start: {e}"))?;
+    if let Err(e) = bundle::install(app, &staged.sha256) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    bundle::note_previous(folder, std::time::SystemTime::now());
+    *HELPER.lock().unwrap_or_else(|e| e.into_inner()) = child.stdin.take();
+    Ok(())
+}
+
 /// Clears what an update left: the build from before, a write cut off, markers, and a staged
 /// build that's no longer for this one (version `own`; `None` for a copy that doesn't update).
+/// A Mac app's previous version stays for 30 days.
 fn tidy(folder: &Path, places: &Places, own: Option<&str>) {
     keep_0_10(folder, places, std::time::SystemTime::now());
     let keep = staged(folder).is_some_and(|s| own.is_some_and(|own| s.fits(own)) && !failed(folder).contains(&s.token));
     swap::clean(places, keep);
+    if let Some(app) = Bundle::containing(&places.exe) {
+        bundle::clean(&app, keep);
+        bundle::keep_previous(folder, &app, std::time::SystemTime::now());
+    }
     if !keep {
         let _ = std::fs::remove_file(folder.join("staged.json"));
     }
@@ -433,19 +471,27 @@ fn look(folder: &Path, places: &Places, build: &Build, channel: Channel, act: Ac
     if found.asset.signature.is_none() {
         return by_hand(ByHand::Unsigned);
     }
-    if !swap::writable(places) {
-        return by_hand(ByHand::Folder);
-    }
-    // A Mac app updates as a whole: its signature covers the bundle, and a new program inside
-    // the old one would break it (and the Keychain's trust with it). Until 1.x swaps whole
-    // bundles as 0.10's updater does, the line offers the download.
-    if in_app_bundle(&places.exe) {
-        return by_hand(ByHand::Failed("A Mac app is replaced as a whole: download the new version and put it in Applications.".into()));
-    }
+    let way = match way(places, channel, &bundle::System) {
+        Way::ByHand(why) => return by_hand(why),
+        way => way,
+    };
     let archive = http::get(&found.asset.url, found.asset.size, route)?;
     if let Err(refused) = verify::check_with(&archive, &found.asset, found.key, &found.parts) {
         eprintln!("ssheesh-preview: {version} wasn't installed: {refused}");
         return by_hand(ByHand::Mismatch);
+    }
+    if let Way::App(app) = &way {
+        let expect = bundle::Expect { bundle_id: bundle::BUNDLE_ID, program: platform.release_program(), version: &version };
+        let digest = match bundle::stage(app, &archive, &expect, &bundle::System) {
+            Ok(digest) => digest,
+            Err(bundle::Unstaged::Refused(why)) => {
+                eprintln!("ssheesh-preview: {version} wasn't installed: {why}");
+                return by_hand(ByHand::Mismatch);
+            }
+            Err(bundle::Unstaged::Failed(why)) => return by_hand(ByHand::Failed(why)),
+        };
+        save_staged(folder, &Staged { token: found.token.clone(), version: version.clone(), sha256: digest, replaces: found.replaces.clone() }).map_err(|e| e.to_string())?;
+        return Ok(Some(ready(version)));
     }
     let name = if channel == Channel::Canary { platform.program() } else { platform.release_program() };
     let program = archive::program(&archive, platform.packing(), name)?;
@@ -457,11 +503,31 @@ fn look(folder: &Path, places: &Places, build: &Build, channel: Channel, act: Ac
     Ok(Some(ready(version)))
 }
 
-/// Whether `exe` runs from inside a macOS app bundle (`….app/Contents/MacOS/<program>`).
-fn in_app_bundle(exe: &Path) -> bool {
-    let mut up = exe.ancestors().skip(1);
-    matches!((up.next(), up.next(), up.next()), (Some(macos), Some(contents), Some(app))
-        if macos.file_name().is_some_and(|n| n == "MacOS") && contents.file_name().is_some_and(|n| n == "Contents") && app.extension().is_some_and(|e| e == "app"))
+/// How this copy takes a newer build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Way {
+    /// A program next to this one, which takes its name (`swap.rs`).
+    Program,
+    /// A whole Mac app in place of this one (`bundle.rs`).
+    App(Bundle),
+    /// Only from its page, for this reason.
+    ByHand(ByHand),
+}
+
+/// How the copy at `places` takes a build of `channel`, as `disk` allows.
+fn way(places: &Places, channel: Channel, disk: &impl bundle::Disk) -> Way {
+    match Bundle::containing(&places.exe) {
+        // Test builds are published as a program, never as an app: one inside an app would
+        // break the app's signature (and the Keychain's trust with it).
+        Some(_) if channel == Channel::Canary => Way::ByHand(ByHand::Failed("A Mac app is replaced as a whole: download the new version and put it in Applications.".into())),
+        Some(app) => match bundle::route(&app, disk) {
+            bundle::Route::Swap => Way::App(app),
+            bundle::Route::MoveToApplications => Way::ByHand(ByHand::MoveToApplications),
+            bundle::Route::NotWritable => Way::ByHand(ByHand::AppFolder),
+        },
+        None if !swap::writable(places) => Way::ByHand(ByHand::Folder),
+        None => Way::Program,
+    }
 }
 
 /// Marks the build from before (`<name>.old`) as this updater's own, set aside by "Restart
@@ -558,27 +624,41 @@ pub fn watch_main() -> Option<i32> {
     let _ = closed.recv_timeout(CLOSING);
     std::thread::sleep(Duration::from_millis(300));
     let Some(folder) = folder() else { return Some(1) };
-    let places = Places::of(&watch.exe);
     let at = marker(&folder, &watch.token);
     let _ = std::fs::remove_file(&at);
+    // A Mac app: started as the Finder starts it, by Launch Services (`bundle::open`).
+    if let Some(app) = Bundle::containing(&watch.exe) {
+        return Some(trial(&folder, &watch.token, &app, &at, |path, var| bundle::open(path, &app.exe(), var, &watch.token, &watch.args)));
+    }
     let start = |exe: &Path, var: &str| {
         let mut cmd = Command::new(exe);
         cmd.args(&watch.args).env(var, &watch.token).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         detach(&mut cmd);
         cmd.spawn()
     };
-    match swap::watch(&places, &at, swap::TRIAL, Duration::from_millis(250), |exe| start(exe, TRIAL_VAR)) {
-        swap::Trial::Started => Some(0),
+    Some(trial(&folder, &watch.token, &Places::of(&watch.exe), &at, start))
+}
+
+/// Starts the new build through `start` (told `TRIAL_VAR`) and watches it; when it doesn't
+/// start, the build from before goes back and is started (told `BACK_VAR`). The helper's exit
+/// code.
+fn trial<S: swap::Started>(folder: &Path, token: &str, replaced: &impl swap::Replaced, at: &Path, start: impl Fn(&Path, &str) -> std::io::Result<S>) -> i32 {
+    match swap::watch(replaced, at, swap::TRIAL, Duration::from_millis(250), |new| start(new, TRIAL_VAR)) {
+        swap::Trial::Started => 0,
         swap::Trial::RolledBack(why) => {
             eprintln!("ssheesh-preview: the new build {why}; the one from before is back");
-            note_failed(&folder, &watch.token);
+            note_failed(folder, token);
             let _ = std::fs::remove_file(folder.join("staged.json"));
-            Some(if start(&places.exe, BACK_VAR).is_ok() { 0 } else { 1 })
+            if start(&replaced.program(), BACK_VAR).is_ok() {
+                0
+            } else {
+                1
+            }
         }
         swap::Trial::Stuck(why) => {
             eprintln!("ssheesh-preview: the new build {why}");
-            note_failed(&folder, &watch.token);
-            Some(1)
+            note_failed(folder, token);
+            1
         }
     }
 }
@@ -656,11 +736,62 @@ mod tests {
         assert!(!places.new.exists() && staged(&folder).is_none());
     }
 
+    struct Disk {
+        read_only: bool,
+        can_replace: bool,
+    }
+
+    impl bundle::Disk for Disk {
+        fn read_only(&self, _: &Path) -> bool {
+            self.read_only
+        }
+        fn can_replace(&self, _: &Path) -> bool {
+            self.can_replace
+        }
+    }
+
+    /// How each copy takes a release: a program swaps itself, a Mac app it can write swaps the
+    /// whole app, and anything else only offers the download, saying why.
     #[test]
-    fn only_a_program_inside_a_mac_app_is_in_a_bundle() {
-        assert!(in_app_bundle(Path::new("/Applications/SSHeesh.app/Contents/MacOS/ssheesh")));
-        assert!(!in_app_bundle(Path::new("/Users/p/Downloads/ssheesh")));
-        assert!(!in_app_bundle(Path::new("/opt/Contents/MacOS/ssheesh")));
+    fn each_copy_takes_a_release_its_own_way() {
+        let ok = Disk { read_only: false, can_replace: true };
+        let app = Places::of(Path::new("/Applications/SSHeesh.app/Contents/MacOS/ssheesh"));
+        assert_eq!(way(&app, Channel::Stable, &ok), Way::App(Bundle::containing(&app.exe).unwrap()));
+        assert_eq!(way(&app, Channel::Rc, &ok), Way::App(Bundle::containing(&app.exe).unwrap()));
+        assert_eq!(way(&app, Channel::Stable, &Disk { read_only: false, can_replace: false }), Way::ByHand(ByHand::AppFolder));
+        assert_eq!(way(&app, Channel::Stable, &Disk { read_only: true, can_replace: true }), Way::ByHand(ByHand::MoveToApplications));
+        let translocated = Places::of(Path::new("/private/var/folders/x1/abc/T/AppTranslocation/5A1B/d/SSHeesh.app/Contents/MacOS/ssheesh"));
+        assert_eq!(way(&translocated, Channel::Stable, &ok), Way::ByHand(ByHand::MoveToApplications));
+        // A test build is a program, never an app.
+        assert!(matches!(way(&app, Channel::Canary, &ok), Way::ByHand(ByHand::Failed(_))));
+        // A program on its own, in a folder this user writes.
+        let dir = tempfile::tempdir().unwrap();
+        let program = Places::of(&dir.path().join("ssheesh"));
+        assert_eq!(way(&program, Channel::Stable, &ok), Way::Program);
+        assert_eq!(way(&Places::of(Path::new("/nonexistent-folder/ssheesh")), Channel::Stable, &ok), Way::ByHand(ByHand::Folder));
+    }
+
+    /// A Mac app's staged bundle counts as still staged while its digest holds.
+    #[test]
+    fn a_staged_app_is_recognised_by_its_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("SSHeesh.app/Contents/MacOS/ssheesh");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"1.0.0").unwrap();
+        let app = Bundle::containing(&exe).unwrap();
+        std::fs::create_dir_all(app.staged.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.staged.join("Contents/MacOS/ssheesh"), b"1.0.1").unwrap();
+        let s = Staged { token: "1.0.1".into(), version: "1.0.1".into(), sha256: bundle::digest(&app.staged).unwrap(), replaces: None };
+        let places = Places::of(&exe);
+        assert!(still_staged(&places, &s));
+        std::fs::write(app.staged.join("Contents/MacOS/ssheesh"), b"1.0.2").unwrap();
+        assert!(!still_staged(&places, &s));
+        // Cleared at the next start once it's no longer newer; the previous version stays.
+        std::fs::create_dir_all(&app.previous).unwrap();
+        let folder = dir.path().join("canary");
+        save_staged(&folder, &s).unwrap();
+        tidy(&folder, &places, Some("1.0.1"));
+        assert!(!app.staged.exists() && app.previous.exists());
     }
 
     #[test]
