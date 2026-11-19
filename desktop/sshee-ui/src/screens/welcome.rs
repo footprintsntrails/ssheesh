@@ -5,24 +5,32 @@
 //!    pick from `~/.ssh/config`, or to add one by hand. A pick opens "Add a server" at that
 //!    list once its sources are read ([`tick`]); when it closes, the welcome comes back at the
 //!    next page.
-//! 2. **How it looks.** Match my system, light or dark, as pictures of the window in each; and
-//!    the sidebar's side.
-//! 3. **In the terminal.** Copying, and what a dropped connection does, each with a short loop
+//! 2. **Layout.** Where tabs go, one at a time or side by side, and compact mode, each with a
+//!    picture of the window that way; naming the server on every tab, the vitals in the
+//!    status bar and the line for Production and Staging.
+//! 3. **Sidebar.** Its side, names or icons, line or pixel icons, each with a picture; how
+//!    busy a server looks, and the logo.
+//! 4. **How it looks.** Match my system, light or dark, as pictures of the window in each; the
+//!    dark theme, the accent, the interface size and animations.
+//! 5. **In the terminal.** Copying, and what a dropped connection does, each with a short loop
 //!    of the real terminal doing it ([`pictures`]).
-//! 4. **Three things people miss**, with their shortcuts; and the tour.
+//! 6. **Three things people miss**, with their shortcuts; and the tour.
 //!
 //! A choice is a row of Settings (`sshee_app::tour::Page::rows`), changed through it as
 //! Settings does and shown at once behind the dialog. What's on when it opens stays picked:
-//! Continue, Continue, Done changes nothing, and Skip (or Esc) at any page decides nothing.
+//! Continue through to Done changes nothing, and Skip (or Esc) at any page decides nothing.
 //!
 //! ```text
 //! welcome-scrim   dims the window; modal (Esc skips)
 //! └── welcome     welcome-dot-<i> · welcome-page-<id>:
 //!                   servers   welcome-old, welcome-config, welcome-add
-//!                   look      welcome-look-<value> (cards), welcome-sidebar (segmented)
+//!                   layout    welcome-<row>-<value> (options), welcome-<row>-picture,
+//!                   sidebar     welcome-<row> (a switch, segmented or pop-up control)
+//!                   look      welcome-look-<value> (cards), welcome-<row>, welcome-accent-<i>
 //!                   terminal  welcome-<row>-<value> (options), welcome-<row>-picture
 //!                   tips      welcome-tip-<id>, welcome-tour
 //!                 welcome-skip · welcome-back · welcome-next (Return)
+//! welcome-menu    a pop-up control's menu, over everything (`menu`)
 //! ```
 //!
 //! The program says whether this start may show it at all (`Backend::welcome`), so a demo and
@@ -30,10 +38,11 @@
 
 mod pictures;
 
-use rune::{col, el, row, spacer, text, El, Tx};
+use rune::{col, el, row, spacer, text, Color, El, Tx};
 use sshee_app::palette::shortcut_label;
-use sshee_app::servers::Source;
-use sshee_app::settings_store::catalog::{Control, Row};
+use sshee_app::servers::{Ask, Source, Sources};
+use sshee_app::settings_store::catalog::{self, ChoiceLook, Control, Row, Special};
+use sshee_app::settings_store::looks;
 use sshee_app::settings_store::schemes::Appearance;
 use sshee_app::tour::{self, Page, PAGES, TIPS};
 
@@ -42,8 +51,11 @@ use crate::icons::{icon, logo, Icon};
 use crate::kit::form::{form_group, form_row, RowText};
 use crate::kit::list::{list_row, ListRow};
 use crate::kit::menu::key_cap;
+use crate::kit::popup::{popup_button, popup_menu};
 use crate::kit::push::{push_button, Push};
 use crate::kit::segmented::segmented;
+use crate::kit::switch::switch;
+use crate::looks::color;
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
 
@@ -51,9 +63,11 @@ pub use pictures::Pictures;
 
 pub const WIDTH: f32 = 600.0;
 /// Every page is this tall, so the buttons under it stay where the pointer is.
-const PAGE_HEIGHT: f32 = 376.0;
+const PAGE_HEIGHT: f32 = 488.0;
 // With its head and foot it fits a dialog (at most 680 points tall).
 const _: () = assert!(PAGE_HEIGHT < 680.0 - 140.0);
+/// A picture column's picture, as wide as it is tall times this: the window's own shape.
+const WINDOW_SHAPE: f32 = 1.6;
 
 #[derive(Default)]
 pub struct State {
@@ -67,6 +81,10 @@ pub struct State {
     resume: bool,
     /// The pictures, decoded on Rune's image thread once the welcome first opens.
     pictures: Option<Pictures>,
+    /// The row whose pop-up menu is open.
+    menu: Option<&'static str>,
+    /// What XPipe and the other SSH apps on this computer hold, once the backend has looked.
+    pub(crate) found: Option<Sources>,
 }
 
 /// At the window's start: the welcome when it's due and the program allows it; else "What's
@@ -86,11 +104,16 @@ impl Shell {
         state.open = true;
         state.at = at.min(PAGES.len() - 1);
         state.resume = false;
+        state.menu = None;
+        // What could be brought over from XPipe and other apps: files to read, so the backend
+        // looks and says later (`Shell::servers_answer`).
+        self.backend_mut().servers(Ask::Sources);
     }
 
     /// Done with the welcome, by any way out: it doesn't come back.
     fn welcome_done(&mut self) {
         self.screens.welcome.open = false;
+        self.screens.welcome.menu = None;
         self.settings.update(tour::welcomed);
     }
 
@@ -124,6 +147,7 @@ impl Shell {
             self.skip_welcome(tx);
         } else {
             self.screens.welcome.at = tour::page(at, by);
+            self.screens.welcome.menu = None;
             tx.instant();
         }
     }
@@ -135,6 +159,8 @@ impl Shell {
 
     /// A choice picked: through its row of Settings, at once.
     fn welcome_pick(&mut self, key: &'static str, value: &'static str, tx: &mut Tx) {
+        self.screens.welcome.menu = None;
+        tx.instant();
         // What's already picked stays as it is: writing it again could swap the active theme.
         if tour::chosen(&self.settings, key).as_deref() == Some(value) {
             return;
@@ -189,6 +215,8 @@ pub fn view(s: &Shell, t: &'static Theme) -> Option<El> {
         .child(dots(t, state.at));
     let content = match page {
         Page::Servers => servers(s, t),
+        Page::Layout => layout(s, t),
+        Page::Sidebar => sidebar(s, t),
         Page::Look => look(s, t),
         Page::Terminal => terminal(s, t),
         Page::Tips => tips(s, t),
@@ -222,6 +250,7 @@ fn dots(t: &Theme, at: usize) -> El {
                 .label(format!("{} of {}: {}", i + 1, PAGES.len(), page.title()))
                 .on_press_tx(move |s: &mut Shell, tx| {
                     s.screens.welcome.at = i;
+                    s.screens.welcome.menu = None;
                     tx.instant();
                 }),
         );
@@ -261,10 +290,27 @@ fn servers(s: &Shell, t: &Theme) -> Content {
         let spec = ListRow { icon: Some(Icon::Doc), label: &label, ..ListRow::default() };
         ways = ways.child(list_row(t, &spec).key("welcome-config").hover(t.hov2).focusable(true).role("button").on_press_tx(|s: &mut Shell, tx| s.welcome_add(Some(Source::SshConfig), tx)));
     }
-    let spec = ListRow { icon: Some(Icon::Plus), label: if servers + old + config == 0 { "Add a server" } else { "Add another by hand" }, note: "paste an address or a whole ssh command", ..ListRow::default() };
+    // XPipe and the other SSH apps, each only when it has servers this list hasn't.
+    let elsewhere = s.screens.welcome.found.as_ref().map(tour::found_elsewhere).unwrap_or_default();
+    for &(source, n) in &elsewhere {
+        let key = match source {
+            Source::App(app) => app.key(),
+            _ => "xpipe",
+        };
+        let label = tour::bring_over(source, n);
+        let spec = ListRow { icon: Some(Icon::Download), label: &label, ..ListRow::default() };
+        ways = ways.child(list_row(t, &spec).key(format!("welcome-{key}")).hover(t.hov2).focusable(true).role("button").on_press_tx(move |s: &mut Shell, tx| s.welcome_add(Some(source), tx)));
+    }
+    let apps: usize = elsewhere.iter().map(|(_, n)| n).sum();
+    let spec = ListRow {
+        icon: Some(Icon::Plus),
+        label: if servers + old + config + apps == 0 { "Add a server" } else { "Add another by hand" },
+        note: "paste an address or a whole ssh command",
+        ..ListRow::default()
+    };
     ways = ways.child(list_row(t, &spec).key("welcome-add").hover(t.hov2).focusable(true).role("button").on_press_tx(|s: &mut Shell, tx| s.welcome_add(None, tx)));
     Content {
-        line: Some(tour::welcome_line(servers, old, config)),
+        line: Some(tour::welcome_line(servers, old, config, apps)),
         parts: vec![
             ways.mx(-8.0),
             spacer(),
@@ -273,7 +319,165 @@ fn servers(s: &Shell, t: &Theme) -> Content {
     }
 }
 
-// ---- 2. how it looks
+// ---- 2. layout, 3. sidebar
+
+fn layout(s: &Shell, t: &'static Theme) -> Content {
+    Content {
+        line: Some("Changes show at once, behind this window. Everything here is in Settings too.".into()),
+        parts: vec![pictured(s, t, &["layout-tabs", "layout-view", "layout-compact"]), settings_rows(s, t, &["layout-tab-server", "layout-vitals", "layout-env-line"])],
+    }
+}
+
+fn sidebar(s: &Shell, t: &'static Theme) -> Content {
+    Content {
+        line: None,
+        parts: vec![pictured(s, t, &["layout-sidebar-side", "layout-server-list", "layout-server-icons"]), settings_rows(s, t, &["layout-server-load", "look-logo"])],
+    }
+}
+
+/// The rows `keys` side by side, each a picture of the window as it picks, its name and its
+/// options under it.
+fn pictured(s: &Shell, t: &'static Theme, keys: &[&str]) -> El {
+    let mut columns = row().w_full().gap(16.0).equal_columns(keys.len()).items_start();
+    for r in keys.iter().filter_map(|key| catalog::row(key)).filter(|r| r.works()) {
+        let now = tour::chosen(&s.settings, r.key).unwrap_or_default();
+        let picture = match &s.screens.welcome.pictures {
+            Some(p) => p.layout(t, r.key, &now),
+            None => el().fill(t.page),
+        };
+        let picture = framed(picture.key(format!("welcome-{}-picture", r.key)).w_full().aspect_ratio(WINDOW_SHAPE), 1.0, t.hair);
+        columns = columns.child(
+            col()
+                .key(format!("welcome-{}", r.key))
+                .min_w(0.0)
+                .gap(8.0)
+                .child(picture)
+                .child(text(column_name(r)).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate().role("heading").level(2).mt(4.0))
+                .child(options(s, t, r, &now).mx(-8.0)),
+        );
+    }
+    columns
+}
+
+/// A picture column's name: Settings' "Side" is the sidebar's, under its heading there.
+fn column_name(r: &Row) -> &'static str {
+    match r.key {
+        "layout-sidebar-side" => "Side",
+        _ => r.label,
+    }
+}
+
+/// The rows `keys` as Settings has them, in one group: those that show with the settings as
+/// they are (naming the server on every tab, only while tabs run along the top).
+fn settings_rows(s: &Shell, t: &'static Theme, keys: &[&str]) -> El {
+    let rows = keys
+        .iter()
+        .filter_map(|key| catalog::row(key))
+        .filter(|r| r.works() && r.shows(&s.settings, s.options.platform))
+        .map(|r| {
+            let (label, help) = match r.key {
+                // Light has one theme, which "Light" is; Settings' help is about its own grid.
+                "look-theme" => ("Dark theme", Some("Whenever the window is dark.".to_owned())),
+                _ => (r.label, r.help(&s.settings, super::settings::keyboard(s))),
+            };
+            let words = RowText { label, help: help.as_deref(), later: None };
+            form_row(t, words, control(s, t, r))
+        })
+        .collect();
+    form_group(t, rows)
+}
+
+/// A row's control in the welcome, picking through it: a switch, a segmented control, a
+/// pop-up button (its menu is [`menu`]), the dark themes, the accents.
+fn control(s: &Shell, t: &'static Theme, r: &'static Row) -> El {
+    let key = r.key;
+    let now = tour::chosen(&s.settings, key).unwrap_or_default();
+    let options = tour::options(key);
+    let at = options.iter().position(|(v, _)| *v == now);
+    match r.control {
+        Control::Switch { .. } => {
+            let on = now == "on";
+            switch(t, r.label, on, true).key(format!("welcome-{key}")).on_press_tx(move |s: &mut Shell, tx| s.welcome_pick(key, if on { "off" } else { "on" }, tx))
+        }
+        Control::Choice { look: ChoiceLook::Popup, .. } => {
+            let labels = r.choice_labels(&s.settings, super::settings::keyboard(s));
+            let shown = at.and_then(|i| labels.get(i).copied()).unwrap_or(now.as_str());
+            popup_button(t, r.label, shown, true).key(format!("welcome-{key}")).on_press_tx(move |s: &mut Shell, tx| {
+                s.screens.welcome.menu = Some(key);
+                tx.instant();
+            })
+        }
+        Control::Choice { .. } => choice_segmented(s, t, r).key(format!("welcome-{key}")),
+        Control::Special(Special::Theme) => {
+            let names: Vec<&str> = options.iter().map(|(_, name)| *name).collect();
+            segmented(t, r.label, &names, at, true, move |s: &mut Shell, i, tx| {
+                if let Some(&(value, _)) = tour::options(key).get(i) {
+                    s.welcome_pick(key, value, tx);
+                }
+            })
+            .key(format!("welcome-{key}"))
+        }
+        Control::Special(Special::Accent) => accents(t, &now),
+        _ => el(),
+    }
+}
+
+/// The accents as round swatches, the one in use ringed (Settings' own colour is there).
+fn accents(t: &Theme, now: &str) -> El {
+    let mut swatches = row().key("welcome-look-accent").gap(8.0).items_center().role("radiogroup").label_static("Accent color").focus_group();
+    for (i, &(name, value)) in looks::ACCENTS.iter().enumerate() {
+        let picked = value == now;
+        let mut dot = el()
+            .key(format!("welcome-accent-{i}"))
+            .size(18.0, 18.0)
+            .radius(9.0)
+            .fill(color(looks::accent_swatch(value)))
+            .border(0.5, Color::BLACK.alpha(0.2))
+            .role("radio")
+            .checked(picked)
+            .label(name)
+            .help(name)
+            .focusable(true)
+            .focus_selected(picked)
+            .on_press_tx(move |s: &mut Shell, tx| s.welcome_pick("look-accent", value, tx));
+        if picked {
+            dot = dot.outline(2.0, 2.0, t.l1);
+        }
+        swatches = swatches.child(dot);
+    }
+    swatches
+}
+
+/// The open pop-up control's menu, over everything.
+pub fn menu(s: &Shell, t: &'static Theme) -> Option<El> {
+    let state = &s.screens.welcome;
+    let key = state.menu.filter(|_| state.open)?;
+    let r = catalog::row(key)?;
+    let labels = r.choice_labels(&s.settings, super::settings::keyboard(s));
+    let now = tour::chosen(&s.settings, key);
+    let options = tour::options(key);
+    let selected = options.iter().position(|(v, _)| Some(*v) == now.as_deref());
+    Some(
+        popup_menu(
+            t,
+            &format!("welcome-{key}"),
+            &labels,
+            selected,
+            move |s: &mut Shell, i, tx| {
+                if let Some(&(value, _)) = tour::options(key).get(i) {
+                    s.welcome_pick(key, value, tx);
+                }
+            },
+            |s: &mut Shell, tx| {
+                s.screens.welcome.menu = None;
+                tx.instant();
+            },
+        )
+        .key("welcome-menu"),
+    )
+}
+
+// ---- 4. how it looks
 
 fn look(s: &Shell, t: &'static Theme) -> Content {
     let store = &s.settings;
@@ -297,12 +501,7 @@ fn look(s: &Shell, t: &'static Theme) -> Content {
                 .child(text(label).font(if picked { theme::TEXT_BOLD } else { theme::TEXT }).color(if picked { t.l1 } else { t.l2on }).single_line().truncate().a11y_hidden()),
         );
     }
-    let mut parts = vec![cards];
-    if let Some(side) = tour::Page::Look.choices().into_iter().find(|r| r.key == "layout-sidebar-side") {
-        let words = RowText { label: "Sidebar", help: Some("Where your servers are listed."), later: None };
-        parts.push(form_group(t, vec![form_row(t, words, choice_segmented(s, t, side).key("welcome-sidebar"))]));
-    }
-    Content { line: Some("Changes show at once, behind this window. Everything here is in Settings too.".into()), parts }
+    Content { line: None, parts: vec![cards, settings_rows(s, t, &["look-theme", "look-accent", "look-size", "look-animations"])] }
 }
 
 /// A picture with rounded corners and a line round it, drawn over its edge.

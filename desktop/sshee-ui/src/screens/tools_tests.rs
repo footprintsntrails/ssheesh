@@ -59,6 +59,8 @@ struct Start {
     welcome: bool,
     version: Option<String>,
     settings: Settings,
+    /// What XPipe and the other SSH apps hold, beside 0.10's one server.
+    found: Sources,
 }
 
 struct FakeBackend {
@@ -152,13 +154,13 @@ impl Backend for FakeBackend {
 
 /// web-7731 (Production) and web-staging in the sidebar; 0.10 offers one more, the ssh
 /// config one.
-fn book() -> Book {
+fn book(found: &Sources) -> Book {
     let host = |id: &str, name: &str, address: &str, from_config: bool| Listed { id: id.into(), name: name.into(), address: address.into(), from_config };
     let hosts = vec![host("web", "web-7731", "deploy@203.0.113.17", false), host("staging", "web-staging", "deploy@203.0.113.18", false), host("cfg:cache-7731", "cache-7731", "deploy@203.0.113.40", true)];
     let mut looks = Looks::default();
     looks.set_env("web", Some(EnvLabel::Prod));
     let offer = |name: &str, address: &str| Candidate { id: address.into(), name: name.into(), address: address.into(), identity_file: None, had_password: false, picked: true };
-    Book::new(hosts, looks, Sources { old: vec![offer("metrics", "ops@203.0.113.60")], ..Sources::default() })
+    Book::new(hosts, looks, Sources { old: vec![offer("metrics", "ops@203.0.113.60")], ..found.clone() })
 }
 
 type Queue = Arc<Mutex<Vec<Box<dyn FnOnce(&mut Shell, &mut Tx) -> bool + Send>>>>;
@@ -177,8 +179,9 @@ impl Window {
         let queue = posted.clone();
         let post: Post = Arc::new(move |f| queue.lock().unwrap().push(f));
         let options = Options { pane: PaneOptions { blink: false, ..Options::default().pane }, frame: Frame::Linux, mac_keys: false, ..Options::default() };
-        let backend = FakeBackend { world: world.clone(), book: book(), remote: None, start };
-        let shell = Shell::new(Workbench::new(book().servers()), Box::new(backend), options, Some(Remote::new(post)));
+        let servers = book(&start.found).servers();
+        let backend = FakeBackend { world: world.clone(), book: book(&start.found), remote: None, start };
+        let shell = Shell::new(Workbench::new(servers), Box::new(backend), options, Some(Remote::new(post)));
         let text = rune::text::TextSystem::new(crate::fonts::FONTS, crate::fonts::FAMILIES);
         let mut rt = Runtime::with_text(shell, view, (1280.0, 800.0), Env::new(true, 1.0), text);
         rt.poll = Some(|s, clock, tx| s.poll(clock, tx));
@@ -501,7 +504,7 @@ fn the_welcome_offers_0_10s_servers_then_the_tour() {
     assert_eq!(w.rt.state.settings.get().onboarding_version, sshee_app::tour::ONBOARDING_VERSION);
     // "Add a server" closed: the welcome comes back at its next page, once.
     w.key(Key::Escape);
-    assert!(!w.has("add-dialog") && w.has("welcome-page-look"), "{}", w.tree());
+    assert!(!w.has("add-dialog") && w.has("welcome-page-layout"), "{}", w.tree());
     w.key(Key::Escape);
     assert!(!w.has("welcome"));
     w.settle();
@@ -521,10 +524,48 @@ fn the_welcome_offers_0_10s_servers_then_the_tour() {
 }
 
 #[test]
+fn the_welcome_offers_what_xpipe_and_putty_hold_and_opens_their_lists() {
+    use sshee_app::servers::{App, AppOffer, Source};
+    let c = |name: &str, address: &str| Candidate { id: address.into(), name: name.into(), address: address.into(), identity_file: None, had_password: false, picked: true };
+    let found = Sources {
+        xpipe: vec![c("mail", "ops@203.0.113.70"), c("vpn", "ops@203.0.113.71")],
+        apps: vec![
+            AppOffer { app: App::Putty, servers: vec![c("router", "admin@203.0.113.80")], here: 0, through_jump: 0, ppk_keys: 0 },
+            // Found, but nothing new in it: not offered.
+            AppOffer { app: App::WinScp, servers: vec![], here: 2, through_jump: 0, ppk_keys: 0 },
+        ],
+        ..Sources::default()
+    };
+    let mut w = Window::open_with(Start { welcome: true, found, ..Start::default() });
+    let tree = w.tree();
+    assert!(tree.contains("Bring over 2 servers from XPipe") && tree.contains("Bring over 1 server from PuTTY"), "{tree}");
+    assert!(!tree.contains("WinSCP") && !tree.contains("KiTTY") && !w.has("welcome-winscp"));
+    // XPipe's row opens "Add a server" at XPipe's list, once it's read.
+    w.click("welcome-xpipe");
+    w.settle();
+    assert!(w.has("add-dialog"));
+    assert_eq!(w.rt.state.screens.add_server.page, crate::screens::add_server::Page::List(Source::Xpipe));
+    // Closed: the welcome comes back at its next page; back once more, PuTTY's row opens its own.
+    w.key(Key::Escape);
+    assert!(w.has("welcome-page-layout"), "{}", w.tree());
+    w.click("welcome-back");
+    w.click("welcome-putty");
+    w.settle();
+    assert_eq!(w.rt.state.screens.add_server.page, crate::screens::add_server::Page::List(Source::App(App::Putty)));
+}
+
+#[test]
+fn a_welcome_with_nothing_found_elsewhere_offers_no_import() {
+    let w = Window::open_with(Start { welcome: true, ..Start::default() });
+    let tree = w.tree();
+    assert!(!tree.contains("XPipe") && !tree.contains("PuTTY") && !w.has("welcome-xpipe"), "{tree}");
+}
+
+#[test]
 fn clicking_through_the_welcome_changes_nothing() {
     let mut w = Window::open_with(Start { welcome: true, ..Start::default() });
     let before = w.rt.state.settings.get().clone();
-    for page in ["servers", "look", "terminal", "tips"] {
+    for page in ["servers", "layout", "sidebar", "look", "terminal", "tips"] {
         assert!(w.has(&format!("welcome-page-{page}")), "{page}\n{}", w.tree());
         w.click("welcome-next");
     }
@@ -541,14 +582,18 @@ fn a_choice_in_the_welcome_is_made_as_in_settings_and_skipping_keeps_it() {
     let settings = |w: &Window| w.rt.state.settings.get().clone();
     w.click("welcome-next");
     // How it looks: what's on is picked, and a pick shows at once.
+    w.click("welcome-next");
+    w.click("welcome-next");
     assert!(w.tree().contains("Match my system"));
     w.click("welcome-look-dark");
     assert!(!settings(&w).theme_follows_system && w.rt.state.dark(false));
-    w.click("welcome-sidebar/seg-1");
+    w.click("welcome-back");
+    w.click("welcome-layout-sidebar-side-right");
     assert_eq!(settings(&w).sidebar_side, Side::Right);
     assert!(w.rt.state.sidebar_at_right());
-    // In the terminal: each choice through its row of Settings, with a line on what it does.
     w.click("welcome-next");
+    w.click("welcome-next");
+    // In the terminal: each choice through its row of Settings, with a line on what it does.
     assert!(w.tree().contains("Select text and it's copied."), "{}", w.tree());
     w.click("welcome-term-copy-keys");
     assert!(!settings(&w).copy_on_select && !w.rt.state.settings.copy_on_select());
@@ -559,6 +604,9 @@ fn a_choice_in_the_welcome_is_made_as_in_settings_and_skipping_keeps_it() {
     // Back, then Esc: it's done, and what was picked stays; nothing else is decided.
     w.click("welcome-back");
     assert!(w.has("welcome-page-look"));
+    let picked = settings(&w);
+    w.click("welcome-look-dark");
+    assert_eq!(settings(&w), picked, "what's picked stays as it is");
     w.key(Key::Escape);
     assert!(!w.has("welcome"));
     let now = settings(&w);
@@ -571,6 +619,100 @@ fn a_choice_in_the_welcome_is_made_as_in_settings_and_skipping_keeps_it() {
     w.click("welcome-skip");
     assert!(!w.has("welcome"));
     assert_eq!(settings(&w), now);
+}
+
+#[test]
+fn the_welcome_lays_the_window_out_as_settings_would() {
+    use sshee_app::model::{CompactMode, TabsPlacement, ViewMode};
+    let mut w = Window::open_with(Start { welcome: true, ..Start::default() });
+    let settings = |w: &Window| w.rt.state.settings.get().clone();
+    w.click("welcome-next");
+    assert!(w.has("welcome-page-layout"));
+    let tree = w.tree();
+    for said in ["Where tabs go", "Along the top", "Under each server", "Tabs on screen", "Side by side", "Compact mode", "Server vitals", "Name the server on every tab"] {
+        assert!(tree.contains(said), "{said}\n{tree}");
+    }
+    // What's on is picked; each choice shows at once, through its row.
+    let before = settings(&w);
+    // Picking what's on changes nothing.
+    w.click("welcome-layout-tabs-top");
+    w.click("welcome-layout-compact-off");
+    assert_eq!(settings(&w), before);
+    w.click("welcome-layout-tabs-sidebar");
+    assert_eq!(settings(&w).tabs_placement, TabsPlacement::Sidebar);
+    assert!(w.rt.state.bench.tabs_under_servers());
+    // Under each server, every tab is under its server's name already: that row goes, as in Settings.
+    assert!(!w.has("welcome-layout-tab-server"));
+    // Compact mode's bar is named for what it holds.
+    assert!(w.tree().contains("Top bar"));
+    w.click("welcome-layout-view-split");
+    assert_eq!(settings(&w).view_mode, ViewMode::Split);
+    w.click("welcome-layout-compact-both");
+    assert_eq!(settings(&w).compact_mode, CompactMode::Both);
+    w.click("welcome-layout-vitals");
+    assert!(!settings(&w).show_vitals);
+    w.click("welcome-layout-env-line");
+    assert!(settings(&w).env_stripe);
+    assert!(w.has("welcome"));
+}
+
+#[test]
+fn the_welcome_sets_up_the_sidebar_with_a_pop_up_for_the_load() {
+    use sshee_app::model::{IconPack, Logo, RailStatus, SidebarMode};
+    let mut w = Window::open_with(Start { welcome: true, ..Start::default() });
+    let settings = |w: &Window| w.rt.state.settings.get().clone();
+    w.click("welcome-next");
+    w.click("welcome-next");
+    assert!(w.has("welcome-page-sidebar"));
+    for said in ["Side", "Server list", "Server icons", "Server load", "Logo"] {
+        assert!(w.tree().contains(said), "{said}");
+    }
+    w.click("welcome-layout-server-list-wide");
+    w.click("welcome-layout-server-icons-pixel");
+    let s = settings(&w);
+    assert!(s.sidebar_mode == SidebarMode::Wide && s.icon_pack == IconPack::Pixel);
+    // The load's five ways are a pop-up, as in Settings; a pick closes it.
+    w.click("welcome-layout-server-load");
+    assert!(w.has("welcome-menu"));
+    w.click("welcome-menu/item-2");
+    assert!(!w.has("welcome-menu") && settings(&w).rail_status == RailStatus::Bars);
+    // Esc closes the menu, not the welcome.
+    w.click("welcome-layout-server-load");
+    w.key(Key::Escape);
+    assert!(!w.has("welcome-menu") && w.has("welcome"));
+    w.click("welcome-look-logo/seg-1");
+    assert_eq!(settings(&w).logo, Logo::Still);
+}
+
+#[test]
+fn the_welcome_picks_the_dark_theme_accent_and_size() {
+    let mut w = Window::open_with(Start { welcome: true, ..Start::default() });
+    let settings = |w: &Window| w.rt.state.settings.get().clone();
+    for _ in 0..3 {
+        w.click("welcome-next");
+    }
+    assert!(w.has("welcome-page-look"));
+    for said in ["Dark theme", "SSHeesh Default", "Midnight", "Graphite", "OLED", "Accent color", "Interface size", "Animations"] {
+        assert!(w.tree().contains(said), "{said}");
+    }
+    w.click("welcome-look-theme/seg-1");
+    assert_eq!(settings(&w).theme, "midnight");
+    assert!(w.rt.state.dark(false));
+    w.click("welcome-accent-2");
+    assert_eq!(settings(&w).accent, sshee_app::settings_store::looks::ACCENTS[2].1);
+    w.click("welcome-look-size");
+    w.click("welcome-menu/item-5");
+    assert_eq!(settings(&w).ui_zoom, 110.0);
+    w.click("welcome-look-animations");
+    assert!(!settings(&w).animations);
+    // Done keeps them all.
+    for _ in 0..2 {
+        w.click("welcome-next");
+    }
+    w.click("welcome-next");
+    assert!(!w.has("welcome"));
+    let s = settings(&w);
+    assert!(s.theme == "midnight" && s.ui_zoom == 110.0 && !s.animations);
 }
 
 #[test]

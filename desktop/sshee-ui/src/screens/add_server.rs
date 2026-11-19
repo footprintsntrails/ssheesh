@@ -278,6 +278,8 @@ impl Shell {
         let state = &mut self.screens.add_server;
         match answer {
             Answer::Sources(sources) => {
+                // The welcome's first page offers what was found too.
+                self.screens.welcome.found = Some(sources.clone());
                 state.sources = Some(sources);
                 if let Some(source) = state.want.take().filter(|_| state.open) {
                     self.add_server_list(source);

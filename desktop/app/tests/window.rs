@@ -1398,17 +1398,14 @@ fn the_welcome_the_tour_and_whats_new_in_both_appearances() {
         for said in ["Welcome to SSHeesh", "Your servers", "Bring over your server from SSHeesh 0.10", "Pick from 2 in ~/.ssh/config", "Skip", "Continue"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
         }
+        // What the demo's XPipe and PuTTY hold, offered by name.
+        for said in ["Bring over 2 servers from XPipe", "Bring over 2 servers from PuTTY"] {
+            assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the tree");
+        }
         // The tour, from the welcome's last page.
-        let script = json!([
-            tap(0.3, "welcome-next"),
-            tap(0.6, "welcome-next"),
-            tap(0.9, "welcome-next"),
-            tap(1.2, "welcome-tour"),
-            tap(1.6, "tour-next"),
-            tap(1.9, "tour-next"),
-            tap(2.2, "tour-next"),
-            end(2.8)
-        ]);
+        let mut events: Vec<Value> = (0..5).map(|i| tap(0.3 + 0.3 * i as f64, "welcome-next")).collect();
+        events.extend([tap(1.8, "welcome-tour"), tap(2.2, "tour-next"), tap(2.5, "tour-next"), tap(2.8, "tour-next"), end(3.4)]);
+        let script = Value::Array(events);
         let Some(run) = self::run(&format!("tour-{theme}"), &["--demo", "--demo-welcome", "--theme", theme], Some(script)) else { return };
         assert!(run.tree_text.contains("Check a server's safety"), "{theme}: the tour's fourth card");
         let Some(run) = self::run(&format!("whats-new-{theme}"), &["--demo", "--demo-whats-new", "--theme", theme], None) else { return };
@@ -1444,11 +1441,15 @@ fn the_welcome_walks_its_pages_once_in_both_appearances() {
     // (theme, the window's frame)
     for (theme, frame) in [("dark", "#28282aff"), ("light", "#ececeeff")] {
         let pages = [
-            ("servers", &["Your servers", "Bring over your server from SSHeesh 0.10", "Add another by hand", "1 of 4"][..]),
-            ("look", &["How it looks", "Match my system", "Light", "Dark", "Sidebar", "2 of 4"]),
-            ("terminal", &["In the terminal", "Copy from the terminal", "When I select text", "When the connection drops", "Reconnect", "Ask me", "3 of 4"]),
+            ("servers", &["Your servers", "Bring over your server from SSHeesh 0.10", "Add another by hand", "1 of 6"][..]),
+            ("layout", &["Layout", "Where tabs go", "Along the top", "Under each server", "Tabs on screen", "Side by side", "Compact mode", "Server vitals", "2 of 6"]),
+            ("sidebar", &["Sidebar", "Side", "Server list", "Names", "Icons", "Server icons", "Pixels", "Server load", "Logo", "3 of 6"]),
+            ("look", &["How it looks", "Match my system", "Light", "Dark", "Dark theme", "Midnight", "Accent color", "Interface size", "Animations", "4 of 6"]),
+            ("terminal", &["In the terminal", "Copy from the terminal", "When I select text", "When the connection drops", "Reconnect", "Ask me", "5 of 6"]),
             ("tips", &["Three things people miss", "Find anything", "Files on the server", "Every agent, in one list", "Take the one-minute tour", "Done"]),
         ];
+        // Every page as tall as the others: the buttons under it stay where the pointer is.
+        let mut next_at: Option<[f64; 2]> = None;
         for (n, (page, said)) in pages.iter().enumerate() {
             let name = format!("welcome-{}-{page}-{theme}", n + 1);
             let Some(run) = run(&name, &["--demo", "--demo-welcome", "--theme", theme], Some(welcome_script(n, vec![]))) else { return };
@@ -1458,13 +1459,20 @@ fn the_welcome_walks_its_pages_once_in_both_appearances() {
                 assert!(run.tree_text.contains(said), "{theme}: {said} isn't on page {page}");
             }
             assert!(!run.tree_text.contains("Streamer"), "{theme}: streamer mode is no headline");
+            // Its top and its right edge: Done, on the last page, is narrower.
+            let [x, y, w, _] = run.rect("welcome-next");
+            let next = [y, x + w];
+            assert!(next_at.is_none_or(|at| (at[0] - next[0]).abs() < 0.5 && (at[1] - next[1]).abs() < 0.5), "{theme}: Continue moved on page {page}: {next:?} from {next_at:?}");
+            next_at = Some(next);
             // The pictures are drawn: many colours where one is, not the page's plain one.
-            let picture = match *page {
-                "look" => Some("welcome-look-dark"),
-                "terminal" => Some("welcome-term-reconnect-picture"),
-                _ => None,
+            let pictures: &[&str] = match *page {
+                "layout" => &["welcome-layout-tabs-picture", "welcome-layout-view-picture", "welcome-layout-compact-picture"],
+                "sidebar" => &["welcome-layout-sidebar-side-picture", "welcome-layout-server-list-picture", "welcome-layout-server-icons-picture"],
+                "look" => &["welcome-look-dark"],
+                "terminal" => &["welcome-term-reconnect-picture"],
+                _ => &[],
             };
-            if let Some(key) = picture {
+            for key in pictures {
                 let px = run.pixels();
                 let [x, y, w, h] = run.rect(key);
                 let mut colours = std::collections::HashSet::new();
@@ -1477,14 +1485,14 @@ fn the_welcome_walks_its_pages_once_in_both_appearances() {
             }
         }
         // Done on the last page: it's gone, and nothing changed.
-        let Some(run) = run(&format!("welcome-done-{theme}"), &["--demo", "--demo-welcome", "--theme", theme], Some(welcome_script(4, vec![]))) else { return };
+        let Some(run) = run(&format!("welcome-done-{theme}"), &["--demo", "--demo-welcome", "--theme", theme], Some(welcome_script(6, vec![]))) else { return };
         assert!(run.element("welcome").is_none(), "{theme}: Done didn't close it");
         assert_eq!(run.fill("window"), frame, "{theme}: the appearance changed");
         // A choice applies at once, as in Settings: the other appearance, and the sidebar at the right.
         let other = if theme == "dark" { "welcome-look-light" } else { "welcome-look-dark" };
-        let script = welcome_script(1, vec![tap(0.9, other), tap(1.2, "welcome-sidebar/seg-1")]);
+        let script = welcome_script(3, vec![tap(1.2, other), tap(1.5, "welcome-back"), tap(1.8, "welcome-layout-sidebar-side-right")]);
         let Some(run) = self::run(&format!("welcome-picked-{theme}"), &["--demo", "--demo-welcome", "--theme", theme], Some(script)) else { return };
-        keep_shot(&run, &format!("welcome-2-look-picked-{theme}"));
+        keep_shot(&run, &format!("welcome-3-sidebar-picked-{theme}"));
         assert_ne!(run.fill("window"), frame, "{theme}: the appearance didn't change");
         assert!(run.rect("rail")[0] > 600.0, "{theme}: the sidebar isn't at the right");
         // Esc on any page skips, and nothing changed.
