@@ -42,6 +42,12 @@ Rule: Rune is named only in `desktop/sshee-ui`. A rule that can be decided witho
   window (`TabId::window`), and the backend's `Remote` routes through the `Hub`: an answer for
   a tab to that tab's window, news of the app (servers, vital signs, Tor) to every window,
   anything else to the window in front. A new `Remote` method picks one of the three.
+  A tab dragged past the window's edge (`tabs.rs`, `TEAR_OFF`) or its menu's "Move to new
+  window" moves into a window of its own (`Shell::move_to_new_window`): the same `Tab`, its
+  `TermPane` with the session in it, and a Files tab's state, taken out (`Shell::take_out`)
+  and taken in (`Shell::take_in`). Its id keeps its old window's range, so the `Hub` notes
+  where it went (`Hub::window_of`): answers, a session's status and a notification's click
+  follow it. While it's out there a card follows the pointer in a Rune overlay (`torn.rs`).
 - **How a view reads it.** `fn view(s: &Shell, cx: &mut Cx<Shell>) -> El` runs again after
   every handler and every `poll` that returns true. It only reads. Hover, press and the focus
   ring are paint (`El::hover`, `El::press`, `Cx::focus_ring`): they never run the view.
@@ -254,8 +260,9 @@ turns the looking off; "Check for test builds" off moves a test build to release
   `drag_resize_window`). macOS and Windows get the design's bar (`App::titlebar`); neither has
   been run yet, nor have their system fonts (`fonts::SYSTEM_FAMILIES`).
 - The row of tabs (`shell/tabs.rs`) has its menu, "+" with its menu (a terminal or Files
-  here or on another machine), drag to reorder and a list for tabs out of sight; a tab can't
-  be dragged out into a window of its own. The title (`shell/title.rs`) names the machine and
+  here or on another machine), drag to reorder and a list for tabs out of sight; a tab dragged
+  past the window's edge opens in a window of its own (not merged back into another window's
+  row: 0.10 had no such drag at all). The title (`shell/title.rs`) names the machine and
   its address and opens its tools (Tunnels and Recipes join that menu when their screens
   land).
 - Settings' "Where tabs go: Under each server" hangs each machine's tabs under it in the

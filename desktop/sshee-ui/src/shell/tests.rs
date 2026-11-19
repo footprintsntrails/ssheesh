@@ -610,3 +610,6 @@ mod sidebar;
 
 /// Tabs under each server in the sidebar (Settings → Layout → Where tabs go).
 mod side_tabs;
+
+/// A tab dragged out into a window of its own, or moved there from its menu.
+mod torn_off;

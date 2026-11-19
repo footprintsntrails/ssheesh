@@ -96,7 +96,7 @@ impl Remote {
     pub fn open_tab(&self, tab: TabId, token: Option<String>) {
         let window = match self.hub() {
             None => Some(self.clone()),
-            Some(hub) => hub.door(tab.window()),
+            Some(hub) => hub.door(hub.window_of(tab)),
         };
         let Some(window) = window else { return };
         window.window(WindowAsk::Raise { token });
@@ -148,7 +148,7 @@ impl Shell {
     pub fn open_link(&mut self, link: &str, tx: &mut Tx) {
         let tab = self.backend_mut().tab_of_link(link);
         // Another window's tab: that window comes forward on it.
-        if let Some(tab) = tab.filter(|t| t.window() != self.window_no()) {
+        if let Some(tab) = tab.filter(|t| self.hub().window_of(*t) != self.window_no()) {
             Remote::routed(self.hub().clone()).open_tab(tab, None);
             return;
         }

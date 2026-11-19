@@ -710,6 +710,41 @@ impl Workbench {
     /// before; a machine's last tab goes to its neighbour in the row (with tabs under each
     /// server, to the main menu); the last tab of all, to the main menu.
     pub fn close(&mut self, id: TabId) -> Option<Tab> {
+        let tab = self.remove(id)?;
+        self.closed.insert(0, ClosedTab { server: tab.server.clone(), kind: tab.kind, title: tab.title.clone(), path: tab.path.clone(), container: tab.container.clone() });
+        self.closed.truncate(CLOSED_KEPT);
+        Some(tab)
+    }
+
+    /// Takes a tab out of the row to move it to another window, as it is (its id, session and
+    /// folder go with it). The row goes on as after [`Self::close`], but nothing joins the
+    /// tabs closed lately: it wasn't closed.
+    pub fn take(&mut self, id: TabId) -> Option<Tab> {
+        self.remove(id)
+    }
+
+    /// A tab taken out of another window ([`Self::take`]) joins this row and is landed on:
+    /// next to the tab you were last on at its machine, else at the row's end. It keeps its
+    /// id, so the session behind it is the same one; its number changes only when this row
+    /// already has that kind numbered so on its machine ("Terminal 2" twice). False when the
+    /// row already has a tab with its id.
+    pub fn adopt(&mut self, mut tab: Tab) -> bool {
+        if self.tab(tab.id).is_some() {
+            return false;
+        }
+        if self.tabs.iter().any(|t| t.kind == tab.kind && t.server == tab.server && t.n == tab.n) {
+            tab.n = self.free_number(tab.kind, &tab.server);
+        }
+        let id = tab.id;
+        let at = self.anchor_on(&tab.server).and_then(|a| self.index_of(a)).map_or(self.tabs.len(), |i| i + 1);
+        self.tabs.insert(at, tab);
+        self.land_on(id);
+        true
+    }
+
+    /// What closing and taking out share: the tab leaves the row, and the one to come up next
+    /// is landed on.
+    fn remove(&mut self, id: TabId) -> Option<Tab> {
         let at = self.index_of(id)?;
         // Shown with others: the pane nearest it comes up, and has its room.
         let shown = self.layout.shown_with(id).is_some();
@@ -729,8 +764,6 @@ impl Workbench {
         };
         let tab = self.tabs.remove(at);
         self.last_on.retain(|_, last| *last != id);
-        self.closed.insert(0, ClosedTab { server: tab.server.clone(), kind: tab.kind, title: tab.title.clone(), path: tab.path.clone(), container: tab.container.clone() });
-        self.closed.truncate(CLOSED_KEPT);
         if self.focused == Some(id) {
             // On the main menu the menu stays; only the tab to come back to changes.
             let was_home = self.home;
@@ -1235,6 +1268,33 @@ mod tests {
         assert_eq!((a.window(), d.window(), b.window(), c.window()), (0, 0, 1, 1));
         assert_eq!(main.for_window(7).open(TabKind::Terminal, WEB).window(), 7);
         assert_eq!(TabId::in_window(3, 9).window(), 3);
+    }
+
+    #[test]
+    fn a_tab_taken_to_another_window_keeps_its_id_and_isnt_closed() {
+        let mut main = bench();
+        let a = main.open(TabKind::Terminal, WEB);
+        let b = main.open(TabKind::Terminal, WEB);
+        main.set_title(b, Some("deploy".into()));
+        let tab = main.take(b).unwrap();
+        // The row goes on as after closing it, but it isn't among the tabs closed lately.
+        assert_eq!(main.active_id(), Some(a));
+        assert!(main.closed().is_empty() && main.tab(b).is_none());
+        // Its new window has it as it was, on screen.
+        let mut second = main.for_window(1);
+        assert!(second.adopt(tab.clone()));
+        assert_eq!(second.active(), Some(&tab));
+        assert!(!second.adopt(tab), "one id twice");
+        // Its number gives way to one this row already has: "Terminal" is taken there.
+        let c = second.open(TabKind::Terminal, WEB);
+        assert_eq!(second.tab(c).unwrap().n, 1);
+        let first = main.take(a).unwrap();
+        assert_eq!(first.n, 1);
+        assert!(second.adopt(first));
+        assert_eq!(second.tab(a).unwrap().n, 3);
+        assert_eq!(second.active_id(), Some(a));
+        // The last tab taken out of a window leaves it on the main menu, as closing it would.
+        assert!(main.tabs().is_empty() && main.showing_home());
     }
 
     #[test]

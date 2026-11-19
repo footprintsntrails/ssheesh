@@ -12,7 +12,9 @@
 //! ```
 //!
 //! - **Ids.** Each window numbers its tabs in a range of its own (`Workbench::for_window`), so
-//!   no two windows ever hold the same id and an answer finds its window by the number alone.
+//!   no two windows ever hold the same id and an answer finds its window by the number, or,
+//!   for a tab dragged out into a window of its own (`move_to_new_window`), by where the hub
+//!   noted it went (`Hub::window_of`).
 //! - **[`Hub`]**: the open windows by number, how to reach each (its own [`Remote`]), which is
 //!   in front, and which window opened each file in an editor elsewhere.
 //! - **[`Shared`]**: a window's way to the one backend. What only one of each exists of (the
@@ -66,6 +68,9 @@ struct Doors {
     edits: HashMap<String, u16>,
     /// The window that last asked what isn't answered to a tab, by kind.
     askers: HashMap<Asker, u16>,
+    /// Tabs moved to another window than the one whose range their id is in (a tab dragged
+    /// out into a window of its own): the window that has each now.
+    moved: HashMap<TabId, u16>,
 }
 
 /// What a window asks of the backend whose answer isn't addressed to a tab.
@@ -101,6 +106,7 @@ impl Hub {
         doors.open.retain(|(n, _)| *n != no);
         doors.edits.retain(|_, n| *n != no);
         doors.askers.retain(|_, n| *n != no);
+        doors.moved.retain(|_, n| *n != no);
         if doors.front == no {
             doors.front = doors.open.first().map_or(MAIN, |(n, _)| *n);
         }
@@ -125,6 +131,22 @@ impl Hub {
         let doors = self.lock();
         let open = |no: &u16| doors.open.iter().any(|(n, _)| n == no);
         doors.askers.get(&kind).copied().filter(open).or(Some(doors.front).filter(open)).or(doors.open.first().map(|(n, _)| *n))
+    }
+
+    /// The window that has `tab`: the one it moved to, else the one whose range its id is in
+    /// (`TabId::window`).
+    pub fn window_of(&self, tab: TabId) -> u16 {
+        self.lock().moved.get(&tab).copied().unwrap_or(tab.window())
+    }
+
+    /// `tab` moved to window `no`: answers for it go there from now on.
+    pub(crate) fn note_moved(&self, tab: TabId, no: u16) {
+        let mut doors = self.lock();
+        if no == tab.window() {
+            doors.moved.remove(&tab);
+        } else {
+            doors.moved.insert(tab, no);
+        }
     }
 
     /// The window came to the front.
@@ -540,6 +562,46 @@ impl Shell {
         let mut shell = Shell::build(bench, backend, options, Some(remote));
         shell.inherit(self);
         shell
+    }
+
+    /// A tab dragged out past the window's edge, or its menu's "Move to new window": it moves
+    /// into a window of its own, as a browser's tab does. It's the same tab: a terminal keeps
+    /// its session, scrollback and program, Files its folder, selection and open file. `at`:
+    /// where the pointer let go, to open the window under it (none from the menu, or where
+    /// the system hides positions: the window opens where the system puts it). This window
+    /// goes on without it, on the main menu when it was the last. Where no window can open
+    /// (a headless run) nothing moves.
+    pub fn move_to_new_window(&mut self, id: TabId, at: Option<super::TornOff>, tx: &mut Tx) {
+        self.row.close_overlays();
+        if self.bench.tab(id).is_none() {
+            return;
+        }
+        if !super::open_window_with_tab(self, id, at, tx) {
+            self.settle(tx);
+        }
+    }
+
+    /// Another window, number `no`, reached through `remote`, made around tab `id` taken out
+    /// of this one ([`Shell::take_out`]): answers for the tab go there from now on
+    /// (`Hub::window_of`). `None` when this window has no such tab.
+    pub(crate) fn window_with_tab(&mut self, no: u16, id: TabId, remote: Remote, tx: &mut Tx) -> Option<Shell> {
+        let moving = self.take_out(id, tx)?;
+        self.hub().join(no, remote.clone());
+        self.hub().note_moved(id, no);
+        let bench = self.bench.for_window(no);
+        let backend = self.shared().another(no, self.settings.follower());
+        let options = Options { place: None, ..self.options.clone() };
+        let mut shell = Shell::build(bench, backend, options, Some(remote));
+        shell.inherit(self);
+        // The new window's own changes wait for its first turn: none here reach this one.
+        shell.take_in(moving, &mut Tx::default());
+        Some(shell)
+    }
+
+    /// A window made around a moved tab ([`Shell::window_with_tab`]) runs its first turn: the
+    /// tab on screen takes the keyboard (made without the window, it couldn't yet).
+    pub(crate) fn window_opened(&mut self, tx: &mut Tx) {
+        self.settle_in_place(tx);
     }
 
     /// What a window opened from `from` knows from the start, as `from` learnt it since the

@@ -85,9 +85,13 @@ impl Remote {
         }
     }
 
-    /// To the window that has `tab` (its id says which: `TabId::window`).
+    /// To the window that has `tab`: the one its id's range says (`TabId::window`), unless
+    /// it moved to another (`Hub::window_of`).
     fn to_tab(&self, tab: TabId, job: Job) {
-        self.to_window(tab.window(), job);
+        match &self.to {
+            To::Window(post) => post(job),
+            To::Windows(hub) => self.to_window(hub.window_of(tab), job),
+        }
     }
 
     /// To every window open.
@@ -274,7 +278,7 @@ impl Remote {
             })),
             EditReply::Opened { tab, result, .. } => {
                 if let Ok(Opened::Session { id, .. }) = result {
-                    hub.note_edit(id.clone(), tab.window());
+                    hub.note_edit(id.clone(), hub.window_of(*tab));
                 }
                 self.to_tab(*tab, deliver(reply));
             }
@@ -588,6 +592,8 @@ pub struct Shell {
     pub(crate) compact: super::compact::Compact,
     /// The row of tabs' own state: its menu, a drag, what is in sight (`tabs.rs`).
     pub(crate) row: super::tabs::Row,
+    /// The card under the pointer while a tab is dragged past the window's edge (`torn.rs`).
+    pub(crate) torn: super::torn::Torn,
     /// Streamer mode (`streamer.rs`).
     pub(crate) streamer: super::streamer::Streamer,
     /// The terminal files from another app are dragged over (`file_drop.rs`).
@@ -604,6 +610,15 @@ pub struct Shell {
     pub(crate) mirroring: Arc<std::sync::atomic::AtomicBool>,
     /// The window closed, or the app quit: nothing more ends.
     closed: bool,
+}
+
+/// A tab on its way from one window to another ([`Shell::take_out`], [`Shell::take_in`]).
+pub(crate) struct Moving {
+    pub(crate) tab: Tab,
+    /// A terminal's pane, with its session, once it has been on screen.
+    pub(crate) pane: Option<TermPane>,
+    /// A Files tab's folder, selection and open file.
+    pub(crate) files: Option<crate::screens::files::State>,
 }
 
 /// A session's status as a tab's.
@@ -678,6 +693,7 @@ impl Shell {
             rail: Default::default(),
             compact: Default::default(),
             row: Default::default(),
+            torn: Default::default(),
             streamer: Default::default(),
             drop_over: None,
             upload: None,
@@ -756,11 +772,11 @@ impl Shell {
     fn make_pane(&mut self, tab: &Tab) -> TermPane {
         let id = tab.id;
         let link = self.backend.terminal(self.bench.server(&tab.server), tab);
-        let status: StatusSink = match &self.remote {
-            Some(remote) => {
-                let remote = remote.clone();
-                Arc::new(move |status| remote.update(move |s| s.link_status(id, status)))
-            }
+        // Through the hub, to the window that has the tab: it may be dragged out into another
+        // window, and its session goes with it (`Hub::window_of`).
+        let routed = self.remote.as_ref().map(|_| Remote::routed(self.hub().clone()));
+        let status: StatusSink = match routed.clone() {
+            Some(remote) => Arc::new(move |status| remote.update_tab(id, move |s| s.link_status(id, status))),
             None => Arc::new(|_| {}),
         };
         let mut pane = TermPane::new(link, status, self.options.pane.clone());
@@ -782,8 +798,16 @@ impl Shell {
             pane.set_waker(waker.clone());
         }
         // A burst the gate holds: told when to look from the session's thread, with no frame now.
-        if let Some(remote) = self.remote.clone() {
-            pane.model.set_hold_waker(Some(Arc::new(move |at| remote.quietly(move |s, tx| s.wake_at(id, at, tx)))));
+        if let Some(remote) = routed {
+            pane.model.set_hold_waker(Some(Arc::new(move |at| {
+                remote.to_tab(
+                    id,
+                    Box::new(move |s, tx| {
+                        s.wake_at(id, at, tx);
+                        false
+                    }),
+                )
+            })));
         }
         if let Some(base) = self.clock_base {
             pane.use_virtual_clock(base);
@@ -954,6 +978,51 @@ impl Shell {
     pub fn close_tab(&mut self, id: TabId, tx: &mut Tx) {
         self.bench.close(id);
         self.settle(tx);
+    }
+
+    /// Takes tab `id` out of this window, to move it to another (`shell::windows`): the tab as
+    /// it is, its terminal's pane with the session running in it, and a Files tab's state
+    /// (folder, selection, a file being edited). Nothing ends and nothing joins the tabs closed
+    /// lately; the row goes on as after closing it (the last tab leaves the main menu).
+    pub(crate) fn take_out(&mut self, id: TabId, tx: &mut Tx) -> Option<Moving> {
+        let tab = self.bench.take(id)?;
+        let pane = self.panes.remove(&id);
+        if self.keyboard == Some(id) {
+            self.keyboard = None;
+        }
+        // A terminal restored from the last run and never shown: its shell goes with it, not
+        // ended as a closed one's is (`sync_panes`).
+        self.opened_before.retain(|t| t.id != id);
+        let files = self.screens.files.remove(&id).map(|mut st| {
+            st.moved();
+            st
+        });
+        self.settle(tx);
+        Some(Moving { tab, pane, files })
+    }
+
+    /// A tab taken out of another window ([`Shell::take_out`]) joins this one, on screen, with
+    /// its pane and its Files state. False when this window already has a tab with its id.
+    pub(crate) fn take_in(&mut self, moving: Moving, tx: &mut Tx) -> bool {
+        let Moving { tab, pane, files } = moving;
+        let id = tab.id;
+        if !self.bench.adopt(tab) {
+            return false;
+        }
+        if let Some(mut pane) = pane {
+            // This window's look and waker; until Rune hands this window its waker
+            // (`set_waker`), output wakes the one it came from, which draws nothing new.
+            pane.view.borrow_mut().set_look(self.look());
+            if let Some(waker) = &self.waker {
+                pane.set_waker(waker.clone());
+            }
+            self.panes.insert(id, pane);
+        }
+        if let Some(files) = files {
+            self.screens.files.insert(id, files);
+        }
+        self.settle(tx);
+        true
     }
 
     pub fn close_active(&mut self, tx: &mut Tx) {

@@ -18,6 +18,7 @@ pub mod state;
 pub mod streamer;
 pub mod tabs;
 pub mod title;
+mod torn;
 pub mod view;
 pub mod windows;
 
@@ -26,8 +27,8 @@ mod tests;
 
 use std::sync::Arc;
 
-use rune::{App, AppSpec, Titlebar, WindowSpec};
-use sshee_app::workbench::{Server, Tab, Workbench};
+use rune::{App, AppSpec, Titlebar, Tx, WindowOptions, WindowSpec};
+use sshee_app::workbench::{Server, Tab, TabId, Workbench};
 
 use crate::terminal::{NoLink, TermLink};
 use crate::theme::{self, Frame};
@@ -90,17 +91,22 @@ fn window_app(options: &mut Options) -> App<Shell> {
     // The top row is the title bar: macOS keeps its traffic lights over its start, Windows
     // gets Rune's minimize, maximize and close at its end, Linux keeps the system's frame.
     // Windows with Settings' "Use the Windows title bar": the system's frame, as on Linux.
-    let app = if options.frame == crate::theme::Frame::Windows && options.native_title_bar {
+    let mut app = if options.frame == crate::theme::Frame::Windows && options.native_title_bar {
         options.frame = crate::theme::Frame::Linux;
         App::new(spec)
     } else {
         App::new(spec).titlebar(Titlebar::new(theme::BAR_HEIGHT).traffic_lights(theme::LIGHTS_AT.0, theme::LIGHTS_AT.1))
     };
+    // The card under the pointer while a tab is dragged past the window's edge (`torn.rs`).
+    let card = torn::overlay(&mut app);
     // The native window, for where it is when it closes (`place.rs`).
     let told = app.handle();
     let app = app.on_window(move |w| {
-        let w = w.clone();
-        told.update(move |s: &mut Shell, _| s.window = Some(w));
+        let (w, card) = (w.clone(), card.clone());
+        told.update(move |s: &mut Shell, _| {
+            s.window = Some(w);
+            s.set_torn_overlay(card);
+        });
     });
     app.on_focus(|s, focused, tx| s.window_focus(focused, tx))
         .on_ime(|s, ev, tx| s.ime(ev, tx))
@@ -149,4 +155,55 @@ pub(crate) fn open_window(from: &mut Shell, server: &str) -> bool {
     shell.options.frame = options.frame;
     rune::open_window(WindowSpec::from_app(format!("server-{no}"), app.init(move || shell)));
     true
+}
+
+/// Where a tab dragged out of the row was let go, to open its window under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TornOff {
+    /// The pointer, in desktop pixels (`Drag::screen_point`).
+    pub screen: (i32, i32),
+    /// The point of the new window's content that goes under the pointer, in window points:
+    /// where the tab will be in its row, and where on the tab it was held.
+    pub grab: [f32; 2],
+}
+
+/// Opens another window from `from`'s around its tab `id`, moved there with its session
+/// (`windows.rs`): under the pointer when `at` says where, as big as `from`'s. It starts at
+/// the end of this turn. False where no window can open (a headless run).
+pub(crate) fn open_window_with_tab(from: &mut Shell, id: TabId, at: Option<TornOff>, tx: &mut Tx) -> bool {
+    if rune::is_headless() || from.bench.tab(id).is_none() {
+        return false;
+    }
+    let mut options = Options { frame: Frame::current(), ..from.options.clone() };
+    let mut app = window_app(&mut options);
+    if let Some(window) = torn_off_options(from.window.as_ref().and_then(|w| w.placement()), at) {
+        app = app.window_options(window);
+    }
+    let remote = window_remote(&app);
+    let Some(no) = from.hub().next_window() else { return false };
+    let Some(mut shell) = from.window_with_tab(no, id, remote, tx) else { return false };
+    shell.options.frame = options.frame;
+    // Its first turn gives the tab the keyboard, as a tab landed on does.
+    app.handle().update(|s: &mut Shell, tx| s.window_opened(tx));
+    rune::open_window(WindowSpec::from_app(format!("server-{no}"), app.init(move || shell)));
+    true
+}
+
+/// A torn-off tab's window: as big as the one it came from, unless that one fills the screen
+/// (then the design's size), with its frame where the pointer holds the tab (`frame_at`).
+/// `None` where nothing is known (Wayland hides positions): the system places it.
+fn torn_off_options(from: Option<rune::WindowPlacement>, at: Option<TornOff>) -> Option<WindowOptions> {
+    let from = from?;
+    let size = (!(from.maximized || from.full_screen || from.minimized)).then_some(from.content_size);
+    let inset = (from.content_position.0 - from.position.0, from.content_position.1 - from.position.1);
+    let position = at.map(|at| frame_at(at.screen, at.grab, from.scale, inset));
+    Some(WindowOptions { position, physical_size: size, ..WindowOptions::default() })
+}
+
+/// The top-left of a window's frame, in desktop pixels, that puts content point `grab`
+/// (window points) under `pointer`: the frame's own border and title bar (`inset`, as the
+/// window the tab came from has them) above and beside the content.
+pub(crate) fn frame_at(pointer: (i32, i32), grab: [f32; 2], scale: f64, inset: (i32, i32)) -> (i32, i32) {
+    let px = |v: f32| (f64::from(v) * scale).round() as i32;
+    (pointer.0 - px(grab[0]) - inset.0, pointer.1 - px(grab[1]) - inset.1)
 }
