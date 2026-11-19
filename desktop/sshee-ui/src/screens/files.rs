@@ -149,11 +149,20 @@ impl State {
     }
 
     /// The tab moved to another window (a tab dragged out into a window of its own): what was
-    /// timed on the old window's clock starts again on the new one's.
+    /// timed on the old window's clock starts again on the new one's, and what works on its
+    /// own thread (a video playing, pictures decoding) is let go: it would wake the old window,
+    /// not the one it's in. [`window_changed`] starts them again there.
     pub(crate) fn moved(&mut self) {
         self.seen_at = None;
         self.hover = None;
+        self.ui.moved();
     }
+}
+
+/// This window has its waker, or tabs that came from another window: what a moved tab let go
+/// of (`State::moved`) plays and decodes again, waking this window.
+pub(crate) fn window_changed(s: &mut Shell) {
+    view::sync(s);
 }
 
 pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>) -> El {
@@ -1583,6 +1592,55 @@ mod tests {
         let file = sshee_app::files::VideoFile(Arc::new(Clip(b"RIFF\0\0\0\0AVI LIST")));
         w.answer(Answer::Video { ticket, path: path.clone(), result: Ok(file) });
         video_until(&w, "failed", |v| v.problem.as_ref().is_some_and(|p| p.to_string() == "AVI videos can't be played here, only MP4 and WebM."));
+    }
+
+    /// A waker that counts how often it's called.
+    fn counted() -> (rune::Waker, Arc<std::sync::atomic::AtomicUsize>) {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = n.clone();
+        (Arc::new(move || _ = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst)), n)
+    }
+
+    #[test]
+    fn a_video_in_a_tab_moved_to_another_window_wakes_that_window() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut w = Window::at_home();
+        let (old_waker, old) = counted();
+        w.s.set_waker(old_waker);
+        let mut listing = home();
+        listing.entries.push(entry("intro.mp4", EntryKind::File));
+        refresh(&mut w.s, w.tab);
+        w.list(listing);
+        open(&mut w.s, w.tab, "intro.mp4");
+        let wants = w.wants();
+        let [Want::OpenVideo { ticket, ref path }] = wants[..] else { panic!("{wants:?}") };
+        let file = sshee_app::files::VideoFile(Arc::new(Clip(include_bytes!("../../../media/fixtures/clip.mp4"))));
+        w.answer(Answer::Video { ticket, path: path.clone(), result: Ok(file) });
+        video_until(&w, "opened", |v| v.status == sshee_media::Status::Paused);
+        w.state().ui.video().unwrap().toggle();
+        video_until(&w, "played", |v| v.status == sshee_media::Status::Playing);
+        let watch = w.state().ui.video().unwrap().player().watch();
+        // Torn off, playing: the old window's player stops with the move...
+        let mut tx = rune::Tx::default();
+        let moving = w.s.take_out(w.tab, &mut tx).unwrap();
+        assert!(moving.files.as_ref().unwrap().ui.video().is_none());
+        let end = Instant::now() + std::time::Duration::from_secs(5);
+        while !watch.stopped() {
+            assert!(Instant::now() < end, "the old window's player didn't stop");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // ...and the window it lands in plays it again, waking that window. (The same Shell
+        // here, given the new window's waker.)
+        let woke_old = old.load(SeqCst);
+        let (new_waker, new) = counted();
+        w.s.set_waker(new_waker);
+        assert!(w.s.take_in(moving, &mut tx));
+        assert!(w.state().ui.video().is_some());
+        video_until(&w, "opened there", |v| v.status == sshee_media::Status::Paused);
+        w.state().ui.video().unwrap().toggle();
+        video_until(&w, "played there", |v| v.status == sshee_media::Status::Playing && v.time > 0.2);
+        assert!(new.load(SeqCst) > 0);
+        assert_eq!(old.load(SeqCst), woke_old, "the old window was woken for the moved tab's video");
     }
 
     #[test]

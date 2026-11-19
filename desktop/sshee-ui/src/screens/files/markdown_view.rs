@@ -33,7 +33,7 @@ fn styled(s: &Shell, block: &Styled, base: rune::tok::TextStyle, t: &'static The
             Style::Image(_) => span.color(t.l2).bg(t.hov, 2.0),
             Style::Link(url) if markdown::is_external(url) => {
                 links.push(Link::new(m.start..m.end, url.clone()));
-                span.color(t.blue)
+                span.color(t.accent_text)
             }
             Style::Link(_) => span.underline(t.hair),
         });
