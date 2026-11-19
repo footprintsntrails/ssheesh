@@ -13,20 +13,11 @@ laid out like a browser. For macOS, Windows and Linux.
 
 <p align="center"><img src="docs/screenshots/1.0/hero.gif" alt="SSHeesh on made-up servers: the Files tab is dragged onto the page and opens beside the terminal on web-7731, then the pointer rests on the tab of an agent on db-main that says Needs you, a card shows the command Claude Code wants to run, and a click on Yes answers it"></p>
 
-> [!WARNING]
-> **SSHeesh 1.0 is rebuilt from the ground up**, so some things will be rough or still missing. If something's wrong, [please say so](https://github.com/footprintsntrails/ssheesh/issues/new/choose).
-
 SSHeesh is a calm window for your servers, made for people who aren't infrastructure experts and for people who are. Each server is like a site with tabs of its own, and the tabs of every server you have open sit in one row, each with its server's name beside it. The terminal gets the room, and a button shows up when you reach for it, not before. It checks your servers' security and frees their disks with one click each, and with one more it hides where you connect from, through Tor. There's no account and no cloud.
-
-## Add a server by pasting its ssh command
-
-Paste or type a whole `ssh` command and every field fills in. Your `~/.ssh/config`, keys and agent just work, and Add a server brings over your servers from SSHeesh 0.10, XPipe, PuTTY and other SSH apps. Errors come in plain words, and every command SSHeesh suggests says what it does.
-
-<p align="center"><img src="docs/screenshots/1.0/add-server.gif" alt="Add a server: ssh deploy@203.0.113.77 -p 2222 is typed into Address, the port and user fill in by themselves and the dialog reads it as deploy@203.0.113.77:2222; Add and connect opens a terminal on the new server"></p>
 
 ## Wi-Fi drops, your work doesn't
 
-With `tmux` on the server, a dropped connection only pauses your view: the shell, the deploy, the agent keep running there. A key or Reconnect takes you back into the same session, or SSHeesh reconnects by itself if you tell it to. A line in the terminal then says what you missed while you were away: how many new lines, and how many of them errors and warnings. Uploads and downloads pick up where they stopped, and a terminal you haven't touched for 20 minutes lets go of its connection, then comes back with a key.
+A dropped connection doesn't end anything. When SSHeesh reconnects, the terminal is exactly as you left it: its whole history is still there, and what was running kept running on the server the whole time. An AI agent in the middle of a task, a deploy, a long build: nothing needs restarting, you just pick up where it is now. A line in the terminal says what you missed while you were away, such as how many new lines came and how many of them are errors. It works on any server with `tmux` installed. Uploads and downloads also pick up where they stopped.
 
 <p align="center"><img src="docs/screenshots/1.0/reconnect.gif" alt="A terminal on backups says The server stopped responding and counts down to its next try; a click on Now brings it back, and a note says Back online, everything's where you left it"></p>
 
@@ -84,6 +75,7 @@ SSHeesh Default (a warm dark with a soft green), Daylight, Midnight, Graphite an
 
 ## More worth knowing
 
+- **Bring your servers with you.** Your `~/.ssh/config`, keys and agent just work, and SSHeesh brings over your servers from SSHeesh 0.10, XPipe, PuTTY, MobaXterm and other SSH apps it finds.
 - **Two tabs at once.** Drag a tab onto the page, also two servers' tabs side by side. Ctrl+Shift+S (⇧⌘S) switches between one tab at a time and side by side.
 - **A welcome that says where you are.** A new terminal shows the server's own welcome, or SSHeesh's: the system, uptime, memory and disk, containers and updates, beside the logo. The server's notices about updates always stay.
 - **The main menu** (the logo at the top left) is a start page with all your servers, what's running and the tabs you closed. Ctrl+Shift+Z (⇧⌘T) brings back the last one.
@@ -142,8 +134,7 @@ What's planned next. The order may still change.
 - **Docker and services.** Per-container stats, and updates you can roll back. systemd services, and version history for config files.
 - **Workspaces.** A workspace per project, a drop-down terminal and a tray monitor. App lock, and `ssh://` links.
 - **Sync.** Encrypted sync through a folder you pick, with no account.
-- **Back from 0.10:** videos that play in Files, and a tab dragged out into a window of its own.
-- **Along the way:** an installer, signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
+- **Along the way:** signed builds for macOS and Windows, and a built-in SSH connection on Windows, since its `ssh` can't share connections.
 
 See what changed in each version in the [changelog](CHANGELOG.md).
 
