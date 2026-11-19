@@ -254,18 +254,25 @@ jobs:
           esac
           ls -la out
 
-      # Linux has nothing but its system: only glibc's own libraries, glibc 2.35 at most.
+      # Linux has nothing but what every desktop has: glibc's own libraries, the C++ runtime (the
+      # video decoder is C++) and libxkbcommon (the keyboard; every X11 or Wayland desktop has it),
+      # no newer than Ubuntu 22.04's: glibc 2.35, GLIBCXX 3.4.30.
       - name: The Linux program needs only what every Linux has
         if: runner.os == 'Linux'
         run: |
           needed=$(readelf -d out/ssheesh | awk '/NEEDED/ {gsub(/[][]/, "", $5); print $5}')
           echo "$needed"
-          extra=$(echo "$needed" | grep -vE '^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|libgcc_s\.so\.1|ld-linux-x86-64\.so\.2|librt\.so\.1)$' || true)
+          extra=$(echo "$needed" | grep -vE '^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|libgcc_s\.so\.1|ld-linux-x86-64\.so\.2|librt\.so\.1|libstdc\+\+\.so\.6|libxkbcommon\.so\.0)$' || true)
           if [ -n "$extra" ]; then echo "::error::The Linux program links libraries a Linux may not have: $extra"; exit 1; fi
           newest=$(objdump -T out/ssheesh | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -n 1)
           echo "newest glibc needed: $newest"
           if [ "$(printf '%s\nGLIBC_2.35\n' "$newest" | sort -V | tail -n 1)" != GLIBC_2.35 ]; then
             echo "::error::The Linux program needs $newest, newer than Ubuntu 22.04's 2.35"; exit 1
+          fi
+          newest=$(objdump -T out/ssheesh | grep -oE 'GLIBCXX_[0-9.]+' | sort -uV | tail -n 1)
+          echo "newest libstdc++ needed: ${newest:-none}"
+          if [ -n "$newest" ] && [ "$(printf '%s\nGLIBCXX_3.4.30\n' "$newest" | sort -V | tail -n 1)" != GLIBCXX_3.4.30 ]; then
+            echo "::error::The Linux program needs $newest, newer than Ubuntu 22.04's 3.4.30"; exit 1
           fi
 
       # The Mac app: the same bundle id and executable name as 0.10 (plan §4), macOS 11 and up.
