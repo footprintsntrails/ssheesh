@@ -3,9 +3,11 @@
 //! looks and what it's called (`looks.json` beside it). Saved passwords go to the copy's own
 //! keychain name (`AppIdentity::keychain_service`), never into a file.
 //!
-//! 0.10's list is never written and never used as this copy's own. It is read to offer
-//! "Bring over your servers from 0.10": each server you tick is added here under a new id,
-//! with the label, icon and colour 0.10 kept for it. 0.10's saved passwords are copied only
+//! 0.10's list is never written and never used as this copy's own. The released copy, 0.10's
+//! next version, takes every server in it at its first start, ids, labels and looks too
+//! ([`ServerStore::move_from_0_10`]). A test copy reads it to offer "Bring over your servers
+//! from 0.10": each server you tick is added here under a new id, with the label, icon and
+//! colour 0.10 kept for it. 0.10's saved passwords are copied only
 //! on "Use old passwords"; the released copy, which shares 0.10's keychain name, has its
 //! `~/.ssh/config` servers' passwords already and only brings over 0.10's note of them.
 //! XPipe's vault, other SSH apps' saved sessions (PuTTY, WinSCP… `sshee_core::other_apps`)
@@ -35,6 +37,10 @@ const LOOKS_FILE: &str = "looks.json";
 /// 0.10's folder already, in the copy's folder: each is brought once, so a password forgotten
 /// here stays forgotten.
 const OLD_NOTED_FILE: &str = "remembered-from-0.10.json";
+
+/// Written once 0.10's servers moved into the released copy's list (the ids that came), so
+/// they move once: one removed here afterwards stays removed.
+const MOVED_FILE: &str = "moved-from-0.10.json";
 
 /// Where saved passwords go. The program's is the system keychain under this copy's own name
 /// ([`PasswordStore`]); a test's is a list in memory.
@@ -227,8 +233,54 @@ impl ServerStore {
             Err(_) => (Looks::default(), false),
         };
         let mut store = ServerStore { places, hosts, looks, looks_unread, keychain };
+        store.move_from_0_10();
         store.note_old_config_passwords();
         store
+    }
+
+    /// The released copy is 0.10's next version: at its first start every server 0.10 listed
+    /// comes along by itself, nothing to pick. Its saved servers keep their ids, so the
+    /// passwords 0.10 kept under the same keychain name are theirs at once; their labels,
+    /// icons and colours come too, and which `~/.ssh/config` servers 0.10 showed or hid. A
+    /// server here already (brought over by hand before, by its address) isn't doubled. Once:
+    /// a note says it's done, and one removed afterwards stays removed. A test copy, under its
+    /// own keychain name, offers them in "Add a server" instead.
+    fn move_from_0_10(&mut self) {
+        if !self.places.shares_old_keychain {
+            return;
+        }
+        let note = self.places.dir.join(MOVED_FILE);
+        let Some(old_dir) = self.places.old_dir.clone() else { return };
+        // 0.10 never ran here (or it's done): nothing to move, nothing to note.
+        if note.exists() || !old_dir.exists() {
+            return;
+        }
+        let mine = self.hosts();
+        let old: Vec<Host> = self.old_hosts().into_iter().filter(|o| !mine.iter().any(|m| m.id == o.id || address(m) == address(o))).collect();
+        if let Err(why) = self.hosts.adopt(&old) {
+            // Tried again at the next start.
+            eprintln!("ssheesh: 0.10's servers didn't move: {why}");
+            return;
+        }
+        let moved: Vec<(String, String)> = old.iter().map(|h| (h.id.clone(), h.id.clone())).collect();
+        match (self.places.old_labels)() {
+            Some(labels) => self.looks.carry(&labels, &moved),
+            None => {
+                // 0.10's choice about `~/.ssh/config` didn't read: all of them show, rather
+                // than any going missing (each can be hidden from its menu).
+                let list: Vec<Listed> = self.hosts().iter().map(listed).collect();
+                let undecided: Vec<String> = self.looks.undecided(&list).into_iter().map(|h| h.id.clone()).collect();
+                self.looks.choose_config(&undecided, &undecided);
+            }
+        }
+        if let Err(why) = self.save_looks() {
+            eprintln!("ssheesh: 0.10's labels didn't move: {why}");
+            return;
+        }
+        let ids: Vec<&String> = old.iter().map(|h| &h.id).collect();
+        if let Ok(json) = serde_json::to_vec_pretty(&ids) {
+            let _ = write_private(&note, &json);
+        }
     }
 
     /// The `~/.ssh/config` servers whose password 0.10 kept in its keychain: the ids in its
@@ -1128,6 +1180,64 @@ mod tests {
         assert!(w.keychain.kept.lock().unwrap().is_empty());
         assert!(!w.copy_file(LOOKS_FILE).contains("Shop"));
         assert!(matches!(again.handle(Ask::Remove { server }), Answer::Refused { .. }));
+    }
+
+    #[test]
+    fn the_release_brings_every_0_10_server_along_by_itself_once() {
+        let w = World::new("moves");
+        w.old_list(OLD_LIST);
+        let mut store = w.store_as(true);
+        // 0.10's saved servers, under the ids they had (their passwords are theirs at once),
+        // and the ~/.ssh/config server 0.10 showed; old-box, never said yes to there, waits.
+        assert_eq!(w.names(&mut store), ["web-7731", "db-main", "backups"]);
+        let shown = store.shown();
+        let db = shown.hosts.iter().find(|h| h.id == "saved:old-db").expect("db-main kept its id");
+        assert!(db.remembered_password && db.port == Some(2222));
+        assert!(shown.hosts.iter().any(|h| h.id == "saved:old-v6" && h.identity_file.as_deref() == Some("~/.ssh/backup_key")));
+        // Its label and look came too, and nothing is left to offer.
+        assert!(shown.servers.iter().any(|s| s.name == "db-main" && s.is_prod() && s.icon == "database"));
+        assert_eq!((shown.old_new, shown.config_new), (0, 1));
+        // Once: removed here, it stays removed after a restart.
+        assert_eq!(store.handle(Ask::Remove { server: "host:saved:old-v6".into() }), Answer::Removed { server: "host:saved:old-v6".into() });
+        let mut again = w.store_as(true);
+        assert_eq!(w.names(&mut again), ["web-7731", "db-main"]);
+        // 0.10's own list is never written.
+        assert_eq!(std::fs::read_to_string(w.root.join("old").join("hosts.json")).unwrap(), OLD_LIST);
+    }
+
+    #[test]
+    fn a_server_brought_over_by_hand_before_isnt_doubled_and_without_0_10s_labels_every_config_server_shows() {
+        let w = World::new("moves-twice");
+        w.old_list(OLD_LIST);
+        // An earlier 1.0 brought db-main over by hand, under a new id.
+        let mut before = w.store();
+        assert!(matches!(before.handle(by_hand("postgres@203.0.113.31:2222", None, false)), Answer::Added { .. }));
+        let identity = AppIdentity::in_dir(w.root.join("copy"), "io.example.ssheesh.test");
+        let places = Places {
+            ssh_config: Some(w.root.join("ssh_config")),
+            old_dir: Some(w.root.join("old")),
+            xpipe: vec![],
+            apps: other_apps::Places::under(&w.root.join("home")),
+            old_labels: Box::new(|| None),
+            shares_old_keychain: true,
+            ..Places::of(&identity, None)
+        };
+        let mut store = ServerStore::open(places, w.keychain.clone());
+        let shown = store.shown();
+        assert_eq!(shown.hosts.iter().filter(|h| h.hostname == "203.0.113.31").count(), 1, "db-main once");
+        assert!(shown.hosts.iter().any(|h| h.id == "saved:old-v6"));
+        // 0.10's choice didn't read: both ~/.ssh/config servers show rather than go missing.
+        assert_eq!(shown.config_new, 0);
+        assert_eq!(w.names(&mut store).len(), 4, "{:?}", w.names(&mut store));
+    }
+
+    #[test]
+    fn a_test_copy_offers_0_10s_servers_and_moves_none() {
+        let w = World::new("offers");
+        w.old_list(OLD_LIST);
+        let mut store = w.store();
+        assert!(w.names(&mut store).is_empty());
+        assert_eq!(store.shown().old_new, 2);
     }
 
     #[test]

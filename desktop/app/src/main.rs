@@ -56,7 +56,7 @@ impl Backend for Live {
         // At 1.0's first start here, the settings start from 0.10's, in its web view's
         // storage: reading it copies a database, so it happens on a thread of its own, and
         // the window takes them when done. A copy with its own settings file ignores the
-        // answer. 0.10's servers aren't copied: "Add a server" offers to bring them over.
+        // answer. 0.10's servers came over already, as the list opened (`servers.rs`).
         let seeder = remote.clone();
         let first = settings::first_start();
         // Files' bookmarks come over from 0.10 once, also into a copy that has its settings.
@@ -299,8 +299,9 @@ fn main() {
     } else {
         // This copy's own list (`~/.sshee-preview/hosts.json`, `looks.json`) and the ssh
         // config: a couple of small files, read before the window opens, so the sidebar is
-        // there in the first frame. 0.10's list is never this copy's: "Add a server" offers to
-        // bring it over. Passwords are kept under this copy's own keychain name.
+        // there in the first frame. At the release's first start 0.10's servers move into it
+        // (a test copy's "Add a server" offers them instead). Passwords are kept under this
+        // copy's own keychain name, 0.10's for the release.
         let places = servers::Places::of(sshee_core::app_identity::current(), args.ssh_config.clone());
         let mut store = servers::ServerStore::open(places, std::sync::Arc::new(sshee_core::secrets::PasswordStore::default()));
         let shown = store.shown();

@@ -148,6 +148,22 @@ impl HostStore {
         self.load_remembered()
     }
 
+    /// Keeps hosts saved in another list (0.10's) as they are, ids and all, after the ones
+    /// here: a password kept under a host's id is still its own. One whose id is here already
+    /// is left out. How many were added.
+    pub fn adopt(&mut self, hosts: &[Host]) -> Result<usize, String> {
+        let mut saved = self.load_saved();
+        let new: Vec<Host> = hosts.iter().filter(|h| !saved.iter().any(|s| s.id == h.id)).cloned().collect();
+        if new.is_empty() {
+            return Ok(0);
+        }
+        let added = new.len();
+        saved.extend(new);
+        self.write_saved(&saved)?;
+        self.cache.clear();
+        Ok(added)
+    }
+
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
         let mut saved = self.load_saved();
         saved.retain(|h| h.id != id);
