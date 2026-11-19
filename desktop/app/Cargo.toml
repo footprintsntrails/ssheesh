@@ -47,9 +47,20 @@ semver = "1"
 # reads it as well, so Files shows a .tif (the version of `tiff` the lock already has).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
+# Windows: the installer (`setup`): the registry under HKCU, the Start menu's shortcuts with
+# their AppUserModelID, its mutex (the versions and features Rune already builds).
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
+
 # Taking macOS's quarantine mark off a staged build (`update::swap`).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+
+# Windows: the icon, version and manifest compiled into the program (`build.rs`; the version
+# the root workspace already locks).
+[build-dependencies]
+embed-resource = "3"
 
 [dev-dependencies]
 # Signing made-up archives as minisign does, with keys made in the tests (`update::verify`);

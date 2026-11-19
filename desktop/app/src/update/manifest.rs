@@ -76,11 +76,20 @@ impl Platform {
         }
     }
 
-    /// The program's name inside the archive.
+    /// The program's name inside a test build's archive.
     pub fn program(self) -> &'static str {
         match self {
             Platform::WindowsX64 => "ssheesh-preview.exe",
             _ => "ssheesh-preview",
+        }
+    }
+
+    /// The program's name inside a release's archive: 0.10's (`ssheesh.exe` in its install
+    /// folder, `Contents/MacOS/ssheesh`), the name every 1.x keeps (plan §4).
+    pub fn release_program(self) -> &'static str {
+        match self {
+            Platform::WindowsX64 => "ssheesh.exe",
+            _ => "ssheesh",
         }
     }
 
@@ -272,5 +281,7 @@ mod tests {
         assert_eq!(Platform::LinuxX64.signed_name("1.0.0-canary.124"), "ssheesh-1.0.0-canary.124-linux-x64.tar.gz");
         assert_eq!(Platform::WindowsX64.signed_name("1.0.0-canary.124"), "ssheesh-1.0.0-canary.124-windows-x64.zip");
         assert_eq!(Platform::WindowsX64.program(), "ssheesh-preview.exe");
+        assert_eq!(Platform::WindowsX64.release_program(), "ssheesh.exe");
+        assert_eq!(Platform::LinuxX64.release_program(), "ssheesh");
     }
 }

@@ -10,6 +10,7 @@ pub mod meter;
 pub mod pixel_icons;
 pub mod proto;
 pub mod screens;
+pub mod setup;
 pub mod shell;
 pub mod svg;
 pub mod terminal;

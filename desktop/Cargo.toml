@@ -4,7 +4,7 @@
 # are path dependencies. Build with `cargo build` here; the target folder is ../target/desktop
 # (.cargo/config.toml). scripts/check-desktop-workspace.sh keeps the two workspaces in step.
 [workspace]
-members = ["sshee-ui", "proto", "app"]
+members = ["sshee-ui", "proto", "app", "release"]
 # Rune's crate with our fixes (vendor/rune.patch): a dependency, not ours to build and test.
 exclude = ["vendor/rune"]
 resolver = "2"

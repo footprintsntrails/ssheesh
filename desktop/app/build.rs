@@ -10,6 +10,11 @@
 //!   `SSHEESH_CANARY_RUN` is set.
 //!
 //! A build with neither (tests, a build on your computer) never updates itself.
+//!
+//! On Windows it also puts into the program what a clean Windows needs of it (plan, Phase 7
+//! item 2): its icon, its version, and a manifest asking for no administrator
+//! (`windows/ssheesh.manifest`), since the same file is the installer. A release build fails
+//! without them; elsewhere (a cross-check without a resource compiler) it only warns.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,4 +58,62 @@ fn main() {
     println!("cargo:rustc-env=SSHEESH_CANARY_RUN={}", run.map(|r| r.to_string()).unwrap_or_default());
     let release = run.is_none() && std::env::var("SSHEESH_RELEASE").is_ok_and(|v| v.trim() == "1");
     println!("cargo:rustc-env=SSHEESH_RELEASE={}", if release { "1" } else { "" });
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        windows_resources(&dir, release);
+    }
+}
+
+/// The icon, the version and the manifest, as a Windows resource script compiled into the
+/// program (`embed-resource`: rc.exe with MSVC, windres with MinGW).
+fn windows_resources(dir: &Path, release: bool) {
+    for file in ["windows/ssheesh.manifest", "windows/ssheesh.ico"] {
+        println!("cargo:rerun-if-changed={file}");
+    }
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    let numbers: Vec<u16> = version.split(['.', '-']).take(3).map(|n| n.parse().unwrap_or(0)).collect();
+    let (major, minor, patch) = (numbers.first().copied().unwrap_or(0), numbers.get(1).copied().unwrap_or(0), numbers.get(2).copied().unwrap_or(0));
+    let quoted = |p: PathBuf| p.display().to_string().replace('\\', "\\\\");
+    let rc = format!(
+        r#"#pragma code_page(65001)
+1 ICON "{icon}"
+1 24 "{manifest}"
+1 VERSIONINFO
+FILEVERSION {major},{minor},{patch},0
+PRODUCTVERSION {major},{minor},{patch},0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "SSHeesh contributors"
+      VALUE "FileDescription", "SSHeesh"
+      VALUE "FileVersion", "{version}"
+      VALUE "InternalName", "ssheesh"
+      VALUE "LegalCopyright", "© 2026 footprintsntrails. CC BY-NC-SA 4.0"
+      VALUE "OriginalFilename", "ssheesh.exe"
+      VALUE "ProductName", "SSHeesh"
+      VALUE "ProductVersion", "{version}"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"#,
+        icon = quoted(dir.join("windows").join("ssheesh.ico")),
+        manifest = quoted(dir.join("windows").join("ssheesh.manifest")),
+    );
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("ssheesh.rc");
+    if let Err(e) = std::fs::write(&out, rc) {
+        panic!("the Windows resource script couldn't be written: {e}");
+    }
+    if let Err(e) = embed_resource::compile(&out, embed_resource::NONE).manifest_required() {
+        if release {
+            panic!("the release's Windows resources (icon, version, manifest) didn't compile: {e}");
+        }
+        println!("cargo:warning=no Windows resources in this build (icon, version, manifest): {e}");
+    }
 }
