@@ -248,10 +248,29 @@ pub enum Trial {
     Stuck(String),
 }
 
-/// Starts the program at `places.exe` (the new build) through `launch` and waits up to `wait`
-/// for `marker` to appear; when it doesn't, the build from before goes back in place.
-pub fn watch<S: Started>(places: &Places, marker: &Path, wait: Duration, poll: Duration, launch: impl FnOnce(&Path) -> std::io::Result<S>) -> Trial {
-    let why = match launch(&places.exe) {
+/// What an update replaced, as the trial starts it and puts it back: a program
+/// ([`Places`]), or a whole Mac app (`bundle::Bundle`).
+pub trait Replaced {
+    /// What `watch` hands its `launch`: the new program, or the new app.
+    fn program(&self) -> PathBuf;
+    /// Puts the build from before back in place.
+    fn roll_back(&self) -> Result<(), String>;
+}
+
+impl Replaced for Places {
+    fn program(&self) -> PathBuf {
+        self.exe.clone()
+    }
+
+    fn roll_back(&self) -> Result<(), String> {
+        roll_back(self)
+    }
+}
+
+/// Starts the new build (`replaced.program()`) through `launch` and waits up to `wait` for
+/// `marker` to appear; when it doesn't, the build from before goes back in place.
+pub fn watch<S: Started>(replaced: &impl Replaced, marker: &Path, wait: Duration, poll: Duration, launch: impl FnOnce(&Path) -> std::io::Result<S>) -> Trial {
+    let why = match launch(&replaced.program()) {
         Err(e) => format!("it couldn't be started: {e}"),
         Ok(mut child) => {
             let since = Instant::now();
@@ -274,7 +293,7 @@ pub fn watch<S: Started>(places: &Places, marker: &Path, wait: Duration, poll: D
             }
         }
     };
-    match roll_back(places) {
+    match replaced.roll_back() {
         Ok(()) => Trial::RolledBack(why),
         Err(e) => Trial::Stuck(format!("{why}, and {e}")),
     }
