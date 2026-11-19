@@ -166,7 +166,6 @@ pub fn latest(release: &Release, key: &str) -> Result<Vec<String>, String> {
         match s {
             System::Windows => kinds.extend([("0.10 installed on Windows", "windows", "x86_64", Some("nsis"), None), ("0.10 portable on Windows", "windows", "x86_64", None, Some("windows-x86_64-portable"))]),
             System::Mac => kinds.push(("0.10 on an Apple silicon Mac", "darwin", "aarch64", Some("app"), None)),
-            System::MacIntel => kinds.push(("0.10 on an Intel Mac", "darwin", "x86_64", Some("app"), None)),
             System::Linux => kinds.push(("0.10's AppImage on Linux", "linux", "x86_64", Some("appimage"), None)),
         }
     }

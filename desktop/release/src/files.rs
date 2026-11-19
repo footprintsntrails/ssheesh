@@ -5,12 +5,12 @@
 //! | `SSHeesh_<v>_x64-setup.exe` | 0.10 installed on Windows (`windows-x86_64-nsis`, `windows-x86_64`): its updater runs it with `/P /UPDATE /R /ARGS`; people downloading it |
 //! | `SSHeesh.exe` | 0.10 portable on Windows (`windows-x86_64-portable`): it swaps it in for itself; people wanting one file |
 //! | `ssheesh-<v>-windows-x64.zip` (`ssheesh.exe`) | 1.x on Windows (`update-v1.json`, `windows-x64`) |
-//! | `SSHeesh_<v>_universal.app.tar.gz` (`SSHeesh.app/`) | 0.10 on a Mac (`darwin-*-app`, `darwin-*`), 1.x on a Mac (`macos-arm64`, `macos-x64`) |
-//! | `SSHeesh_<v>_universal.dmg` | people downloading for a Mac |
+//! | `ssheesh-<v>-macos-arm64.tar.gz` (`SSHeesh.app/`) | 0.10 on an Apple silicon Mac (`darwin-aarch64-app`, `darwin-aarch64`), 1.x on a Mac (`macos-arm64`); people downloading |
 //! | `ssheesh-<v>-linux-x64` (the program) | 0.10's AppImage on Linux (`linux-x86_64-appimage`, `linux-x86_64`): its updater writes any ELF over the AppImage |
 //! | `ssheesh-<v>-linux-x64.tar.gz` (`ssheesh`) | 1.x on Linux (`linux-x64`); people downloading |
 //!
-//! Each has its signature beside it as `<file>.sig` (`sign`).
+//! Each has its signature beside it as `<file>.sig` (`sign`). Intel Macs have no entry: they stay
+//! on 0.10.14 until 1.x is checked there (plan R17).
 
 use std::path::{Path, PathBuf};
 
@@ -32,13 +32,12 @@ pub enum System {
     Windows,
     /// Apple silicon.
     Mac,
-    MacIntel,
     Linux,
 }
 
 impl System {
     pub fn all() -> Vec<System> {
-        vec![System::Windows, System::Mac, System::MacIntel, System::Linux]
+        vec![System::Windows, System::Mac, System::Linux]
     }
 
     pub fn parse_list(list: &str) -> Result<Vec<System>, String> {
@@ -47,10 +46,9 @@ impl System {
             let s = match word {
                 "windows" => System::Windows,
                 "macos" => System::Mac,
-                "macos-intel" => System::MacIntel,
                 "linux" => System::Linux,
                 "none" => continue,
-                other => return Err(format!("unknown system {other}: windows, macos, macos-intel, linux or none")),
+                other => return Err(format!("unknown system {other}: windows, macos, linux or none")),
             };
             if !out.contains(&s) {
                 out.push(s);
@@ -77,7 +75,7 @@ impl Names {
             installer: format!("SSHeesh_{v}_x64-setup.exe"),
             portable: "SSHeesh.exe".into(),
             windows_zip: format!("ssheesh-{v}-windows-x64.zip"),
-            mac_app: format!("SSHeesh_{v}_universal.app.tar.gz"),
+            mac_app: format!("ssheesh-{v}-macos-arm64.tar.gz"),
             linux_program: format!("ssheesh-{v}-linux-x64"),
             linux_tar: format!("ssheesh-{v}-linux-x64.tar.gz"),
         }
@@ -142,7 +140,6 @@ impl Release {
             match s {
                 System::Windows => out.extend([("windows-x86_64-nsis", n.installer.as_str()), ("windows-x86_64", n.installer.as_str()), ("windows-x86_64-portable", n.portable.as_str())]),
                 System::Mac => out.extend([("darwin-aarch64-app", n.mac_app.as_str()), ("darwin-aarch64", n.mac_app.as_str())]),
-                System::MacIntel => out.extend([("darwin-x86_64-app", n.mac_app.as_str()), ("darwin-x86_64", n.mac_app.as_str())]),
                 System::Linux => out.extend([("linux-x86_64-appimage", n.linux_program.as_str()), ("linux-x86_64", n.linux_program.as_str())]),
             }
         }
@@ -164,7 +161,7 @@ impl Release {
     /// `update-v1.json`'s entries: `(key, file)`.
     pub fn v1_entries(&self) -> Vec<(&'static str, &str)> {
         let n = &self.names;
-        vec![("linux-x64", n.linux_tar.as_str()), ("macos-arm64", n.mac_app.as_str()), ("macos-x64", n.mac_app.as_str()), ("windows-x64", n.windows_zip.as_str())]
+        vec![("linux-x64", n.linux_tar.as_str()), ("macos-arm64", n.mac_app.as_str()), ("windows-x64", n.windows_zip.as_str())]
     }
 
     /// `update-v1.json` (`desktop/app/src/update/release.rs`): every system 1.x runs on, with
@@ -244,7 +241,13 @@ mod tests {
     fn each_kind_of_0_10_finds_its_entry() {
         let r = Release::of("1.0.0", "footprintsntrails/ssheesh", "v1.0.0", Path::new("."), None).unwrap();
         let keys: Vec<_> = r.latest_entries().into_iter().map(|(k, _)| k).collect();
-        for want in ["windows-x86_64-nsis", "windows-x86_64", "windows-x86_64-portable", "darwin-aarch64-app", "darwin-x86_64-app", "linux-x86_64-appimage"] {
+        for want in ["windows-x86_64-nsis", "windows-x86_64", "windows-x86_64-portable", "darwin-aarch64-app", "linux-x86_64-appimage"] {
+            assert!(keys.contains(&want), "{want}");
+        }
+        for absent in ["darwin-x86_64-app", "darwin-x86_64"] {
+            assert!(!keys.contains(&absent), "{absent}");
+        }
+        for want in ["windows-x86_64-nsis"] {
             assert!(keys.contains(&want), "{want}");
         }
         assert_eq!(r.url("SSHeesh.exe"), "https://github.com/footprintsntrails/ssheesh/releases/download/v1.0.0/SSHeesh.exe");

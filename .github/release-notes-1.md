@@ -12,7 +12,7 @@ On Windows the version you had stays in the Start menu as "SSHeesh (previous ver
 
 | System | Download |
 | --- | --- |
-| **macOS** 11+, Apple Silicon and Intel | [**SSHeesh_{{version}}_universal.dmg**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_universal.dmg) |
+| **macOS** 11+, Apple Silicon | [**ssheesh-{{version}}-macos-arm64.tar.gz**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/ssheesh-{{version}}-macos-arm64.tar.gz): `SSHeesh.app`, drag it to Applications |
 | **Windows** 10 and 11 | The [**installer**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh_{{version}}_x64-setup.exe), for you only, no administrator needed · or [**SSHeesh.exe**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/SSHeesh.exe), nothing to install |
 | **Linux** x64 | [**ssheesh-{{version}}-linux-x64.tar.gz**](https://github.com/footprintsntrails/ssheesh/releases/download/v{{version}}/ssheesh-{{version}}-linux-x64.tar.gz): one program, `tar xzf` and run `./ssheesh`. It needs Vulkan (Mesa's driver works) |
 

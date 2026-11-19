@@ -29,7 +29,7 @@ const USAGE: &str = "\
 usage:
   ssheesh-release sign --version V [--minisig] FILE...
   ssheesh-release manifests --version V --repo OWNER/NAME --tag TAG --dir DIR
-                            [--platforms windows,macos,macos-intel,linux] [--pulled FILE] [--notes FILE]
+                            [--platforms windows,macos,linux] [--pulled FILE] [--notes FILE]
   ssheesh-release verify --version V [--key PUBLIC_KEY_BASE64] FILE...
   ssheesh-release check --version V --repo OWNER/NAME --tag TAG --dir DIR
                         [--platforms ...] [--key PUBLIC_KEY_BASE64]";

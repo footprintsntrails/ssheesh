@@ -1,5 +1,15 @@
 # Releases SSHeesh 1.x, the app on Rune in desktop/, and moves 0.10.x users onto it.
 #
+# What a release holds (README's Install section):
+#   SSHeesh_<v>_x64-setup.exe        Windows installer, for the person only, where 0.10's NSIS put it
+#   SSHeesh.exe                      Windows, portable: the same program, run from any folder
+#   ssheesh-<v>-macos-arm64.tar.gz   SSHeesh.app, Apple silicon
+#   ssheesh-<v>-linux-x64.tar.gz     the program `ssheesh`, Linux x64
+# and what only updates take: ssheesh-<v>-linux-x64 (the program alone, written over 0.10's
+# AppImage), ssheesh-<v>-windows-x64.zip (ssheesh.exe, for 1.x), the .sig files, latest.json
+# and update-v1.json (+ .minisig). No file is named "preview": the crate's ssheesh-preview
+# program is renamed ssheesh / ssheesh.exe here.
+#
 # Runs when a 1.x tag is pushed (git tag v1.0.0 && git push origin v1.0.0), or by hand from the
 # Actions tab (Run workflow) with one of three actions:
 #
@@ -19,7 +29,8 @@
 #     as its installer (desktop/app/src/setup.rs): 1.x takes 0.10's place, 0.10 stays in
 #     `previous\` for 30 days;
 #   - portable on Windows: it swaps SSHeesh.exe (1.x) in for itself;
-#   - on a Mac: it swaps SSHeesh_<v>_universal.app.tar.gz's SSHeesh.app in for itself;
+#   - on an Apple silicon Mac: it swaps the SSHeesh.app of ssheesh-<v>-macos-arm64.tar.gz in for
+#     itself (Intel Macs have no entry and stay on 0.10.14 until 1.x is checked there, plan R17);
 #   - Linux AppImage: it writes ssheesh-<v>-linux-x64 (1.x's program) over its AppImage.
 # Release candidates (v1.0.1-rc.1) never touch latest.json and update through `channel-rc`.
 #
@@ -60,8 +71,8 @@ on:
         type: boolean
         default: true
       platforms_0_10:
-        description: "Whose 0.10 moves: windows, macos (Apple silicon), macos-intel, linux, comma separated"
-        default: "windows,macos,macos-intel,linux"
+        description: "Whose 0.10 moves: windows, macos (Apple silicon), linux, comma separated"
+        default: "windows,macos,linux"
       stop_to:
         description: "With stop-moving-0.10-users: the 0.10 release to make latest again"
         default: "v0.10.14"
@@ -97,7 +108,7 @@ jobs:
           IN_PLATFORMS: ${{ inputs.platforms_0_10 }}
         run: |
           if [ "$EVENT" = "push" ]; then
-            tag="$PUSHED"; action=release; move=true; platforms="windows,macos,macos-intel,linux"
+            tag="$PUSHED"; action=release; move=true; platforms="windows,macos,linux"
           else
             tag="$IN_TAG"; action="$IN_ACTION"; move="$IN_MOVE"; platforms="$IN_PLATFORMS"
           fi
@@ -106,7 +117,7 @@ jobs:
             echo "::error::$tag isn't a 1.x release tag (v1.2.3 or v1.2.3-rc.4)"; exit 1
           fi
           if ! printf '%s' "$platforms" | grep -Eq '^[a-z, -]*$'; then
-            echo "::error::platforms_0_10: only windows, macos, macos-intel, linux"; exit 1
+            echo "::error::platforms_0_10: only windows, macos, linux"; exit 1
           fi
           case "$version" in
             *-rc.*) prerelease=true; channel=channel-rc; move=false ;;
@@ -183,7 +194,7 @@ jobs:
         working-directory: desktop
         run: |
           rustup toolchain install || rustup show
-          if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+          if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin; fi
 
       - name: Make Rune with our fixes
         run: sh scripts/vendor-rune.sh
@@ -221,8 +232,7 @@ jobs:
         run: |
           case "$RUNNER_OS" in
             macOS)
-              cargo build --locked --release -p ssheesh-preview --target aarch64-apple-darwin
-              cargo build --locked --release -p ssheesh-preview --target x86_64-apple-darwin ;;
+              cargo build --locked --release -p ssheesh-preview --target aarch64-apple-darwin ;;
             # The C runtime inside the program, so a clean Windows needs no VC++ redistributable,
             # and imported libraries from System32 only: the installer runs from %TEMP% and the
             # portable copy from Downloads, where a planted DLL would otherwise load first. With
@@ -240,10 +250,7 @@ jobs:
             Linux) cp target/desktop/release/ssheesh-preview out/ssheesh ;;
             Windows) cp target/desktop/x86_64-pc-windows-msvc/release/ssheesh-preview.exe out/ssheesh.exe ;;
             macOS)
-              lipo -create -output out/ssheesh \
-                target/desktop/aarch64-apple-darwin/release/ssheesh-preview \
-                target/desktop/x86_64-apple-darwin/release/ssheesh-preview
-              lipo -info out/ssheesh ;;
+              cp target/desktop/aarch64-apple-darwin/release/ssheesh-preview out/ssheesh ;;
           esac
           ls -la out
 
@@ -273,7 +280,7 @@ jobs:
           sed "s/@VERSION@/$VERSION/g" desktop/app/macos/Info.plist > "$app/Contents/Info.plist"
           cp desktop/app/macos/icon.icns "$app/Contents/Resources/icon.icns"
           plutil -lint "$app/Contents/Info.plist"
-          for arch in arm64 x86_64; do
+          for arch in arm64; do
             libs=$(otool -arch "$arch" -L "$app/Contents/MacOS/ssheesh" | tail -n +2 | awk '{print $1}')
             echo "$libs" | grep -q libSystem || { echo "::error::Couldn't read what the $arch Mac app links"; exit 1; }
             extra=$(echo "$libs" | grep -vE '^(/System/Library/|/usr/lib/)' || true)
@@ -370,11 +377,10 @@ jobs:
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          mkdir -p up dmg
-          # One folder at the top, as 0.10's updater and scripts/install-macos.sh unpack it.
-          COPYFILE_DISABLE=1 tar -C out -czf "up/SSHeesh_${VERSION}_universal.app.tar.gz" SSHeesh.app
-          cp -R out/SSHeesh.app dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname SSHeesh -srcfolder dmg -ov -format UDZO "up/SSHeesh_${VERSION}_universal.dmg"
+          mkdir -p up
+          # One folder at the top, SSHeesh.app, as 0.10's updater unpacks it and as people drag it
+          # to Applications.
+          COPYFILE_DISABLE=1 tar -C out -czf "up/ssheesh-${VERSION}-macos-arm64.tar.gz" SSHeesh.app
           ls -la up
       - uses: actions/upload-artifact@v4
         with:
@@ -425,7 +431,7 @@ jobs:
           cp dl/windows/ssheesh.exe "up/SSHeesh_${VERSION}_x64-setup.exe"
           cp dl/windows/ssheesh.exe up/SSHeesh.exe
           (cd dl/windows && zip -q "../../up/ssheesh-$VERSION-windows-x64.zip" ssheesh.exe)
-          cp dl/macos/*.app.tar.gz dl/macos/*.dmg up/
+          cp dl/macos/ssheesh-*-macos-arm64.tar.gz up/
           ls -la up
 
       # The update key signs each file with its name and this version in the signature: what
@@ -440,7 +446,7 @@ jobs:
           ../tool/ssheesh-release sign --version "$VERSION" \
             "ssheesh-$VERSION-linux-x64" "ssheesh-$VERSION-linux-x64.tar.gz" \
             "SSHeesh_${VERSION}_x64-setup.exe" SSHeesh.exe "ssheesh-$VERSION-windows-x64.zip" \
-            "SSHeesh_${VERSION}_universal.app.tar.gz" "SSHeesh_${VERSION}_universal.dmg"
+            "ssheesh-$VERSION-macos-arm64.tar.gz"
 
       # update-v1.json keeps the channel's list of withdrawn versions.
       - name: Write latest.json and update-v1.json
@@ -494,7 +500,7 @@ jobs:
           set -e
           cd up
           files=("ssheesh-$VERSION-linux-x64" "ssheesh-$VERSION-linux-x64.tar.gz" "SSHeesh_${VERSION}_x64-setup.exe" SSHeesh.exe
-                 "ssheesh-$VERSION-windows-x64.zip" "SSHeesh_${VERSION}_universal.app.tar.gz" "SSHeesh_${VERSION}_universal.dmg"
+                 "ssheesh-$VERSION-windows-x64.zip" "ssheesh-$VERSION-macos-arm64.tar.gz"
                  update-v1.json update-v1.json.minisig)
           sigs=(); for f in "${files[@]}"; do if [ -f "$f.sig" ]; then sigs+=("$f.sig"); fi; done
           flags=(--title "SSHeesh $VERSION" --notes-file ../notes.md --verify-tag)
