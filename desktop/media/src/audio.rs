@@ -8,6 +8,10 @@ use symphonia_core::formats::Packet as SymPacket;
 use crate::demux::Codec;
 use crate::Problem;
 
+/// The rates of sound played: from telephone sound to the most studio recordings use.
+const MIN_RATE: u32 = 4_000;
+const MAX_RATE: u32 = 384_000;
+
 pub struct AudioDecoder {
     kind: Kind,
     /// The decoded sound's rate and channels, as it comes out.
@@ -63,7 +67,8 @@ impl AudioDecoder {
             }
             other => return Err(unsupported(other.name())),
         };
-        if rate == 0 || channels == 0 {
+        // A rate the file made up: at 1 Hz, every packet would come out 48,000 times longer.
+        if !(MIN_RATE..=MAX_RATE).contains(&rate) || channels == 0 {
             return Err(unsupported(codec.name()));
         }
         Ok(AudioDecoder { kind, rate, channels, out: Resampler::new(rate, out_rate), skip })
@@ -193,5 +198,16 @@ mod tests {
         r.push(&[0.1, 0.2, 0.5, 0.0, 0.0, 0.0, 0.1, 0.2, 0.5, 0.0, 0.0, 0.0], 6, &mut out);
         assert_eq!(out.len(), 4);
         assert!((out[2] - 0.45).abs() < 1e-6 && (out[3] - 0.55).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_rate_a_file_made_up_is_refused() {
+        // An MP4 can say its AAC is at 1 Hz, and with no settings of its own that's believed:
+        // each packet would come out 48,000 times longer.
+        let codec = |rate| Codec::Aac { config: None, rate, channels: 2 };
+        for rate in [1, 3_999, 400_000] {
+            assert!(matches!(AudioDecoder::new(&codec(rate), 48_000), Err(Problem::Unsupported(_))), "{rate}");
+        }
+        assert!(AudioDecoder::new(&codec(44_100), 48_000).is_ok());
     }
 }

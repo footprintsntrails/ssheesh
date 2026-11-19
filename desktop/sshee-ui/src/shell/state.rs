@@ -746,6 +746,8 @@ impl Shell {
             pane.set_waker(waker.clone());
         }
         self.waker = Some(waker);
+        // A Files tab from another window plays and decodes again, waking this one.
+        crate::screens::files::window_changed(self);
     }
 
     /// Rune's waker, for a screen's own background work (a picture being decoded).
@@ -1021,6 +1023,7 @@ impl Shell {
         }
         if let Some(files) = files {
             self.screens.files.insert(id, files);
+            crate::screens::files::window_changed(self);
         }
         self.settle(tx);
         true

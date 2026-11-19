@@ -76,8 +76,11 @@ pub fn build(colors: &Colors, dark: bool, accent: Option<u32>) -> Theme {
         switch_on: ok,
         ..base.clone()
     };
-    if let Some(accent) = accent {
-        with_accent(&mut t, accent);
+    match accent {
+        Some(accent) => with_accent(&mut t, accent),
+        // The design's accent words, as they are where they read on this theme's own page
+        // and cards, else a shade that does.
+        None => t.accent_text = t.legible(base.accent_text),
     }
     t
 }
@@ -89,6 +92,7 @@ fn with_accent(t: &mut Theme, accent: u32) {
     t.blue = blue;
     t.blue_down = t.shade(blue, 0.16);
     t.ring = blue;
+    t.accent_text = t.legible(blue);
     t.on_color = if schemes::is_light(accent | 0xff) { Color::BLACK } else { Color::WHITE };
 }
 
@@ -226,5 +230,24 @@ mod tests {
         let design = theme_for(&s, true);
         assert_eq!(design.frame, Theme::of(true).frame);
         assert_eq!(design.blue.hex(), "#9aa3adff");
+    }
+
+    #[test]
+    fn words_in_any_accent_read_on_any_theme() {
+        let mut s = Settings::defaults(Platform::Linux);
+        for theme in ["ssheesh", "midnight"] {
+            for accent in ["#ffd60a", "#9aa3ad", "#0a84ff", "#4eba65"] {
+                s.theme = theme.into();
+                s.accent = accent.into();
+                for dark in [true, false] {
+                    let t = theme_for(&s, dark);
+                    assert_eq!(t.legible(t.accent_text), t.accent_text);
+                    for g in [t.page, t.frame].into_iter().filter(|g| g.a >= 1.0) {
+                        let ratio = crate::theme::contrast(t.accent_text, g);
+                        assert!(ratio >= 4.5, "{theme} {accent} dark={dark}: {ratio:.2}:1 on {}", g.hex());
+                    }
+                }
+            }
+        }
     }
 }

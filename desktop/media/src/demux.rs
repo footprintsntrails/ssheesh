@@ -14,6 +14,12 @@ use crate::{Problem, ReadSeek};
 pub const MAX_INDEX: u64 = 64 * 1024 * 1024;
 /// The biggest packet read: a picture this big compressed isn't one this preview plays.
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
+/// The most samples (pictures, or pieces of sound) one MP4 track may list: over 46 hours at
+/// 60 fps, and fewer than an index of `MAX_INDEX` could list one by one. A sample takes 32
+/// bytes here, so a track costs at most ~320 MB however its index is made. An index can say
+/// "four billion samples of one size" in a few bytes, and believing it would take the app
+/// down: an allocation that fails aborts, it can't be caught.
+pub const MAX_SAMPLES: u64 = if 10_000_000 < MAX_INDEX / 4 { 10_000_000 } else { MAX_INDEX / 4 };
 
 /// What a track holds, and what its decoder needs to start.
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +165,8 @@ struct Track {
 
 pub struct Mp4 {
     file: Box<dyn ReadSeek>,
+    /// The file's size: no sample is read past it.
+    size: u64,
     tracks: Tracks,
     video: Option<Track>,
     audio: Option<Track>,
@@ -193,14 +201,14 @@ fn moov_size(file: &mut dyn ReadSeek, size: u64) -> Result<Option<u64>, Problem>
 }
 
 impl Mp4 {
-    fn open(mut file: Box<dyn ReadSeek>, size: u64) -> Result<Mp4, Problem> {
-        match moov_size(&mut *file, size)? {
+    fn open(mut file: Box<dyn ReadSeek>, file_size: u64) -> Result<Mp4, Problem> {
+        match moov_size(&mut *file, file_size)? {
             None => return Err(Problem::Broken("This video has no index: it may not have finished being written.".into())),
             Some(len) if len > MAX_INDEX => return Err(Problem::TooBig("This video's index is too big to read here.".into())),
             Some(_) => {}
         }
         file.seek(SeekFrom::Start(0)).map_err(read_failed)?;
-        let reader = mp4::Mp4Reader::read_header(&mut file, size).map_err(|e| Problem::Broken(format!("This video couldn't be read: {e}")))?;
+        let reader = mp4::Mp4Reader::read_header(&mut file, file_size).map_err(|e| Problem::Broken(format!("This video couldn't be read: {e}")))?;
         let mut tracks = Tracks { video: None, audio: None, duration: None };
         let (mut video, mut audio) = (None, None);
         let mut other_video = None;
@@ -233,7 +241,7 @@ impl Mp4 {
                     (_, Some(v)) => [u32::from(v.width), u32::from(v.height)],
                     _ => [u32::from(trak.tkhd.width.value()), u32::from(trak.tkhd.height.value())],
                 };
-                video = Some(Track { samples: samples(&table!(trak.mdia.minf.stbl), shift, timescale)?, next: 0, timescale: f64::from(timescale) });
+                video = Some(Track { samples: samples(&table!(trak.mdia.minf.stbl), shift, timescale, file_size)?, next: 0, timescale: f64::from(timescale) });
                 tracks.video = Some((codec, size));
             } else if &handler == b"soun" && tracks.audio.is_none() {
                 let Some(mp4a) = &stsd.mp4a else {
@@ -246,7 +254,7 @@ impl Mp4 {
                     let v = (u16::from(d.profile) << 11) | (u16::from(d.freq_index & 0xF) << 7) | (u16::from(d.chan_conf & 0xF) << 3);
                     v.to_be_bytes().to_vec()
                 });
-                audio = Some(Track { samples: samples(&table!(trak.mdia.minf.stbl), shift, timescale)?, next: 0, timescale: f64::from(timescale) });
+                audio = Some(Track { samples: samples(&table!(trak.mdia.minf.stbl), shift, timescale, file_size)?, next: 0, timescale: f64::from(timescale) });
                 tracks.audio = Some(Codec::Aac { config, rate, channels: mp4a.channelcount });
             }
             let seconds = trak.mdia.mdhd.duration as f64 / f64::from(timescale);
@@ -265,7 +273,7 @@ impl Mp4 {
             audio = None;
         }
         drop(reader);
-        Ok(Mp4 { file, tracks, video, audio })
+        Ok(Mp4 { file, size: file_size, tracks, video, audio })
     }
 
     fn packet(&mut self) -> Result<Option<Packet>, Problem> {
@@ -284,6 +292,10 @@ impl Mp4 {
         track.next += 1;
         if u64::from(sample.size) > MAX_PACKET {
             return Err(Problem::TooBig("A picture in this video is too big to play here.".into()));
+        }
+        // Not a byte allocated for a sample the file hasn't got.
+        if sample.offset.checked_add(u64::from(sample.size)).is_none_or(|end| end > self.size) {
+            return Err(Problem::Broken("This video ends before its last picture: it may not have finished copying.".into()));
         }
         self.file.seek(SeekFrom::Start(sample.offset)).map_err(read_failed)?;
         let mut data = vec![0u8; sample.size as usize];
@@ -352,22 +364,44 @@ use table;
 
 /// Every sample of a track: where it is (stsc, stco/co64, stsz), when (stts, ctts, the edit
 /// list's `shift`) and which a decoder can start from (stss; all, when there's none).
-fn samples(t: &Table, shift: i64, timescale: u32) -> Result<Vec<Sample>, Problem> {
+///
+/// The index is the file's word, so it's held to it before anything is built: at most
+/// [`MAX_SAMPLES`] samples, together no bigger than the file (`file_size`), and chunk runs in
+/// order, so neither memory nor time grows past what the file really holds.
+fn samples(t: &Table, shift: i64, timescale: u32, file_size: u64) -> Result<Vec<Sample>, Problem> {
     let broken = || Problem::Broken("This video's index doesn't add up.".into());
+    let too_big = || Problem::TooBig("This video's index is too big to read here.".into());
+    if u64::from(t.count) > MAX_SAMPLES {
+        return Err(too_big());
+    }
     let count = t.count as usize;
     let sizes = t.sizes;
-    if t.sample_size == 0 && sizes.len() != count {
+    // What all the samples take together: more than the whole file is an index that lies.
+    let total = if t.sample_size == 0 {
+        if sizes.len() != count {
+            return Err(broken());
+        }
+        sizes.iter().map(|&s| u64::from(s)).sum::<u64>()
+    } else {
+        u64::from(t.count) * u64::from(t.sample_size)
+    };
+    if total > file_size {
         return Err(broken());
     }
     let chunks = &t.chunks;
     if chunks.is_empty() && count > 0 {
         return Err(broken());
     }
-    // Each sample's place: its chunk's offset plus the sizes before it in that chunk.
-    let mut out = Vec::with_capacity(count.min(4 << 20));
     let runs = &t.runs;
+    // Each run starts at a later chunk than the one before, so the chunks are walked once.
+    if runs.windows(2).any(|w| w[1].0 <= w[0].0) {
+        return Err(broken());
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(count).map_err(|_| too_big())?;
+    // Each sample's place: its chunk's offset plus the sizes before it in that chunk.
     let mut sample = 0usize;
-    for (r, &(first, per_chunk)) in runs.iter().enumerate() {
+    'runs: for (r, &(first, per_chunk)) in runs.iter().enumerate() {
         let first = first.max(1) as usize;
         let last = runs.get(r + 1).map_or(chunks.len(), |n| (n.0 as usize).saturating_sub(1).min(chunks.len()));
         for chunk in first..=last {
@@ -375,7 +409,7 @@ fn samples(t: &Table, shift: i64, timescale: u32) -> Result<Vec<Sample>, Problem
             let mut offset = base;
             for _ in 0..per_chunk {
                 if sample >= count {
-                    break;
+                    break 'runs;
                 }
                 let size = if t.sample_size == 0 { sizes[sample] } else { t.sample_size };
                 out.push(Sample { offset, size, dts: 0, pts: 0.0, key: true });
@@ -387,30 +421,29 @@ fn samples(t: &Table, shift: i64, timescale: u32) -> Result<Vec<Sample>, Problem
     if out.len() != count {
         return Err(broken());
     }
-    // Times.
+    // Times: when each is decoded (stts), then when shown, at its own offset from that (ctts).
     let mut dts = 0i64;
     let mut i = 0;
-    for &(n, delta) in &t.stts {
+    'stts: for &(n, delta) in &t.stts {
         for _ in 0..n {
-            let Some(s) = out.get_mut(i) else { break };
+            let Some(s) = out.get_mut(i) else { break 'stts };
             s.dts = dts;
             dts = dts.saturating_add(i64::from(delta));
             i += 1;
         }
     }
-    let mut offsets: Vec<i64> = Vec::new();
-    for &(n, offset) in &t.ctts {
-        for _ in 0..n {
-            if offsets.len() >= count {
-                break;
-            }
-            offsets.push(i64::from(offset));
-        }
-    }
     let scale = f64::from(timescale);
-    for (i, s) in out.iter_mut().enumerate() {
-        let shown = s.dts.saturating_add(offsets.get(i).copied().unwrap_or(0)).saturating_sub(shift);
-        s.pts = shown as f64 / scale;
+    let shown = |s: &mut Sample, offset: i64| s.pts = s.dts.saturating_add(offset).saturating_sub(shift) as f64 / scale;
+    for s in out.iter_mut() {
+        shown(s, 0);
+    }
+    let mut i = 0;
+    'ctts: for &(n, offset) in &t.ctts {
+        for _ in 0..n {
+            let Some(s) = out.get_mut(i) else { break 'ctts };
+            shown(s, i64::from(offset));
+            i += 1;
+        }
     }
     if let Some(stss) = t.stss {
         for s in out.iter_mut() {
@@ -559,9 +592,10 @@ fn read_cues(file: &mut dyn ReadSeek) -> (Vec<(u64, u64)>, Option<u64>) {
             let data = file.stream_position().ok()?;
             match id {
                 0x114D_9B74 => {
-                    let size = size?.min(1 << 20);
-                    let mut head = vec![0u8; size as usize];
-                    file.read_exact(&mut head).ok()?;
+                    let mut head = Vec::new();
+                    let want = size?.min(1 << 20);
+                    Read::take(&mut *file, want).read_to_end(&mut head).ok()?;
+                    (head.len() as u64 == want).then_some(())?;
                     for (id, seek) in ebml_children(&head) {
                         let fields = ebml_children(seek);
                         let target = fields.iter().find(|(i, _)| *i == 0x53AB).map(|f| f.1);
@@ -586,8 +620,12 @@ fn read_cues(file: &mut dyn ReadSeek) -> (Vec<(u64, u64)>, Option<u64>) {
         if size > MAX_CUES {
             return None;
         }
-        let mut all = vec![0u8; size as usize];
-        file.read_exact(&mut all).ok()?;
+        // Read as it comes, not allocated from the size it claims: a file can claim more.
+        let mut all = Vec::new();
+        Read::take(&mut *file, size).read_to_end(&mut all).ok()?;
+        if all.len() as u64 != size {
+            return None;
+        }
         for (id, point) in ebml_children(&all) {
             if id != 0xBB {
                 continue;
@@ -815,6 +853,78 @@ mod tests {
         big.extend_from_slice(&[0x10, 0, 0, 0]);
         big.extend_from_slice(b"moov");
         assert_eq!(open(&big), "This video's index is too big to read here.");
+    }
+
+    fn table<'a>(sample_size: u32, count: u32, sizes: &'a [u32]) -> Table<'a> {
+        Table { sample_size, count, sizes, chunks: vec![0], runs: vec![(1, u32::MAX)], stts: vec![(u32::MAX, 1)], ctts: vec![(u32::MAX, 2)], stss: None }
+    }
+
+    #[test]
+    fn an_index_claiming_billions_of_samples_is_refused_before_anything_is_built() {
+        let started = std::time::Instant::now();
+        // "4 billion samples of one byte each" is 12 bytes of stsz: 128 GB of samples here.
+        let refused = samples(&table(1, u32::MAX, &[]), 0, 1000, u64::MAX);
+        assert!(matches!(refused, Err(Problem::TooBig(_))), "{:?}", refused.err());
+        let refused = samples(&table(1, MAX_SAMPLES as u32 + 1, &[]), 0, 1000, u64::MAX);
+        assert!(matches!(refused, Err(Problem::TooBig(_))), "{:?}", refused.err());
+        // Fewer, but more bytes of them than the file has.
+        let refused = samples(&table(1000, 1_000_000, &[]), 0, 1000, 50_000);
+        assert!(matches!(refused, Err(Problem::Broken(_))), "{:?}", refused.err());
+        let refused = samples(&table(0, 2, &[u32::MAX, u32::MAX]), 0, 1000, 50_000);
+        assert!(matches!(refused, Err(Problem::Broken(_))), "{:?}", refused.err());
+        // Runs that go back walk the chunks again and again: refused.
+        let mut back = table(1, 3, &[]);
+        back.chunks = vec![0; 1000];
+        back.runs = vec![(1, 1), (5, 1), (3, 1)];
+        assert!(matches!(samples(&back, 0, 1000, 50_000), Err(Problem::Broken(_))));
+        // Huge runs of chunks, times and offsets cost only the samples there are.
+        let few = samples(&table(1, 5, &[]), 0, 1000, 50_000).unwrap();
+        assert_eq!(few.len(), 5);
+        assert_eq!(few[4].offset, 4);
+        assert_eq!((few[4].dts, few[4].pts), (4, 0.006));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    /// clip.mp4 with its video track's stsz (the first) and stsc rewritten.
+    fn crafted(sample_size: u32, count: u32, per_chunk: Option<u32>) -> Vec<u8> {
+        let mut bytes = include_bytes!("../fixtures/clip.mp4").to_vec();
+        let at = |bytes: &[u8], name: &[u8]| bytes.windows(4).position(|w| w == name).unwrap();
+        let stsz = at(&bytes, b"stsz") + 8;
+        bytes[stsz..stsz + 4].copy_from_slice(&sample_size.to_be_bytes());
+        bytes[stsz + 4..stsz + 8].copy_from_slice(&count.to_be_bytes());
+        if let Some(per_chunk) = per_chunk {
+            // After version and flags, the entry count and the first entry's first chunk: its
+            // samples per chunk.
+            let stsc = at(&bytes, b"stsc") + 16;
+            bytes[stsc..stsc + 4].copy_from_slice(&per_chunk.to_be_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_tiny_mp4_claiming_billions_of_samples_says_it_cant_play() {
+        let started = std::time::Instant::now();
+        let open = |bytes: Vec<u8>| match Demuxer::open(Box::new(std::io::Cursor::new(bytes))) {
+            Err(p) => p.to_string(),
+            Ok(_) => "opened".into(),
+        };
+        assert_eq!(open(crafted(1, u32::MAX, None)), "This video's index is too big to read here.");
+        assert_eq!(open(crafted(1, 9_000_000, None)), "This video's index doesn't add up.");
+        assert_eq!(open(crafted(u32::MAX, 1000, None)), "This video's index doesn't add up.");
+        // A chunk of 4 billion samples: the mp4 crate already refuses its sums.
+        assert!(open(crafted(1, u32::MAX, Some(u32::MAX))).starts_with("This video couldn't be read"));
+        // A first chunk claiming a million samples opens: it holds only those there are, and
+        // reading them costs no more than the file.
+        let mut bytes = include_bytes!("../fixtures/clip.mp4").to_vec();
+        let stsc = bytes.windows(4).position(|w| w == b"stsc").unwrap() + 16;
+        bytes[stsc..stsc + 4].copy_from_slice(&1_000_000u32.to_be_bytes());
+        let mut demuxer = Demuxer::open(Box::new(std::io::Cursor::new(bytes))).unwrap();
+        let mut packets = 0;
+        while let Ok(Some(_)) = demuxer.packet() {
+            packets += 1;
+        }
+        assert!(packets < 10_000, "{packets}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[test]

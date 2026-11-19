@@ -272,6 +272,17 @@ impl Ui {
         self.video.as_ref()
     }
 
+    /// The tab moved to another window: the video's player and the picture decoder wake the
+    /// window they were made in, so they go (the player stops) with what they made; `sync`
+    /// makes them again with the new window's waker. The text, typed or not, stays.
+    pub(super) fn moved(&mut self) {
+        self.video = None;
+        self.pictures = None;
+        self.picture = None;
+        self.checker = None;
+        self.decoded = false;
+    }
+
     /// The tab went out of sight: a video playing in it pauses.
     pub(super) fn hidden(&self) {
         if let Some(v) = &self.video {
@@ -378,7 +389,13 @@ pub fn sync(s: &mut Shell) {
             continue;
         };
         let rev = editor.revision();
-        if ui.draft_of == Some(rev) && !matches!((editor.body(), &ui.picture), (Body::Image(_), None)) {
+        let svg = kinds::is_svg(editor.name());
+        if ui.draft_of == Some(rev) {
+            // The same file as last time. A picture not had yet (no waker until now, or let
+            // go of when the tab moved to another window) is decoded; the text stays as typed.
+            if ui.picture.is_none() {
+                decode_picture(ui, rev, editor.body(), svg, &waker);
+            }
             continue;
         }
         ui.draft_of = Some(rev);
@@ -391,21 +408,28 @@ pub fn sync(s: &mut Shell) {
                 let mut at = 0;
                 ui.lines = saved.split('\n').map(|l| (at, { at += l.len() + 1; at - 1 })).collect();
             }
-            Body::Image(bytes) => {
-                if let Some(waker) = &waker {
-                    let cache = ui.pictures.get_or_insert_with(|| rune::ImageCache::new(waker.clone()));
-                    ui.picture = Some((rev, cache.load(bytes.clone())));
-                }
-            }
+            Body::Image(_) => {}
             _ => ui.draft = TextEdit::new(""),
         }
-        // An SVG is text, and drawn too: as it's saved, on Rune's image thread (its `svg`
-        // feature; vendor/rune.patch keeps it from reading this computer's files).
-        if let (Body::Text { saved, .. }, true, Some(waker)) = (editor.body(), kinds::is_svg(editor.name()), &waker) {
-            let cache = ui.pictures.get_or_insert_with(|| rune::ImageCache::new(waker.clone()));
-            ui.picture = Some((rev, cache.svg(saved.as_bytes().to_vec(), SVG_DRAWN, 2.0)));
-        }
+        decode_picture(ui, rev, editor.body(), svg, &waker);
     }
+}
+
+/// A picture, or an SVG (text, and drawn too: as it's saved), starts decoding on Rune's image
+/// thread, which wakes the window when it's done. SVG is Rune's `svg` feature;
+/// vendor/rune.patch keeps it from reading this computer's files.
+fn decode_picture(ui: &mut Ui, rev: u64, body: &Body, svg: bool, waker: &Option<rune::Waker>) {
+    let Some(waker) = waker else { return };
+    if !matches!(body, Body::Image(_)) && !(svg && matches!(body, Body::Text { .. })) {
+        return;
+    }
+    let cache = ui.pictures.get_or_insert_with(|| rune::ImageCache::new(waker.clone()));
+    let picture = match body {
+        Body::Image(bytes) => cache.load(bytes.clone()),
+        Body::Text { saved, .. } => cache.svg(saved.as_bytes().to_vec(), SVG_DRAWN, 2.0),
+        _ => return,
+    };
+    ui.picture = Some((rev, picture));
 }
 
 // ---- what the screen does, with the questions that come first
@@ -806,7 +830,7 @@ fn drag_card(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
                     .min_w(0.0)
                     .gap(1.0)
                     .child(text(what).font(theme::TEXT_BOLD).color(t.l1).single_line().truncate())
-                    .child(text(landing_text(s, d, super::on_server(s, id))).key("files-drag-does").font(theme::NOTE).color(if ok { t.blue } else { t.l2 }).single_line().truncate()),
+                    .child(text(landing_text(s, d, super::on_server(s, id))).key("files-drag-does").font(theme::NOTE).color(if ok { t.accent_text } else { t.l2 }).single_line().truncate()),
             ),
         )
         .inert();
@@ -1684,7 +1708,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
     // Opened at some lines: which, in the accent.
     let marked = marked_lines(s, id);
     if let Some((first, last)) = marked {
-        head = head.child(text(sshee_app::prompts::lines_note(first, last)).key("preview-lines-note").font(theme::LIST_NUMBER).color(t.blue).single_line());
+        head = head.child(text(sshee_app::prompts::lines_note(first, last)).key("preview-lines-note").font(theme::LIST_NUMBER).color(t.accent_text).single_line());
     }
     head = head.child(spacer());
     if markdown || svg {

@@ -235,9 +235,9 @@ pub(crate) fn note(t: &Theme, words: &str, bad: bool) -> El {
     row().w_full().px(12.0).py(8.0).radius(theme::RADIUS_ROW).fill(fill).child(text(words).font(theme::NOTE).color(ink).wrap().grow(1.0).shrink().min_w(0.0))
 }
 
-/// Text that reads as a link: blue, and a button.
+/// Text that reads as a link: in the accent (as words, so it reads), and a button.
 pub(crate) fn link(t: &Theme, words: &str) -> El {
-    text(words).font(theme::CONTROL_TEXT).color(t.blue).single_line().role("button").label(words).focusable(true)
+    text(words).font(theme::CONTROL_TEXT).color(t.accent_text).single_line().role("button").label(words).focusable(true)
 }
 
 /// The space a dialog keeps from the window's top and bottom edges.

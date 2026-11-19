@@ -135,6 +135,10 @@ pub struct Theme {
     /// The selected menu item; pressed, `blue_down`.
     pub blue: Color,
     pub blue_down: Color,
+    /// Words in the accent colour (a link, a note): the accent where it reads at 4.5:1 on the
+    /// page, a card and the frame, else a shade of it that does (the light design's green
+    /// alone reads at 2.3:1 on white). [`Theme::legible`] makes it for other accents.
+    pub accent_text: Color,
     /// The keyboard focus ring.
     pub ring: Color,
     /// "Needs you": the text and, a touch stronger in the light appearance, the dots.
@@ -181,6 +185,12 @@ pub struct Theme {
     pub knob: Color,
 }
 
+/// WCAG's contrast ratio between two solid colours (a `Color` holds linear values).
+pub fn contrast(a: Color, b: Color) -> f32 {
+    let (x, y) = (a.luminance(), b.luminance());
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
 fn c(hex: &str) -> Color {
     rune::color::hex(hex).expect("a colour written in this file")
 }
@@ -215,6 +225,7 @@ impl Theme {
             // The accent is the logo's green, its cursor (0.10's default accent).
             blue: c("#4eba65"),
             blue_down: c("#3f9a53"),
+            accent_text: c("#4eba65"),
             ring: c("#4eba65"),
             orange: c("#ff9f0a"),
             orange_dot: c("#ff9f0a"),
@@ -260,6 +271,8 @@ impl Theme {
             strong: black,
             blue: c("#4eba65"),
             blue_down: c("#3f9a53"),
+            // The accent's green, as dark as it has to be to read at 4.5:1 on the frame.
+            accent_text: c("#2f783e"),
             ring: c("#4eba65"),
             orange: c("#a84a00"),
             orange_dot: c("#d96200"),
@@ -285,6 +298,24 @@ impl Theme {
             switch_on: c("#34c759"),
             knob: c("#ffffff"),
         }
+    }
+
+    /// What words are drawn on: the page, a card or a popover, a settings group, the frame,
+    /// the tab you're on. Solid, as they're seen (a see-through one over the frame).
+    fn text_grounds(&self) -> [Color; 5] {
+        let solid = |c: Color| if c.a >= 1.0 { c } else { self.frame.alpha(1.0).mix(c.alpha(1.0), c.a) };
+        [solid(self.page), solid(self.pop), solid(self.group), solid(self.frame), solid(self.sel)]
+    }
+
+    /// `color` as words: itself when it reads at 4.5:1 on every ground words are drawn on, else
+    /// the first step from it toward the main text colour that does (darker in a light
+    /// appearance, lighter in a dark one; the main text itself at worst).
+    pub fn legible(&self, color: Color) -> Color {
+        let grounds = self.text_grounds();
+        (0..=20)
+            .map(|step| color.mix(self.l1.alpha(color.a), step as f32 / 20.0))
+            .find(|c| grounds.iter().all(|g| contrast(*c, *g) >= 4.5))
+            .unwrap_or(self.l1)
     }
 
     /// The ring of a label chip and the like: `color` at 45%.
@@ -357,6 +388,21 @@ mod tests {
         assert_eq!(night.page.hex(), "#1c1c1eff");
         assert_eq!(day.frame.hex(), "#ececeeff");
         assert_eq!(day.page.hex(), "#ffffffff");
+        // Words in the accent read at 4.5:1 wherever words are drawn: the green itself at
+        // night, a darker shade of it by day.
+        for t in [night, day] {
+            for ground in t.text_grounds() {
+                let ratio = contrast(t.accent_text, ground);
+                assert!(ratio >= 4.5, "accent words at {ratio:.2}:1 on {}", ground.hex());
+            }
+            assert_eq!(t.legible(t.accent_text), t.accent_text);
+        }
+        assert_eq!(night.accent_text, night.blue);
+        assert!(contrast(day.blue, day.page) < 3.0, "the light accent reads on its own now: drop the shade");
+        // The shade keeps the accent's hue: green the most, red the least, in the same order.
+        let (a, b) = (day.blue, day.accent_text);
+        assert!(b.g > b.r && b.g > b.b && b.b > b.r && a.b > a.r);
+        assert!((b.r / b.g - a.r / a.g).abs() < 0.05 && (b.b / b.g - a.b / a.g).abs() < 0.05, "{a:?} {b:?}");
         // The page is darker than the frame at night, lighter by day.
         assert!(night.page.r < night.frame.r && day.page.r > day.frame.r);
         // Whole pixels at 1, 1.25, 1.5, 1.75 and 2x, so the terminal's grid starts on a pixel.

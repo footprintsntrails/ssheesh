@@ -253,6 +253,55 @@ mod window {
     }
 
     #[test]
+    fn a_press_at_a_rows_right_edge_reaches_the_row_while_the_bar_is_hidden() {
+        /// The rows pressed, in order.
+        struct Pressed(Vec<usize>);
+        fn view(_: &Pressed, _: &mut Cx<Pressed>) -> El {
+            let t = Theme::of(true);
+            let list = col()
+                .key("long")
+                .w(500.0)
+                .h(400.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .child(col().key("long-rows").w_full().growth(GrowthSpec::default()).virtual_rows(ROWS, ROW, |_: &Pressed, i| format!("row-{i}").into(), move |_: &Pressed, i| {
+                    // A row's last control at its right edge, as a close button or a chevron.
+                    row().h(ROW).px(10.0).on_press(move |s: &mut Pressed| s.0.push(i)).child(text(format!("Row {i}")).font(crate::theme::TEXT).color(t.l1).single_line())
+                }))
+                .scroll_bars(t);
+            col().key("root").w_full().h_full().fill(t.page).child(list)
+        }
+        crate::fonts::declare();
+        let text = rune::text::TextSystem::new(crate::fonts::FONTS, crate::fonts::FAMILIES);
+        let mut rt = Runtime::with_text(Pressed(Vec::new()), view, (800.0, 600.0), Env::new(true, 1.0), text);
+        settle(&mut rt);
+        let [x, y, w, _] = rt.presented("long").unwrap().0;
+        let top = |rt: &Runtime<Pressed>| rt.presented("row-0").map_or(f32::NAN, |r| r.0[1]);
+        let at_rest = top(&rt);
+        assert!(thumb(&rt).1 < 0.01, "the bar shows at rest");
+        // A press 3 points from the right edge, on the fourth row, with the bar out of sight.
+        let (px, py) = (x + w - 3.0, y + 3.5 * ROW);
+        rt.pointer_down(px, py);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_up(px, py);
+        settle(&mut rt);
+        assert_eq!(rt.state.0, [3], "the press didn't reach the row");
+        assert_eq!(top(&rt), at_rest, "the press paged the list");
+        // Shown by the pointer and faded after it left: the same, a faded bar takes nothing.
+        rt.pointer_move(x + w / 2.0, py);
+        settle(&mut rt);
+        assert!(thumb(&rt).1 > 0.99, "the pointer over the list didn't bring the bar up");
+        rt.pointer_move(x + w + 100.0, py);
+        settle(&mut rt);
+        assert!(thumb(&rt).1 < 0.01, "the bar stays after the pointer left");
+        rt.pointer_down(px, py);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_up(px, py);
+        settle(&mut rt);
+        assert_eq!(rt.state.0, [3, 3], "the press didn't reach the row");
+        assert_eq!(top(&rt), at_rest, "the press paged the list");
+    }
+
+    #[test]
     fn a_list_that_fits_has_no_bar() {
         struct Short;
         fn view(_: &Short, _: &mut Cx<Short>) -> El {
