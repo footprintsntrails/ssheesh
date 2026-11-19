@@ -134,8 +134,8 @@ fn rest_on_the_agents_tab(t: f64) -> Value {
 
 /// A row that isn't filled.
 const NONE: &str = "#00000000";
-const BLUE: &str = "#0071e3ff";
-const BLUE_DOWN: &str = "#005bbfff";
+const BLUE: &str = "#4eba65ff";
+const BLUE_DOWN: &str = "#3f9a53ff";
 
 #[test]
 fn the_card_opens_under_the_waiting_agents_tab_in_both_appearances() {
@@ -169,7 +169,7 @@ fn the_card_opens_under_the_waiting_agents_tab_in_both_appearances() {
         }
         let px = run.pixels();
         let [x, y, w, h] = card.map(|v| v as u32);
-        assert_eq!(near(&px, [x, y, x + w, y + h], [0x00, 0x71, 0xe3]), 0, "{theme}: something on the card is blue");
+        assert_eq!(near(&px, [x, y, x + w, y + h], [0x4e, 0xba, 0x65]), 0, "{theme}: something on the card is blue");
         // You're still on the shop's tab.
         assert!(run.element("pane-1").is_some(), "{theme}");
     }

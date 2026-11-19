@@ -281,8 +281,8 @@ fn a_tab_shows_its_own_terminal() {
 fn the_component_sheet_draws_every_state() {
     let Some(run) = run("sheet", &["--demo", "--sheet"], None) else { return };
     assert_eq!(run.fill("t-on"), "#3a3a3cff");
-    assert_eq!(run.fill("m-2"), "#0071e3ff");
-    assert_eq!(run.fill("m-3"), "#005bbfff");
+    assert_eq!(run.fill("m-2"), "#4eba65ff");
+    assert_eq!(run.fill("m-3"), "#3f9a53ff");
     assert_eq!(run.fill("pop"), "#2c2c2eff");
     for key in ["t-rest", "t-off", "t-wait", "t-re", "t-gone", "r-sel", "r-wait", "r-tor-on", "r-tor-start", "r-tor-bad", "b-side", "s-disk"] {
         assert!(run.element(key).is_some(), "{key}");
@@ -342,7 +342,7 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
             assert_eq!(y, FIRST_SECTION + SECTION_ROW * n as f64 + SECTION_BUNCH * bunch, "{theme}: {name}");
         }
         // The picked section is a quiet fill, not the accent blue, and it differs from the rest.
-        assert_ne!(run.fill("nav-layout"), "#0071e3ff", "{theme}");
+        assert_ne!(run.fill("nav-layout"), "#4eba65ff", "{theme}");
         assert_ne!(run.fill("nav-layout"), run.fill("nav-terminal"), "{theme}");
         // Rows with their words and controls.
         for said in ["Name the server on every tab", "Sidebar", "Show sidebar", "Server vitals", "Compact mode", "Where tabs go", "Under each server", "Search"] {
@@ -355,7 +355,7 @@ fn settings_is_a_page_in_the_window_in_both_appearances() {
         assert_eq!(at(&px, 26, 500), frame, "{theme}: the sidebar");
         let [x, y, w, _] = run.rect("layout-tab-server");
         assert_eq!(at(&px, (x + w / 2.0) as u32, (y + 4.0) as u32), group, "{theme}: a row's box");
-        assert_ne!(at(&px, 262, 106), "#0071e3", "{theme}: the picked section");
+        assert_ne!(at(&px, 262, 106), "#4eba65", "{theme}: the picked section");
         assert_ne!(at(&px, 262, 106), frame, "{theme}: the picked section");
         let [sx, sy, sw, sh] = run.rect("layout-tab-server-control");
         let green = if theme == "dark" { [0x30, 0xd1, 0x58] } else { [0x34, 0xc7, 0x59] };
@@ -754,7 +754,7 @@ fn tabs_go_under_each_server_in_both_appearances() {
         // Its line in the accent, beside it, in the picture.
         let [x, y, _, h] = run.rect("tab-1");
         let px = run.pixels();
-        let blue = [0x00, 0x71, 0xe3];
+        let blue = [0x4e, 0xba, 0x65];
         assert!(near(&px, [(x - 9.0) as u32, y as u32, x as u32, (y + h) as u32], blue) > 6, "no accent line beside the tab on screen");
     });
 }
@@ -839,8 +839,8 @@ fn the_palette_hangs_under_the_title_with_files_first_in_both_appearances() {
         assert!((palette[0] - title[0]).abs() < 1.0 && palette[1] > title[1] + title[3], "{theme}: {title:?} {palette:?}");
         assert_eq!(run.fill("palette"), format!("{pop}ff"), "{theme}");
         // One blue row, the first: Files.
-        assert_eq!(run.fill("pal-0"), "#0071e3ff", "{theme}");
-        assert_ne!(run.fill("pal-1"), "#0071e3ff", "{theme}");
+        assert_eq!(run.fill("pal-0"), "#4eba65ff", "{theme}");
+        assert_ne!(run.fill("pal-1"), "#4eba65ff", "{theme}");
         for said in ["Search or run on web-7731", "On web-7731", "Files", "df -h -x tmpfs -x devtmpfs", "snippet", "Go to", "Migration 0042", "Needs you", "Window", "Settings"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the palette");
         }
@@ -860,7 +860,7 @@ fn a_typed_command_is_offered_for_the_production_server_and_not_chosen() {
     let Some(run) = run("palette-run", &["--demo"], Some(script)) else { return };
     // Return did nothing: the palette is open, its one row isn't the blue one, and it says why.
     assert!(run.element("palette").is_some());
-    assert_ne!(run.fill("pal-0"), "#0071e3ff");
+    assert_ne!(run.fill("pal-0"), "#4eba65ff");
     assert!(run.element("pal-1").is_none());
     for said in ["docker compose ps", "run on web-7731", "Prod", "Nothing runs by itself"] {
         assert!(run.tree_text.contains(said), "{said}");
@@ -909,7 +909,7 @@ fn a_servers_menu_and_card_open_beside_its_icon_in_both_appearances() {
         let script = json!([{ "t": 0.3, "type": "secondary-click", "key": "server-4" }, { "t": 0.6, "type": "key", "name": "Down" }, { "t": 1.0, "type": "mark", "name": "end" }]);
         let Some(run) = self::run(&format!("menu-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
         assert_eq!(run.fill("server-menu"), format!("{pop}ff"), "{theme}");
-        assert_eq!(run.fill("sm-0"), "#0071e3ff", "{theme}: the arrow didn't highlight the first row");
+        assert_eq!(run.fill("sm-0"), "#4eba65ff", "{theme}: the arrow didn't highlight the first row");
         for said in ["New terminal", "Files", "Rename…", "Icon and color…", "Production", "Staging", "Development", "Remove server…"] {
             assert!(run.tree_text.contains(said), "{theme}: {said} isn't in the menu");
         }
@@ -923,7 +923,7 @@ fn a_servers_menu_and_card_open_beside_its_icon_in_both_appearances() {
 /// then ".." and the rows, 26 pt each from y = 140; the Files tab of the demo is `tab-2`.
 #[test]
 fn files_lists_opens_and_asks_in_both_appearances() {
-    for (theme, page, blue) in [("dark", "#1c1c1e", [0x00, 0x71, 0xe3]), ("light", "#ffffff", [0x00, 0x71, 0xe3])] {
+    for (theme, page, blue) in [("dark", "#1c1c1e", [0x4e, 0xba, 0x65]), ("light", "#ffffff", [0x4e, 0xba, 0x65])] {
         // The Files tab, then a click on deploy.sh: the list, one row selected.
         let script = json!([{ "t": 0.3, "type": "tap", "key": "tab-2" }, { "t": 0.8, "type": "tap", "x": 300.0, "y": 231.0 }, { "t": 1.4, "type": "mark", "name": "end" }]);
         let Some(run) = run(&format!("files-{theme}"), &["--demo", "--theme", theme], Some(script)) else { return };
@@ -1318,7 +1318,7 @@ fn a_confirmation_dims_the_window_in_both_appearances() {
         // Delete takes something away: red words on a quiet button, never blue.
         let px = run.pixels();
         let [bx, by, bw, bh] = run.rect("question-yes");
-        assert_eq!(near(&px, [bx as u32, by as u32, (bx + bw) as u32, (by + bh) as u32], [0x00, 0x71, 0xe3]), 0, "Delete is blue");
+        assert_eq!(near(&px, [bx as u32, by as u32, (bx + bw) as u32, (by + bh) as u32], [0x4e, 0xba, 0x65]), 0, "Delete is blue");
     });
 }
 
@@ -1343,7 +1343,7 @@ fn a_new_test_build_is_offered_across_the_top_in_both_appearances() {
         assert_eq!(at(&px, (x + 40.0) as u32, (y + 3.0) as u32), group, "{theme}");
         let [bx, by, bw, bh] = run.rect("canary-restart");
         let button = [bx as u32, by as u32, (bx + bw) as u32, (by + bh) as u32];
-        assert!(near(&px, button, [0x00, 0x71, 0xe3]) + near(&px, button, [0x0a, 0x84, 0xff]) > 100, "{theme}: Restart isn't blue");
+        assert!(near(&px, button, [0x4e, 0xba, 0x65]) + near(&px, button, [0x4e, 0xba, 0x65]) > 100, "{theme}: Restart isn't blue");
     }
     // Without the flag, nothing is said.
     let Some(run) = self::run("canary-none", &["--demo"], None) else { return };
@@ -1597,7 +1597,7 @@ fn containers_are_a_tab_grouped_by_project_in_both_appearances() {
         let px = run.pixels();
         assert_eq!(at(&px, 700, 760), page, "{theme}: the page's background under the list");
         // Nothing blue but what's selected: no row is.
-        assert_eq!(near(&px, [60, 90, 1270, 700], [0x00, 0x71, 0xe3]), 0, "{theme}: blue on the page");
+        assert_eq!(near(&px, [60, 90, 1270, 700], [0x4e, 0xba, 0x65]), 0, "{theme}: blue on the page");
     }
     // A machine without Docker says how to install it.
     let mut events = vec![tap(0.3, "server-3")];
@@ -1664,7 +1664,7 @@ fn stats_has_graphs_meters_and_programs_in_both_appearances() {
         let px = run.pixels();
         let graph = run.rect("stat-cpu");
         // The graph's line is drawn in the accent, so a quiet server's graph is still seen.
-        assert!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x00, 0x71, 0xe3]) > 20, "{theme}: the CPU line isn't in the accent");
+        assert!(near(&px, [graph[0] as u32, graph[1] as u32, (graph[0] + graph[2]) as u32, (graph[1] + graph[3]) as u32], [0x4e, 0xba, 0x65]) > 20, "{theme}: the CPU line isn't in the accent");
         assert_eq!(at(&px, 1270, 790), page, "{theme}");
     }
 }
