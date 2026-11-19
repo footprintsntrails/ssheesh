@@ -40,7 +40,7 @@ use rune::{col, row, text, text_input, Color, Cx, El, FileDialogOptions, Key, Ke
 use sshee_app::labels::{env_name, env_order, Face, HOST_COLORS, HOST_ICONS, MORE_COLORS};
 use sshee_app::model::EnvLabel;
 use sshee_app::roles::{automatic_words, Watch};
-use sshee_app::servers::{host_id, removal, Ask, Password};
+use sshee_app::servers::{host_id, removal, Ask};
 use sshee_app::workbench::{Link, Server, ServerKey, TabId, TabKind};
 
 use crate::icons::{icon, Icon};
@@ -358,7 +358,9 @@ impl Shell {
             menu.error = Some("Type the password first.".into());
             return;
         }
-        let ask = Ask::SavePassword { server, password: Password::new(menu.password.text.as_str()), remember: menu.remember };
+        // Moved out of the field, never copied: the one copy wipes itself when it goes.
+        let password = crate::terminal::password::take_password(&mut menu.password);
+        let ask = Ask::SavePassword { server, password, remember: menu.remember };
         self.backend_mut().servers(ask);
         self.close_server_menu(tx);
     }

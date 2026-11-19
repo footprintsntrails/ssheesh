@@ -619,6 +619,8 @@ pub(crate) struct Moving {
     pub(crate) pane: Option<TermPane>,
     /// A Files tab's folder, selection and open file.
     pub(crate) files: Option<crate::screens::files::State>,
+    /// A terminal that goes around Tor (`screens::tor::State::direct`).
+    pub(crate) direct: bool,
 }
 
 /// A session's status as a tab's.
@@ -707,6 +709,8 @@ impl Shell {
         shell.apply_settings();
         shell.sync_panes();
         shell.sync_watch();
+        // What goes through Tor here, before its first frame: another window asks with it.
+        crate::screens::tor::sync(&shell);
         if secondary {
             // Another window takes these from the one that opened it (`shell::windows`).
             return shell;
@@ -913,8 +917,10 @@ impl Shell {
         self.sync_keyboard(tx);
         self.save_tabs();
         crate::screens::agent::settled(self, tx);
-        // The tray's list of tabs that need you (`desktop.rs`).
+        // The tray's list of tabs that need you (`desktop.rs`), and what goes through Tor
+        // here, for the other windows' question before Tor goes off.
         self.sync_waiting();
+        crate::screens::tor::sync(self);
         if self.screens.any_open() || self.screens.settings.open {
             // What is open over the window, and Settings over the page, keep the keyboard.
         } else if let Some(id) = self.bench.active_id().filter(|id| self.panes.contains_key(id)) {
@@ -998,14 +1004,15 @@ impl Shell {
             st.moved();
             st
         });
+        let direct = self.screens.tor.direct.remove(&id);
         self.settle(tx);
-        Some(Moving { tab, pane, files })
+        Some(Moving { tab, pane, files, direct })
     }
 
     /// A tab taken out of another window ([`Shell::take_out`]) joins this one, on screen, with
     /// its pane and its Files state. False when this window already has a tab with its id.
     pub(crate) fn take_in(&mut self, moving: Moving, tx: &mut Tx) -> bool {
-        let Moving { tab, pane, files } = moving;
+        let Moving { tab, pane, files, direct } = moving;
         let id = tab.id;
         if !self.bench.adopt(tab) {
             return false;
@@ -1021,6 +1028,9 @@ impl Shell {
         }
         if let Some(files) = files {
             self.screens.files.insert(id, files);
+        }
+        if direct {
+            self.screens.tor.direct.insert(id);
         }
         self.settle(tx);
         true
@@ -1304,6 +1314,7 @@ impl Shell {
         // Toasts whose time is up (`notes.rs`), and the tray's list of who needs you.
         let notes = super::notes::tick(self, clock, tx);
         self.sync_waiting();
+        crate::screens::tor::sync(self);
         changed || ticked || agents || winked || notes || tor || pictured
     }
 

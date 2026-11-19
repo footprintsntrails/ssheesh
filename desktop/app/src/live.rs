@@ -1048,6 +1048,10 @@ impl TermLink for LiveLink {
         *self.0.phase.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn password_prompt(&self) -> Option<u32> {
+        self.0.watch.lock().unwrap_or_else(|e| e.into_inner()).password_prompt()
+    }
+
     /// tmux's rows, history, scroll position or folder (only for a shell in tmux), what is at
     /// a path, where a relative path is, which agents the server has: each an ssh round trip
     /// (or a folder listing here), on a thread of its own.

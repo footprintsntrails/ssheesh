@@ -138,6 +138,16 @@ pub trait TermLink {
     fn phase(&self) -> Option<connecting::Phase> {
         None
     }
+    /// ssh asks, on the line it is on now, for this server's own password, as the link read
+    /// the session's output since this connection attempt began: which such prompt it is,
+    /// counting from 1 (a higher one after an answer means the server refused it). `None`
+    /// otherwise: no prompt, a jump host on the way, a prompt worded otherwise or naming
+    /// another account, or other output already printed (a login script's). The window
+    /// offers to save the password only then (`password.rs`); a link that can't tell says
+    /// `None`, and nothing is offered.
+    fn password_prompt(&self) -> Option<u32> {
+        None
+    }
     /// The pane copied `text` to the clipboard. A replay records it (its fixtures are made
     /// up); a live session ignores it.
     fn note_copy(&self, text: &str) {
