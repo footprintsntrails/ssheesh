@@ -2,12 +2,13 @@
 //! `Hints.tsx`).
 //!
 //! - **The welcome** shows once ([`welcome_due`]), to everyone: a new install, a 0.10 user and
-//!   whoever saw 1.0's first welcome. A few short pages ([`PAGES`]): your servers (1.0 keeps a
-//!   list of its own, so 0.10's are offered to bring over, and the ssh config's to pick from),
-//!   then the few settings that matter most, each with a picture of what it changes, then
-//!   three things people miss. A choice is a row of Settings ([`Page::rows`]), changed through
-//!   that row as Settings does; what's on when it opens stays picked, so clicking through
-//!   changes nothing. Skipping, at any page, decides nothing for you.
+//!   whoever saw an earlier 1.0 welcome. A few short pages ([`PAGES`]): your servers (1.0 keeps
+//!   a list of its own, so 0.10's are offered to bring over, and the ssh config's to pick
+//!   from), then how the window is laid out, the sidebar, how it looks and the terminal, each
+//!   big choice with a picture of what it changes, then three things people miss. A choice is
+//!   a row of Settings ([`Page::rows`]), changed through that row as Settings does; what's on
+//!   when it opens stays picked, so clicking through changes nothing. Skipping, at any page,
+//!   decides nothing for you.
 //! - **The tour** is the simple one (plan decision Р7): six cards, a title and a line each,
 //!   with the shortcut that does it. 0.10's animated scenes come later.
 //! - **Hints** are one small note at a time about something on screen, the first time it's
@@ -16,13 +17,16 @@
 //!   keyboard.
 
 use crate::model::Settings;
-use crate::settings_store::catalog::{self, Control, Row};
-use crate::settings_store::SettingsStore;
+use crate::servers::{Source, Sources};
+use crate::settings_store::catalog::{self, Control, Row, Special};
+use crate::settings_store::schemes::APP_THEMES;
+use crate::settings_store::{looks, SettingsStore};
 use crate::workbench::shortcuts::Shortcut;
 
-/// The welcome's version: 0.10's was 2 and 1.0's first (your servers only) 3, so everyone sees
-/// this one once, whichever they saw before.
-pub const ONBOARDING_VERSION: u32 = 4;
+/// The welcome's version: 0.10's was 2, 1.0's first (your servers only) 3, and 4 the one with
+/// light or dark and the terminal but not the layout; so everyone sees this one once,
+/// whichever they saw before.
+pub const ONBOARDING_VERSION: u32 = 5;
 
 /// Whether the welcome opens at this start.
 pub fn welcome_due(settings: &Settings) -> bool {
@@ -40,7 +44,11 @@ pub fn welcomed(settings: &mut Settings) {
 pub enum Page {
     /// Bring 0.10's servers over, pick from the ssh config, or add one.
     Servers,
-    /// Light or dark, and the sidebar's side.
+    /// Where tabs go, two at once, compact mode, and the window's bars and lines.
+    Layout,
+    /// The sidebar's side, its list and icons, how busy a server looks, and the logo.
+    Sidebar,
+    /// Light or dark, the dark theme, the accent, the size, and motion.
     Look,
     /// Copying, and what a dropped connection does.
     Terminal,
@@ -49,13 +57,15 @@ pub enum Page {
 }
 
 /// The welcome's pages, in order.
-pub const PAGES: [Page; 4] = [Page::Servers, Page::Look, Page::Terminal, Page::Tips];
+pub const PAGES: [Page; 6] = [Page::Servers, Page::Layout, Page::Sidebar, Page::Look, Page::Terminal, Page::Tips];
 
 impl Page {
     /// A fixed word for its element's key.
     pub fn id(self) -> &'static str {
         match self {
             Page::Servers => "servers",
+            Page::Layout => "layout",
+            Page::Sidebar => "sidebar",
             Page::Look => "look",
             Page::Terminal => "terminal",
             Page::Tips => "tips",
@@ -65,6 +75,8 @@ impl Page {
     pub fn title(self) -> &'static str {
         match self {
             Page::Servers => "Your servers",
+            Page::Layout => "Layout",
+            Page::Sidebar => "Sidebar",
             Page::Look => "How it looks",
             Page::Terminal => "In the terminal",
             Page::Tips => "Three things people miss",
@@ -72,19 +84,40 @@ impl Page {
     }
 
     /// The settings it offers, by their rows' keys in Settings (`settings_store::catalog`), in
-    /// the order shown. Where tabs go isn't one yet: tabs under each server aren't built
-    /// (Settings shows that row disabled), and a choice here never pretends.
+    /// the order shown. Left to Settings: the sliders (the space between panes, their corners,
+    /// fading the pane not in use), hiding the sidebar (its shortcut does that), and Windows'
+    /// own title bar (for when the window misbehaves).
     pub fn rows(self) -> &'static [&'static str] {
         match self {
-            Page::Look => &["look-appearance", "layout-sidebar-side"],
+            Page::Layout => &["layout-tabs", "layout-view", "layout-compact", "layout-tab-server", "layout-vitals", "layout-env-line"],
+            Page::Sidebar => &["layout-sidebar-side", "layout-server-list", "layout-server-icons", "layout-server-load", "look-logo"],
+            Page::Look => &["look-appearance", "look-theme", "look-accent", "look-size", "look-animations"],
             Page::Terminal => &["term-copy", "term-reconnect"],
             Page::Servers | Page::Tips => &[],
         }
     }
 
-    /// The rows it shows: those 1.0 acts on, each a choice among a few.
+    /// The rows it shows: those 1.0 acts on that the welcome can offer ([`options`]).
     pub fn choices(self) -> Vec<&'static Row> {
-        self.rows().iter().filter_map(|key| catalog::row(key)).filter(|r| r.works() && matches!(r.control, Control::Choice { .. })).collect()
+        self.rows().iter().filter_map(|key| catalog::row(key)).filter(|r| r.works() && !options(r.key).is_empty()).collect()
+    }
+}
+
+/// The dark themes, for the welcome's "Dark theme": light has one, Daylight, and "Light" is it.
+pub fn dark_themes() -> impl Iterator<Item = (&'static str, &'static str)> {
+    APP_THEMES.into_iter().filter(|(id, _)| !looks::resolve(id, &[]).light)
+}
+
+/// What the row `key` can be in the welcome, each `(value, label)`: a choice's options, a
+/// switch's on and off, the dark themes, the accents. Empty: not something it offers.
+pub fn options(key: &str) -> Vec<(&'static str, &'static str)> {
+    match catalog::row(key).map(|r| r.control) {
+        Some(Control::Choice { options, .. }) => options.to_vec(),
+        Some(Control::Switch { .. }) => vec![("on", "On"), ("off", "Off")],
+        Some(Control::Special(Special::Theme)) => dark_themes().collect(),
+        // Settings keeps them as (name, value).
+        Some(Control::Special(Special::Accent)) => looks::ACCENTS.iter().map(|&(name, value)| (value, name)).collect(),
+        _ => vec![],
     }
 }
 
@@ -93,22 +126,37 @@ pub fn page(at: usize, by: i32) -> usize {
     (at as i64 + by as i64).clamp(0, PAGES.len() as i64 - 1) as usize
 }
 
-/// The value a choice row has now.
+/// The value the row `key` has now, as [`options`] names it. The dark theme is the one drawn
+/// whenever the window is dark: while following the system, the one for that side.
 pub fn chosen(store: &SettingsStore, key: &str) -> Option<String> {
+    let s = store.get();
     match catalog::row(key)?.control {
         Control::Choice { get, .. } => Some(get(store)),
+        Control::Switch { get, .. } => Some(if get(store) { "on" } else { "off" }.to_owned()),
+        Control::Special(Special::Theme) => Some(if s.theme_follows_system { s.dark_theme.clone() } else { s.theme.clone() }),
+        Control::Special(Special::Accent) => {
+            let preset = looks::ACCENTS.iter().find(|(_, v)| v.eq_ignore_ascii_case(s.accent.trim()));
+            Some(preset.map_or_else(|| s.accent.clone(), |(_, v)| (*v).to_owned()))
+        }
         _ => None,
     }
 }
 
-/// Picks `value` for the choice row `key` through the row itself, as Settings does. False: no
-/// such row, or no such value of it.
+/// Picks `value` for the row `key` through the row itself, as Settings does: a theme as its
+/// picture in Settings picks it, an accent as its swatch does. False: no such row, or no such
+/// value of it.
 pub fn pick(store: &mut SettingsStore, key: &str, value: &str) -> bool {
-    let Some(Control::Choice { options, set, .. }) = catalog::row(key).map(|r| r.control) else { return false };
-    if !options.iter().any(|(v, _)| *v == value) {
+    let Some(control) = catalog::row(key).map(|r| r.control) else { return false };
+    if !options(key).iter().any(|(v, _)| *v == value) {
         return false;
     }
-    set(store, value);
+    match control {
+        Control::Choice { set, .. } => set(store, value),
+        Control::Switch { set, .. } => set(store, value == "on"),
+        Control::Special(Special::Theme) => looks::pick(store, value),
+        Control::Special(Special::Accent) => store.set(|s| s.accent = value.to_owned()),
+        _ => return false,
+    }
     true
 }
 
@@ -140,15 +188,37 @@ pub const TIPS: [Tip; 3] = [
 ];
 
 /// What the welcome says over your servers, by how many the list has (this computer not
-/// counted) and what can be brought in.
-pub fn welcome_line(servers: usize, from_old: usize, from_config: usize) -> String {
+/// counted) and what can be brought in: from 0.10, from `~/.ssh/config`, and from XPipe and
+/// other SSH apps (`from_apps`, all of theirs together).
+pub fn welcome_line(servers: usize, from_old: usize, from_config: usize, from_apps: usize) -> String {
     let s = |n: usize| if n == 1 { "" } else { "s" };
-    match (servers, from_old, from_config) {
-        (0, 0, 0) => "Add your first one: paste its address, or a whole ssh command, and SSHeesh fills in the rest.".into(),
-        (0, old, _) if old > 0 => format!("SSHeesh 1.0 keeps its own list. Bring your {old} server{} over from 0.10, or add one.", s(old)),
-        (0, _, config) => format!("Found {config} in your SSH config. Pick the ones you want; the file isn't changed."),
-        (n, _, _) => format!("Your {n} server{} {} here.", s(n), if n == 1 { "is" } else { "are" }),
+    match (servers, from_old, from_config, from_apps) {
+        (0, 0, 0, 0) => "Add your first one: paste its address, or a whole ssh command, and SSHeesh fills in the rest.".into(),
+        (0, old, _, _) if old > 0 => format!("SSHeesh 1.0 keeps its own list. Bring your {old} server{} over from 0.10, or add one.", s(old)),
+        (0, _, config, _) if config > 0 => format!("Found {config} in your SSH config. Pick the ones you want; the file isn't changed."),
+        (0, _, _, apps) => format!("Found {apps} server{} in your other SSH apps. Bring over the ones you want; nothing there is changed.", s(apps)),
+        (n, _, _, _) => format!("Your {n} server{} {} here.", s(n), if n == 1 { "is" } else { "are" }),
     }
+}
+
+/// Where else servers were found, beyond 0.10 and `~/.ssh/config` (the welcome offers those
+/// by their own counts): XPipe, then the other SSH apps, each with how many it has that the
+/// list hasn't. None found, none listed.
+pub fn found_elsewhere(sources: &Sources) -> Vec<(Source, usize)> {
+    let xpipe = (!sources.xpipe.is_empty()).then(|| (Source::Xpipe, sources.xpipe.len()));
+    let apps = sources.apps.iter().filter(|o| !o.servers.is_empty()).map(|o| (Source::App(o.app), o.servers.len()));
+    xpipe.into_iter().chain(apps).collect()
+}
+
+/// The welcome's row for a source found elsewhere: "Bring over 12 servers from XPipe".
+pub fn bring_over(source: Source, n: usize) -> String {
+    let from = match source {
+        Source::Xpipe => "XPipe",
+        Source::App(app) => app.name(),
+        Source::Old => "SSHeesh 0.10",
+        Source::SshConfig => "~/.ssh/config",
+    };
+    format!("Bring over {n} server{} from {from}", if n == 1 { "" } else { "s" })
 }
 
 /// One card of the tour.
@@ -310,6 +380,8 @@ mod tests {
     fn whoever_saw_the_first_1_0_welcome_sees_this_one_once() {
         let mut s = Settings { onboarded: true, onboarding_version: 3, ..Settings::default() };
         assert!(welcome_due(&s));
+        // And whoever saw the one without the layout (canary's 4).
+        assert!(welcome_due(&Settings { onboarded: true, onboarding_version: 4, ..Settings::default() }));
         welcomed(&mut s);
         assert!(!welcome_due(&s));
         // A newer version's welcome seen, then back on this one: it doesn't show again.
@@ -321,41 +393,100 @@ mod tests {
     fn every_choice_is_a_working_row_of_settings() {
         for page in PAGES {
             let choices = page.choices();
-            assert_eq!(choices.len(), page.rows().len(), "{page:?}: a row is missing, disabled or not a choice");
+            assert_eq!(choices.len(), page.rows().len(), "{page:?}: a row is missing, disabled or not offered");
             for row in choices {
-                let Control::Choice { options, .. } = row.control else { unreachable!() };
-                assert!((2..=3).contains(&options.len()), "{}: a few to pick from", row.key);
+                let options = options(row.key);
+                assert!((2..=10).contains(&options.len()), "{}: {} to pick from", row.key, options.len());
+                // Every value it offers is one the row takes.
+                let mut store = SettingsStore::in_memory(Settings::default());
+                for (value, _) in &options {
+                    assert!(pick(&mut store, row.key, value), "{}: {value}", row.key);
+                    assert_eq!(chosen(&store, row.key).as_deref(), Some(*value), "{}", row.key);
+                }
             }
         }
-        assert_eq!(PAGES.map(Page::id), ["servers", "look", "terminal", "tips"]);
+        assert_eq!(PAGES.map(Page::id), ["servers", "layout", "sidebar", "look", "terminal", "tips"]);
         assert_eq!(page(0, -1), 0);
         assert_eq!(page(PAGES.len() - 1, 1), PAGES.len() - 1);
     }
 
     #[test]
+    fn the_layout_and_the_look_are_all_offered_but_the_fine_tuning() {
+        use crate::settings_store::catalog::Section;
+        let offered: Vec<&str> = PAGES.iter().flat_map(|p| p.rows().iter().copied()).collect();
+        // Left to Settings: sliders, hiding the sidebar (a shortcut), Windows' title bar.
+        let left = ["layout-gap", "layout-radius", "look-fade", "layout-sidebar-shown", "layout-title-bar", "layout-ssh-config", "look-light-dark"];
+        for r in catalog::rows().iter().filter(|r| matches!(r.section, Section::Layout | Section::Appearance)) {
+            assert!(offered.contains(&r.key) != left.contains(&r.key), "{}: offered, or named as left to Settings", r.key);
+        }
+    }
+
+    #[test]
     fn a_choice_changes_the_setting_as_settings_does_and_nothing_else() {
+        use crate::model::{CompactMode, IconPack, RailStatus, ReconnectMode, Side, SidebarMode, TabsPlacement, ViewMode};
         let mut store = SettingsStore::in_memory(Settings::default());
         let before = store.get().clone();
         // What's on stays picked: the defaults, and nothing changes by looking.
-        assert_eq!(chosen(&store, "term-copy").as_deref(), Some("select"));
-        assert_eq!(chosen(&store, "term-reconnect").as_deref(), Some("ask"));
-        assert_eq!(chosen(&store, "layout-sidebar-side").as_deref(), Some("left"));
+        for (key, value) in [
+            ("term-copy", "select"),
+            ("term-reconnect", "ask"),
+            ("layout-sidebar-side", "left"),
+            ("layout-tabs", "top"),
+            ("layout-view", "tabs"),
+            ("layout-compact", "off"),
+            ("layout-vitals", "on"),
+            ("layout-env-line", "off"),
+            ("layout-server-list", "narrow"),
+            ("layout-server-icons", "line"),
+            ("look-theme", "ssheesh"),
+            ("look-accent", "#4eba65"),
+            ("look-size", "100"),
+            ("look-animations", "on"),
+        ] {
+            assert_eq!(chosen(&store, key).as_deref(), Some(value), "{key}");
+        }
         assert_eq!(store.get(), &before);
         assert!(pick(&mut store, "term-copy", "keys"));
         assert!(!store.get().copy_on_select);
         assert!(pick(&mut store, "term-reconnect", "auto"));
-        assert_eq!(store.get().reconnect_mode, crate::model::ReconnectMode::Auto);
+        assert_eq!(store.get().reconnect_mode, ReconnectMode::Auto);
         assert!(pick(&mut store, "look-appearance", "light"));
         assert!(!store.get().theme_follows_system && store.get().theme == "daylight");
         assert!(pick(&mut store, "layout-sidebar-side", "right"));
-        assert_eq!(store.get().sidebar_side, crate::model::Side::Right);
-        // Nothing it doesn't know: no such value, no such row, a row that isn't a choice.
+        assert_eq!(store.get().sidebar_side, Side::Right);
+        // The layout, each through its row.
+        assert!(pick(&mut store, "layout-tabs", "sidebar") && pick(&mut store, "layout-view", "split") && pick(&mut store, "layout-compact", "both"));
+        let s = store.get();
+        assert!(s.tabs_placement == TabsPlacement::Sidebar && s.view_mode == ViewMode::Split && s.compact_mode == CompactMode::Both);
+        assert!(pick(&mut store, "layout-vitals", "off") && pick(&mut store, "layout-env-line", "on") && pick(&mut store, "layout-tab-server", "off"));
+        let s = store.get();
+        assert!(!s.show_vitals && s.env_stripe && !store.more().tabs_name_server);
+        assert!(pick(&mut store, "layout-server-list", "wide") && pick(&mut store, "layout-server-icons", "pixel") && pick(&mut store, "layout-server-load", "bars"));
+        let s = store.get();
+        assert!(s.sidebar_mode == SidebarMode::Wide && s.icon_pack == IconPack::Pixel && s.rail_status == RailStatus::Bars);
+        // The look: a dark theme from light goes dark in it, as its picture in Settings does.
+        assert!(pick(&mut store, "look-theme", "midnight"));
+        assert_eq!(crate::settings_store::schemes::Appearance::of(store.get()), crate::settings_store::schemes::Appearance::Dark);
+        assert_eq!(store.get().theme, "midnight");
+        assert!(pick(&mut store, "look-accent", "#7c83ff"));
+        assert!(pick(&mut store, "look-size", "110"));
+        assert!(pick(&mut store, "look-animations", "off"));
+        let s = store.get();
+        assert!(s.accent == "#7c83ff" && s.ui_zoom == 110.0 && !s.animations);
+        // Following the system, the dark theme is the dark side's, whatever the system is now.
+        assert!(pick(&mut store, "look-appearance", "system") && pick(&mut store, "look-theme", "oled"));
+        assert_eq!(store.get().dark_theme, "oled");
+        assert_eq!(chosen(&store, "look-theme").as_deref(), Some("oled"));
+        // Nothing it doesn't know: no such value, no such row, a row it doesn't offer.
         let now = store.get().clone();
         assert!(!pick(&mut store, "term-copy", "always"));
         assert!(!pick(&mut store, "no-such-row", "x"));
-        assert!(!pick(&mut store, "term-blink", "true"));
+        assert!(!pick(&mut store, "term-font-size", "14"));
+        assert!(!pick(&mut store, "look-theme", "daylight"));
+        assert!(!pick(&mut store, "look-accent", "#123456"));
+        assert!(!pick(&mut store, "layout-gap", "4"));
         assert_eq!(store.get(), &now);
-        assert_eq!(chosen(&store, "term-blink"), None);
+        assert_eq!(chosen(&store, "layout-gap"), None);
     }
 
     #[test]
@@ -367,12 +498,32 @@ mod tests {
 
     #[test]
     fn the_welcome_line_says_where_servers_come_from() {
-        assert!(welcome_line(0, 0, 0).starts_with("Add your first one"));
-        assert_eq!(welcome_line(0, 3, 2), "SSHeesh 1.0 keeps its own list. Bring your 3 servers over from 0.10, or add one.");
-        assert_eq!(welcome_line(0, 1, 0), "SSHeesh 1.0 keeps its own list. Bring your 1 server over from 0.10, or add one.");
-        assert!(welcome_line(0, 0, 4).starts_with("Found 4 in your SSH config"));
-        assert_eq!(welcome_line(1, 0, 0), "Your 1 server is here.");
-        assert_eq!(welcome_line(5, 2, 0), "Your 5 servers are here.");
+        assert!(welcome_line(0, 0, 0, 0).starts_with("Add your first one"));
+        assert_eq!(welcome_line(0, 3, 2, 5), "SSHeesh 1.0 keeps its own list. Bring your 3 servers over from 0.10, or add one.");
+        assert_eq!(welcome_line(0, 1, 0, 0), "SSHeesh 1.0 keeps its own list. Bring your 1 server over from 0.10, or add one.");
+        assert!(welcome_line(0, 0, 4, 2).starts_with("Found 4 in your SSH config"));
+        assert_eq!(welcome_line(0, 0, 0, 12), "Found 12 servers in your other SSH apps. Bring over the ones you want; nothing there is changed.");
+        assert_eq!(welcome_line(1, 0, 0, 0), "Your 1 server is here.");
+        assert_eq!(welcome_line(5, 2, 0, 3), "Your 5 servers are here.");
+    }
+
+    #[test]
+    fn only_the_apps_that_have_servers_are_offered_by_name() {
+        use crate::servers::{App, AppOffer, Candidate};
+        let c = |id: &str| Candidate { id: id.into(), name: id.into(), address: id.into(), identity_file: None, had_password: false, picked: true };
+        let offer = |app, servers: Vec<Candidate>| AppOffer { app, servers, here: 0, through_jump: 0, ppk_keys: 0 };
+        let mut sources = Sources {
+            old: vec![c("old")],
+            xpipe: vec![c("a"), c("b")],
+            apps: vec![offer(App::Putty, vec![c("p")]), offer(App::WinScp, vec![]), offer(App::Remmina, vec![c("r1"), c("r2"), c("r3")])],
+            ..Sources::default()
+        };
+        assert_eq!(found_elsewhere(&sources), [(Source::Xpipe, 2), (Source::App(App::Putty), 1), (Source::App(App::Remmina), 3)]);
+        assert_eq!(bring_over(Source::Xpipe, 2), "Bring over 2 servers from XPipe");
+        assert_eq!(bring_over(Source::App(App::Putty), 1), "Bring over 1 server from PuTTY");
+        sources.xpipe.clear();
+        sources.apps.clear();
+        assert!(found_elsewhere(&sources).is_empty());
     }
 
     #[test]

@@ -25,10 +25,28 @@ macro_rules! shots {
 }
 
 /// Every picture, by name: `look-*` in neither appearance, the others in both.
-const SHOTS: [(&str, &[u8]); 15] = shots![
+const SHOTS: [(&str, &[u8]); 33] = shots![
     "look-system",
     "look-light",
     "look-dark",
+    "dark-tabs-sidebar",
+    "dark-split",
+    "dark-compact-sidebar",
+    "dark-compact-tabbar",
+    "dark-compact-both",
+    "dark-side-right",
+    "dark-rail",
+    "dark-rail-names",
+    "dark-rail-pixel",
+    "light-tabs-sidebar",
+    "light-split",
+    "light-compact-sidebar",
+    "light-compact-tabbar",
+    "light-compact-both",
+    "light-side-right",
+    "light-rail",
+    "light-rail-names",
+    "light-rail-pixel",
     "dark-copy-picked",
     "dark-drop-on",
     "dark-drop-retrying",
@@ -70,6 +88,26 @@ impl Pictures {
     /// The window in the appearance `value` ("system", "light", "dark").
     pub fn look(&self, value: &str) -> El {
         self.shot(&format!("look-{value}"))
+    }
+
+    /// The window laid out as the row `key` has it when it's `value`, all else as it comes, in
+    /// `t`'s appearance: the whole window, or for the sidebar's list and icons its top corner.
+    pub fn layout(&self, t: &Theme, key: &str, value: &str) -> El {
+        let side = if t.dark { "dark" } else { "light" };
+        let name = match (key, value) {
+            ("layout-tabs", "sidebar") => "tabs-sidebar",
+            ("layout-view", "split") => "split",
+            ("layout-compact", "sidebar") => "compact-sidebar",
+            ("layout-compact", "tabbar") => "compact-tabbar",
+            ("layout-compact", "both") => "compact-both",
+            ("layout-sidebar-side", "right") => "side-right",
+            ("layout-server-list", "wide") => "rail-names",
+            ("layout-server-icons", "pixel") => "rail-pixel",
+            ("layout-server-list" | "layout-server-icons", _) => "rail",
+            // As it comes: the window in this appearance.
+            _ => return self.look(side),
+        };
+        self.shot(&format!("{side}-{name}"))
     }
 
     /// What the terminal choice `key` does when it's `value`, as a loop in `t`'s appearance.
