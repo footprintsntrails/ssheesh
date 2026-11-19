@@ -225,7 +225,11 @@ fn bar(t: &Theme, at: f32) -> El {
 }
 
 fn foot(s: &State, t: &Theme) -> El {
-    let mut foot = row().w_full().px(20.0).py(14.0).gap(8.0).items_center().border_sides([1.0, 0.0, 0.0, 0.0], t.hair).child(spacer());
+    let mut foot = row().w_full().px(20.0).py(14.0).gap(8.0).items_center().child(spacer());
+    // The rule over the buttons only where there are buttons.
+    if !matches!(s.phase, Phase::Working { .. } | Phase::Done { closes: true, .. }) {
+        foot = foot.border_sides([1.0, 0.0, 0.0, 0.0], t.hair);
+    }
     match &s.phase {
         Phase::Ask { go, destructive, .. } => {
             foot = foot
@@ -260,7 +264,7 @@ pub fn demo(which: &str) -> Option<Phase> {
         },
         "working" => Phase::Working { title: "Updating SSHeesh".into(), words: "Keeping the version you have, to go back to…".into(), at: 0.45 },
         "done" => Phase::Done { title: "SSHeesh is installed".into(), line: "It's in the Start menu. Opening it now…".into(), closes: true },
-        "failed" => Phase::Failed { title, line: r"SSHeesh couldn't be copied to C:\Users\you\AppData\Local\SSHeesh: the disk is full.".into() },
+        "failed" => Phase::Failed { title: "SSHeesh couldn't be installed".into(), line: r"SSHeesh couldn't be copied to C:\Users\you\AppData\Local\SSHeesh: the disk is full.".into() },
         "uninstall" => Phase::Ask {
             title: "Remove SSHeesh".into(),
             about: "SSHeesh 1.0.0 goes from this computer: the program, its Start menu item and its entry in Installed apps.".into(),
