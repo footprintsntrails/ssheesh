@@ -306,6 +306,8 @@ jobs:
     name: Sign (Windows)
     needs: [prepare, build]
     runs-on: windows-latest
+    # Its secrets are the release environment's: it waits for the same approval as publishing.
+    environment: release
     defaults:
       run:
         shell: bash
@@ -340,6 +342,7 @@ jobs:
     name: Sign (macOS)
     needs: [prepare, build]
     runs-on: macos-latest
+    environment: release
     steps:
       - uses: actions/download-artifact@v4
         with:

@@ -168,7 +168,19 @@ impl HostStore {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(ids).map_err(|e| e.to_string())?;
-        std::fs::write(&self.remembered_file, json).map_err(|e| format!("Couldn't note the saved password: {e}"))
+        // Whole or not at all, and only yours: a temporary file beside it, then moved over.
+        let tmp = self.remembered_file.with_extension("json.tmp");
+        let write = || -> std::io::Result<()> {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&tmp)?;
+            std::io::Write::write_all(&mut file, json.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&tmp, &self.remembered_file)
+        };
+        write().map_err(|e| format!("Couldn't note the saved password: {e}"))
     }
 
     fn write_saved(&self, hosts: &[Host]) -> Result<(), String> {

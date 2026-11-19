@@ -99,7 +99,10 @@ pub struct Done {
 
 /// The `RunOnce` command that finishes the replacement after a power loss.
 pub fn run_once_command(layout: &Layout) -> String {
-    format!("\"{}\" {} \"{}\"", layout.new.display(), flags::FINISH, layout.dir.display())
+    // A folder ending in a backslash (`/D=C:\Apps\`) would escape the closing quote.
+    let dir = layout.dir.display().to_string();
+    let dir = dir.trim_end_matches(['\\', '/']);
+    format!("\"{}\" {} \"{}\"", layout.new.display(), flags::FINISH, dir)
 }
 
 /// Installs `program` (this installer's own file) of `version` as `plan` says.
