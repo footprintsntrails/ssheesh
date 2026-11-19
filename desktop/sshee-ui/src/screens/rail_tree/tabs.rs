@@ -232,7 +232,7 @@ pub fn list(s: &Shell, t: &'static Theme, index: usize, server: &str, branch: f3
             icon: tab_icon(tab),
             name: &name,
             server: None,
-            prod: false,
+            env: None,
             badge: badge.filter(|b| *b != Badge::NeedsYou),
             working: working(s, tab),
             connecting: connecting(tab),

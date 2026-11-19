@@ -50,6 +50,7 @@ use sshee_app::palette::shortcut_label;
 use sshee_app::workbench::shortcuts::Shortcut;
 use sshee_app::workbench::layout::{self, Layout};
 use sshee_app::workbench::titles::{self, Home};
+use sshee_app::model::EnvLabel;
 use sshee_app::workbench::{Badge, Open, ServerKey, StripTab, TabId, TabKind};
 
 use super::state::Shell;
@@ -58,6 +59,7 @@ use crate::kit::button::toolbar_button;
 use crate::kit::list::{list_row, list_rule, ListRow};
 use crate::kit::menu::{menu, menu_row, menu_separator, RowState};
 use crate::kit::popover::popover;
+use crate::kit::chip::env_chip_width;
 use crate::kit::tab::{group_name, tab, Tab};
 use crate::kit::{divider, ringed_dot};
 use crate::terminal::overlays::Wish;
@@ -617,8 +619,8 @@ fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working:
     if named {
         w += 7.0 + rune::text::advance(server, theme::TAB_SERVER);
     }
-    if st.prod && named {
-        w += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
+    if let Some(env) = st.env.filter(|_| named) {
+        w += 7.0 + env_chip_width(env);
     }
     if let Some(badge) = st.tab.badge() {
         let font = if badge == Badge::NeedsYou { theme::NEEDS } else { theme::TAB_STATE };
@@ -635,7 +637,7 @@ fn natural_width(st: &StripTab, label: &str, server: &str, named: bool, working:
 /// How wide a crowded tab is at its narrowest, and what leads it (the divider and its
 /// machine's name, when it starts a group or the run in sight). What it has to say is only
 /// its mark there (`kit::tab`), counted at its widest.
-fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bool, working: bool) -> (f32, f32) {
+fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, env: Option<&EnvLabel>, working: bool) -> (f32, f32) {
     let mut own = 8.0 + theme::ICON + 6.0 + rune::text::advance(label, theme::TAB_NAME) + 8.0;
     if st.tab.badge().is_some() {
         own += 6.0 + 14.0;
@@ -649,8 +651,8 @@ fn crowded_width(st: &StripTab, label: &str, server: &str, leads: bool, prod: bo
     let mut lead = if st.starts_group { 11.0 + 2.0 } else { 0.0 };
     if leads {
         lead += 12.0 + rune::text::advance(server, theme::GROUP) + 2.0;
-        if prod {
-            lead += 7.0 + 10.0 + rune::text::advance("Prod", theme::CHIP);
+        if let Some(env) = env {
+            lead += 7.0 + env_chip_width(env);
         }
     }
     // The tab you're on keeps its name (up to a cap); the others give way first.
@@ -783,7 +785,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
     let partners: Vec<TabId> = s.bench.on_screen().into_iter().filter(|id| Some(*id) != s.bench.active_id()).collect();
 
     // The tabs in sight.
-    let prod_of = |st: &StripTab| s.bench.server(&st.tab.server).is_some_and(|sv| sv.is_prod());
+    let env_of = |st: &StripTab| s.bench.server(&st.tab.server).and_then(|sv| sv.env.as_ref());
     let plus = theme::CONTROL + 2.0;
     let widths = |from: usize| -> Vec<f32> {
         strip
@@ -791,7 +793,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
             .zip(&names)
             .enumerate()
             .map(|(i, (st, (label, server)))| {
-                let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, prod_of(st), marked(st));
+                let (own, lead) = crowded_width(st, label, server, i == from || i == 0 || st.starts_group, env_of(st), marked(st));
                 own + lead
             })
             .collect()
@@ -813,7 +815,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
     // natural one.
     let least = |st: &StripTab, label: &str, server: &str| {
         if compact {
-            crowded_width(st, label, server, false, false, marked(st)).0 - 2.0
+            crowded_width(st, label, server, false, None, marked(st)).0 - 2.0
         } else {
             natural_width(st, label, server, !grouped, marked(st)) - 2.0 - if st.starts_group { 11.0 } else { 0.0 }
         }
@@ -835,7 +837,7 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
         let mut used = if hidden { 2.0 * plus } else { plus };
         for i in sight.clone() {
             let st = &strip[i];
-            let (own, _) = crowded_width(st, &names[i].0, &names[i].1, false, false, marked(st));
+            let (own, _) = crowded_width(st, &names[i].0, &names[i].1, false, None, marked(st));
             used += held.get(&st.tab.id).map_or(widths[i], |w| widths[i] - own + w + 2.0);
         }
         if used > room {
@@ -867,13 +869,13 @@ pub(crate) fn strip(s: &Shell, t: &'static Theme, window_active: bool, fit: Fit)
         }
         if grouped && (i == sight.start || st.starts_group) {
             // Crowded, or tabs that don't name it: the server is named once, before its tabs.
-            tabs = tabs.child(group_name(t, server, prod_of(st), current == Some(st.tab.server.as_str())).key(format!("group-{}", id.0)));
+            tabs = tabs.child(group_name(t, server, env_of(st), current == Some(st.tab.server.as_str())).key(format!("group-{}", id.0)));
         }
         let spec = Tab {
             icon: tab_icon(st.tab),
             name: label,
             server: (!grouped).then_some(server.as_str()),
-            prod: st.prod && !grouped,
+            env: st.env.filter(|_| !grouped),
             badge: st.tab.badge(),
             working: working(st),
             connecting: connecting(st),
