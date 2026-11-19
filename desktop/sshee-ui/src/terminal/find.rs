@@ -392,7 +392,7 @@ impl TermPane {
 /// A `TextEdit` for a pane that is gone (its tab closed between the frame that drew its find
 /// field and an edit the field had queued). The edit lands here and is never read: a few
 /// hundred bytes, left behind in a case that takes a closed tab and a keystroke in one frame.
-fn nowhere() -> &'static mut TextEdit {
+pub(crate) fn nowhere() -> &'static mut TextEdit {
     Box::leak(Box::new(TextEdit::new("")))
 }
 

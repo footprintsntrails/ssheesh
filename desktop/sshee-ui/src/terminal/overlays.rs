@@ -3,6 +3,8 @@
 //!
 //! ```text
 //! term-box   column: the pane's whole area
+//! ├── pw-strip       "Type the password here once…", above the terminal while ssh asks for a
+//! │                  password a server has none saved for (`password.rs`)
 //! ├── term           the grid, cursor and input method (`view.rs`); the away line sits between
 //! │                  its rows
 //! ├── scroll         the scroll bar, over the right edge
@@ -159,6 +161,9 @@ pub enum Wish {
     /// Files dropped on this terminal wait for the folder its shell is in, to upload there
     /// (`shell::file_drop`); `None` when it can't be known.
     UploadFolder(Option<String>),
+    /// The password typed into the strip got the terminal in: keep it for its server
+    /// (`password.rs`). Its `Debug` is dots.
+    SavePassword(sshee_app::servers::Password),
 }
 
 /// A pane's overlays' state.
@@ -174,6 +179,8 @@ pub struct Overlays {
     pub(crate) session: super::session::Session,
     /// "Connecting to web-7731…" over a terminal with nothing on screen yet (`connecting.rs`).
     pub(crate) connecting: super::connecting::Connecting,
+    /// "Type the password here once…" while ssh asks for one (`password.rs`).
+    pub(crate) password: super::password::Strip,
     wishes: Vec<Wish>,
     /// The program in the foreground, when something tells (the agents' watch will):
     /// who gets Ctrl+F depends on it.
@@ -271,6 +278,7 @@ impl TermPane {
         }
         changed |= self.poll_session(clock, tx);
         changed |= self.poll_connecting(clock, tx);
+        changed |= self.poll_password();
         changed |= self.poll_away(clock, tx);
         changed |= self.poll_links(clock, tx);
         changed |= self.poll_scroll();
@@ -282,7 +290,8 @@ impl TermPane {
 pub fn layer<S: 'static>(term: El, pane: &TermPane, cx: &mut Cx<S>, get: impl Fn(&mut S) -> Option<&mut TermPane> + Copy + 'static, m: &CellMetrics) -> El {
     // Dark or light as Settings says (the pane's own), else as the system is.
     let t = pane.theme(cx.env().system_dark);
-    let mut layer = rune::col().key("term-box").w_full().grow(1.0).min_h(0.0).child(term);
+    // Above the terminal, not over it: ssh's prompt stays in sight (`password.rs`).
+    let mut layer = rune::col().key("term-box").w_full().grow(1.0).min_h(0.0).children(super::password::strip(pane, t, get)).child(term);
     layer = layer.children(scrollbar::bar(pane, t, get));
     layer = layer.children(scrollbar::to_bottom(pane, t, get));
     layer = layer.children(links::hint(pane, t, m));

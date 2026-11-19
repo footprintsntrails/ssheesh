@@ -6074,6 +6074,7 @@ dependencies = [
  "sshee-term",
  "tempfile",
  "windows",
+ "zeroize",
  "zstd",
 ]
 

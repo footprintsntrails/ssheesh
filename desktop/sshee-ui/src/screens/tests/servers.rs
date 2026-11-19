@@ -5,7 +5,7 @@
 
 use rune::Key;
 use sshee_app::model::EnvLabel;
-use sshee_app::servers::{Answer, Ask, PickedLook, SignIn};
+use sshee_app::servers::{Answer, Ask, Password, PickedLook, SignIn};
 use sshee_app::workbench::TabKind;
 
 use super::{Window, DB, WEB};
@@ -167,6 +167,43 @@ fn the_address_is_copied_except_in_streamer_mode_and_a_saved_password_forgotten(
 }
 
 #[test]
+fn a_password_is_saved_from_the_menu_of_a_server_without_one() {
+    let mut w = Window::open(false);
+    // web-7731 has one saved: nothing to save there.
+    w.right_click("server-1");
+    assert!(!w.tree().contains("Save password…"));
+    w.key(Key::Escape, "");
+    // db-main has none: its menu offers it where "Forget saved password" would be.
+    w.right_click("server-2");
+    let tree = w.tree();
+    assert!(tree.contains("Save password…") && !tree.contains("Forget saved password"), "{tree}");
+    w.click("sm-14");
+    let tree = w.tree();
+    assert!(tree.contains("Save the password for db-main") && tree.contains("Remember password") && tree.contains("Saved in your system keychain"), "{tree}");
+    assert!(w.rt.state.screens.server_menu.remember);
+    // Nothing typed: said on the page.
+    w.click("sm-save-password");
+    assert!(w.tree().contains("Type the password first."));
+    w.click("sm-secret");
+    w.type_text("made-up-password");
+    // A secure field: the tree never holds what was typed.
+    assert!(!w.tree().contains("made-up-password"));
+    // Off and on again: for this run only, then remembered.
+    w.click("sm-remember");
+    assert!(w.tree().contains("Kept only until you quit SSHeesh."));
+    w.click("sm-remember");
+    w.click("sm-save-password");
+    assert!(w.rt.state.screens.server_menu.open.is_none());
+    assert!(w.asks().contains(&Ask::SavePassword { server: DB.into(), password: Password::new("made-up-password"), remember: true }), "{:?}", w.asks());
+    assert!(w.rt.state.screens.server_menu.password.text.is_empty(), "the field is wiped");
+    assert!(w.rt.state.screens.notes.titles().iter().any(|t| t.starts_with("Saved the password for db-main")), "{:?}", w.rt.state.screens.notes.titles());
+    // Saved now: the menu offers to forget it instead.
+    w.right_click("server-2");
+    let tree = w.tree();
+    assert!(tree.contains("Forget saved password") && !tree.contains("Save password…"), "{tree}");
+}
+
+#[test]
 fn a_look_can_be_automatic_any_colour_or_a_picture_and_a_failure_says_so() {
     let mut w = Window::open(false);
     w.right_click("server-2");
@@ -283,7 +320,7 @@ fn removing_a_server_stops_and_forgets_its_tunnels() {
         t.save("web", None, "", local(3000, SERVER, 3000));
     });
     w.right_click("server-2");
-    w.click("sm-14");
+    w.click("sm-15");
     w.click("dialog-yes");
     assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));
     let asked = w.world.lock().unwrap().tunnels.clone();

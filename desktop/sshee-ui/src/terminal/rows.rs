@@ -575,6 +575,15 @@ impl PaneView {
         (line < self.mirror.len()).then_some((line, start))
     }
 
+    /// The text of the row the cursor is on, while the view shows the bottom (nothing
+    /// scrolled back): what ssh asks there while it connects (`password.rs`).
+    pub fn cursor_row_text(&self) -> Option<String> {
+        if self.display_offset != 0 {
+            return None;
+        }
+        self.mirror.get(self.cursor.line).map(Row::text)
+    }
+
     /// The rows the presentation pass reads: the edges' and the view's.
     fn texts(&self) -> (Vec<RowText>, Vec<RowText>, Vec<RowText>) {
         let above = row_texts(&self.edges.above, false);

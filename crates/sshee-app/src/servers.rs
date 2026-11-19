@@ -36,9 +36,16 @@ use crate::workbench::{Server, ServerKey};
 use indexmap::IndexMap;
 use std::fmt;
 
-/// A password on its way to the keychain. Never printed: its `Debug` is dots.
+/// A password on its way to the keychain. Never printed: its `Debug` is dots. Wiped from
+/// memory when dropped.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Password(String);
+
+impl Drop for Password {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
 
 impl Password {
     pub fn new(text: impl Into<String>) -> Password {
@@ -806,6 +813,10 @@ pub enum Ask {
     SetEnv { server: ServerKey, env: Option<EnvLabel> },
     /// "Forget saved password": out of the keychain, and the server asks again.
     ForgetPassword { server: ServerKey },
+    /// "Save password…", or the password typed once while a terminal signs in: kept for this
+    /// run, and in the keychain when `remember` is set, so the server stops asking. Any
+    /// server, one from `~/.ssh/config` too.
+    SavePassword { server: ServerKey, password: Password, remember: bool },
     /// Take a server out of the list: a saved one is removed and its password forgotten, one
     /// from `~/.ssh/config` is hidden.
     Remove { server: ServerKey },
@@ -826,6 +837,7 @@ impl Ask {
             Ask::Detect { .. } => "Couldn't check the server",
             Ask::SetEnv { .. } => "Couldn't change the label",
             Ask::ForgetPassword { .. } => "Couldn't forget the password",
+            Ask::SavePassword { .. } => "Couldn't save the password",
             Ask::Remove { .. } => "Couldn't remove the server",
         }
     }
@@ -842,6 +854,7 @@ impl Ask {
             | Ask::Detect { server, .. }
             | Ask::SetEnv { server, .. }
             | Ask::ForgetPassword { server }
+            | Ask::SavePassword { server, .. }
             | Ask::Remove { server } => Some(server),
             _ => None,
         }
@@ -1109,6 +1122,17 @@ impl Book {
                 self.passwords.retain(|p| *p != host.id);
                 Answer::Note(forgot_note(self.looks.name(&host)))
             }
+            Ask::SavePassword { ref server, ref password, remember } => {
+                let Some(host) = self.listed(server).cloned() else { return Answer::failed(&ask, "That server isn't in your list anymore.") };
+                if password.is_empty() {
+                    return Answer::failed(&ask, "Type the password first.");
+                }
+                // A demo keeps no password, only that there is one.
+                if remember && !self.passwords.contains(&host.id) {
+                    self.passwords.push(host.id.clone());
+                }
+                Answer::Note(saved_note(self.looks.name(&host), remember))
+            }
             Ask::Remove { server } => {
                 let Some(host) = self.listed(&server).cloned() else { return Answer::failed(&Ask::Remove { server }, "That server isn't in your list anymore.") };
                 if host.from_config {
@@ -1127,6 +1151,24 @@ impl Book {
 /// What "Forget saved password" did.
 pub fn forgot_note(name: &str) -> String {
     format!("Forgot the saved password for {name}. It asks the next time.")
+}
+
+/// Whether ssh asks for a server's password on this line of a terminal: "user@host's
+/// password:", "(user@host) Password:", a bare "Password:". The rule askpass reads a prompt by
+/// (sshee-core's `secrets::is_password_prompt`), so never a key's passphrase ("Enter
+/// passphrase for key …:"), a host key's question or a one-time code.
+pub fn asks_for_password(line: &str) -> bool {
+    let p = line.trim().to_lowercase();
+    !p.contains("passphrase") && (p.ends_with("password:") || p.contains("'s password"))
+}
+
+/// What "Save password" did: kept in the keychain (`remember`), or until SSHeesh quits.
+pub fn saved_note(name: &str, remember: bool) -> String {
+    if remember {
+        format!("Saved the password for {name}. It signs in without asking.")
+    } else {
+        format!("SSHeesh uses the password for {name} until it quits.")
+    }
 }
 
 /// The window's faces of the servers in `looks`: each with its picture made by `picture` (only
@@ -1445,6 +1487,14 @@ mod tests {
         assert!(book.servers()[0].is_prod());
         assert_eq!(book.handle(Ask::ForgetPassword { server: server.clone() }), Answer::Note(forgot_note("db-7731")));
         assert!(!book.faces(|_| None)[&server].saved_password);
+        // Saved again from its menu, or from the terminal that asked for it.
+        let save = Ask::SavePassword { server: server.clone(), password: Password::new("made-up-password"), remember: true };
+        assert!(!format!("{save:?}").contains("made-up"));
+        assert_eq!(save.server(), Some(server.as_str()));
+        assert_eq!(book.handle(save), Answer::Note(saved_note("db-7731", true)));
+        assert!(book.faces(|_| None)[&server].saved_password);
+        assert!(matches!(book.handle(Ask::SavePassword { server: server.clone(), password: Password::default(), remember: true }), Answer::Refused { .. }));
+        assert_eq!(saved_note("db-7731", false), "SSHeesh uses the password for db-7731 until it quits.");
         // A picture, then back to the icon; "Automatic", then a guess.
         book.handle(Ask::SetImage { server: server.clone(), path: "/pictures/db.png".into() });
         let picture = Picture { width: 1, height: 1, rgba: std::sync::Arc::from(&[1u8, 2, 3, 4][..]) };
@@ -1455,6 +1505,23 @@ mod tests {
         assert!(!book.faces(|_| None)[&server].look.picked);
         assert_eq!(book.handle(Ask::Detect { server: server.clone(), first: true }), Answer::Detected { server: server.clone(), icon: Some("database".into()) });
         assert_eq!(book.faces(|_| None)[&server].look.icon, "database");
+    }
+
+    #[test]
+    fn a_line_asks_for_a_password_only_as_ssh_words_it() {
+        for line in ["deploy@203.0.113.17's password: ", "(deploy@web-7731) Password:", "Password:", "  root@db's password:   "] {
+            assert!(asks_for_password(line), "{line}");
+        }
+        for line in [
+            "Enter passphrase for key '/home/demo/.ssh/id_ed25519': ",
+            "Are you sure you want to continue connecting (yes/no/[fingerprint])? ",
+            "Verification code: ",
+            "Permission denied, please try again.",
+            "deploy@web-7731:~$ ",
+            "",
+        ] {
+            assert!(!asks_for_password(line), "{line}");
+        }
     }
 
     #[test]

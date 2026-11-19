@@ -3,8 +3,8 @@
 //! New terminal, the server in a window of its own, Files, the two side by side, Stats, Containers, its tunnels and "Free up disk
 //! space"; its address
 //! to copy; a name of your own; its icon, colour or picture; its Production, Staging or
-//! Development label; forgetting its saved password; and taking it out of the list, asked by
-//! name first.
+//! Development label; saving its password, or forgetting the saved one; and taking it out of
+//! the list, asked by name first.
 //!
 //! One popover with three pages, at the point that was clicked:
 //!
@@ -12,12 +12,17 @@
 //! server-menu    modal: Esc and a click outside close it
 //!   Menu     sm-0 … rows; arrows move one highlight, Return picks
 //!   Rename   sm-name (a field), sm-cancel, sm-save
+//!   Password sm-secret (a secure field), sm-remember, sm-cancel, sm-save-password
 //!   Look     sm-auto, sm-check · icon-<id> × 30 · color-0 … 5, more-0 … 11, sm-hex ·
 //!            sm-picture, sm-no-picture · sm-error · sm-done
 //! ```
 //!
 //! Removing a server and forgetting its password ask first, in the window's own question in
 //! the middle (`Shell::confirm`): "Remove web-7731?", dialog-no (Return), dialog-yes.
+//!
+//! "Save password…" (a server with none saved, one from `~/.ssh/config` too) takes the password
+//! in a secure field (no screen reader, trace or tree ever holds it) that leaves this file only
+//! inside an `Ask::SavePassword`, and is wiped when the page closes.
 //!
 //! Nothing here saves: each change is asked of the backend (`sshee_app::servers::Ask`), which
 //! keeps it and sends the list back. A change that fails says so: on the page while the menu
@@ -31,11 +36,11 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
-use rune::{col, row, text, Color, Cx, El, FileDialogOptions, Key, KeyEvent, SurfaceFit, TextEdit, Tx};
+use rune::{col, row, text, text_input, Color, Cx, El, FileDialogOptions, Key, KeyEvent, SurfaceFit, TextEdit, Tx};
 use sshee_app::labels::{env_name, env_order, Face, HOST_COLORS, HOST_ICONS, MORE_COLORS};
 use sshee_app::model::EnvLabel;
 use sshee_app::roles::{automatic_words, Watch};
-use sshee_app::servers::{host_id, removal, Ask};
+use sshee_app::servers::{host_id, removal, Ask, Password};
 use sshee_app::workbench::{Link, Server, ServerKey, TabId, TabKind};
 
 use crate::icons::{icon, Icon};
@@ -43,7 +48,7 @@ use crate::kit::field::{code_input, field, input};
 use crate::kit::list::{list_row, list_rule, ListRow};
 use crate::kit::menu::RowState;
 use crate::kit::popover::popover;
-use crate::kit::push::{icon_button, push_button, Push};
+use crate::kit::push::{check_box, icon_button, push_button, Push};
 use crate::shell::{Confirm, Shell, Toast};
 use crate::theme::{self, Theme};
 
@@ -54,6 +59,8 @@ pub enum Page {
     Menu,
     Rename,
     Look,
+    /// "Save password…".
+    Password,
 }
 
 /// The menu, open on one server.
@@ -74,6 +81,10 @@ pub struct State {
     pub name: TextEdit,
     /// The Look page's "your own colour" field.
     pub hex: TextEdit,
+    /// The Password page's field: secure, wiped when the page closes.
+    pub password: TextEdit,
+    /// The Password page's "Remember password" (on when the page opens).
+    pub remember: bool,
     /// What went wrong with the last change, on the page.
     pub error: Option<String>,
     /// Every server's look, picture and saved password, by key (`Shell::set_server_faces`).
@@ -101,6 +112,7 @@ enum Item {
     Rename,
     Look,
     Env(EnvLabel),
+    SavePassword,
     ForgetPassword,
     Remove,
 }
@@ -111,7 +123,7 @@ fn from_config(server: &Server) -> bool {
 }
 
 /// The rows for a server, in groups (a rule is drawn between two groups). Its address isn't
-/// offered in streamer mode; "Forget saved password" only when one is saved.
+/// offered in streamer mode; "Forget saved password" when one is saved, else "Save password…".
 fn groups(server: &Server, saved_password: bool, streaming: bool) -> Vec<Vec<Item>> {
     let mut groups = vec![vec![Item::NewTerminal, Item::NewWindow, Item::Files, Item::SideBySide, Item::Stats, Item::Containers]];
     if !server.is_local() {
@@ -124,9 +136,7 @@ fn groups(server: &Server, saved_password: bool, streaming: bool) -> Vec<Vec<Ite
         groups.push(own);
         groups.push(env_order().into_iter().map(Item::Env).collect());
         let mut leave = vec![Item::Remove];
-        if saved_password {
-            leave.insert(0, Item::ForgetPassword);
-        }
+        leave.insert(0, if saved_password { Item::ForgetPassword } else { Item::SavePassword });
         groups.push(leave);
     }
     groups
@@ -150,6 +160,8 @@ impl Shell {
     pub fn close_server_menu(&mut self, tx: &mut Tx) {
         self.screens.server_menu.open = None;
         self.screens.server_menu.error = None;
+        // A password typed and not saved goes (the field wipes it).
+        self.screens.server_menu.password = TextEdit::default().secure();
         self.settle(tx);
     }
 
@@ -172,7 +184,13 @@ impl Shell {
             pictures.insert(key.clone(), pixels);
         }
         state.pictures = pictures;
-        state.faces = faces;
+        // Each terminal knows whether its server has a password saved: one without is offered
+        // the strip while ssh asks (`terminal/password.rs`).
+        for (id, pane) in &mut self.panes {
+            let saved = self.bench.tab(*id).and_then(|t| faces.get(&t.server)).is_some_and(|f| f.saved_password);
+            pane.set_saved_password(saved);
+        }
+        self.screens.server_menu.faces = faces;
     }
 
     /// The server the menu is open on, while it's still in the list.
@@ -297,6 +315,17 @@ impl Shell {
                 self.backend_mut().servers(Ask::SetEnv { server: key, env });
                 self.close_server_menu(tx);
             }
+            Item::SavePassword => {
+                let menu = &mut self.screens.server_menu;
+                if let Some(open) = &mut menu.open {
+                    open.page = Page::Password;
+                }
+                menu.password = TextEdit::default().secure();
+                menu.password.focused = true;
+                menu.remember = true;
+                menu.error = None;
+                tx.instant();
+            }
             Item::ForgetPassword => {
                 let name = self.server_shown(&key, &server.name).into_owned();
                 let ask = Confirm::new(format!("Forget the saved password for {name}?"), "You'll type it again the next time you connect.", "Forget").destructive(false);
@@ -317,6 +346,20 @@ impl Shell {
             let ask = Ask::Rename { server: open.server.clone(), name };
             self.backend_mut().servers(ask);
         }
+        self.close_server_menu(tx);
+    }
+
+    /// The Password page's Return and its button: the password goes to the backend, which
+    /// keeps it in the keychain (or for this run), and the field is wiped.
+    fn server_menu_save_password(&mut self, tx: &mut Tx) {
+        let menu = &mut self.screens.server_menu;
+        let Some(server) = menu.open.as_ref().map(|o| o.server.clone()) else { return };
+        if menu.password.text.is_empty() {
+            menu.error = Some("Type the password first.".into());
+            return;
+        }
+        let ask = Ask::SavePassword { server, password: Password::new(menu.password.text.as_str()), remember: menu.remember };
+        self.backend_mut().servers(ask);
         self.close_server_menu(tx);
     }
 
@@ -447,6 +490,7 @@ fn menu_page(t: &Theme, server: &Server, saved_password: bool, streaming: bool, 
                 Item::Rename => ListRow { icon: Some(Icon::Pencil), label: "Rename…", state, ..ListRow::default() },
                 Item::Look => ListRow { icon: Some(Icon::Swatch), label: "Icon and color…", state, ..ListRow::default() },
                 Item::Env(env) => ListRow { label: env_name(env), checked: Some(server.env.as_ref() == Some(env)), state, ..ListRow::default() },
+                Item::SavePassword => ListRow { icon: Some(Icon::Key), label: "Save password…", state, ..ListRow::default() },
                 Item::ForgetPassword => ListRow { icon: Some(Icon::Key), label: "Forget saved password", state, ..ListRow::default() },
                 Item::Remove => ListRow { icon: Some(Icon::Bin), label: if from_config(server) { "Hide from list…" } else { "Remove server…" }, destructive: true, state, ..ListRow::default() },
             };
@@ -499,6 +543,43 @@ fn rename_page(t: &Theme, shown: &str, streaming: bool, name: &TextEdit) -> El {
                 .child(push_button(t, "Cancel", Push::Quiet, true).key("sm-cancel").on_press_tx(|s: &mut Shell, tx| s.close_server_menu(tx)))
                 .child(push_button(t, "Rename", Push::Primary, true).key("sm-save").on_press_tx(|s: &mut Shell, tx| s.server_menu_rename(tx))),
         )
+}
+
+/// "Save password…": a secure field and "Remember password", like the Add server form's.
+fn password_page(t: &Theme, shown: &str, state: &State) -> El {
+    let secret = text_input(&state.password, theme::TEXT)
+        .secure()
+        .single_line()
+        .key("sm-secret")
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .color(t.l1)
+        .placeholder("Password", t.l2)
+        .caret(t.ring, t.ring.alpha(0.35))
+        .label_static("Password")
+        .on_edit(|s: &mut Shell| &mut s.screens.server_menu.password)
+        .on_submit(|s: &mut Shell, tx| s.server_menu_save_password(tx));
+    let kept = if state.remember { "Saved in your system keychain, never in SSHeesh's own files." } else { "Kept only until you quit SSHeesh." };
+    let mut page = col()
+        .w_full()
+        .padding(14.0)
+        .gap(10.0)
+        .child(title(t, &format!("Save the password for {shown}")))
+        .child(field(t, secret, state.error.is_some()))
+        .child(check_box(t, "Remember password", state.remember).key("sm-remember").on_press_tx(|s: &mut Shell, _| s.screens.server_menu.remember ^= true))
+        .child(text(kept).font(theme::SMALL).color(t.l2).w_full().wrap());
+    if let Some(why) = &state.error {
+        page = page.child(error_line(t, why));
+    }
+    page.child(
+        row()
+            .w_full()
+            .gap(8.0)
+            .justify_end()
+            .child(push_button(t, "Cancel", Push::Quiet, true).key("sm-cancel").on_press_tx(|s: &mut Shell, tx| s.close_server_menu(tx)))
+            .child(push_button(t, "Save", Push::Primary, true).key("sm-save-password").on_press_tx(|s: &mut Shell, tx| s.server_menu_save_password(tx))),
+    )
 }
 
 /// A round colour to pick, ringed when it's the one in use.
@@ -639,6 +720,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut Cx<Shell>) -> Option<El> {
         }
         Page::Rename => (rename_page(t, &shown, s.streaming(), &s.screens.server_menu.name), 300.0, 170.0),
         Page::Look => (look_page(s, t, server, &shown), 296.0, 470.0),
+        Page::Password => (password_page(t, &shown, &s.screens.server_menu), 300.0, 200.0),
     };
     // At the pointer, pulled in from the window's far edges.
     let [w, h] = cx.layout_size("window").unwrap_or([crate::shell::SIZE.0, crate::shell::SIZE.1]);

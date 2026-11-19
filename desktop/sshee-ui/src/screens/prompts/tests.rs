@@ -56,13 +56,17 @@ impl TermLink for FakeLink {
     }
 }
 
-struct FakeBackend(Arc<Mutex<Vec<Arc<Mutex<Seen>>>>>);
+/// The sessions made, and what the window asked of the server list.
+struct FakeBackend(Arc<Mutex<Vec<Arc<Mutex<Seen>>>>>, Arc<Mutex<Vec<sshee_app::servers::Ask>>>);
 
 impl Backend for FakeBackend {
     fn terminal(&mut self, _: Option<&Server>, _: &Tab) -> Box<dyn TermLink> {
         let seen = Arc::new(Mutex::new(Seen::default()));
         self.0.lock().unwrap().push(seen.clone());
         Box::new(FakeLink(seen))
+    }
+    fn servers(&mut self, ask: sshee_app::servers::Ask) {
+        self.1.lock().unwrap().push(ask);
     }
     fn replays(&self) -> bool {
         true
@@ -78,6 +82,7 @@ type Queue = Arc<Mutex<Vec<Box<dyn FnOnce(&mut Shell, &mut Tx) -> bool + Send>>>
 struct Window {
     rt: Runtime<Shell>,
     sessions: Arc<Mutex<Vec<Arc<Mutex<Seen>>>>>,
+    asks: Arc<Mutex<Vec<sshee_app::servers::Ask>>>,
     posted: Queue,
 }
 
@@ -85,17 +90,18 @@ impl Window {
     fn open() -> Window {
         crate::fonts::declare();
         let sessions = Arc::new(Mutex::new(Vec::new()));
+        let asks = Arc::new(Mutex::new(Vec::new()));
         let posted: Queue = Arc::new(Mutex::new(Vec::new()));
         let queue = posted.clone();
         let post: Post = Arc::new(move |f| queue.lock().unwrap().push(f));
         let options = Options { pane: PaneOptions { blink: false, ..Options::default().pane }, frame: Frame::Linux, mac_keys: false, ..Options::default() };
         let servers = vec![Server::host("web", "web-7731", "deploy@203.0.113.17")];
-        let shell = Shell::new(Workbench::new(servers), Box::new(FakeBackend(sessions.clone())), options, Some(Remote::new(post)));
+        let shell = Shell::new(Workbench::new(servers), Box::new(FakeBackend(sessions.clone(), asks.clone())), options, Some(Remote::new(post)));
         let text = rune::text::TextSystem::new(crate::fonts::FONTS, crate::fonts::FAMILIES);
         let mut rt = Runtime::with_text(shell, crate::shell::view::view, (1280.0, 800.0), Env::new(true, 1.0), text);
         rt.poll = Some(|s, clock, tx| s.poll(clock, tx));
         rt.on_key = Some(|s, ev, tx| s.key(ev, tx));
-        let mut w = Window { rt, sessions, posted };
+        let mut w = Window { rt, sessions, asks, posted };
         w.frames(4);
         w
     }
@@ -384,6 +390,100 @@ fn a_password_prompt_takes_the_place_of_connecting_and_keys_answer_it() {
     assert!(w.rt.find("connect-screen").is_none(), "ssh's question shows");
     w.key(Key::Text("x".into()));
     assert_eq!(w.written(0), "x");
+}
+
+// ---- "Type the password here once…" (`terminal/password.rs`)
+
+/// What the window asked the server list to save.
+fn saved(w: &Window) -> Vec<sshee_app::servers::Ask> {
+    w.asks.lock().unwrap().iter().filter(|a| matches!(a, sshee_app::servers::Ask::SavePassword { .. })).cloned().collect()
+}
+
+#[test]
+fn a_password_typed_above_the_prompt_answers_it_and_is_saved_once_it_got_in() {
+    use sshee_app::servers::{Ask, Password};
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.print(0, b"deploy@203.0.113.17's password: ");
+    assert!(w.rt.find("pw-strip").is_some(), "{}", w.tree());
+    assert!(w.tree().contains(crate::terminal::password::OFFER));
+    // Above the terminal, not over the prompt.
+    let (_, strip_y) = w.rt.find("pw-strip").unwrap();
+    let (_, term_y) = w.rt.find("term").unwrap();
+    assert!(strip_y < term_y, "the strip is at {strip_y}, the terminal at {term_y}");
+    // Nothing typed: Save does nothing.
+    w.click("pw-strip-save");
+    assert_eq!(w.written(0), "");
+    w.click("pw-strip-field");
+    for c in "made-up-password".chars() {
+        w.key(Key::Text(c.to_string()));
+    }
+    assert_eq!(w.written(0), "", "typing in the strip goes nowhere yet");
+    assert!(!w.tree().contains("made-up-password"), "a secure field");
+    w.key(Key::Enter);
+    // The prompt is answered, and the strip goes; nothing is saved before the server lets it in.
+    assert_eq!(w.written(0), "made-up-password\r");
+    assert!(w.rt.find("pw-strip").is_none());
+    assert!(w.rt.state.active_pane().unwrap().over.password.field.text.is_empty(), "the field is wiped");
+    assert!(saved(&w).is_empty());
+    w.print(0, b"\r\n");
+    w.status(0, LinkStatus::Connected { durable: true });
+    assert_eq!(saved(&w), [Ask::SavePassword { server: "host:web".into(), password: Password::new("made-up-password"), remember: true }]);
+    assert!(!format!("{:?}", saved(&w)).contains("made-up"), "never printed");
+}
+
+#[test]
+fn a_password_the_server_refuses_is_never_saved_and_the_strip_says_so() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.print(0, b"deploy@203.0.113.17's password: ");
+    w.click("pw-strip-field");
+    w.key(Key::Text("wrong".into()));
+    w.key(Key::Enter);
+    assert_eq!(w.written(0), "wrong\r");
+    w.print(0, b"\r\nPermission denied, please try again.\r\ndeploy@203.0.113.17's password: ");
+    assert!(w.tree().contains(crate::terminal::password::REFUSED), "{}", w.tree());
+    // It stops there: nothing kept.
+    w.status(0, LinkStatus::Gone { note: "The server didn't accept your login.".into() });
+    assert!(w.rt.find("pw-strip").is_none());
+    assert!(saved(&w).is_empty());
+}
+
+#[test]
+fn the_strip_goes_when_the_password_is_typed_in_the_terminal() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.print(0, b"(deploy@web-7731) Password: ");
+    assert!(w.rt.find("pw-strip").is_some());
+    // Typed into the terminal, as ever: the keys go to ssh, and the strip waits.
+    w.key(Key::Text("x".into()));
+    assert_eq!(w.written(0), "x");
+    w.key(Key::Enter);
+    w.print(0, b"\r\n");
+    assert!(w.rt.find("pw-strip").is_none(), "the prompt is answered");
+    w.status(0, LinkStatus::Connected { durable: true });
+    assert!(saved(&w).is_empty(), "what is typed in the terminal is never taken");
+}
+
+#[test]
+fn no_strip_for_a_passphrase_a_key_question_a_saved_password_or_a_shell() {
+    let mut w = Window::on_web();
+    w.status(0, LinkStatus::Connecting);
+    w.print(0, b"Enter passphrase for key '/home/demo/.ssh/id_ed25519': ");
+    assert!(w.rt.find("pw-strip").is_none(), "a key's passphrase");
+    w.print(0, b"\r\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ");
+    assert!(w.rt.find("pw-strip").is_none(), "the host key's question");
+    // A server with a password saved: ssh gets it by itself.
+    w.rt.update(|s, _| s.active_pane().unwrap().set_saved_password(true));
+    w.print(0, b"\r\ndeploy@203.0.113.17's password: ");
+    assert!(w.rt.find("pw-strip").is_none(), "a saved password");
+    w.rt.update(|s, _| s.active_pane().unwrap().set_saved_password(false));
+    w.frames(2);
+    assert!(w.rt.find("pw-strip").is_some());
+    // Signed in, a program's own prompt (sudo's) is never offered.
+    w.status(0, LinkStatus::Connected { durable: true });
+    w.print(0, b"\r\n[sudo] password for deploy: ");
+    assert!(w.rt.find("pw-strip").is_none(), "sudo's prompt");
 }
 
 #[test]

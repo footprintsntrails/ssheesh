@@ -777,6 +777,7 @@ impl Shell {
         if let Some(server) = self.bench.server(&tab.server) {
             pane.set_machine(!server.is_local(), &self.server_shown(&tab.server, &server.name));
         }
+        pane.set_saved_password(self.screens.server_menu.faces.get(&tab.server).is_some_and(|f| f.saved_password));
         pane.view.borrow_mut().set_look(self.look());
         if let Some(waker) = &self.waker {
             pane.set_waker(waker.clone());

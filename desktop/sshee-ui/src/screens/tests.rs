@@ -706,7 +706,7 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     // Remove: asked by name, in the middle of the window over a dimmed page, the menu gone;
     // Return is Cancel.
     w.right_click("server-2");
-    w.click("sm-14");
+    w.click("sm-15");
     assert!(w.rt.state.screens.server_menu.open.is_none() && w.has("dialog-layer"));
     let tree = w.tree();
     assert!(tree.contains("Remove Main database?") && tree.contains("Only removes it from SSHeesh. Nothing changes on the server."), "{tree}");
@@ -714,7 +714,7 @@ fn a_server_is_renamed_given_a_look_and_removed_after_a_question_by_name() {
     assert!(!w.has("dialog-layer"));
     assert_eq!(w.servers().len(), 3);
     w.right_click("server-2");
-    w.click("sm-14");
+    w.click("sm-15");
     w.click("dialog-yes");
     assert_eq!(w.servers(), ["This computer", "web-7731"]);
     assert!(w.asks().contains(&Ask::Remove { server: DB.into() }));

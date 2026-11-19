@@ -28,6 +28,9 @@ tempfile = "3"
 # LevelDB's checksum (already here for rusty-leveldb): `legacy` checks a copied store itself
 # before the library opens it, because the library skips damage without a word.
 crc32c = "0.6"
+# Wipes a password typed in the window from memory once it is used (`servers::Password`),
+# as sshee-core does its own (already here through sshee-core in both programs).
+zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
 # `O_NONBLOCK` and `O_NOFOLLOW`, so a FIFO or a link where a store file should be can't hold
