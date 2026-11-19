@@ -169,8 +169,8 @@ pub const ACCENTS: [(&str, &str); 7] = [
     ("Terracotta", "#d77757"),
 ];
 
-/// The 1.0 design's blue: the default accent's colour.
-pub const DESIGN_BLUE: u32 = 0x0071e3ff;
+/// The design's accent: the default accent's colour, the >_< logo's green.
+pub const DESIGN_BLUE: u32 = 0x4eba65ff;
 
 /// The accent as it is drawn: `None` for the default (the design's own blue).
 pub fn accent(s: &Settings) -> Option<u32> {

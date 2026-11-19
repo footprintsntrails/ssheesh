@@ -561,27 +561,70 @@ pub fn logo_face(size: f32, eyes: LogoFace) -> El {
     logo_frame(size, vec![canvas(logo_layer(size, true, Some(eyes), true))])
 }
 
-/// The logo at work, `size` points square: the loader where something takes a while (the
-/// security check, the first numbers of Stats, a file on its way). Its cursor, the green
-/// line under the eyes, blinks as a terminal's does, and now and then the face blinks too.
-/// Both are loops on Rune's render clock: frames only while it's on screen, none from the
-/// view. Under Reduce Motion Rune holds them still: the logo as it always is, eyes open.
+/// The logo thinking, `size` points square: the loader everywhere something is on its way (a
+/// page waiting for its first look, a tab connecting, a row at work). It reads as "working on
+/// it" in the logo's own drawing: the title band's three dots light up in the logo's green one
+/// after another, as a typing "…" does, while the eyes, now two square pupils, glance up to one
+/// side and then the other under a raised eyebrow, and the green cursor of a mouth sits to
+/// one side ("hmm?"). All are
+/// loops on Rune's render clock: frames only while it's on screen, none from the view. Under
+/// Reduce Motion Rune holds them still: the first dot lit, the eyes up to the left.
 pub fn logo_loader(size: f32) -> El {
-    // Eyes open, shut for a moment near the end of each round, open again.
-    const OPEN: &[(f32, f32)] = &[(0.0, 1.0), (0.84, 1.0), (0.86, 0.0), (0.92, 0.0), (0.94, 1.0), (1.0, 1.0)];
-    const SHUT: &[(f32, f32)] = &[(0.0, 0.0), (0.84, 0.0), (0.86, 1.0), (0.92, 1.0), (0.94, 0.0), (1.0, 0.0)];
-    // The cursor: on half the round, dim (never quite gone) the other half.
-    const CURSOR: &[(f32, f32)] = &[(0.0, 1.0), (0.46, 1.0), (0.54, 0.18), (0.92, 0.18), (1.0, 1.0)];
-    let blink = |stops, still| Cycle { period: 2.8, phase: 0.0, stops, still, fps: Cycle::DISPLAY_RATE };
+    // The dots: each lit for its third of the round, fading in and out a little.
+    const DOT0: &[(f32, f32)] = &[(0.0, 1.0), (0.28, 1.0), (0.36, 0.0), (0.92, 0.0), (1.0, 1.0)];
+    const DOT1: &[(f32, f32)] = &[(0.0, 0.0), (0.28, 0.0), (0.36, 1.0), (0.61, 1.0), (0.69, 0.0), (1.0, 0.0)];
+    const DOT2: &[(f32, f32)] = &[(0.0, 0.0), (0.61, 0.0), (0.69, 1.0), (0.92, 1.0), (1.0, 0.0)];
+    // The eyes: up to the left half the round, up to the right the other half.
+    const LEFT: &[(f32, f32)] = &[(0.0, 1.0), (0.44, 1.0), (0.5, 0.0), (0.94, 0.0), (1.0, 1.0)];
+    const RIGHT: &[(f32, f32)] = &[(0.0, 0.0), (0.44, 0.0), (0.5, 1.0), (0.94, 1.0), (1.0, 0.0)];
+    let dots = |stops, still| Cycle { period: 1.2, phase: 0.0, stops, still, fps: Cycle::DISPLAY_RATE };
+    let eyes = |stops, still| Cycle { period: 2.4, phase: 0.0, stops, still, fps: Cycle::DISPLAY_RATE };
     logo_frame(
         size,
         vec![
             canvas(logo_layer(size, true, None, false)),
-            canvas(logo_layer(size, false, Some(LogoFace::Open), false)).cycle(blink(OPEN, 1.0)),
-            canvas(logo_layer(size, false, Some(LogoFace::Blink), false)).cycle(blink(SHUT, 0.0)),
-            canvas(logo_layer(size, false, None, true)).cycle(Cycle { period: 1.1, phase: 0.0, stops: CURSOR, still: 1.0, fps: Cycle::DISPLAY_RATE }),
+            canvas(thinking_layer(size, Thinking::Dot(0))).cycle(dots(DOT0, 1.0)),
+            canvas(thinking_layer(size, Thinking::Dot(1))).cycle(dots(DOT1, 0.0)),
+            canvas(thinking_layer(size, Thinking::Dot(2))).cycle(dots(DOT2, 0.0)),
+            canvas(thinking_layer(size, Thinking::Eyes(-1.0))).cycle(eyes(LEFT, 1.0)),
+            canvas(thinking_layer(size, Thinking::Eyes(1.0))).cycle(eyes(RIGHT, 0.0)),
+            canvas(thinking_layer(size, Thinking::Mouth)),
         ],
     )
+}
+
+/// A piece of the thinking logo ([`logo_loader`]).
+#[derive(Clone, Copy)]
+enum Thinking {
+    /// The `n`th title-band dot, lit in the logo's green.
+    Dot(usize),
+    /// The eyes as square pupils looking up and to the left (-1) or the right (1).
+    Eyes(f32),
+    /// The cursor mouth, short and to one side.
+    Mouth,
+}
+
+/// A thinking piece drawn on the logo's own grid (a 184-unit square from (8, 8)).
+fn thinking_layer(size: f32, piece: Thinking) -> Shape {
+    let fit = Fit::square(8.0, 8.0, 184.0, size);
+    let at = |p: [f32; 2]| [p[0] * fit.scale + fit.dx, p[1] * fit.scale + fit.dy];
+    let hex = |h: &str| rune::color::hex(h).expect("a colour written here");
+    let (eye, green) = (hex("#f2f0ea"), hex("#4eba65"));
+    let rect = |x: f32, y: f32, w: f32, h: f32| vec![at([x, y]), at([x + w, y]), at([x + w, y + h]), at([x, y + h])];
+    match piece {
+        Thinking::Dot(n) => {
+            let cx = [35.0, 52.0, 69.0][n.min(2)];
+            Shape::new().fill_path(&svg::path(&data(Oval(cx, 27.0, 5.5, 5.5)), fit), green)
+        }
+        Thinking::Eyes(side) => {
+            // Square pupils, as wide as the open eye's stroke, where the chevrons' points were,
+            // moved up and to the side.
+            let (dx, dy) = (side * 12.0, -16.0);
+            Shape::new().fill(rect(36.0 + dx, 102.0 + dy, 24.0, 24.0), eye).fill(rect(140.0 + dx, 102.0 + dy, 24.0, 24.0), eye)
+        }
+        // A short mouth to one side, and the right eyebrow raised on a slant: "hmm?"
+        Thinking::Mouth => Shape::new().fill(rect(100.0, 140.0, 30.0, 20.0), green).fill(vec![at([134.0, 66.0]), at([172.0, 56.0]), at([172.0, 70.0]), at([134.0, 80.0])], eye),
+    }
 }
 
 /// The logo's drawing, `size` points square: its title band and three dots, its eyes as

@@ -341,42 +341,97 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
     }
     if let Some((said, how)) = board.empty() {
         let open = s.screens.containers.get(&id).is_some_and(|st| st.guide);
+        let toggle = move |s: &mut Shell, tx: &mut Tx| {
+            if let Some(st) = s.screens.containers.get_mut(&id) {
+                st.guide = !st.guide;
+            }
+            tx.instant();
+        };
+        // One column, the width of something read: the words wrap in it instead of running
+        // across the page.
         let mut empty = col()
             .key("containers-empty")
             .w_full()
+            .max_w(560.0)
+            .px(24.0)
+            .pt(if open { 32.0 } else { 72.0 })
+            .pb(24.0)
+            .gap(6.0)
             .items_center()
-            .gap(4.0)
-            .pt(64.0)
-            .child(text(said).font(theme::TEXT).color(t.l2on).single_line())
-            .child(text(how).font(theme::NOTE).color(t.l2).single_line())
-            .child(push_button(t, if open { "Hide the guide" } else { "How to run a first container" }, Push::Quiet, true).key("containers-guide").mt(8.0).on_press_tx(move |s: &mut Shell, tx| {
-                if let Some(st) = s.screens.containers.get_mut(&id) {
-                    st.guide = !st.guide;
-                }
-                tx.instant();
-            }));
+            .child(icon(Icon::Cube, 24.0, t.l2))
+            .child(text(said).font(theme::TEXT_BOLD).color(t.l1).single_line().mt(6.0))
+            .child(text(how).font(theme::NOTE).color(t.l2).wrap().align(Align::Center));
         if open {
-            empty = empty.child(guide(s, id, t));
+            empty = empty.child(guide(s, id, t, toggle));
+        } else {
+            empty = empty.child(push_button(t, "How to run a first container", Push::Quiet, true).key("containers-guide").mt(10.0).on_press_tx(toggle));
         }
-        out = out.child(empty);
+        out = out.child(col().w_full().items_center().child(empty));
     }
     out
 }
 
-/// The empty list's short guide: one container, or a Compose project, each with its command.
-fn guide(s: &Shell, id: TabId, t: &'static Theme) -> El {
-    let mut steps = col().key("containers-guide-steps").gap(16.0).mt(12.0).items_center().max_w(480.0);
+/// The empty list's short guide, in a box like a Settings group: one container, or a Compose
+/// project, each with what it does and its command beside Copy and "Type it in a terminal".
+fn guide(s: &Shell, id: TabId, t: &'static Theme, close: impl Fn(&mut Shell, &mut Tx) + Clone + 'static) -> El {
+    let head = row()
+        .w_full()
+        .pl(14.0)
+        .pr(6.0)
+        .py(6.0)
+        .items_center()
+        .child(text("Run a first container").font(theme::TEXT_BOLD).color(t.l1).single_line().grow(1.0).min_w(0.0))
+        .child(icon_button(t, Icon::Close, "Hide the guide", true).key("containers-guide").on_press_tx(close));
+    let mut rows = vec![head];
     for (n, (title, command, explain)) in rules::FIRST_CONTAINER.iter().enumerate() {
-        steps = steps.child(
+        rows.push(
             col()
+                .key(format!("containers-guide-step-{n}"))
+                .w_full()
+                .px(14.0)
+                .py(12.0)
                 .gap(6.0)
-                .items_center()
                 .child(text(*title).font(theme::TEXT_BOLD).color(t.l1).single_line())
-                .child(text(*explain).font(theme::NOTE).color(t.l2).max_w(460.0).align(Align::Center))
-                .child(command_box(s, id, t, command, &format!("containers-guide-{n}"))),
+                .child(text(*explain).font(theme::NOTE).color(t.l2).wrap().w_full())
+                .child(guide_command(s, id, t, command, &format!("containers-guide-{n}"))),
         );
     }
-    steps.child(text(rules::FIRST_CONTAINER_AFTER).font(theme::NOTE).color(t.l2).max_w(460.0).align(Align::Center))
+    col()
+        .key("containers-guide-steps")
+        .w_full()
+        .mt(18.0)
+        .gap(8.0)
+        .child(crate::kit::form::form_group(t, rows))
+        .child(text(rules::FIRST_CONTAINER_AFTER).font(theme::NOTE).color(t.l2).wrap().w_full().px(14.0))
+}
+
+/// A guide step's command: whole on its own line (it wraps rather than being cut), its
+/// buttons under it.
+fn guide_command(s: &Shell, id: TabId, t: &'static Theme, command: &str, key: &str) -> El {
+    let (copy, typed) = (command.to_owned(), command.to_owned());
+    let server = s.bench.tab(id).map(|t| t.server.clone()).unwrap_or_default();
+    col()
+        .key(key.to_owned())
+        .w_full()
+        .mt(4.0)
+        .gap(8.0)
+        .child(
+            el().w_full()
+                .px(10.0)
+                .py(6.0)
+                .radius(theme::RADIUS_ROW)
+                .fill(t.code)
+                .border(1.0, t.hair2)
+                .child(text(s.text_shown(command).into_owned()).font(theme::CODE).color(t.l1).selectable(true).wrap().w_full()),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(push_button(t, "Copy", Push::Quiet, true).key(format!("{key}-copy")).on_press_tx(move |_: &mut Shell, tx| tx.copy(copy.clone())))
+                .child(push_button(t, "Type it in a terminal", Push::Quiet, true).key(format!("{key}-type")).help("Types it at a terminal's prompt there; you press Return").on_press_tx(
+                    move |s: &mut Shell, tx| s.run_on(&server, &typed, false, tx),
+                )),
+        )
 }
 
 /// The tab's page.

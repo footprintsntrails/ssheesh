@@ -4,7 +4,7 @@
 use rune::El;
 
 use crate::icons::{icon, Icon};
-use crate::kit::{progress_ring, ringed_dot};
+use crate::kit::ringed_dot;
 use crate::theme::{self, Theme};
 
 /// What a sidebar button shows beyond its icon.
@@ -59,7 +59,7 @@ pub fn rail_button_with(t: &Theme, glyph: El, name: &str, state: RailState, wait
     };
     b = b.child(glyph);
     if state == RailState::TorStarting {
-        b = b.child(progress_ring(size - 6.0, 1.5, t.green).absolute(3.0, 3.0));
+        b = b.child(crate::kit::halo_ring(size - 6.0, t.green).absolute(3.0, 3.0));
     }
     if state == RailState::TorFailed {
         // A square, not a dot: it isn't "needs you".

@@ -237,7 +237,7 @@ fn main() {
     // beside it.
     let identity = match std::env::var_os("SSHEE_PREVIEW_DIR").filter(|d| !d.is_empty()) {
         Some(dir) => AppIdentity::in_dir(dir.into(), AppIdentity::preview().keychain_service()),
-        None if env!("SSHEESH_RELEASE") == "1" => AppIdentity::standard(),
+        None if matches!(env!("SSHEESH_RELEASE"), "1") => AppIdentity::standard(),
         None => AppIdentity::preview(),
     };
     let _ = sshee_core::app_identity::set(identity);

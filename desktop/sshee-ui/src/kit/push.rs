@@ -30,7 +30,7 @@ pub fn push_button(t: &Theme, label: &str, kind: Push, enabled: bool) -> El {
     let (fill, hover, down, ink) = match kind {
         Push::Quiet => (t.control, t.control_hover, t.control_down, t.l1),
         Push::Primary => (t.blue, t.shade(t.blue, 0.08), t.blue_down, t.on_color),
-        Push::Destructive => (t.red, t.shade(t.red, 0.08), t.red.alpha(0.8), if t.dark { t.page } else { t.on_color }),
+        Push::Destructive => (t.red, t.shade(t.red, 0.08), t.red.alpha(0.8), if t.dark { t.page } else { rune::Color::WHITE }),
         Push::Caution => (t.control, t.control_hover, t.control_down, t.red),
     };
     let b = rune::row()
