@@ -99,10 +99,12 @@ pub struct Done {
 
 /// The `RunOnce` command that finishes the replacement after a power loss.
 pub fn run_once_command(layout: &Layout) -> String {
-    // A folder ending in a backslash (`/D=C:\Apps\`) would escape the closing quote.
+    // Backslashes right before a closing quote are doubled, as Windows reads a command line
+    // (`CommandLineToArgvW`): a folder like `C:\Apps\` or a drive's root `C:\` stays itself
+    // instead of escaping the quote.
     let dir = layout.dir.display().to_string();
-    let dir = dir.trim_end_matches(['\\', '/']);
-    format!("\"{}\" {} \"{}\"", layout.new.display(), flags::FINISH, dir)
+    let trailing = dir.len() - dir.trim_end_matches('\\').len();
+    format!("\"{}\" {} \"{}{}\"", layout.new.display(), flags::FINISH, dir, "\\".repeat(trailing))
 }
 
 /// Installs `program` (this installer's own file) of `version` as `plan` says.
@@ -320,6 +322,15 @@ pub mod tests {
         let values = names::uninstall_values(dir, "0.10.14", 30_000, &format!("\"{folder}/uninstall.exe\""), "");
         fake.write(UNINSTALL_KEY, &values).unwrap();
         fake.shortcut(&fake.programs_menu().join(SHORTCUT), &dir.join(MAIN_EXE), Some(names::APP_ID)).unwrap();
+    }
+
+    #[test]
+    fn the_recovery_command_keeps_a_folder_ending_in_a_backslash_whole() {
+        // Linux paths stand in for Windows ones: only the text of the command is checked.
+        for (dir, ends) in [("C:\\Apps\\", "\"C:\\Apps\\\\\""), ("C:\\", "\"C:\\\\\""), ("C:\\Apps", "\"C:\\Apps\"")] {
+            let command = run_once_command(&Layout::of(Path::new(dir)));
+            assert!(command.ends_with(ends), "{dir}: {command}");
+        }
     }
 
     #[test]
