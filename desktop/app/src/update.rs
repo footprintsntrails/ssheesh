@@ -75,7 +75,7 @@ const MOST_MANIFEST: u64 = 256 * 1024;
 const MOST_SIGNATURE: u64 = 8 * 1024;
 /// The first look, once the window has settled and Tor has had a moment.
 const FIRST_LOOK: Duration = Duration::from_secs(30);
-const EVERY: Duration = Duration::from_secs(4 * 3600);
+const EVERY: Duration = Duration::from_secs(3600);
 /// After a look that failed (offline, Tor still starting).
 const AGAIN: Duration = Duration::from_secs(20 * 60);
 /// While nothing is looked for ("Never check"): how often to see whether that changed.
@@ -216,6 +216,29 @@ pub struct Updater {
     build: Build,
     arrival: Arrival,
     wish: Arc<Mutex<Wish>>,
+    /// "Check now": wakes the looks at once.
+    poke: Arc<Poke>,
+}
+
+/// Settings' "Check now", to the thread that looks: set, then the thread is woken.
+#[derive(Default)]
+struct Poke {
+    asked: Mutex<bool>,
+    woken: std::sync::Condvar,
+}
+
+impl Poke {
+    /// Waits `wait`, or less when "Check now" is pressed: true then.
+    fn wait(&self, wait: Duration) -> bool {
+        let asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut asked, _) = self.woken.wait_timeout_while(asked, wait, |asked| !*asked).unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *asked)
+    }
+
+    fn ask(&self) {
+        *self.asked.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        self.woken.notify_all();
+    }
 }
 
 /// The helper's stdin, held open until this process ends: its end tells the helper the
@@ -224,7 +247,14 @@ static HELPER: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
 
 impl Updater {
     pub fn new(arrival: Arrival) -> Updater {
-        Updater { build: build(), arrival, wish: Arc::new(Mutex::new(Wish { mode: UpdateMode::Auto, test_builds: true })) }
+        Updater { build: build(), arrival, wish: Arc::new(Mutex::new(Wish { mode: UpdateMode::Auto, test_builds: true })), poke: Arc::default() }
+    }
+
+    /// Settings' "Check now": a look at once, whose answer the window is told (`checked`).
+    /// Before the first look has started (a few seconds after the window opens), the first
+    /// look is it.
+    pub fn check_now(&self) {
+        self.poke.ask();
     }
 
     /// Follows "Install updates" and "Check for test builds" in `store`.
@@ -248,7 +278,7 @@ impl Updater {
             let version = version_of(&self.build, token);
             remote.update(move |s| sshee_ui::screens::canary::show(s, Notice::RolledBack { version }));
         }
-        let (trial, build, wish) = (self.arrival.trial.clone(), self.build.clone(), self.wish.clone());
+        let (trial, build, wish, poke) = (self.arrival.trial.clone(), self.build.clone(), self.wish.clone(), self.poke.clone());
         let spawned = std::thread::Builder::new().name("update".into()).spawn(move || {
             if let Some(token) = trial {
                 // Said from the window's own thread, once it has run a while: it started.
@@ -268,7 +298,7 @@ impl Updater {
             let own = build.updates_itself().then(|| build.full_version());
             tidy(&folder, &places, own.as_deref());
             let Some(platform) = Platform::current().filter(|_| build.updates_itself()) else { return };
-            looks(&folder, &places, &build, platform, &wish, &remote);
+            looks(&folder, &places, &build, platform, &wish, &poke, &remote);
         });
         if let Err(e) = spawned {
             eprintln!("ssheesh-preview: updates aren't looked for: {e}");
@@ -364,31 +394,40 @@ fn tidy(folder: &Path, places: &Places, own: Option<&str>) {
     }
 }
 
-/// Looks now and every few hours, in the channel Settings picks at each look.
-fn looks(folder: &Path, places: &Places, build: &Build, platform: Platform, wish: &Mutex<Wish>, remote: &Remote) {
+/// Looks now and every hour, in the channel Settings picks at each look, and at once on
+/// "Check now" (whose answer the window is told, found or not).
+fn looks(folder: &Path, places: &Places, build: &Build, platform: Platform, wish: &Mutex<Wish>, poke: &Poke, remote: &Remote) {
     let mut wait = FIRST_LOOK;
     let mut said: Option<Notice> = None;
     loop {
-        std::thread::sleep(wait);
+        let asked = poke.wait(wait);
         let now = wish.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let Some((channel, act)) = Channel::choose(build, &now.mode, now.test_builds) else {
+        // "Never check" still looks when asked to, and then only says what it found.
+        let mode = if asked && now.mode == UpdateMode::Manual { UpdateMode::Notify } else { now.mode.clone() };
+        let Some((channel, act)) = Channel::choose(build, &mode, now.test_builds) else {
             wait = OFF;
             continue;
         };
-        wait = match look(folder, places, build, channel, act, platform) {
+        let looked = look(folder, places, build, channel, act, platform);
+        wait = if looked.is_ok() { EVERY } else { AGAIN };
+        if asked {
+            let answer = looked.clone();
+            if let Ok(Some(notice)) = &looked {
+                said = Some(notice.clone());
+            }
+            remote.update(move |s| sshee_ui::screens::canary::checked(s, answer));
+            continue;
+        }
+        match looked {
+            // Each notice once (after "Later" it stays away); a newer build says so again.
             Ok(notice) => {
-                // Each notice once (after "Later" it stays away); a newer build says so again.
                 if let Some(notice) = notice.filter(|n| said.as_ref() != Some(n)) {
                     said = Some(notice.clone());
                     remote.update(move |s| sshee_ui::screens::canary::show(s, notice));
                 }
-                EVERY
             }
-            Err(e) => {
-                eprintln!("ssheesh-preview: looking for a newer build ({channel:?}): {e}");
-                AGAIN
-            }
-        };
+            Err(e) => eprintln!("ssheesh-preview: looking for a newer build ({channel:?}): {e}"),
+        }
     }
 }
 
@@ -670,6 +709,26 @@ fn trial<S: swap::Started>(folder: &Path, token: &str, replaced: &impl swap::Rep
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_now_wakes_the_looks_at_once_and_only_once() {
+        let poke = Arc::new(Poke::default());
+        // Asked before the wait: it doesn't wait at all.
+        poke.ask();
+        let started = std::time::Instant::now();
+        assert!(poke.wait(Duration::from_secs(30)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // Asked during the wait, from another thread.
+        let other = poke.clone();
+        let asker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            other.ask();
+        });
+        assert!(poke.wait(Duration::from_secs(30)));
+        asker.join().unwrap();
+        // Not asked: the wait runs out, and says so.
+        assert!(!poke.wait(Duration::from_millis(20)));
+    }
     use verify::tests::TestKey;
 
     fn os(args: &[&str]) -> Vec<OsString> {

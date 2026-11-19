@@ -498,6 +498,10 @@ impl Backend for Shared {
         self.backend().restart_to_update()
     }
 
+    fn check_for_updates(&mut self) {
+        self.backend().check_for_updates();
+    }
+
     fn recipes(&mut self, ask: sshee_app::recipes::Ask) {
         self.backend().recipes(ask);
     }

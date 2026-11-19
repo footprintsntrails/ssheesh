@@ -536,14 +536,31 @@ fn alone(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
         Special::TerminalPreview => terminal_preview(s, t),
         Special::Network => col().w_full().gap(6.0).child(form_heading(t, r.label, None)).child(network(s, t)),
         Special::UpdateCard => {
+            use crate::screens::canary::Check;
             let build = &s.options.build;
-            let line = match (build.is_test(), build.release) {
+            let own = match (build.is_test(), build.release) {
                 (true, _) if s.settings.canary_updates() => "A test build: it looks for newer test builds by itself.",
                 (true, _) => "A test build: it looks for releases by itself.",
                 (false, true) => "It looks for newer versions by itself.",
                 (false, false) => "Built on this computer: it doesn't update itself.",
             };
-            version_card(t, "updates-card", 40.0, (&format!("{} {version}", crate::shell::title(build)), line), Some("Check now"))
+            let check = &s.screens.canary.check;
+            let line = match check {
+                Check::Idle => own.to_owned(),
+                Check::Looking => "Looking for a newer version…".to_owned(),
+                Check::Newest => "You have the newest version.".to_owned(),
+                Check::Found => match &s.screens.canary.notice {
+                    Some(notice) => format!("SSHeesh {} is out: see the line at the top.", notice.version()),
+                    None => own.to_owned(),
+                },
+                Check::Failed(why) => format!("Couldn't look for a newer version: {why}."),
+            };
+            let can = build.updates_itself() && *check != Check::Looking;
+            let mut button = push_button(t, if *check == Check::Looking { "Checking…" } else { "Check now" }, Push::Quiet, can).key("check-now");
+            if can {
+                button = button.on_press_tx(|s: &mut Shell, tx| crate::screens::canary::check_now(s, tx));
+            }
+            version_card(t, "updates-card", 40.0, (&format!("{} {version}", crate::shell::title(build)), &line), None).child(button)
         }
         Special::AboutCard => col()
             .w_full()

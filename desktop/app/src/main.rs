@@ -96,6 +96,10 @@ impl Backend for Live {
         self.update.restart()
     }
 
+    fn check_for_updates(&mut self) {
+        self.update.check_now();
+    }
+
     fn servers(&mut self, ask: sshee_app::servers::Ask) {
         self.inner.servers(ask);
     }

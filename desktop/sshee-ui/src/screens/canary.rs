@@ -18,6 +18,48 @@ pub struct State {
     pub notice: Option<Notice>,
     /// The version "Later" put off: its line stays away until a newer one.
     later: Option<String>,
+    /// Settings → Updates → "Check now", and what it found.
+    pub check: Check,
+}
+
+/// "Check now" in Settings → Updates.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum Check {
+    #[default]
+    Idle,
+    /// Asked; the program is looking.
+    Looking,
+    /// Nothing newer than this copy.
+    Newest,
+    /// Something newer: its line is at the top of the page.
+    Found,
+    /// The look didn't work: why.
+    Failed(String),
+}
+
+/// What a look asked for from Settings found (the program's answer): a newer version's own
+/// notice comes as [`show`] does, at the top of the page.
+pub fn checked(s: &mut Shell, found: Result<Option<Notice>, String>) {
+    s.screens.canary.check = match found {
+        Ok(Some(notice)) => {
+            // Asked for: shown even after "Later".
+            s.screens.canary.later = None;
+            s.screens.canary.notice = Some(notice);
+            Check::Found
+        }
+        Ok(None) => Check::Newest,
+        Err(why) => Check::Failed(why),
+    };
+}
+
+/// "Check now": the program looks at once.
+pub fn check_now(s: &mut Shell, tx: &mut rune::Tx) {
+    if s.screens.canary.check == Check::Looking {
+        return;
+    }
+    s.screens.canary.check = Check::Looking;
+    s.backend_mut().check_for_updates();
+    tx.instant();
 }
 
 /// A notice from the program.

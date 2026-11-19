@@ -443,6 +443,11 @@ pub trait Backend {
         let _ = ask;
     }
 
+    /// Settings → Updates → "Check now": the program looks for a newer version at once and
+    /// says what it found ([`crate::screens::canary::checked`]). A copy that doesn't update
+    /// itself never asks.
+    fn check_for_updates(&mut self) {}
+
     /// "Restart to update" on a newer test build (`screens::canary`): puts it in place and
     /// has it started once the window has closed. `Ok` closes the window; an error is said on
     /// the line instead and nothing has changed.

@@ -27,6 +27,8 @@ struct Told {
     settings: usize,
     reconnect: String,
     tor: Vec<TorCommand>,
+    /// "Check now" presses that reached the program.
+    checks: usize,
 }
 
 struct Link(Arc<Mutex<Told>>, usize);
@@ -68,6 +70,9 @@ impl Backend for Fake {
     }
     fn tor(&mut self, command: TorCommand) {
         self.told.lock().unwrap().tor.push(command);
+    }
+    fn check_for_updates(&mut self) {
+        self.told.lock().unwrap().checks += 1;
     }
     fn replays(&self) -> bool {
         true
@@ -454,6 +459,43 @@ fn a_release_never_calls_itself_a_preview_and_a_test_build_still_does() {
     assert!(words.contains("SSHeesh Preview 1.0.0-canary.124 (4edfea3)"));
     assert!(words.contains("Preview 1.0.0-canary.124 (4edfea3) · early preview, expect rough edges"));
     assert_eq!(crate::shell::title(&test), "SSHeesh Preview");
+}
+
+#[test]
+fn check_now_looks_at_once_and_says_what_it_found() {
+    use crate::screens::canary::{checked, Check};
+    use sshee_app::canary::{Build, Notice};
+    let release = Build { version: "1.0.0".into(), sha: "4e72e6c".into(), run: None, release: true };
+    let mut w = Window::open_as(SettingsStore::in_memory(quiet()), true, false, release);
+    w.go(Section::Updates);
+    w.click("check-now");
+    assert_eq!(w.told.lock().unwrap().checks, 1);
+    assert!(w.says("Looking for a newer version…"), "{}", w.tree());
+    // A second press while it looks asks nothing more.
+    w.click("check-now");
+    assert_eq!(w.told.lock().unwrap().checks, 1);
+    // Nothing newer.
+    w.rt.update(|s, _| checked(s, Ok(None)));
+    w.settle();
+    assert!(w.says("You have the newest version."));
+    // Again, and 1.0.1 is out: its line at the top, and the card says so.
+    w.click("check-now");
+    w.rt.update(|s, _| checked(s, Ok(Some(Notice::Ready { version: "1.0.1".into() }))));
+    w.settle();
+    assert_eq!(w.rt.state.screens.canary.check, Check::Found);
+    assert!(w.says("SSHeesh 1.0.1 is out: see the line at the top."), "{}", w.tree());
+    // Offline: why.
+    w.click("check-now");
+    w.rt.update(|s, _| checked(s, Err("no connection".into())));
+    w.settle();
+    assert!(w.says("Couldn't look for a newer version: no connection."));
+    assert_eq!(w.told.lock().unwrap().checks, 3);
+
+    // Built here: it doesn't update itself, and the button does nothing.
+    let mut w = Window::open_as(SettingsStore::in_memory(quiet()), true, false, Build::default());
+    w.go(Section::Updates);
+    w.click("check-now");
+    assert_eq!(w.told.lock().unwrap().checks, 0);
 }
 
 #[test]
