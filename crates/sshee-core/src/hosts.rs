@@ -66,6 +66,9 @@ pub struct NewHost {
 
 pub struct HostStore {
     file: PathBuf,
+    /// Ids of servers from ~/.ssh/config whose password is in the keychain. Only the ids: the
+    /// password itself never goes to a file.
+    remembered_file: PathBuf,
     ssh_config: Option<PathBuf>,
     cache: Vec<Host>,
 }
@@ -74,6 +77,7 @@ impl HostStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             file: data_dir.join("hosts.json"),
+            remembered_file: data_dir.join("remembered-passwords.json"),
             ssh_config: dirs::home_dir().map(|h| h.join(".ssh").join("config")),
             cache: Vec::new(),
         }
@@ -88,6 +92,10 @@ impl HostStore {
         let mut hosts = self.ssh_config.as_deref().map(parse_ssh_config_file).unwrap_or_default();
         let saved = self.load_saved();
         hosts.retain(|h| !saved.iter().any(|s| s.name == h.name));
+        let remembered = self.load_remembered();
+        for h in &mut hosts {
+            h.remembered_password = remembered.iter().any(|id| *id == h.id);
+        }
         hosts.extend(saved);
         self.cache = hosts.clone();
         hosts
@@ -109,13 +117,28 @@ impl HostStore {
         Ok(host)
     }
 
-    /// Records whether a password for a saved host is in the keychain.
+    /// Records whether a password for a server is in the keychain: a saved host notes it in
+    /// hosts.json, any other (one from ~/.ssh/config) in a list of ids beside it.
     pub fn set_remembered_password(&mut self, id: &str, remembered: bool) -> Result<(), String> {
         let mut saved = self.load_saved();
-        for h in saved.iter_mut().filter(|h| h.id == id) {
-            h.remembered_password = remembered;
+        if saved.iter().any(|h| h.id == id) {
+            for h in saved.iter_mut().filter(|h| h.id == id) {
+                h.remembered_password = remembered;
+            }
+            self.write_saved(&saved)?;
+        } else {
+            let mut ids = self.load_remembered();
+            let had = ids.iter().any(|i| i == id);
+            if remembered && !had {
+                ids.push(id.to_string());
+            } else if !remembered && had {
+                ids.retain(|i| i != id);
+            } else {
+                self.cache.clear();
+                return Ok(());
+            }
+            self.write_remembered(&ids)?;
         }
-        self.write_saved(&saved)?;
         self.cache.clear();
         Ok(())
     }
@@ -131,6 +154,21 @@ impl HostStore {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
+    }
+
+    fn load_remembered(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.remembered_file)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_remembered(&self, ids: &[String]) -> Result<(), String> {
+        if let Some(dir) = self.remembered_file.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let json = serde_json::to_string_pretty(ids).map_err(|e| e.to_string())?;
+        std::fs::write(&self.remembered_file, json).map_err(|e| format!("Couldn't note the saved password: {e}"))
     }
 
     fn write_saved(&self, hosts: &[Host]) -> Result<(), String> {
@@ -352,6 +390,29 @@ mod tests {
         let mut again = HostStore::new(&dir).with_ssh_config(None);
         assert!(again.get(&with.id).unwrap().remembered_password);
         assert!(!again.get(&without.id).unwrap().remembered_password);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn notes_a_remembered_password_for_a_server_from_ssh_config() {
+        let dir = std::env::temp_dir().join(format!("sshee-hosts-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config");
+        std::fs::write(&config, "Host web\n  HostName 203.0.113.20\n\nHost db\n  HostName 203.0.113.21\n").unwrap();
+        let mut store = HostStore::new(&dir).with_ssh_config(Some(config.clone()));
+        assert!(!store.get("cfg:web").unwrap().remembered_password);
+        store.set_remembered_password("cfg:web", true).unwrap();
+        assert!(store.get("cfg:web").unwrap().remembered_password);
+        // A fresh store reads it back, like the app after a restart; the other host stays as it was.
+        let mut again = HostStore::new(&dir).with_ssh_config(Some(config.clone()));
+        assert!(again.get("cfg:web").unwrap().remembered_password);
+        assert!(!again.get("cfg:db").unwrap().remembered_password);
+        // Only the id is written, and hosts.json isn't touched.
+        let noted = std::fs::read_to_string(dir.join("remembered-passwords.json")).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<String>>(&noted).unwrap(), ["cfg:web"]);
+        assert!(!dir.join("hosts.json").exists());
+        again.set_remembered_password("cfg:web", false).unwrap();
+        assert!(!HostStore::new(&dir).with_ssh_config(Some(config)).get("cfg:web").unwrap().remembered_password);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -21,7 +21,7 @@ use indexmap::IndexMap;
 use sshee_app::labels::{Listed, Looks};
 use sshee_app::legacy::APP_IDENTIFIER;
 use sshee_app::model::Labels;
-use sshee_app::servers::{forgot_note, host_id, imported_note, old_passwords_note, Answer, App, AppOffer, Ask, Candidate, NewServer, Source, Sources};
+use sshee_app::servers::{forgot_note, host_id, imported_note, old_passwords_note, saved_note, Answer, App, AppOffer, Ask, Candidate, NewServer, Source, Sources};
 use sshee_core::other_apps;
 use sshee_app::workbench::{Server, ServerKey};
 use sshee_core::secrets::{PasswordStore, Secret};
@@ -496,6 +496,26 @@ impl ServerStore {
                 }
                 Answer::Note(forgot_note(self.looks.name(&listed(&host))))
             }
+            Ask::SavePassword { ref server, ref password, remember } => {
+                let Some(host) = host_id(server).and_then(|id| self.hosts.get(id)) else { return Answer::failed(&ask, "That server isn't in your list anymore.") };
+                if password.is_empty() {
+                    return Answer::failed(&ask, "Type the password first.");
+                }
+                // Only for this run: an older one in the keychain goes, or the next run would
+                // sign in with it.
+                if !remember {
+                    self.keychain.forget(&host.id);
+                }
+                // The keychain refused: it still works until the app quits, and says so.
+                if let Err(why) = self.keychain.set(&host.id, Secret::new(password.expose()), remember) {
+                    let _ = self.hosts.set_remembered_password(&host.id, false);
+                    return Answer::failed(&ask, why);
+                }
+                if let Err(why) = self.hosts.set_remembered_password(&host.id, remember) {
+                    return Answer::failed(&ask, why);
+                }
+                Answer::Note(saved_note(self.looks.name(&listed(&host)), remember))
+            }
             Ask::Remove { server } => {
                 let Some(host) = host_id(&server).and_then(|id| self.hosts.list().into_iter().find(|h| h.id == id)) else {
                     return Answer::failed(&Ask::Remove { server }, "That server isn't in your list anymore.");
@@ -777,6 +797,64 @@ mod tests {
         // A session to it goes by its alias, as the config says.
         let host = store.hosts().into_iter().find(|h| h.id == "cfg:web-7731").unwrap();
         assert_eq!(host.target().destination, "web-7731");
+    }
+
+    #[test]
+    fn a_password_saved_for_a_server_from_the_ssh_config_is_used_after_a_restart() {
+        let w = World::new("save-password");
+        let mut store = w.store();
+        let ids = vec!["cfg:web-7731".to_owned()];
+        store.handle(Ask::Import { source: Source::SshConfig, picks: ids.clone(), offered: ids });
+        let server = "host:cfg:web-7731".to_owned();
+        assert!(!store.shown().faces[&server].saved_password);
+        assert_eq!(store.password("cfg:web-7731"), None);
+        let ask = Ask::SavePassword { server: server.clone(), password: Password::new("made-up-password"), remember: true };
+        // Never printed, even inside the ask.
+        assert!(!format!("{ask:?}").contains("made-up"));
+        assert_eq!(store.handle(ask), Answer::Note(saved_note("web-7731", true)));
+        assert_eq!(*w.keychain.kept.lock().unwrap(), [("cfg:web-7731".to_owned(), "made-up-password".to_owned(), true)]);
+        // After a restart the list says the keychain has it, and a session signs in with it.
+        let mut again = w.store();
+        assert!(again.shown().faces[&server].saved_password);
+        assert!(again.hosts().iter().any(|h| h.id == "cfg:web-7731" && h.remembered_password));
+        assert_eq!(again.password("cfg:web-7731").map(|p| p.expose().to_owned()).as_deref(), Some("made-up-password"));
+        // No file holds it; the ssh config is untouched.
+        for entry in std::fs::read_dir(w.root.join("copy")).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default();
+            assert!(!text.contains("made-up-password"));
+        }
+        assert!(!std::fs::read_to_string(w.root.join("ssh_config")).unwrap().contains("made-up"));
+        // Forgotten again: the next run asks.
+        assert!(matches!(again.handle(Ask::ForgetPassword { server: server.clone() }), Answer::Note(_)));
+        assert!(!w.store().shown().faces[&server].saved_password);
+        // Nothing typed, or a server not in the list, is refused in words.
+        assert!(matches!(again.handle(Ask::SavePassword { server: server.clone(), password: Password::default(), remember: true }), Answer::Refused { .. }));
+        assert!(matches!(again.handle(Ask::SavePassword { server: "host:cfg:gone".into(), password: Password::new("x"), remember: true }), Answer::Refused { .. }));
+    }
+
+    /// The window offers to save a password at the prompts askpass answers, and no others.
+    #[test]
+    fn the_window_reads_a_password_prompt_as_askpass_does() {
+        for line in [
+            "deploy@203.0.113.17's password: ",
+            "(deploy@web-7731) Password:",
+            "Password:",
+            "Enter passphrase for key '/home/demo/.ssh/id_ed25519': ",
+            "Are you sure you want to continue connecting (yes/no/[fingerprint])? ",
+            "Verification code: ",
+            "deploy@web-7731:~$ ",
+        ] {
+            assert_eq!(sshee_app::servers::asks_for_password(line), sshee_core::secrets::is_password_prompt(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_keychain_that_refuses_a_saved_password_says_so() {
+        let w = World::refusing("save-refused");
+        let mut store = w.store();
+        let answer = store.handle(Ask::SavePassword { server: "host:cfg:web-7731".into(), password: Password::new("made-up-password"), remember: true });
+        assert!(matches!(&answer, Answer::Refused { why, .. } if why.contains("keychain")), "{answer:?}");
+        assert!(!store.hosts().iter().any(|h| h.remembered_password));
     }
 
     #[test]

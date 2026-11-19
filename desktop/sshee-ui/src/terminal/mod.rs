@@ -21,6 +21,7 @@ pub mod menu;
 pub mod metrics;
 pub mod overlays;
 pub mod palette;
+pub mod password;
 pub mod pane;
 pub mod replay;
 pub mod rows;

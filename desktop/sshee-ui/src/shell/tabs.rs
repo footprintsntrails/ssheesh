@@ -539,6 +539,12 @@ impl Shell {
                     changed = true;
                 }
                 Wish::Folder(folder) => changed |= self.set_folder(id, &folder),
+                // The password typed above the terminal got it in: kept for its server, in the
+                // keychain (`terminal/password.rs`).
+                Wish::SavePassword(password) => {
+                    let Some(server) = self.bench.tab(id).map(|t| t.server.clone()) else { continue };
+                    self.backend_mut().servers(sshee_app::servers::Ask::SavePassword { server, password, remember: true });
+                }
                 // Side by side: the side you press is the tab you're on.
                 Wish::Pressed => {
                     if self.bench.active_id() != Some(id) && self.tabs_on_screen().contains(&id) {
