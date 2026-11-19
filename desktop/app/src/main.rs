@@ -232,8 +232,12 @@ fn main() {
     // SSHEE_PREVIEW_DIR puts the copy's folder elsewhere: the window tests give each run its
     // own, since Windows finds the home folder without asking HOME. Child processes (the Tor
     // and askpass helpers) inherit it, so they find the same folder.
+    // The released 1.0 is the standard copy, as 0.10 was: `~/.sshee` and 0.10's keychain
+    // name, so the passwords 0.10 saved are there after the update. Test builds stay Preview,
+    // beside it.
     let identity = match std::env::var_os("SSHEE_PREVIEW_DIR").filter(|d| !d.is_empty()) {
         Some(dir) => AppIdentity::in_dir(dir.into(), AppIdentity::preview().keychain_service()),
+        None if env!("SSHEESH_RELEASE") == "1" => AppIdentity::standard(),
         None => AppIdentity::preview(),
     };
     let _ = sshee_core::app_identity::set(identity);
