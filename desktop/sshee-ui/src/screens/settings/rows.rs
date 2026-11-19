@@ -521,6 +521,12 @@ fn wide(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
     })
 }
 
+/// About's line under the name: a release says its version, any other build that it's a
+/// preview.
+fn about_line(build: &sshee_app::canary::Build, version: &str) -> String {
+    if build.release { format!("Version {version}") } else { format!("Preview {version} · early preview, expect rough edges") }
+}
+
 /// A row that is a card or a picture of its own, outside the boxes.
 fn alone(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
     let Control::Special(special) = r.control else { return None };
@@ -537,12 +543,12 @@ fn alone(s: &Shell, t: &'static Theme, r: &'static Row) -> Option<El> {
                 (false, true) => "It looks for newer versions by itself.",
                 (false, false) => "Built on this computer: it doesn't update itself.",
             };
-            version_card(t, "updates-card", 40.0, (&format!("SSHeesh Preview {version}"), line), Some("Check now"))
+            version_card(t, "updates-card", 40.0, (&format!("{} {version}", crate::shell::title(build)), line), Some("Check now"))
         }
         Special::AboutCard => col()
             .w_full()
             .gap(10.0)
-            .child(version_card(t, "about-card", 56.0, ("SSHeesh", &format!("Preview {version} · early preview, expect rough edges")), None))
+            .child(version_card(t, "about-card", 56.0, ("SSHeesh", &about_line(&s.options.build, &version)), None))
             .child(
                 // The license's name never breaks inside: non-breaking hyphens and spaces.
                 text("Servers, terminals and files that don't fall over. Free, with open source code under the CC\u{a0}BY\u{2011}NC\u{2011}SA\u{a0}4.0 license.")

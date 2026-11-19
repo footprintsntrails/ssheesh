@@ -143,6 +143,11 @@ impl HostStore {
         Ok(())
     }
 
+    /// The ids of the servers from ~/.ssh/config whose password is noted as in the keychain.
+    pub fn remembered_ids(&self) -> Vec<String> {
+        self.load_remembered()
+    }
+
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
         let mut saved = self.load_saved();
         saved.retain(|h| h.id != id);
@@ -422,6 +427,7 @@ mod tests {
         // Only the id is written, and hosts.json isn't touched.
         let noted = std::fs::read_to_string(dir.join("remembered-passwords.json")).unwrap();
         assert_eq!(serde_json::from_str::<Vec<String>>(&noted).unwrap(), ["cfg:web"]);
+        assert_eq!(HostStore::new(&dir).with_ssh_config(None).remembered_ids(), ["cfg:web"]);
         assert!(!dir.join("hosts.json").exists());
         again.set_remembered_password("cfg:web", false).unwrap();
         assert!(!HostStore::new(&dir).with_ssh_config(Some(config)).get("cfg:web").unwrap().remembered_password);

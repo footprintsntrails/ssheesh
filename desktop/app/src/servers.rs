@@ -5,10 +5,11 @@
 //!
 //! 0.10's list is never written and never used as this copy's own. It is read to offer
 //! "Bring over your servers from 0.10": each server you tick is added here under a new id,
-//! with the label, icon and colour 0.10 kept for it. 0.10's saved passwords stay in 0.10's
-//! keychain; a server that needs one asks the first time. XPipe's vault, other SSH apps' saved
-//! sessions (PuTTY, WinSCP… `sshee_core::other_apps`) and `~/.ssh/config` are read the same
-//! way: read, offered, never changed.
+//! with the label, icon and colour 0.10 kept for it. 0.10's saved passwords are copied only
+//! on "Use old passwords"; the released copy, which shares 0.10's keychain name, has its
+//! `~/.ssh/config` servers' passwords already and only brings over 0.10's note of them.
+//! XPipe's vault, other SSH apps' saved sessions (PuTTY, WinSCP… `sshee_core::other_apps`)
+//! and `~/.ssh/config` are read the same way: read, offered, never changed.
 //!
 //! Everything here reads files or asks the keychain, so the window never calls it: the
 //! backend runs [`ServerStore::handle`] on a thread and sends the answer through `Remote`.
@@ -29,6 +30,11 @@ use sshee_core::{AppIdentity, Host, HostSource, HostStore, NewHost};
 
 /// How each server looks and what it's called, in the copy's folder.
 const LOOKS_FILE: &str = "looks.json";
+
+/// The `~/.ssh/config` servers whose "password in the keychain" note was brought over from
+/// 0.10's folder already, in the copy's folder: each is brought once, so a password forgotten
+/// here stays forgotten.
+const OLD_NOTED_FILE: &str = "remembered-from-0.10.json";
 
 /// Where saved passwords go. The program's is the system keychain under this copy's own name
 /// ([`PasswordStore`]); a test's is a list in memory.
@@ -76,6 +82,9 @@ pub struct Places {
     pub apps: other_apps::Places,
     /// The labels 0.10 kept (slow: it copies a database to read it).
     pub old_labels: Box<dyn Fn() -> Option<Labels> + Send>,
+    /// This copy keeps its passwords under 0.10's keychain name (the released 1.x is the
+    /// standard copy): what 0.10 saved is already where this copy looks.
+    pub shares_old_keychain: bool,
 }
 
 impl Places {
@@ -83,7 +92,15 @@ impl Places {
     /// own (no home folder) keeps its list for this run only, in a folder that goes with it.
     pub fn of(identity: &AppIdentity, ssh_config: Option<PathBuf>) -> Places {
         let dir = identity.dir().map(Path::to_owned).unwrap_or_else(|| std::env::temp_dir().join(format!("sshee-preview-{}", std::process::id())));
-        Places { dir, ssh_config, old_dir: dirs::data_dir().map(|d| d.join(APP_IDENTIFIER)), xpipe: sshee_core::xpipe::vaults(), apps: other_apps::Places::here(), old_labels: Box::new(labels_of_0_10) }
+        Places {
+            dir,
+            ssh_config,
+            old_dir: dirs::data_dir().map(|d| d.join(APP_IDENTIFIER)),
+            xpipe: sshee_core::xpipe::vaults(),
+            apps: other_apps::Places::here(),
+            old_labels: Box::new(labels_of_0_10),
+            shares_old_keychain: identity.keychain_service() == AppIdentity::standard().keychain_service(),
+        }
     }
 }
 
@@ -209,7 +226,50 @@ impl ServerStore {
             },
             Err(_) => (Looks::default(), false),
         };
-        ServerStore { places, hosts, looks, looks_unread, keychain }
+        let mut store = ServerStore { places, hosts, looks, looks_unread, keychain };
+        store.note_old_config_passwords();
+        store
+    }
+
+    /// The `~/.ssh/config` servers whose password 0.10 kept in its keychain: the ids in its
+    /// `remembered-passwords.json`. Only ever read.
+    fn old_remembered_config(&self) -> Vec<String> {
+        match &self.places.old_dir {
+            Some(dir) => HostStore::new(dir).with_ssh_config(None).remembered_ids().into_iter().filter(|id| id.starts_with("cfg:")).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// A copy under 0.10's keychain name has 0.10's passwords for its `~/.ssh/config` servers
+    /// already (the same entry, `cfg:<alias>`); only 0.10's note that they're there is in
+    /// 0.10's folder. Brings that note over, once for each server this copy lists. Never reads
+    /// a password, and a note that can't be written is tried again next time.
+    fn note_old_config_passwords(&mut self) {
+        if !self.places.shares_old_keychain {
+            return;
+        }
+        let old = self.old_remembered_config();
+        if old.is_empty() {
+            return;
+        }
+        let path = self.places.dir.join(OLD_NOTED_FILE);
+        let mut noted: Vec<String> = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        let listed = self.hosts();
+        let before = noted.len();
+        for id in old {
+            if noted.contains(&id) {
+                continue;
+            }
+            let Some(host) = listed.iter().find(|h| h.id == id && h.source == HostSource::SshConfig) else { continue };
+            if host.remembered_password || self.hosts.set_remembered_password(&id, true).is_ok() {
+                noted.push(id);
+            }
+        }
+        if noted.len() > before {
+            if let Ok(json) = serde_json::to_vec_pretty(&noted) {
+                let _ = write_private(&path, &json);
+            }
+        }
     }
 
     /// Every host: the ssh config's and the ones added here.
@@ -232,15 +292,22 @@ impl ServerStore {
     }
 
     /// This copy's servers brought over from 0.10 whose password 0.10 kept and this copy
-    /// doesn't have: `(id here, id in 0.10, name)`, matched by address.
+    /// doesn't have: `(id here, id in 0.10, name)`, matched by address. A `~/.ssh/config`
+    /// server is the same id in both; a copy under 0.10's keychain name has those passwords
+    /// already ([`ServerStore::note_old_config_passwords`]), so only another copy is offered them.
     fn old_passwords(&mut self) -> Vec<(String, String, String)> {
         let old = self.old_hosts();
+        let old_config = if self.places.shares_old_keychain { Vec::new() } else { self.old_remembered_config() };
         self.hosts()
             .into_iter()
-            .filter(|h| h.source != HostSource::SshConfig && !h.remembered_password)
+            .filter(|h| !h.remembered_password)
             .filter_map(|h| {
-                let from = old.iter().find(|o| o.remembered_password && address(o) == address(&h))?;
-                Some((h.id.clone(), from.id.clone(), h.name.clone()))
+                let from = if h.source == HostSource::SshConfig {
+                    old_config.iter().find(|id| **id == h.id)?.clone()
+                } else {
+                    old.iter().find(|o| o.remembered_password && address(o) == address(&h))?.id.clone()
+                };
+                Some((h.id.clone(), from, h.name.clone()))
             })
             .collect()
     }
@@ -648,6 +715,8 @@ mod tests {
     struct FakeKeychain {
         kept: Mutex<Vec<(String, String, bool)>>,
         refuses: bool,
+        /// Each `get`: the host, and whether the list said the keychain has its password.
+        asked: Mutex<Vec<(String, bool)>>,
     }
 
     impl Keychain for FakeKeychain {
@@ -659,7 +728,8 @@ mod tests {
             Ok(())
         }
 
-        fn get(&self, host_id: &str, _: bool) -> Option<Secret> {
+        fn get(&self, host_id: &str, remembered: bool) -> Option<Secret> {
+            self.asked.lock().unwrap().push((host_id.to_owned(), remembered));
             self.kept.lock().unwrap().iter().find(|(id, ..)| id == host_id).map(|(_, pw, _)| Secret::new(pw.clone()))
         }
 
@@ -668,8 +738,12 @@ mod tests {
         }
 
         fn old(&self, host_id: &str) -> Option<Secret> {
-            // 0.10 kept a password for its server "old-db" only.
-            (host_id == "saved:old-db").then(|| Secret::new("from-0.10"))
+            // 0.10 kept a password for its server "old-db" and for the ssh config's "web-7731".
+            match host_id {
+                "saved:old-db" => Some(Secret::new("from-0.10")),
+                "cfg:web-7731" => Some(Secret::new("config-from-0.10")),
+                _ => None,
+            }
         }
     }
 
@@ -694,6 +768,11 @@ mod tests {
         }
 
         fn store(&self) -> ServerStore {
+            self.store_as(false)
+        }
+
+        /// The store of a copy that shares 0.10's keychain name (the release) or not (Preview).
+        fn store_as(&self, shares_old_keychain: bool) -> ServerStore {
             // The copy's own folder comes from its identity, as in the program.
             let identity = AppIdentity::in_dir(self.root.join("copy"), "io.example.ssheesh.test");
             let places = Places {
@@ -708,6 +787,7 @@ mod tests {
                     labels.config_seen.push("cfg:web-7731".into());
                     Some(labels)
                 }),
+                shares_old_keychain,
                 ..Places::of(&identity, None)
             };
             ServerStore::open(places, self.keychain.clone())
@@ -897,6 +977,69 @@ mod tests {
         // Forgotten: out of the keychain, and the server asks again.
         assert!(matches!(store.handle(Ask::ForgetPassword { server: db.key() }), Answer::Note(_)));
         assert!(w.keychain.kept.lock().unwrap().is_empty() && !store.shown().faces[&db.key()].saved_password);
+    }
+
+    impl World {
+        /// 0.10's note of the ssh config servers whose password it kept.
+        fn old_remembered(&self, ids: &[&str]) {
+            std::fs::write(self.root.join("old").join("remembered-passwords.json"), serde_json::to_string(ids).unwrap()).unwrap();
+        }
+
+        fn remembered(store: &mut ServerStore, id: &str) -> Option<bool> {
+            store.hosts().into_iter().find(|h| h.id == id).map(|h| h.remembered_password)
+        }
+    }
+
+    #[test]
+    fn the_release_keeps_0_10s_passwords_for_ssh_config_servers_without_asking_once() {
+        let w = World::new("old-config-release");
+        // 0.10 kept passwords for web-7731 (in the config) and gone-box (not in it any more).
+        w.old_remembered(&["cfg:web-7731", "cfg:gone-box"]);
+        let old_note = std::fs::read(w.root.join("old").join("remembered-passwords.json")).unwrap();
+        let mut store = w.store_as(true);
+        assert_eq!(World::remembered(&mut store, "cfg:web-7731"), Some(true));
+        assert_eq!(World::remembered(&mut store, "cfg:old-box"), Some(false));
+        assert_eq!(World::remembered(&mut store, "cfg:gone-box"), None);
+        // No password was read or copied: it's in the same keychain entry, and a session asks
+        // for it there.
+        assert!(w.keychain.kept.lock().unwrap().is_empty());
+        let _ = store.password("cfg:web-7731");
+        assert!(w.keychain.asked.lock().unwrap().contains(&("cfg:web-7731".to_owned(), true)));
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        assert_eq!(sources.old_passwords, 0);
+        assert_eq!(serde_json::from_str::<Vec<String>>(&w.copy_file("remembered-passwords.json")).unwrap(), ["cfg:web-7731"]);
+        // A second start changes nothing more.
+        let (note, noted) = (w.copy_file("remembered-passwords.json"), w.copy_file(OLD_NOTED_FILE));
+        let mut again = w.store_as(true);
+        assert_eq!((w.copy_file("remembered-passwords.json"), w.copy_file(OLD_NOTED_FILE)), (note, noted));
+        // Forgotten here, it stays forgotten after a restart.
+        assert!(matches!(again.handle(Ask::ForgetPassword { server: "host:cfg:web-7731".into() }), Answer::Note(_)));
+        assert_eq!(World::remembered(&mut w.store_as(true), "cfg:web-7731"), Some(false));
+        // 0.10's folder is only read.
+        assert_eq!(std::fs::read(w.root.join("old").join("remembered-passwords.json")).unwrap(), old_note);
+        assert!(!w.root.join("old").join("hosts.json").exists());
+    }
+
+    #[test]
+    fn a_preview_offers_0_10s_passwords_for_ssh_config_servers_and_copies_them_on_a_yes() {
+        let w = World::new("old-config-preview");
+        w.old_remembered(&["cfg:web-7731", "cfg:gone-box"]);
+        let mut store = w.store();
+        // Its keychain is its own: nothing is noted before you say yes.
+        assert_eq!(World::remembered(&mut store, "cfg:web-7731"), Some(false));
+        assert!(!w.root.join("copy").join(OLD_NOTED_FILE).exists());
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        assert_eq!(sources.old_passwords, 1);
+        assert_eq!(store.handle(Ask::UseOldPasswords), Answer::Note("Brought over the saved passwords of 1 server.".into()));
+        assert_eq!(*w.keychain.kept.lock().unwrap(), [("cfg:web-7731".to_owned(), "config-from-0.10".to_owned(), true)]);
+        assert_eq!(World::remembered(&mut store, "cfg:web-7731"), Some(true));
+        assert_eq!(store.password("cfg:web-7731").map(|p| p.expose().to_owned()).as_deref(), Some("config-from-0.10"));
+        // Nothing more is offered, now or after a restart.
+        let Answer::Sources(sources) = store.handle(Ask::Sources) else { panic!() };
+        assert_eq!(sources.old_passwords, 0);
+        let Answer::Sources(sources) = w.store().handle(Ask::Sources) else { panic!() };
+        assert_eq!(sources.old_passwords, 0);
+        assert_eq!(w.keychain.kept.lock().unwrap().len(), 1);
     }
 
     #[test]

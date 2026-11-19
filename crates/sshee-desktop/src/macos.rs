@@ -148,7 +148,7 @@ impl Notifier for Bounce {
     fn withdraw(&mut self, _: u64) {}
 
     fn support(&self) -> Support {
-        Support::None("macOS shows notifications only for an app in a bundle (SSHeesh Preview.app); run on its own, the Dock icon bounces instead.")
+        Support::None("macOS shows notifications only for an app in a bundle (a .app); run on its own, the Dock icon bounces instead.")
     }
 }
 

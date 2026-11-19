@@ -86,6 +86,11 @@ fn quiet() -> Settings {
 
 impl Window {
     fn open(store: SettingsStore, dark: bool, mac_keys: bool) -> Window {
+        Window::open_as(store, dark, mac_keys, sshee_app::canary::Build::default())
+    }
+
+    /// The window of a given build: a release, a test build, one built here.
+    fn open_as(store: SettingsStore, dark: bool, mac_keys: bool, build: sshee_app::canary::Build) -> Window {
         crate::fonts::declare();
         let told = Arc::new(Mutex::new(Told::default()));
         let servers = vec![
@@ -93,7 +98,7 @@ impl Window {
             Server::host("web", "web-7731", "deploy@203.0.113.17").env(EnvLabel::Prod).icon("globe"),
             Server::host("db", "db-main", "postgres@203.0.113.31").icon("database"),
         ];
-        let options = Options { frame: Frame::Linux, mac_keys, ..Options::default() };
+        let options = Options { frame: Frame::Linux, mac_keys, build, ..Options::default() };
         let shell = Shell::new(Workbench::new(servers), Box::new(Fake { told: told.clone(), store: Some(store) }), options, None);
         let text = rune::text::TextSystem::new(crate::fonts::FONTS, crate::fonts::FAMILIES);
         let mut rt = Runtime::with_text(shell, view, (1280.0, 800.0), Env::new(dark, 1.0), text);
@@ -415,6 +420,40 @@ fn a_pop_up_button_opens_its_menu_and_takes_the_pick() {
     w.key(Key::Escape, "");
     assert!(!w.has("popup-menu") && w.rt.state.screens.settings.open);
     assert_eq!(w.settings().welcome_mode.as_str(), "off");
+}
+
+/// Every text on screen and everything a screen reader gets, after visiting each section.
+fn every_word(w: &mut Window) -> String {
+    let mut out = String::new();
+    for section in Section::ALL {
+        w.go(section);
+        for e in w.rt.elements() {
+            if let Some(t) = e.text.as_deref().filter(|_| !e.exiting) {
+                out.push_str(t);
+                out.push('\n');
+            }
+        }
+        out.push_str(&w.tree());
+    }
+    out
+}
+
+#[test]
+fn a_release_never_calls_itself_a_preview_and_a_test_build_still_does() {
+    use sshee_app::canary::Build;
+    let release = Build { version: "1.0.0".into(), sha: "4edfea3".into(), run: None, release: true };
+    let mut w = Window::open_as(SettingsStore::in_memory(quiet()), true, false, release.clone());
+    let words = every_word(&mut w);
+    assert!(!words.contains("Preview") && !words.contains("preview,"), "a release says Preview:\n{words}");
+    assert!(words.contains("SSHeesh 1.0.0 (4edfea3)") && words.contains("Version 1.0.0 (4edfea3)"));
+    assert_eq!(crate::shell::title(&release), "SSHeesh");
+
+    let test = Build { version: "1.0.0-canary".into(), sha: "4edfea3".into(), run: Some(124), release: false };
+    let mut w = Window::open_as(SettingsStore::in_memory(quiet()), true, false, test.clone());
+    let words = every_word(&mut w);
+    assert!(words.contains("SSHeesh Preview 1.0.0-canary.124 (4edfea3)"));
+    assert!(words.contains("Preview 1.0.0-canary.124 (4edfea3) · early preview, expect rough edges"));
+    assert_eq!(crate::shell::title(&test), "SSHeesh Preview");
 }
 
 #[test]

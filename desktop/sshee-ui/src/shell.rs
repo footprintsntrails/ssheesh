@@ -43,6 +43,12 @@ pub const TITLE: &str = "SSHeesh Preview";
 /// The released 1.x's title: SSHeesh, as 0.10.
 pub const RELEASE_TITLE: &str = "SSHeesh";
 
+/// What this build calls itself, in the title and wherever the window names the app: a
+/// release is SSHeesh, any other build (a test build, one built here) SSHeesh Preview.
+pub fn title(build: &sshee_app::canary::Build) -> &'static str {
+    if build.release { RELEASE_TITLE } else { TITLE }
+}
+
 /// The window's first size, the design's.
 pub const SIZE: (f32, f32) = (1280.0, 800.0);
 
@@ -88,7 +94,7 @@ fn window_app(options: &mut Options) -> App<Shell> {
         setup: Some(|s, waker| s.set_waker(waker)),
         poll: Some(|s, clock, tx| s.poll(clock, tx)),
         on_key: Some(|s, ev, tx| s.key(ev, tx)),
-        ..AppSpec::new(if options.build.release { RELEASE_TITLE } else { TITLE }, SIZE, blank, view::view)
+        ..AppSpec::new(title(&options.build), SIZE, blank, view::view)
     };
     // The top row is the title bar: macOS keeps its traffic lights over its start, Windows
     // gets Rune's minimize, maximize and close at its end, Linux keeps the system's frame.
