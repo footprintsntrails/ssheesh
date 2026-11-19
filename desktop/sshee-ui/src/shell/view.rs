@@ -72,6 +72,11 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
         .w_full()
         .h_full()
         .fill(t.frame)
+        // The window's size: how far a dragged tab is past its edge (`tabs.rs`). Only noted.
+        .on_layout_tx(|s: &mut Shell, [_, _, w, h], tx| {
+            s.row.room = Some([w, h]);
+            tx.live_only();
+        })
         .on_paste_content(|s: &mut Shell, content, tx| s.paste(content, tx))
         .child(if away_bar { super::compact::top_band(s, t) } else { bar(s, t, cx) })
         .child(body)

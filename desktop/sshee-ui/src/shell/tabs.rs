@@ -79,6 +79,10 @@ const SLACK: f32 = 16.0;
 /// How far the pointer travels before a press on a tab is a drag.
 const DRAG_START: f32 = 4.0;
 
+/// How far past the window's edge a dragged tab goes before letting go opens it in a window
+/// of its own: past a system title bar above the content, and never by a slip at the edge.
+const TEAR_OFF: f32 = 40.0;
+
 /// The tab menu's, the tab list's and the "+" menu's widths.
 const MENU_WIDTH: f32 = 248.0;
 const LIST_WIDTH: f32 = 300.0;
@@ -108,6 +112,8 @@ struct Dragging {
     slot: Option<usize>,
     /// The same place in the whole row, counted without it (what `move_tab` takes).
     to: Option<usize>,
+    /// Far past the window's edge ([`TEAR_OFF`]): letting go opens it in a window of its own.
+    outside: bool,
 }
 
 /// How far each tab is drawn from its place while one is dragged along the row, and the room
@@ -119,6 +125,9 @@ type DragMarks = (HashMap<TabId, [f32; 2]>, Option<[f32; 4]>);
 pub struct Row {
     /// Where each tab was last laid out, in window points.
     rects: HashMap<TabId, [f32; 4]>,
+    /// The window's size, in window points, as last laid out: how far a dragged tab is past
+    /// its edge.
+    pub(crate) room: Option<[f32; 2]>,
     held: Option<Held>,
     drag: Option<Dragging>,
     /// The tab whose menu is open, and where.
@@ -203,6 +212,8 @@ pub enum TabPick {
     /// A terminal's: Files at the folder its shell is in (0.10's "Browse files in this
     /// folder").
     BrowseFiles,
+    /// Into a window of its own, as dragging it out past the window's edge does.
+    NewWindow,
 }
 
 impl Shell {
@@ -223,7 +234,7 @@ impl Shell {
     pub(crate) fn tab_drag(&mut self, id: TabId, d: &Drag, tx: &mut Tx) {
         match d.phase {
             Phase::Down => {
-                self.row.drag = Some(Dragging { id, moved: false, dx: 0.0, dy: 0.0, over_page: false, slot: None, to: None });
+                self.row.drag = Some(Dragging { id, moved: false, dx: 0.0, dy: 0.0, over_page: false, slot: None, to: None, outside: false });
                 tx.live_only();
             }
             Phase::Move => {
@@ -234,11 +245,15 @@ impl Shell {
                 }
                 let at = d.window_point();
                 (drag.moved, drag.dx, drag.dy) = (true, d.dx, d.dy);
+                // Far out of the window: it would open in a window of its own there.
+                drag.outside = self.row.room.is_some_and(|room| past_edge(at, room));
                 // Over the page: it would land on a pane there (`split.rs`), not in the row.
-                drag.over_page = self.row.rects.get(&id).is_some_and(|r| at[1] > r[1] + r[3] + 8.0);
+                drag.over_page = !drag.outside && self.row.rects.get(&id).is_some_and(|r| at[1] > r[1] + r[3] + 8.0);
                 self.sides.drop = if drag.over_page { self.drop_target(id, at) } else { None };
-                (drag.slot, drag.to) = if drag.over_page { (None, None) } else { self.row_slot(id, at[0]) };
+                (drag.slot, drag.to) = if drag.over_page || drag.outside { (None, None) } else { self.row_slot(id, at[0]) };
                 self.row.drag = Some(drag);
+                // Out there the window can't draw it: a card follows the pointer (`torn.rs`).
+                self.torn_card(id, d.screen_point().filter(|_| drag.outside));
                 // The tabs it passes step aside, and the marks move, on their springs; the
                 // dragged tab itself follows the pointer exactly (`strip`).
                 tx.animated();
@@ -246,9 +261,14 @@ impl Shell {
             Phase::Up => {
                 let Some(drag) = self.row.drag.take().filter(|g| g.id == id) else { return };
                 let drop = self.sides.drop.take();
+                self.torn_card(id, None);
                 tx.instant();
                 if d.cancelled() || !drag.moved {
                     return;
+                }
+                if drag.outside {
+                    let torn = d.screen_point().map(|screen| super::TornOff { screen, grab: self.grab_point(id, d) });
+                    return self.move_to_new_window(id, torn, tx);
                 }
                 if let Some(at) = drop {
                     return self.drop_on(id, at, tx);
@@ -260,6 +280,18 @@ impl Shell {
                 // order is kept for the next run.
                 self.focus_tab(id, tx);
             }
+        }
+    }
+
+    /// Where the pointer holds tab `id`, as a point of a window that has it as its only tab:
+    /// where the row's first tab is, plus where on the tab it was pressed. A window opened for
+    /// it under the pointer has it there ([`super::frame_at`]).
+    fn grab_point(&self, id: TabId, d: &Drag) -> [f32; 2] {
+        let first = self.row.shown.borrow().first().and_then(|t| self.row.rects.get(t)).copied();
+        let mine = self.row.rects.get(&id).copied();
+        match (first, mine) {
+            (Some(first), Some(mine)) => [first[0] + d.start_x, mine[1] + d.start_y],
+            _ => [d.start_x, d.start_y],
         }
     }
 
@@ -286,7 +318,7 @@ impl Shell {
         let shown = self.row.shown.borrow();
         let mine = *self.row.rects.get(&drag.id)?;
         let mut shifts = HashMap::new();
-        shifts.insert(drag.id, [drag.dx, if drag.over_page { drag.dy } else { 0.0 }]);
+        shifts.insert(drag.id, [drag.dx, if drag.over_page || drag.outside { drag.dy } else { 0.0 }]);
         let (Some(from), Some(slot)) = (shown.iter().position(|t| *t == drag.id), drag.slot) else { return Some((shifts, None)) };
         let others: Vec<TabId> = shown.iter().copied().filter(|t| *t != drag.id).collect();
         // The room it leaves, and takes: its width and the row's gap.
@@ -460,6 +492,7 @@ impl Shell {
             TabPick::Below => self.show_beside(id, layout::Dir::Col, tx),
             TabPick::Apart => self.leave_pair(id, tx),
             TabPick::Duplicate => self.duplicate_tab(id, tx),
+            TabPick::NewWindow => self.move_to_new_window(id, None, tx),
             TabPick::BrowseFiles => {
                 if let Some(pane) = self.panes.get_mut(&id) {
                     pane.browse_files_here(tx);
@@ -1135,6 +1168,7 @@ fn tab_menu_items(s: &Shell, id: TabId) -> Vec<Option<MenuItem>> {
     }
     items.extend([
         row("tab-duplicate", "Duplicate tab", None, TabPick::Duplicate, true),
+        row("tab-new-window", "Move to new window", None, TabPick::NewWindow, true),
         None,
         row("tab-close", "Close tab", keys(Shortcut::CloseTab), TabPick::Close, true),
         row("tab-close-others", "Close other tabs", None, TabPick::CloseOthers, !layout::others(&s.bench, id).is_empty()),
@@ -1142,6 +1176,12 @@ fn tab_menu_items(s: &Shell, id: TabId) -> Vec<Option<MenuItem>> {
         row("tab-close-right", if s.bench.tabs_under_servers() { "Close tabs below" } else { "Close tabs to the right" }, None, TabPick::CloseRight, !layout::to_the_right(&s.bench, id).is_empty()),
     ]);
     items
+}
+
+/// Point `at` (window points) is past the edge of a window `room` big by more than
+/// [`TEAR_OFF`], on any side.
+pub(crate) fn past_edge(at: [f32; 2], room: [f32; 2]) -> bool {
+    at[0] < -TEAR_OFF || at[1] < -TEAR_OFF || at[0] > room[0] + TEAR_OFF || at[1] > room[1] + TEAR_OFF
 }
 
 /// The list of all tabs, under its button: each by its name and machine, and what it says.

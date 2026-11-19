@@ -146,6 +146,13 @@ impl State {
             scroll_to_marked: false,
         }
     }
+
+    /// The tab moved to another window (a tab dragged out into a window of its own): what was
+    /// timed on the old window's clock starts again on the new one's.
+    pub(crate) fn moved(&mut self) {
+        self.seen_at = None;
+        self.hover = None;
+    }
 }
 
 pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, cx: &mut Cx<Shell>) -> El {

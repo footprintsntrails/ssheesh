@@ -6,6 +6,7 @@
 - **Your servers come along when you say so.** 1.0 keeps a list of its own. The welcome, and Add a server, offer to bring over the servers you had in 0.10 and to pick from your SSH config; your settings and snippets come over by themselves the first time.
 - **Find anything from one bar.** Servers, folders, commands, snippets and settings. A command for a server is never picked for you: you move to it and press Return.
 - **Files can open in your own editor.** Pick a file and choose the editor; every save goes back to the server, and a change made there in the meantime is shown before anything is overwritten.
+- **Drag a tab out of the window to give it a window of its own.** Let go well past the window's edge and the tab opens in a new window under the pointer, with a card following the pointer on the way. It's the same tab: a terminal keeps its session, what it printed and the program running in it; Files keeps its folder and the file you're editing. A tab's right-click menu has "Move to new window" too.
 - **The security check, recipes and snippets are here.** A fix shows exactly what will run and runs only after you say yes, twice on a server labelled Production.
 
 ## 0.10.14 — files land where you drop them
