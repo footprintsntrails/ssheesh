@@ -29,7 +29,7 @@ An agent you start in SSHeesh runs on the server, not on your computer. Close th
 
 ## Connect through Tor, in one click
 
-Press the onion above Settings and everything goes through Tor: terminals, files, stats and tunnels. Your servers and their logs see a Tor address instead of yours, and your internet provider sees Tor, not which servers you use. If Tor can't carry a connection, the connection isn't made: nothing slips around it, not even a name lookup. Tor is built in, so there's nothing to install, and terminals in `tmux` move over without losing their place.
+Click the onion above Settings and switch Tor on: everything goes through Tor, terminals, files, stats and tunnels. Your servers and their logs see a Tor address instead of yours, and your internet provider sees Tor, not which servers you use. If Tor can't carry a connection, the connection isn't made: nothing slips around it, not even a name lookup. Tor is built in, so there's nothing to install, and terminals in `tmux` move over without losing their place. Turning it off while servers are open asks first, since they would see your own address again.
 
 <p align="center"><img src="docs/screenshots/1.0/tor.gif" alt="Tor is off; a click on the onion in the sidebar turns it on: a card says Tor is on with an 84 ms round trip and shows the last lines of its log, a note in the corner says servers now see a Tor address, and Tor 84 ms shows in the status bar"></p>
 
