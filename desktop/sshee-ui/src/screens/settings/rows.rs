@@ -194,10 +194,8 @@ fn special_control(s: &Shell, t: &'static Theme, r: &'static Row, special: Speci
         }
         Special::TorSwitch => {
             let on = s.bench.tor() != Tor::Off;
-            switch(t, r.label, on, true).key(key).on_press_tx(move |s: &mut Shell, tx| {
-                s.tor_command(if on { TorCommand::Off } else { TorCommand::On });
-                tx.instant();
-            })
+            // The popover's switch: turning it off asks first while something goes through it.
+            switch(t, r.label, on, true).key(key).on_press_tx(|s: &mut Shell, tx| s.switch_tor(tx))
         }
         // The editor Files' "Open in" starts: the ones found, or one picked with "Choose an app…".
         Special::ExternalEditor => {

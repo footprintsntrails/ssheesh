@@ -1,7 +1,9 @@
 //! Tor: the popover over the sidebar's onion (0.10's `TorButton.tsx`, its states drawn as the
 //! design's sheet has them: off, starting with its ring, on in green, a red square when it
 //! can't start). The switch, how far a start has got and what holds it up, the round trip
-//! through Tor, the last lines of its log, new routes, and starting afresh.
+//! through Tor, the last lines of its log, new routes, and starting afresh. A click on the
+//! onion opens it; its switch turns Tor on or off. Off while terminals, Files or tunnels go
+//! through Tor, it asks first ("Reconnect without Tor?"): they'd reconnect directly.
 //!
 //! ```text
 //! tor-panel        modal: Esc and a click outside close it
@@ -24,14 +26,14 @@ use std::collections::HashSet;
 
 use rune::{col, row, text, Cx, El, Tx};
 use sshee_app::tor::{body, headline, progress, Ask, Detail, Follow, Note, Status};
-use sshee_app::workbench::{TabId, Tor};
+use sshee_app::workbench::{TabId, TabKind, Tor};
 
 use crate::icons::{icon, Icon};
 use crate::kit::popover::popover;
 use crate::kit::push::{push_button, Push};
 use crate::kit::switch::switch;
 use crate::screens::settings::TorCommand;
-use crate::shell::{Remote, Shell};
+use crate::shell::{Confirm, Remote, Shell};
 use crate::theme::{self, Theme};
 
 /// The popover's width.
@@ -194,22 +196,41 @@ impl Shell {
         self.settle(tx);
     }
 
-    /// The sidebar's onion and the top bar's, as 0.10's Tor button: a click turns Tor on or
-    /// off. Turned on, the popover opens too, so the start can be watched; a secondary click
-    /// (or the status bar's "Tor 84 ms") opens the popover alone.
+    /// The sidebar's onion and the top bar's: a click (or Return, or Space) opens the popover,
+    /// whose switch turns Tor on or off; a second click closes it. A secondary click does the
+    /// same.
     pub fn tor_button(&mut self, tx: &mut Tx) {
-        let was_on = status(self).switched_on();
-        self.switch_tor(tx);
-        if !was_on && !self.screens.tor.open {
-            self.toggle_tor(tx);
-        }
+        self.toggle_tor(tx);
     }
 
-    /// Tor on or off, as Settings' switch does.
+    /// Tor on or off: the popover's switch, Settings' and the palette's. Turning it off while
+    /// something on a server goes through Tor asks first ([`reconnect_without_tor`]): it would
+    /// reconnect around Tor and the server would see your own address. Nothing is switched or
+    /// reconnected before the answer. Turning it on doesn't ask: what's open moves to Tor, and
+    /// a toast says what stayed as it was.
     pub fn switch_tor(&mut self, tx: &mut Tx) {
         let on = status(self).switched_on();
+        if let Some(ask) = reconnect_without_tor(self).filter(|_| on) {
+            // The popover is a modal of its own: the question takes its place.
+            if self.screens.tor.open {
+                self.close_tor(tx);
+            }
+            self.confirm(ask, |s, tx| {
+                // Still on: it may have gone off another way while the question was open.
+                if status(s).switched_on() {
+                    s.turn_tor(false, tx);
+                }
+            });
+            tx.instant();
+            return;
+        }
+        self.turn_tor(!on, tx);
+    }
+
+    /// Asks the backend to turn Tor `on` or off, now.
+    fn turn_tor(&mut self, on: bool, tx: &mut Tx) {
         self.screens.tor.detail.warning = None;
-        self.tor_command(if on { TorCommand::Off } else { TorCommand::On });
+        self.tor_command(if on { TorCommand::On } else { TorCommand::Off });
         tx.instant();
     }
 
@@ -239,9 +260,69 @@ pub fn status(s: &Shell) -> Status {
 
 /// The onion's tooltip, and what a screen reader says of it: the state, and what a click does.
 pub fn button_help(s: &Shell) -> String {
-    let st = status(s);
-    let does = if st.switched_on() { "Click to turn it off" } else { "Click to turn it on" };
-    format!("{}. {does}, right-click for more", sshee_app::tor::rail_help(&st))
+    format!("{}. Click for its switch and more", sshee_app::tor::rail_help(&status(s)))
+}
+
+/// What goes through Tor now and would reconnect around it were Tor turned off: terminals on
+/// servers (but those that already go around it, [`State::direct`]), the other tabs on
+/// servers, and the tunnels that are on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Through {
+    pub terminals: usize,
+    pub files: usize,
+    /// Stats and Containers tabs.
+    pub other_tabs: usize,
+    pub tunnels: usize,
+}
+
+impl Through {
+    pub fn of(s: &Shell) -> Through {
+        use sshee_app::tunnels::State as Tunnel;
+        let mut through = Through::default();
+        for tab in s.bench.tabs() {
+            if !s.bench.server(&tab.server).is_some_and(|sv| !sv.is_local()) {
+                continue;
+            }
+            match tab.kind {
+                TabKind::Terminal if s.screens.tor.direct.contains(&tab.id) => {}
+                TabKind::Terminal => through.terminals += 1,
+                TabKind::Files => through.files += 1,
+                TabKind::Stats | TabKind::Containers => through.other_tabs += 1,
+            }
+        }
+        through.tunnels = s.screens.tunnels.tunnels.states.values().filter(|st| matches!(st, Tunnel::On { .. } | Tunnel::Reconnecting { .. })).count();
+        through
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Through::default()
+    }
+
+    /// "2 terminals, 1 Files tab and 1 tunnel".
+    pub fn words(&self) -> String {
+        let count = |n: usize, one: &str, many: &str| (n > 0).then(|| format!("{n} {}", if n == 1 { one } else { many }));
+        let parts: Vec<String> =
+            [count(self.terminals, "terminal", "terminals"), count(self.files, "Files tab", "Files tabs"), count(self.other_tabs, "other tab", "other tabs"), count(self.tunnels, "tunnel", "tunnels")]
+                .into_iter()
+                .flatten()
+                .collect();
+        match parts.split_last() {
+            None => String::new(),
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        }
+    }
+}
+
+/// The question before Tor goes off while something goes through it; `None` when nothing
+/// does. Its yes shows your address to servers: red, and Return means Cancel.
+pub fn reconnect_without_tor(s: &Shell) -> Option<Confirm> {
+    let through = Through::of(s);
+    if through.is_empty() {
+        return None;
+    }
+    let body = format!("{} on servers will reconnect directly, and those servers will see your own address instead of a Tor one.", through.words());
+    Some(Confirm::new("Reconnect without Tor?", body, "Reconnect without Tor").destructive(false))
 }
 
 /// The popover, beside the sidebar's onion while it's open.
