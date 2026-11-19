@@ -25,6 +25,7 @@ use rune::{Cx, El};
 
 pub mod edit;
 mod markdown_view;
+mod video;
 mod view;
 
 pub use view::{key, overlay};
@@ -288,6 +289,13 @@ pub(crate) fn tick(s: &mut Shell, clock: f64, tx: &mut rune::Tx) -> bool {
     let mut decoded = false;
     for st in s.screens.files.values_mut() {
         decoded |= st.ui.picture_decoded();
+    }
+    // A video in a tab out of sight pauses (another tab on top, the window's other half).
+    let on_screen = s.tabs_on_screen();
+    for (id, st) in &s.screens.files {
+        if !on_screen.contains(id) {
+            st.ui.hidden();
+        }
     }
     let due: Vec<(TabId, String, String)> = s
         .screens
@@ -1037,6 +1045,11 @@ fn apply(s: &mut Shell, reply: Reply) {
                 editor.image(ticket, &path, result);
             }
         }
+        Answer::Video { ticket, path, result } => {
+            if let Some(editor) = s.screens.files.get_mut(&tab).and_then(|st| st.editor.as_mut()) {
+                editor.video(ticket, &path, result);
+            }
+        }
         Answer::Saved { ticket, path, result } => {
             let Some(State { browser, editor: Some(editor), tickets, .. }) = s.screens.files.get_mut(&tab) else { return };
             match editor.saved(ticket, result, tickets) {
@@ -1470,7 +1483,7 @@ mod tests {
         let mut w = Window::at_home();
         let mut listing = home();
         listing.entries.push(entry("logo.png", EntryKind::File));
-        listing.entries.push(entry("intro.mp4", EntryKind::File));
+        listing.entries.push(entry("photo.heic", EntryKind::File));
         refresh(&mut w.s, w.tab);
         w.list(listing);
         open(&mut w.s, w.tab, "logo.png");
@@ -1478,12 +1491,91 @@ mod tests {
         let [Want::ReadImage { ticket, ref path }] = wants[..] else { panic!("{wants:?}") };
         w.answer(Answer::Image { ticket, path: path.clone(), result: Ok(vec![0x89, b'P', b'N', b'G']) });
         assert!(matches!(w.state().editor.as_ref().unwrap().body(), Body::Image(bytes) if bytes.len() == 4));
-        open(&mut w.s, w.tab, "intro.mp4");
+        open(&mut w.s, w.tab, "photo.heic");
         assert!(w.wants().is_empty());
         assert_eq!(w.state().editor.as_ref().unwrap().body(), &Body::NoPreview);
         // Leaving the folder closes the file.
         up(&mut w.s, w.tab);
         assert!(w.state().editor.is_none());
+    }
+
+    /// A video's bytes, as the backend hands one over.
+    struct Clip(&'static [u8]);
+    impl sshee_app::files::VideoSource for Clip {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, at: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+            let rest = self.0.get(at as usize..).unwrap_or_default();
+            let n = rest.len().min(buf.len());
+            buf[..n].copy_from_slice(&rest[..n]);
+            Ok(n)
+        }
+    }
+
+    /// Waits (5 s at most) for the open video's player to be so.
+    fn video_until(w: &Window, what: &str, ok: impl Fn(&sshee_media::View) -> bool) {
+        let end = Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let view = w.state().ui.video().map(|v| v.view());
+            if view.as_ref().is_some_and(&ok) {
+                return;
+            }
+            assert!(Instant::now() < end, "the video never {what}: {view:?}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn space() -> rune::KeyEvent {
+        rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() }
+    }
+
+    #[test]
+    fn a_video_plays_pauses_on_space_and_out_of_sight_and_stops_when_closed() {
+        let mut w = Window::at_home();
+        w.s.set_waker(Arc::new(|| {}));
+        let mut listing = home();
+        listing.entries.push(entry("intro.mp4", EntryKind::File));
+        listing.entries.push(entry("notes.avi", EntryKind::File));
+        refresh(&mut w.s, w.tab);
+        w.list(listing);
+        open(&mut w.s, w.tab, "intro.mp4");
+        let wants = w.wants();
+        let [Want::OpenVideo { ticket, ref path }] = wants[..] else { panic!("{wants:?}") };
+        let file = sshee_app::files::VideoFile(Arc::new(Clip(include_bytes!("../../../media/fixtures/clip.mp4"))));
+        w.answer(Answer::Video { ticket, path: path.clone(), result: Ok(file) });
+        assert!(matches!(w.state().editor.as_ref().unwrap().body(), Body::Video(_)));
+        // Its first picture, paused; Space plays it, and again pauses it.
+        video_until(&w, "opened", |v| v.status == sshee_media::Status::Paused && v.size == Some([160, 90]));
+        let mut tx = rune::Tx::default();
+        assert!(key(&mut w.s, &space(), &mut tx));
+        video_until(&w, "played", |v| v.status == sshee_media::Status::Playing);
+        assert!(key(&mut w.s, &space(), &mut tx));
+        video_until(&w, "paused", |v| v.status == sshee_media::Status::Paused);
+        // Playing when its tab goes out of sight: it pauses.
+        w.state().ui.video().unwrap().toggle();
+        video_until(&w, "played again", |v| v.status == sshee_media::Status::Playing);
+        let other = w.s.bench.open(TabKind::Terminal, "local");
+        tick(&mut w.s, 1.0, &mut tx);
+        video_until(&w, "paused out of sight", |v| v.status == sshee_media::Status::Paused);
+        w.s.bench.focus(w.tab);
+        let _ = other;
+        // Closing the preview stops it: the player's thread ends.
+        let watch = w.state().ui.video().unwrap().player().watch();
+        view::guarded(&mut w.s, w.tab, view::After::Close);
+        assert!(w.state().ui.video().is_none());
+        let end = Instant::now() + std::time::Duration::from_secs(5);
+        while !watch.stopped() {
+            assert!(Instant::now() < end, "the player didn't stop");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // A video this player can't play says why, with the download.
+        open(&mut w.s, w.tab, "notes.avi");
+        let wants = w.wants();
+        let [Want::OpenVideo { ticket, ref path }] = wants[..] else { panic!("{wants:?}") };
+        let file = sshee_app::files::VideoFile(Arc::new(Clip(b"RIFF\0\0\0\0AVI LIST")));
+        w.answer(Answer::Video { ticket, path: path.clone(), result: Ok(file) });
+        video_until(&w, "failed", |v| v.problem.as_ref().is_some_and(|p| p.to_string() == "AVI videos can't be played here, only MP4 and WebM."));
     }
 
     #[test]

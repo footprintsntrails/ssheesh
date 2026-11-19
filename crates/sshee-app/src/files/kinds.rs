@@ -92,8 +92,11 @@ pub enum Opens {
     Text,
     /// Read whole and decoded as a picture (png, jpg, gif, webp, bmp, ico).
     Image,
-    /// A video or a picture Rune can't decode: nothing is read, the screen says it can't be
-    /// shown and offers the download.
+    /// A video: opened to be read in pieces as it plays (desktop/media plays it, or says why
+    /// it can't).
+    Video,
+    /// A picture Rune can't decode: nothing is read, the screen says it can't be shown and
+    /// offers the download.
     Nothing,
 }
 
@@ -102,6 +105,8 @@ pub fn opens_as(name: &str) -> Opens {
         Opens::Image
     } else if is_svg(name) {
         Opens::Text
+    } else if media_kind(name) == Some(MediaKind::Video) {
+        Opens::Video
     } else if media_kind(name).is_some() {
         Opens::Nothing
     } else {
@@ -247,8 +252,12 @@ mod tests {
         for name in ["a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "A.PNG", "scan.tif", "scan.TIFF"] {
             assert_eq!(opens_as(name), Opens::Image, "{name}");
         }
-        for name in ["a.avif", "a.heic", "a.mp4", "a.webm"] {
+        for name in ["a.avif", "a.heic"] {
             assert_eq!(opens_as(name), Opens::Nothing, "{name}");
+        }
+        // Every video opens to play: what can't, says so then.
+        for name in ["a.mp4", "a.M4V", "a.mov", "a.webm", "a.mkv", "a.ogv", "a.avi"] {
+            assert_eq!(opens_as(name), Opens::Video, "{name}");
         }
         // An SVG is text, drawn in its preview, edited as its source.
         for name in ["a.md", "Makefile", ".env", "a.bin", "a.tar.gz", "logo.svg", "LOGO.SVG"] {

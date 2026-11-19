@@ -991,6 +991,37 @@ fn return_on_the_delete_question_deletes_nothing() {
 }
 
 #[test]
+fn a_video_opens_on_its_first_picture_with_its_controls() {
+    // Into shop, then by typing to the release's public folder and its promo: the preview
+    // shows the clip's first picture, paused, with play, the time, the bar and the sound.
+    let script = json!([
+        tap(0.3, "tab-2"),
+        { "t": 0.8, "type": "double-click", "x": 300.0, "y": 205.0 },
+        { "t": 1.3, "type": "type", "text": "re" },
+        press(1.6, "Enter", false, false, false),
+        { "t": 2.2, "type": "type", "text": "2024-10-12" },
+        press(2.8, "Enter", false, false, false),
+        { "t": 3.4, "type": "type", "text": "pu" },
+        press(3.8, "Enter", false, false, false),
+        { "t": 4.4, "type": "type", "text": "pr" },
+        press(4.8, "Enter", false, false, false),
+        { "t": 7.0, "type": "mark", "name": "end" }
+    ]);
+    let Some(run) = run("files-video", &["--demo"], Some(script)) else { return };
+    for said in ["promo.mp4", "Video promo.mp4", "640 × 360", "0:00", "0:06", "Time", "Volume", "Mute"] {
+        assert!(run.tree_text.contains(said), "{said} isn't in the tree");
+    }
+    assert_eq!(run.label("preview-video-play"), "Play");
+    // The picture is drawn: the clip's colours, not the pane's.
+    let [x, y, w, h] = run.rect("preview-video-picture");
+    assert!(w > 100.0 && (w / h - 16.0 / 9.0).abs() < 0.05, "{w} × {h}");
+    let px = run.pixels();
+    let page = at(&px, (x - 8.0) as u32, (y + h / 2.0) as u32);
+    let middle = at(&px, (x + w / 2.0) as u32, (y + h / 2.0) as u32);
+    assert_ne!(middle, page, "the picture isn't drawn");
+}
+
+#[test]
 fn a_download_shows_its_card_until_it_is_stopped() {
     // Into backups, the menu on its one file, Download: the demo's endless download.
     let events = |stop: bool| {

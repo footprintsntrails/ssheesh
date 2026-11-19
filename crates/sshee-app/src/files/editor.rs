@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use super::kinds::{media_kind, opens_as, MediaKind, Opens};
-use super::protocol::{SaveFailure, Want};
+use super::kinds::{opens_as, Opens};
+use super::protocol::{SaveFailure, VideoFile, Want};
 use super::{Failure, Notice, Stamp, TextFile, Tickets, Tone, MAX_EDIT};
 use crate::paths;
 
@@ -53,7 +53,10 @@ pub enum Body {
     /// A picture's bytes as the file has them (png, jpg, gif, webp, bmp, ico), for Rune to
     /// decode.
     Image(Arc<[u8]>),
-    /// A video, an SVG, a picture Rune can't decode: nothing was read.
+    /// A video, open to be played (the screen's player reads it as it plays, and says when
+    /// it can't).
+    Video(VideoFile),
+    /// A picture Rune can't decode: nothing was read.
     NoPreview,
     /// It couldn't be read.
     Failed(Failure),
@@ -184,6 +187,10 @@ impl Editor {
                 editor.reading = tickets.next();
                 Some(Want::ReadImage { ticket: editor.reading, path: editor.path() })
             }
+            Opens::Video => {
+                editor.reading = tickets.next();
+                Some(Want::OpenVideo { ticket: editor.reading, path: editor.path() })
+            }
             Opens::Text => Some(editor.read_again(tickets)),
         };
         (editor, want)
@@ -268,13 +275,9 @@ impl Editor {
         match &self.body {
             Body::Binary => plain("This is a binary file."),
             Body::TooBig => plain("This file is too big to edit here (over 2 MB)."),
-            // Rune has no video player yet: say so rather than "this kind of file".
-            Body::NoPreview if media_kind(&self.name) == Some(MediaKind::Video) => {
-                Some(("Videos can't be played here yet.".into(), if on_server { "Download it to watch it.".into() } else { String::new() }))
-            }
             Body::NoPreview => Some(("This kind of file can't be shown here.".into(), if on_server { "Download it to open it.".into() } else { String::new() })),
             Body::Failed(failure) => Some((format!("Couldn't open {}", self.name), failure.message.clone())),
-            Body::Loading | Body::Text { .. } | Body::Image(_) => None,
+            Body::Loading | Body::Text { .. } | Body::Image(_) | Body::Video(_) => None,
         }
     }
 
@@ -334,6 +337,30 @@ impl Editor {
             Err(failure) => Body::Failed(failure),
         };
         true
+    }
+
+    /// The answer to a video's opening. False when it's for another file or an older request.
+    pub fn video(&mut self, ticket: u64, path: &str, result: Result<VideoFile, Failure>) -> bool {
+        if ticket == 0 || ticket != self.reading || path != self.path() {
+            return false;
+        }
+        self.reading = 0;
+        self.revision += 1;
+        self.body = match result {
+            Ok(file) => {
+                self.size = Some(file.size());
+                Body::Video(file)
+            }
+            Err(failure) => Body::Failed(failure),
+        };
+        true
+    }
+
+    /// What to say when the open video can't be played (the player said why): a title and
+    /// a line under it, as [`Editor::message`].
+    pub fn cant_play(why: &str, on_server: bool) -> (String, String) {
+        let next = if on_server { "Download it to watch it." } else { "Open it in another app to watch it." };
+        ("This video can't be played here.".into(), format!("{why} {next}"))
     }
 
     fn send(&mut self, draft: &str, expected: Option<Stamp>, copy: Option<(String, u32)>, tickets: &mut Tickets) -> Want {
@@ -459,14 +486,14 @@ mod tests {
         assert_eq!(want, Some(Want::ReadImage { ticket: 1, path: "/home/deploy/logo.png".into() }));
         assert!(e.is_loading());
         let (e, want) = Editor::open(DIR, "intro.mp4", &mut tickets);
-        assert_eq!((want, e.body()), (None, &Body::NoPreview));
-        assert_eq!(e.message(true), Some(("Videos can't be played here yet.".into(), "Download it to watch it.".into())));
-        assert_eq!(e.message(false).unwrap().1, "");
+        assert_eq!(want, Some(Want::OpenVideo { ticket: 2, path: "/home/deploy/intro.mp4".into() }));
+        assert!(e.is_loading());
         let (e, _) = Editor::open(DIR, "photo.heic", &mut tickets);
         assert_eq!(e.message(true), Some(("This kind of file can't be shown here.".into(), "Download it to open it.".into())));
+        assert_eq!(e.message(false).unwrap().1, "");
         assert_eq!(e.size(), None);
         let (e, want) = Editor::open("/", "fstab", &mut tickets);
-        assert_eq!(want, Some(Want::Read { ticket: 2, path: "/fstab".into() }));
+        assert_eq!(want, Some(Want::Read { ticket: 3, path: "/fstab".into() }));
         assert_eq!((e.name(), e.dir(), e.path().as_str()), ("fstab", "/", "/fstab"));
     }
 
@@ -531,6 +558,35 @@ mod tests {
         let Some(Want::ReadImage { ticket, path }) = want else { panic!() };
         big.image(ticket, &path, Err(Failure::new(FailureKind::TooLarge, "This file is too big to open here.")));
         assert_eq!(big.message(true).unwrap(), ("Couldn't open photo.jpg".into(), "This file is too big to open here.".into()));
+    }
+
+    struct Bytes(Vec<u8>);
+    impl super::super::VideoSource for Bytes {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, _: u64, _: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn a_video_opens_to_play_and_says_why_when_it_cant() {
+        let mut tickets = Tickets::default();
+        let (mut e, want) = Editor::open(DIR, "intro.webm", &mut tickets);
+        let Some(Want::OpenVideo { ticket, path }) = want else { panic!() };
+        let file = VideoFile(Arc::new(Bytes(vec![0; 1234])));
+        assert!(!e.video(ticket + 1, &path, Ok(file.clone())), "an older request");
+        assert!(e.video(ticket, &path, Ok(file.clone())));
+        assert_eq!((e.body(), e.size(), e.message(true)), (&Body::Video(file), Some(1234), None));
+        // Couldn't be opened: as any file that can't.
+        let (mut e, want) = Editor::open(DIR, "intro.mp4", &mut tickets);
+        let Some(Want::OpenVideo { ticket, path }) = want else { panic!() };
+        e.video(ticket, &path, Err(Failure::new(FailureKind::NotFound, "No such file or directory")));
+        assert_eq!(e.message(true), Some(("Couldn't open intro.mp4".into(), "No such file or directory".into())));
+        // Opened, and the player said it can't: the way on is the download, or another app.
+        assert_eq!(Editor::cant_play("AVI videos can't be played here, only MP4 and WebM.", true).1, "AVI videos can't be played here, only MP4 and WebM. Download it to watch it.");
+        assert_eq!(Editor::cant_play("Broken.", false).1, "Broken. Open it in another app to watch it.");
     }
 
     #[test]

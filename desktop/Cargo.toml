@@ -4,7 +4,7 @@
 # are path dependencies. Build with `cargo build` here; the target folder is ../target/desktop
 # (.cargo/config.toml). scripts/check-desktop-workspace.sh keeps the two workspaces in step.
 [workspace]
-members = ["sshee-ui", "proto", "app"]
+members = ["sshee-ui", "proto", "app", "media"]
 # Rune's crate with our fixes (vendor/rune.patch): a dependency, not ours to build and test.
 exclude = ["vendor/rune"]
 resolver = "2"
@@ -30,6 +30,7 @@ sshee-term = { path = "../crates/sshee-term" }
 sshee-app = { path = "../crates/sshee-app" }
 sshee-desktop = { path = "../crates/sshee-desktop" }
 sshee-ui = { path = "sshee-ui" }
+sshee-media = { path = "media" }
 # The version Rune already locks: cmap coverage and font metrics for the terminal's cells.
 swash = "0.2.10"
 
@@ -61,6 +62,10 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 # Rune, parley, swash and alacritty at -O0 make debug windows crawl.
+opt-level = 2
+
+# The video player turns every picture's pixels over: at -O0 a debug window's video stutters.
+[profile.dev.package.sshee-media]
 opt-level = 2
 
 [profile.release]

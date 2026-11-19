@@ -153,6 +153,12 @@ pub enum Icon {
     FilePlus,
     /// A terminal asleep: let go of its connection while unused.
     Moon,
+    /// A video in Files' preview: play it, pause it.
+    Play,
+    Pause,
+    /// Its sound: on (a speaker and its waves), and muted (the speaker, crossed out).
+    Sound,
+    Muted,
 }
 
 /// A piece of a drawing, in the drawing's own units.
@@ -177,12 +183,15 @@ const SHEET: Piece = Path("M4.4 2.2h4.8l3.4 3.4v7.2a1 1 0 0 1-1 1H4.4a1 1 0 0 1-
 /// A picture's and a video's frame.
 const FRAME: Piece = Rect(2.2, 3.0, 11.6, 10.0, 1.6);
 
+/// A speaker, for a video's sound.
+const SPEAKER: Piece = Path("M2.4 6.2h2.2l3.2-2.8v9.2l-3.2-2.8H2.4z");
+
 /// An eye's outline, for streamer mode's two states.
 const EYE: Piece = Path("M1.6 8c1.5-2.8 3.7-4.2 6.4-4.2S12.9 5.2 14.4 8c-1.5 2.8-3.7 4.2-6.4 4.2S3.1 10.8 1.6 8z");
 
 impl Icon {
     /// Every icon, for tests and the component sheet.
-    pub const ALL: [Icon; 79] = [
+    pub const ALL: [Icon; 83] = [
         Icon::Sidebar,
         Icon::Globe,
         Icon::Terminal,
@@ -262,10 +271,14 @@ impl Icon {
         Icon::Peek,
         Icon::FilePlus,
         Icon::Moon,
+        Icon::Play,
+        Icon::Pause,
+        Icon::Sound,
+        Icon::Muted,
     ];
 
     /// The signs that aren't a server's icon, for the component sheet.
-    pub const SIGNS: [Icon; 49] = [
+    pub const SIGNS: [Icon; 53] = [
         Icon::ChevronUp,
         Icon::ChevronDown,
         Icon::Eye,
@@ -315,6 +328,10 @@ impl Icon {
         Icon::Peek,
         Icon::FilePlus,
         Icon::Moon,
+        Icon::Play,
+        Icon::Pause,
+        Icon::Sound,
+        Icon::Muted,
     ];
 
     /// The drawing: its grid's size and its pieces.
@@ -440,6 +457,10 @@ impl Icon {
             Icon::Peek => (16.0, &[Path("M3.8 4.4 7.4 8l-3.6 3.6M8.6 4.4 12.2 8l-3.6 3.6")]),
             Icon::Moon => (16.0, &[Path("M13.4 9.6A5.6 5.6 0 1 1 6.4 2.6a4.4 4.4 0 0 0 7 7z")]),
             Icon::FilePlus => (16.0, &[Path("M9.2 1.9H4.6a1.4 1.4 0 0 0-1.4 1.4v9.4a1.4 1.4 0 0 0 1.4 1.4h6.8a1.4 1.4 0 0 0 1.4-1.4V5.5zM9.2 1.9v3.6h3.6M8 7.8v4M6 9.8h4")]),
+            Icon::Play => (16.0, &[Path("M5 3.3v9.4a.6.6 0 0 0 .9.5l7.3-4.7a.6.6 0 0 0 0-1L5.9 2.8a.6.6 0 0 0-.9.5z")]),
+            Icon::Pause => (16.0, &[Path("M5.6 3.4v9.2M10.4 3.4v9.2")]),
+            Icon::Sound => (16.0, &[SPEAKER, Path("M10.4 6a2.8 2.8 0 0 1 0 4M12.2 4.2a5.4 5.4 0 0 1 0 7.6")]),
+            Icon::Muted => (16.0, &[SPEAKER, Path("M10.6 6.2l3.4 3.6M14 6.2l-3.4 3.6")]),
         }
     }
 

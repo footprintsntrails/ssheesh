@@ -15,5 +15,7 @@ swash.workspace = true
 indexmap = "2"
 # The app's state without screens: the window draws a `Workbench` and changes it through its methods.
 sshee-app.workspace = true
+# Files' preview plays videos with it: decoding and sound on its own thread, no Rune.
+sshee-media.workspace = true
 # Replay fixtures (`terminal::replay`) and their records.
 serde_json = "1"

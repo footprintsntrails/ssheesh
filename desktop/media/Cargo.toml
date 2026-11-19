@@ -1,0 +1,32 @@
+[package]
+name = "sshee-media"
+version = "0.0.1"
+description = "SSHeesh's video player for Files' preview: reads MP4 and WebM, decodes H.264, VP9, AAC, Opus and Vorbis on a thread of its own, and plays the sound"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No Rune here: sshee-ui puts the pictures on screen (a Rune NativeSurface). Every decoder is
+# built from source with the program, so nothing has to be installed on the computer that plays.
+[dependencies]
+# Containers: MP4/MOV (its boxes; the samples are found and read here) and Matroska/WebM.
+mp4 = "0.14"
+matroska-demuxer = "0.8"
+# H.264: Cisco's OpenH264, compiled from its C++ source by the crate (BSD-2-Clause).
+openh264 = "0.9"
+# VP9, in Rust.
+rusty_vp9 = "0.3"
+# AAC and Vorbis (symphonia's decoders, the version Rune locks), and Opus.
+symphonia-core = "0.5.5"
+symphonia-codec-aac = "0.5.5"
+symphonia-codec-vorbis = "0.5.5"
+opuscule = "0.2"
+
+# The sound: Core Audio and WASAPI through cpal, which need nothing installed.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+cpal = "0.15"
+
+# Linux: ALSA's library, opened when a video first plays (`sound::alsa`), so the program
+# builds without its headers and still starts (silently) on a system without it.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"

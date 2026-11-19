@@ -196,6 +196,12 @@ impl MediaFile {
         }
     }
 
+    /// `want` bytes from `at`, or fewer if the file ends first: how SSHeesh 1.0's own player
+    /// reads a video (desktop/media), over the connections kept for it.
+    pub fn read_at(&self, at: u64, want: u64) -> Result<Vec<u8>, OpError> {
+        self.read(at, want)
+    }
+
     /// `want` bytes from `at`, or fewer if the file ends first.
     fn read(&self, at: u64, want: u64) -> Result<Vec<u8>, OpError> {
         let want = want.min(self.size.saturating_sub(at)) as usize;
