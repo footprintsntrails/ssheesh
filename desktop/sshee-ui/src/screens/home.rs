@@ -13,16 +13,17 @@
 //! └── home-column  at most 720 pt, centred
 //!     ├── home-search   the field: a button that opens the palette over itself
 //!     ├── home-tiles    tile-0 … tile-N, tile-add (wraps)
-//!     ├── home-config   "3 servers in ~/.ssh/config to pick from", when there are;
+//!     ├── home-config   "3 servers in ~/.ssh/config to pick from" in a soft pill, when there are;
 //!     │                 home-first on a first start, when there's nothing else to show
-//!     ├── home-running  "Running now": run-0 … in one quiet box
-//!     ├── home-closed   "Recently closed": closed-0 … in one quiet box
-//!     └── home-hints
+//!     ├── home-running  "Running now": run-0 …, rows on the page lit only under the pointer
+//!     ├── home-closed   "Recently closed": closed-0 …, "Reopen" showing on the one you point at
+//!     └── home-hints    at the foot of the page
 //! ```
 //!
 //! One strong thing, the search, as a browser's new tab is its address bar; the servers in
-//! their own colours and pictures under it; the lists in quiet boxes, as Settings groups its
-//! rows. The logo stays the menu's button: it isn't drawn again here.
+//! their own colours and pictures under it; the lists under small quiet headings, as Settings
+//! names its groups, their rows bare until you point at one. The logo stays the menu's button:
+//! it isn't drawn again here.
 
 use indexmap::IndexMap;
 use rune::{col, row, text, Cx, El, Key, KeyEvent, ScrollSpec, Tx};
@@ -41,6 +42,9 @@ use crate::theme::{self, Theme};
 
 /// The gap between two tiles.
 const TILE_GAP: f32 = 4.0;
+/// A list row's height on the page, and how far in its icon and its list's heading sit.
+const PAGE_ROW: f32 = 34.0;
+const LIST_INSET: f32 = 10.0;
 /// A server's picture or icon on its tile.
 const TILE_GLYPH: f32 = 26.0;
 /// The page's column at its widest.
@@ -194,23 +198,34 @@ fn spot_key(spot: Spot) -> String {
     }
 }
 
-/// A list's heading: its name in the page's own ink, a quiet note at its end.
+/// A list's heading: its name small and quiet, as Settings names its groups, in line with the
+/// rows' icons under it; a quiet note at its end.
 fn heading(t: &Theme, name: &str, note: &str) -> El {
-    let mut h = row().w_full().px(4.0).items_center().child(text(name).font(theme::TEXT_BOLD).color(t.l1).single_line().role("heading").level(2));
+    let mut h = row().w_full().px(LIST_INSET).pb(2.0).items_center().child(text(name).font(theme::GROUP_TITLE).color(t.l2).single_line().role("heading").level(2));
     if !note.is_empty() {
         h = h.child(rune::spacer()).child(text(note).font(theme::SMALL).color(t.l2).single_line());
     }
     h
 }
 
-/// A list under its heading: its rows in one quiet box, as Settings groups its rows.
+/// A list under its heading: its rows straight on the page, each lit only under the pointer
+/// or the keyboard, so that a list of one doesn't read as a second search field. As wide as
+/// the search over it: the page keeps one measure.
 fn list(t: &Theme, key: &str, name: &str, note: &str, rows: Vec<El>) -> El {
-    let mut body = col().w_full().padding(4.0).gap(1.0).radius(theme::RADIUS_GROUP).fill(t.group).border(1.0, t.hair2);
-    for row in rows {
-        body = body.child(row);
+    col().key(key.to_owned()).w_full().max_w(SEARCH_WIDTH).gap(4.0).child(heading(t, name, note)).child(col().w_full().gap(1.0).children(rows))
+}
+
+/// A list's row: the kit's, a little taller on a page than in a menu, its icon in line with
+/// the heading. `action` ("Reopen") shows at its end only under the pointer or the keyboard:
+/// five of them at rest would be five times the same word.
+fn page_row(t: &Theme, spec: &ListRow, action: Option<&str>) -> El {
+    let lit = spec.state != RowState::Rest;
+    let mut row = list_row(t, spec).h(PAGE_ROW).px(LIST_INSET).radius(theme::RADIUS).hover(t.hov2).hover_group();
+    if let Some(action) = action {
+        let ink = if lit { t.on_color } else { t.l2 };
+        row = row.child(text(action).key("tail").font(theme::NOTE).color(ink).single_line().group_opacity(if lit { 1.0 } else { 0.0 }, 1.0));
     }
-    // As wide as the search over it: the page keeps one measure.
-    col().key(key.to_owned()).w_full().max_w(SEARCH_WIDTH).gap(8.0).child(heading(t, name, note)).child(body)
+    row
 }
 
 /// A key cap and what it does, for the line of hints.
@@ -299,7 +314,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     let add = Tile { icon: Some(Icon::Plus), name: "Add a server", focused: on(Spot::Add), dashed: true, ..Tile::default() };
     tiles = tiles.child(tile(t, add).key("tile-add").on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));
 
-    let mut column = col().key("home-column").w_full().max_w(COLUMN_WIDTH).px(24.0).pt(top(state.height)).pb(40.0).items_center().child(search).child(tiles.mt(40.0));
+    let mut column = col().key("home-column").w_full().max_w(COLUMN_WIDTH).px(24.0).pt(top(state.height)).min_h(state.height).pb(24.0).items_center().child(search).child(tiles.mt(36.0));
 
     // Servers waiting to be brought in: each line opens "Add a server", where they're listed.
     let plural = |n: usize| if n == 1 { "" } else { "s" };
@@ -307,17 +322,20 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
         ("home-old", state.old_new, format!("{} server{} from SSHeesh 0.10 to bring over", state.old_new, plural(state.old_new))),
         ("home-config", state.config_new, format!("{} server{} in ~/.ssh/config to pick from", state.config_new, plural(state.config_new))),
     ];
-    let mut offered = row().key("home-offers").mt(14.0).gap(4.0).flex_wrap().justify_center();
+    // Each a soft pill, so it reads as something to click rather than a stray line of text.
+    let mut offered = row().key("home-offers").mt(16.0).gap(8.0).flex_wrap().justify_center();
     for (key, n, words) in offers {
         if n > 0 {
             offered = offered.child(
                 row()
                     .key(key)
-                    .h(26.0)
-                    .px(10.0)
+                    .h(28.0)
+                    .pl(10.0)
+                    .pr(12.0)
                     .gap(6.0)
-                    .radius(theme::RADIUS_ROW)
+                    .radius(14.0)
                     .items_center()
+                    .fill(t.hov)
                     .hover(t.hov2)
                     .press(t.down)
                     .role("button")
@@ -332,7 +350,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     } else if home.tiles.len() <= 1 && home.running.is_empty() && home.closed.is_empty() {
         // A first start: only this computer so far. One line on what the page is for.
         column = column.child(
-            text("Servers you add show here, one click or one digit away.").key("home-first").font(theme::NOTE).color(t.l2).single_line().mt(18.0),
+            text("Servers you add show up here, each one click or one digit away.").key("home-first").font(theme::NOTE).color(t.l2).single_line().mt(16.0),
         );
     }
 
@@ -354,9 +372,9 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
                 ..ListRow::default()
             };
             let tab = r.tab;
-            rows.push(list_row(t, &spec).key(format!("run-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.focus_tab(tab, tx)));
+            rows.push(page_row(t, &spec, None).key(format!("run-{i}")).on_press_tx(move |s: &mut Shell, tx| s.focus_tab(tab, tx)));
         }
-        column = column.child(list(t, "home-running", "Running now", "", rows).mt(44.0));
+        column = column.child(list(t, "home-running", "Running now", "", rows).mt(40.0));
     }
 
     if !home.closed.is_empty() {
@@ -375,11 +393,11 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
                 TabKind::Stats => Icon::Stats,
                 TabKind::Containers => Icon::Cube,
             };
-            let spec = ListRow { icon: Some(glyph), label: &label, note: &note, tail: "Reopen", state: if on(Spot::Closed(i)) { RowState::Hot } else { RowState::Rest }, ..ListRow::default() };
+            let spec = ListRow { icon: Some(glyph), label: &label, note: &note, state: if on(Spot::Closed(i)) { RowState::Hot } else { RowState::Rest }, ..ListRow::default() };
             let index = c.index;
-            rows.push(list_row(t, &spec).key(format!("closed-{i}")).hover(t.hov2).on_press_tx(move |s: &mut Shell, tx| s.reopen_closed_at(index, tx)));
+            rows.push(page_row(t, &spec, Some("Reopen")).key(format!("closed-{i}")).on_press_tx(move |s: &mut Shell, tx| s.reopen_closed_at(index, tx)));
         }
-        let gap = if home.running.is_empty() { 44.0 } else { 28.0 };
+        let gap = if home.running.is_empty() { 40.0 } else { 28.0 };
         column = column.child(list(t, "home-closed", "Recently closed", &note, rows).mt(gap));
     }
 
@@ -389,11 +407,12 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> El {
     let servers = home.tiles.len() > 1;
     let digits = (numbered > 1).then(|| format!("1–{}", numbered.min(9)));
     let hints = [hint(t, keys(Shortcut::NewTerminal), "new terminal"), hint(t, digits, "open a server")];
-    let mut line = row().key("home-hints").mt(48.0).gap(20.0).items_center().justify_center().flex_wrap().children(hints.into_iter().flatten());
+    let mut line = row().key("home-hints").mt(40.0).gap(20.0).items_center().justify_center().flex_wrap().children(hints.into_iter().flatten());
     if servers {
         line = line.child(text("Right-click a server for its tools").font(theme::SMALL).color(t.l2).single_line());
     }
-    column = column.child(line);
+    // At the foot of the page, out of the way of what you came for, as a status line is.
+    column = column.child(rune::spacer()).child(line);
 
     col()
         .key("home-page")

@@ -87,8 +87,10 @@ pub fn tile(t: &Theme, spec: Tile) -> El {
         .gap(8.0)
         .radius(14.0)
         .items_center()
-        .hover(t.hov)
+        .hover(t.hov2)
         .press(t.down)
+        // A tap gives a little, as a tile on a phone does.
+        .press_scale(0.97)
         .role("button")
         .label(spec.name)
         .child(square)
@@ -100,7 +102,7 @@ pub fn tile(t: &Theme, spec: Tile) -> El {
         e = e.child(key_cap(t, key, false).key("key").absolute(7.0, 7.0));
     }
     if spec.focused {
-        e = e.outline(theme::RING, 0.0, t.ring);
+        e = e.fill(t.hov).outline(theme::RING, 0.0, t.ring);
     }
     e
 }
