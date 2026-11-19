@@ -1,108 +1,351 @@
-# Builds SSHeesh for macOS, Windows and Linux and publishes a GitHub release.
-# Runs when a version tag is pushed (git tag v0.1.1 && git push --tags),
-# or by hand from the Actions tab.
+# Releases SSHeesh 1.x, the app on Rune in desktop/, and moves 0.10.x users onto it.
 #
-# Needs two repository secrets for signed auto-updates:
-#   TAURI_SIGNING_PRIVATE_KEY           contents of the private key file
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+# Runs when a 1.x tag is pushed (git tag v1.0.0 && git push origin v1.0.0), or by hand from the
+# Actions tab (Run workflow) with one of three actions:
+#
+#   release                 build, sign and publish the tag's release (what a tag push does)
+#   move-0.10-users         publish latest.json for 0.10 in an already published release and make
+#                           it GitHub's "latest": 0.10.x then offer the update as usual
+#   stop-moving-0.10-users  the stop switch (plan §6.8): make the 0.10 release named in
+#                           `stop_to` (v0.10.14) "latest" again, so 0.10.x read its own untouched
+#                           latest.json and no longer see 1.x. 1.x itself isn't affected: it
+#                           reads update-v1.json from the `channel-stable` release
+#
+# How 0.10.x reach 1.x: 0.10's updater reads releases/latest/download/latest.json. A release
+# of a stable version carries latest.json and becomes "latest" (`move_0_10_users`, on by
+# default and always on for a tag push), so 0.10.x see "update available → Restart to update"
+# as with any update:
+#   - installed on Windows: it runs SSHeesh_<v>_x64-setup.exe /P /UPDATE /R, which is 1.x itself
+#     as its installer (desktop/app/src/setup.rs): 1.x takes 0.10's place, 0.10 stays in
+#     `previous\` for 30 days;
+#   - portable on Windows: it swaps SSHeesh.exe (1.x) in for itself;
+#   - on a Mac: it swaps SSHeesh_<v>_universal.app.tar.gz's SSHeesh.app in for itself;
+#   - Linux AppImage: it writes ssheesh-<v>-linux-x64 (1.x's program) over its AppImage.
+# Release candidates (v1.0.1-rc.1) never touch latest.json and update through `channel-rc`.
+#
+# Where things are signed: the builds run without any secret and with read-only access; the
+# Mac and Windows signing jobs only sign what was built; the publish job only signs with the
+# update key, writes the manifests, checks them (desktop/release, `ssheesh-release check`) and
+# publishes. Nothing is published if the check fails.
+#
+# Secrets, the same as 0.10's releases used:
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   the update key (B239B8BC1DA9D744)
+#   MACOS_SIGNING_CERTIFICATE, MACOS_SIGNING_CERTIFICATE_PASSWORD   SSHeesh's own Mac certificate:
+#       the same one as 0.10's, or the Keychain asks about every saved password. Required: the
+#       Mac job fails without it rather than sign ad hoc.
+# and two optional new ones, for Authenticode (plan R3), skipped while absent:
+#   WINDOWS_SIGNING_CERTIFICATE           a .pfx, base64
+#   WINDOWS_SIGNING_CERTIFICATE_PASSWORD  its password
+#
+# The publishing jobs run in the `release` environment: make yourself its required reviewer
+# (Settings → Environments → release) and every release waits for your button.
 
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v1.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag, for example v1.0.0 (it must already exist)"
+        required: true
+      action:
+        description: "What to do"
+        type: choice
+        options: [release, move-0.10-users, stop-moving-0.10-users]
+        default: release
+      move_0_10_users:
+        description: "With release: publish latest.json and make this release GitHub's latest, so 0.10.x update to it. Off: the release is published and 0.10.x stay where they are"
+        type: boolean
+        default: true
+      platforms_0_10:
+        description: "Whose 0.10 moves: windows, macos (Apple silicon), macos-intel, linux, comma separated"
+        default: "windows,macos,macos-intel,linux"
+      stop_to:
+        description: "With stop-moving-0.10-users: the 0.10 release to make latest again"
+        default: "v0.10.14"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  create-release:
-    name: Create draft release
+  # What is released, from the tag: its version is the tag without its "v".
+  prepare:
+    name: What to release
     runs-on: ubuntu-24.04
     outputs:
-      release_id: ${{ steps.create.outputs.result }}
+      tag: ${{ steps.what.outputs.tag }}
+      version: ${{ steps.what.outputs.version }}
+      prerelease: ${{ steps.what.outputs.prerelease }}
+      channel: ${{ steps.what.outputs.channel }}
+      action: ${{ steps.what.outputs.action }}
+      move: ${{ steps.what.outputs.move }}
+      platforms: ${{ steps.what.outputs.platforms }}
+    steps:
+      - id: what
+        env:
+          EVENT: ${{ github.event_name }}
+          PUSHED: ${{ github.ref_name }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_ACTION: ${{ inputs.action }}
+          IN_MOVE: ${{ inputs.move_0_10_users }}
+          IN_PLATFORMS: ${{ inputs.platforms_0_10 }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            tag="$PUSHED"; action=release; move=true; platforms="windows,macos,macos-intel,linux"
+          else
+            tag="$IN_TAG"; action="$IN_ACTION"; move="$IN_MOVE"; platforms="$IN_PLATFORMS"
+          fi
+          version="${tag#v}"
+          if ! printf '%s' "$version" | grep -Eq '^1\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+            echo "::error::$tag isn't a 1.x release tag (v1.2.3 or v1.2.3-rc.4)"; exit 1
+          fi
+          if ! printf '%s' "$platforms" | grep -Eq '^[a-z, -]*$'; then
+            echo "::error::platforms_0_10: only windows, macos, macos-intel, linux"; exit 1
+          fi
+          case "$version" in
+            *-rc.*) prerelease=true; channel=channel-rc; move=false ;;
+            *) prerelease=false; channel=channel-stable ;;
+          esac
+          {
+            echo "tag=$tag"; echo "version=$version"; echo "prerelease=$prerelease"; echo "channel=$channel"
+            echo "action=$action"; echo "move=$move"; echo "platforms=$platforms"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $version from $tag ($action; 0.10 moves: $move, $platforms)"
+
+  # The release tool, tested and built on its own, without secrets: the publishing jobs only run it.
+  tool:
+    name: Release tool
+    needs: prepare
+    if: needs.prepare.outputs.action != 'stop-moving-0.10-users'
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - id: create
-        uses: actions/github-script@v9
         with:
-          script: |
-            const fs = require("fs");
-            const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
-            const tag = context.ref.startsWith("refs/tags/") ? context.ref.slice("refs/tags/".length) : `v${version}`;
-            // This version's section of CHANGELOG.md becomes "What's new"; the app shows it before updating.
-            const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
-            const section = changelog.split(/^## /m).find((s) => s.startsWith(`${version} `) || s.startsWith(`${version}\n`)) ?? "";
-            const news = section.split("\n").slice(1).join("\n").trim();
-            const body = fs
-              .readFileSync(".github/release-notes.md", "utf8")
-              .replaceAll("{{version}}", version)
-              .replace("{{changes}}", news || "See CHANGELOG.md.");
-            const { data } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              name: `SSHeesh ${version}`,
-              body,
-              draft: true,
-            });
-            return data.id;
+          ref: ${{ needs.prepare.outputs.tag }}
+      - name: Install Rust
+        working-directory: desktop
+        run: rustup toolchain install || rustup show
+      - name: Make Rune with our fixes (the workspace needs it to resolve)
+        run: sh scripts/vendor-rune.sh
+      - name: Test and build it
+        working-directory: desktop
+        run: |
+          cargo test --locked -p ssheesh-release
+          cargo build --locked --release -p ssheesh-release
+          mkdir -p ../tool && cp ../target/desktop/release/ssheesh-release ../tool/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-tool
+          path: tool
+          retention-days: 7
 
   build:
     name: Build (${{ matrix.name }})
-    needs: create-release
+    needs: prepare
+    if: needs.prepare.outputs.action == 'release'
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - name: macOS
-            platform: macos-latest
-            args: --target universal-apple-darwin
-          - name: Windows
-            platform: windows-latest
-            args: ""
+          # 22.04: glibc 2.35, so 1.x starts wherever 0.10's AppImage did (plan §6.4).
           - name: Linux
-            platform: ubuntu-24.04
-            args: ""
-    runs-on: ${{ matrix.platform }}
+            os: ubuntu-22.04
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - name: Let git write long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
 
-      - name: Install Linux build libraries
-        if: matrix.name == 'Linux'
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libdbus-1-dev pkg-config
 
-      - uses: actions/setup-node@v7
+      - name: Install Rust
+        working-directory: desktop
+        run: |
+          rustup toolchain install || rustup show
+          if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+
+      - name: Make Rune with our fixes
+        run: sh scripts/vendor-rune.sh
+
+      # The version is the tag's: desktop/app/Cargo.toml says 1.0.0-canary between releases
+      # (canary.yml's test builds count on it), so the release puts its own in, and Cargo.lock's
+      # entry with it so the build stays --locked.
+      - name: Put the version in
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          v = os.environ["VERSION"]
+          p = "desktop/app/Cargo.toml"
+          s = open(p, encoding="utf-8").read()
+          s, n = re.subn(r'(?m)^version = "[^"]*"', f'version = "{v}"', s, count=1)
+          assert n == 1, "no version in desktop/app/Cargo.toml"
+          open(p, "w", encoding="utf-8").write(s)
+          p = "desktop/Cargo.lock"
+          s = open(p, encoding="utf-8").read()
+          s, n = re.subn(r'(name = "ssheesh-preview"\r?\nversion = )"[^"]*"', rf'\1"{v}"', s, count=1)
+          assert n == 1, "no ssheesh-preview in desktop/Cargo.lock"
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+      # Only this step knows it's a release: the build reads update-v1.json, uses 0.10's folder
+      # and keychain name, and must embed its Windows manifest (desktop/app/build.rs).
+      - name: Build
+        working-directory: desktop
+        env:
+          SSHEESH_RELEASE: "1"
+          SSHEESH_BUILD_SHA: ${{ github.sha }}
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          case "$RUNNER_OS" in
+            macOS)
+              cargo build --locked --release -p ssheesh-preview --target aarch64-apple-darwin
+              cargo build --locked --release -p ssheesh-preview --target x86_64-apple-darwin ;;
+            # The C runtime inside the program, so a clean Windows needs no VC++ redistributable,
+            # and imported libraries from System32 only: the installer runs from %TEMP% and the
+            # portable copy from Downloads, where a planted DLL would otherwise load first. With
+            # --target these reach the program only, not build scripts.
+            Windows)
+              RUSTFLAGS="-C target-feature=+crt-static -C link-arg=/DEPENDENTLOADFLAG:0x800" \
+                cargo build --locked --release -p ssheesh-preview --target x86_64-pc-windows-msvc ;;
+            *) cargo build --locked --release -p ssheesh-preview ;;
+          esac
+
+      - name: Collect the program
+        run: |
+          mkdir -p out
+          case "$RUNNER_OS" in
+            Linux) cp target/desktop/release/ssheesh-preview out/ssheesh ;;
+            Windows) cp target/desktop/x86_64-pc-windows-msvc/release/ssheesh-preview.exe out/ssheesh.exe ;;
+            macOS)
+              lipo -create -output out/ssheesh \
+                target/desktop/aarch64-apple-darwin/release/ssheesh-preview \
+                target/desktop/x86_64-apple-darwin/release/ssheesh-preview
+              lipo -info out/ssheesh ;;
+          esac
+          ls -la out
+
+      # Linux has nothing but its system: only glibc's own libraries, glibc 2.35 at most.
+      - name: The Linux program needs only what every Linux has
+        if: runner.os == 'Linux'
+        run: |
+          needed=$(readelf -d out/ssheesh | awk '/NEEDED/ {gsub(/[][]/, "", $5); print $5}')
+          echo "$needed"
+          extra=$(echo "$needed" | grep -vE '^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|libgcc_s\.so\.1|ld-linux-x86-64\.so\.2|librt\.so\.1)$' || true)
+          if [ -n "$extra" ]; then echo "::error::The Linux program links libraries a Linux may not have: $extra"; exit 1; fi
+          newest=$(objdump -T out/ssheesh | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -n 1)
+          echo "newest glibc needed: $newest"
+          if [ "$(printf '%s\nGLIBC_2.35\n' "$newest" | sort -V | tail -n 1)" != GLIBC_2.35 ]; then
+            echo "::error::The Linux program needs $newest, newer than Ubuntu 22.04's 2.35"; exit 1
+          fi
+
+      # The Mac app: the same bundle id and executable name as 0.10 (plan §4), macOS 11 and up.
+      - name: Make SSHeesh.app
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          app=out/SSHeesh.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          mv out/ssheesh "$app/Contents/MacOS/ssheesh"
+          sed "s/@VERSION@/$VERSION/g" desktop/app/macos/Info.plist > "$app/Contents/Info.plist"
+          cp desktop/app/macos/icon.icns "$app/Contents/Resources/icon.icns"
+          plutil -lint "$app/Contents/Info.plist"
+          for arch in arm64 x86_64; do
+            libs=$(otool -arch "$arch" -L "$app/Contents/MacOS/ssheesh" | tail -n +2 | awk '{print $1}')
+            echo "$libs" | grep -q libSystem || { echo "::error::Couldn't read what the $arch Mac app links"; exit 1; }
+            extra=$(echo "$libs" | grep -vE '^(/System/Library/|/usr/lib/)' || true)
+            if [ -n "$extra" ]; then echo "::error::The $arch Mac app links libraries a Mac doesn't have: $extra"; exit 1; fi
+            minos=$(otool -arch "$arch" -l "$app/Contents/MacOS/ssheesh" | awk '/LC_BUILD_VERSION/ {b=1} b && /minos/ {print $2; exit}')
+            echo "$arch minos $minos"
+            if [ "$(printf '%s\n11.0\n' "$minos" | sort -V | tail -n 1)" != 11.0 ]; then
+              echo "::error::The $arch Mac app needs macOS $minos, newer than 11.0"; exit 1
+            fi
+          done
+          # Artifacts lose the executable bit: tar keeps it.
+          tar -C out -cf out/SSHeesh.app.tar SSHeesh.app && rm -rf "$app"
+
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: 22
-          cache: npm
+          name: build-${{ matrix.name }}
+          path: out
+          retention-days: 7
 
-      - uses: dtolnay/rust-toolchain@stable
+  # Authenticode, when there's a certificate (plan R3). The installer, the portable copy and the
+  # program in 1.x's zip are one and the same file, signed once.
+  sign-windows:
+    name: Sign (Windows)
+    needs: [prepare, build]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          targets: ${{ matrix.name == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          name: build-Windows
+          path: out
+      - name: Authenticode
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo "::warning::No WINDOWS_SIGNING_CERTIFICATE secret: the Windows program goes out without Authenticode, as 0.10 did."
+            exit 0
+          fi
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/windows.pfx"
+          signtool=$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/signtool.exe | sort -V | tail -n 1)
+          "$signtool" sign //fd SHA256 //td SHA256 //tr http://timestamp.digicert.com //f "$RUNNER_TEMP/windows.pfx" //p "$CERTIFICATE_PASSWORD" out/ssheesh.exe
+          rm -f "$RUNNER_TEMP/windows.pfx"
+          "$signtool" verify //pa out/ssheesh.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-Windows
+          path: out
+          retention-days: 7
 
-      - uses: Swatinem/rust-cache@v2
-
-      - run: npm ci
-
-      # Every macOS build is signed with the same certificate (SSHeesh's own,
-      # self-signed), so macOS sees an update as the same app: Keychain access
-      # to saved server passwords ("Always Allow") carries over instead of
-      # asking for the Mac's password again after every update. Ad-hoc
-      # signatures change with every build. If the certificate is missing or
-      # codesign can't use it, the build stays ad-hoc signed, as before.
-      - name: Use SSHeesh's signing certificate
-        if: matrix.name == 'macOS'
+  # SSHeesh's own certificate, the same as 0.10's, so the Keychain keeps "Always Allow" for saved
+  # passwords. Without it this job fails: an ad-hoc signature would make every Mac ask again.
+  sign-macos:
+    name: Sign (macOS)
+    needs: [prepare, build]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-macOS
+          path: out
+      - name: Sign SSHeesh.app with SSHeesh's certificate
         env:
           CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
           if [ -z "$CERTIFICATE" ]; then
-            echo "::warning::No MACOS_SIGNING_CERTIFICATE secret; this build stays ad-hoc signed."
-            exit 0
+            echo "::error::No MACOS_SIGNING_CERTIFICATE secret: the Mac app can't be signed as 0.10 was."
+            exit 1
           fi
           kc="$RUNNER_TEMP/ssheesh-signing.keychain-db"
           kc_password=$(uuidgen)
@@ -114,129 +357,258 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_password" "$kc" > /dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/signing.p12"
-          # Try it on a scratch copy before the build relies on it.
-          cp /bin/echo "$RUNNER_TEMP/probe"
-          if codesign --force --sign "SSHeesh Code Signing" "$RUNNER_TEMP/probe"; then
-            echo "APPLE_SIGNING_IDENTITY=SSHeesh Code Signing" >> "$GITHUB_ENV"
+          tar -C out -xf out/SSHeesh.app.tar && rm out/SSHeesh.app.tar
+          codesign --force --options runtime --timestamp=none --identifier io.github.footprintsntrails.ssheesh \
+            --sign "SSHeesh Code Signing" out/SSHeesh.app
+          codesign --verify --strict --verbose=2 out/SSHeesh.app
+          codesign -dv out/SSHeesh.app 2>&1 | grep -E '^(Identifier|Authority|Signature)='
+          codesign -d -r- out/SSHeesh.app 2>&1 | grep designated
+          if codesign -dv out/SSHeesh.app 2>&1 | grep -q 'Signature=adhoc'; then
+            echo "::error::The Mac app came out ad-hoc signed"; exit 1
+          fi
+      - name: Pack the app and the disk image
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p up dmg
+          # One folder at the top, as 0.10's updater and scripts/install-macos.sh unpack it.
+          COPYFILE_DISABLE=1 tar -C out -czf "up/SSHeesh_${VERSION}_universal.app.tar.gz" SSHeesh.app
+          cp -R out/SSHeesh.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname SSHeesh -srcfolder dmg -ov -format UDZO "up/SSHeesh_${VERSION}_universal.dmg"
+          ls -la up
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-macOS
+          path: up
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: [prepare, tool, build, sign-windows, sign-macos]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          sparse-checkout: |
+            CHANGELOG.md
+            .github
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tool
+          path: tool
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-Linux
+          path: dl/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-Windows
+          path: dl/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-macOS
+          path: dl/macos
+
+      - name: Name the files
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -e
+          mkdir -p up
+          chmod +x tool/ssheesh-release dl/linux/ssheesh
+          cp dl/linux/ssheesh "up/ssheesh-$VERSION-linux-x64"
+          tar -C dl/linux -czf "up/ssheesh-$VERSION-linux-x64.tar.gz" ssheesh
+          cp dl/windows/ssheesh.exe "up/SSHeesh_${VERSION}_x64-setup.exe"
+          cp dl/windows/ssheesh.exe up/SSHeesh.exe
+          (cd dl/windows && zip -q "../../up/ssheesh-$VERSION-windows-x64.zip" ssheesh.exe)
+          cp dl/macos/*.app.tar.gz dl/macos/*.dmg up/
+          ls -la up
+
+      # The update key signs each file with its name and this version in the signature: what
+      # 0.10's updater and 1.x check. After Authenticode and codesign, which change the bytes.
+      - name: Sign the files with the update key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cd up
+          ../tool/ssheesh-release sign --version "$VERSION" \
+            "ssheesh-$VERSION-linux-x64" "ssheesh-$VERSION-linux-x64.tar.gz" \
+            "SSHeesh_${VERSION}_x64-setup.exe" SSHeesh.exe "ssheesh-$VERSION-windows-x64.zip" \
+            "SSHeesh_${VERSION}_universal.app.tar.gz" "SSHeesh_${VERSION}_universal.dmg"
+
+      # update-v1.json keeps the channel's list of withdrawn versions.
+      - name: Write latest.json and update-v1.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          PLATFORMS: ${{ needs.prepare.outputs.platforms }}
+        run: |
+          set -e
+          python3 - <<'PY'
+          import os, re
+          v = os.environ["VERSION"]
+          sections = re.split(r"(?m)^## ", open("CHANGELOG.md", encoding="utf-8").read())
+          news = next((s.split("\n", 1)[1].strip() for s in sections if s.startswith(f"{v} ") or s.startswith(f"{v}\n")), "")
+          body = open(".github/release-notes-1.md", encoding="utf-8").read().replace("{{version}}", v).replace("{{changes}}", news or "See CHANGELOG.md.")
+          open("notes.md", "w", encoding="utf-8").write(body)
+          open("update-notes.txt", "w", encoding="utf-8").write(news or f"SSHeesh {v}")
+          PY
+          pulled=()
+          if gh release download "$CHANNEL" --pattern update-v1.json --dir last 2>/dev/null; then pulled=(--pulled last/update-v1.json); fi
+          tool/ssheesh-release manifests --version "$VERSION" --repo "$GH_REPO" --tag "$TAG" --dir up \
+            --platforms "$PLATFORMS" --notes update-notes.txt "${pulled[@]}"
+          tool/ssheesh-release sign --version "$VERSION" --minisig up/update-v1.json
+          cat up/latest.json up/update-v1.json
+
+      - name: Check everything as 0.10 and 1.x will read it
+        env:
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PLATFORMS: ${{ needs.prepare.outputs.platforms }}
+        run: tool/ssheesh-release check --version "$VERSION" --repo "$GH_REPO" --tag "$TAG" --dir up --platforms "$PLATFORMS"
+
+      # "latest" is always said outright (plan §6.7.1): a stable release that moves 0.10 becomes
+      # GitHub's latest with its latest.json; otherwise it stays beside the latest, and latest.json
+      # is kept as this run's artifact (move-0.10-users makes it again from the release's files).
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          MOVE: ${{ needs.prepare.outputs.move }}
+        run: |
+          set -e
+          cd up
+          files=("ssheesh-$VERSION-linux-x64" "ssheesh-$VERSION-linux-x64.tar.gz" "SSHeesh_${VERSION}_x64-setup.exe" SSHeesh.exe
+                 "ssheesh-$VERSION-windows-x64.zip" "SSHeesh_${VERSION}_universal.app.tar.gz" "SSHeesh_${VERSION}_universal.dmg"
+                 update-v1.json update-v1.json.minisig)
+          sigs=(); for f in "${files[@]}"; do if [ -f "$f.sig" ]; then sigs+=("$f.sig"); fi; done
+          flags=(--title "SSHeesh $VERSION" --notes-file ../notes.md --verify-tag)
+          if [ "$PRERELEASE" = true ]; then
+            flags+=(--prerelease --latest=false)
+          elif [ "$MOVE" = true ]; then
+            files+=(latest.json); flags+=(--latest)
           else
-            echo "::warning::codesign couldn't use the SSHeesh certificate; this build stays ad-hoc signed."
+            flags+=(--latest=false)
+          fi
+          gh release create "$TAG" "${files[@]}" "${sigs[@]}" "${flags[@]}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: latest-json
+          path: up/latest.json
+          retention-days: 90
+
+      # update-v1.json at its lasting address: the channel's own release, made once as a
+      # pre-release that's never "latest" and whose tag doesn't start with v.
+      - name: Put update-v1.json in its channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+        run: |
+          set -e
+          if ! gh release view "$CHANNEL" > /dev/null 2>&1; then
+            gh release create "$CHANNEL" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "SSHeesh updates ($CHANNEL)" \
+              --notes "What SSHeesh 1.x reads to update itself. Not a release to download: see the latest release."
+          fi
+          gh release upload "$CHANNEL" up/update-v1.json up/update-v1.json.minisig --clobber
+
+      # Read back from where 0.10 and 1.x read them: the same bytes as checked.
+      - name: Read them back from GitHub
+        env:
+          GH_REPO: ${{ github.repository }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          MOVE: ${{ needs.prepare.outputs.move }}
+        run: |
+          set -e
+          base="https://github.com/$GH_REPO/releases"
+          same() { for i in 1 2 3 4 5 6; do curl -fsSL "$1" | cmp -s - "$2" && return 0; sleep 10; done; echo "::error::$1 isn't what was checked"; return 1; }
+          same "$base/download/$CHANNEL/update-v1.json" up/update-v1.json
+          same "$base/download/$CHANNEL/update-v1.json.minisig" up/update-v1.json.minisig
+          if [ "$PRERELEASE" != true ] && [ "$MOVE" = true ]; then
+            same "$base/latest/download/latest.json" up/latest.json
+            echo "0.10.x now see $(jq -r .version up/latest.json)"
           fi
 
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
-          updaterJsonPreferNsis: true
-
-      # A Mac has nothing but its system. A library from the build machine's
-      # Homebrew stops the app from starting everywhere else, while it runs
-      # fine on the build machine. A failure here publishes nothing.
-      - name: The Mac app needs only what every Mac has
-        if: matrix.name == 'macOS'
-        run: |
-          app=$(find target src-tauri/target -path '*/bundle/macos/SSHeesh.app' -prune 2>/dev/null | head -n 1)
-          for arch in arm64 x86_64; do
-            libs=$(otool -arch "$arch" -L "$app/Contents/MacOS/ssheesh" | tail -n +2 | awk '{print $1}')
-            # Every program has this one: without it, the list wasn't read.
-            echo "$libs" | grep -q libSystem || { echo "::error::Couldn't read what the $arch Mac app links"; exit 1; }
-            extra=$(echo "$libs" | grep -vE '^(/System/Library/|/usr/lib/)' || true)
-            if [ -n "$extra" ]; then
-              echo "::error::The $arch Mac app links libraries a Mac doesn't have: $extra"
-              exit 1
-            fi
-          done
-
-      # Says in the log which signature the Mac app got.
-      - name: Show the macOS signature
-        if: matrix.name == 'macOS'
-        run: |
-          app=$(find target src-tauri/target -path '*/bundle/macos/SSHeesh.app' -prune 2>/dev/null | head -n 1)
-          codesign -dv "$app" 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
-          codesign -d -r- "$app" 2>&1 | grep designated || true
-
-      # Signed with the update key, so the portable app can update itself
-      # and check the new file the same way installed apps do.
-      - name: Sign the portable Windows app
-        if: matrix.name == 'Windows'
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          for exe in target/release/ssheesh.exe src-tauri/target/release/ssheesh.exe; do
-            [ -f "$exe" ] && break
-          done
-          npx tauri signer sign "$exe"
-
-      # The same app as one file to run without installing.
-      - name: Attach the portable Windows app
-        if: matrix.name == 'Windows'
-        uses: actions/github-script@v9
-        env:
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
-        with:
-          script: |
-            const fs = require("fs");
-            const exe = ["target/release/ssheesh.exe", "src-tauri/target/release/ssheesh.exe"].find((p) => fs.existsSync(p));
-            if (!exe) throw new Error("Couldn't find the built ssheesh.exe");
-            const upload = (path, name) =>
-              github.rest.repos.uploadReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: Number(process.env.RELEASE_ID),
-                name,
-                data: fs.readFileSync(path),
-                headers: { "content-type": "application/octet-stream", "content-length": fs.statSync(path).size },
-              });
-            // Just "SSHeesh.exe": it's the file people keep and run, and its
-            // updates keep whatever name it has.
-            await upload(exe, "SSHeesh.exe");
-            // Read by the publish job, which puts it into latest.json.
-            await upload(`${exe}.sig`, "SSHeesh.exe.sig");
-
-  publish-release:
-    name: Publish release
-    needs: [create-release, build]
+  # Moves 0.10 users later, for a release published with move_0_10_users off: latest.json from
+  # the release's own files and signatures, checked, then the release becomes GitHub's latest.
+  move:
+    name: Move 0.10 users
+    needs: [prepare, tool]
+    if: needs.prepare.outputs.action == 'move-0.10-users' && needs.prepare.outputs.prerelease != 'true'
     runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
     steps:
-      - uses: actions/github-script@v9
-        env:
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+      - uses: actions/download-artifact@v4
         with:
-          script: |
-            const release_id = Number(process.env.RELEASE_ID);
-            const { owner, repo } = context.repo;
-            let assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
-            // The portable app updates itself from its own entry in latest.json. Added
-            // here, after every build, so no build job's own latest.json upload can drop it.
-            const exe = assets.find((a) => a.name === "SSHeesh.exe");
-            const sig = assets.find((a) => a.name === "SSHeesh.exe.sig");
-            const manifest = assets.find((a) => a.name === "latest.json");
-            if (exe && sig && manifest) {
-              const read = async (a) => {
-                const { data } = await github.request("GET /repos/{owner}/{repo}/releases/assets/{asset_id}", {
-                  owner, repo, asset_id: a.id, headers: { accept: "application/octet-stream" },
-                });
-                return Buffer.from(data).toString("utf8");
-              };
-              const latest = JSON.parse(await read(manifest));
-              // The API address, like the other entries: unlike a draft's download
-              // link it stays the same once the release is published.
-              latest.platforms["windows-x86_64-portable"] = { signature: (await read(sig)).trim(), url: exe.url };
-              const body = JSON.stringify(latest, null, 2);
-              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: manifest.id });
-              await github.rest.repos.uploadReleaseAsset({
-                owner, repo, release_id, name: "latest.json", data: body,
-                headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
-              });
-              assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id });
-            }
-            // Signatures are already inside latest.json; one file per system is enough.
-            for (const a of assets.filter((a) => a.name.endsWith(".sig"))) {
-              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
-            }
-            await github.rest.repos.updateRelease({ owner, repo, release_id, draft: false });
+          name: release-tool
+          path: tool
+      - name: latest.json from the release's files, checked, then latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PLATFORMS: ${{ needs.prepare.outputs.platforms }}
+        run: |
+          set -e
+          chmod +x tool/ssheesh-release
+          gh release download "$TAG" --dir up
+          printf 'SSHeesh %s' "$VERSION" > notes.txt
+          # The manifests are written afresh; the release's own update-v1.json and its
+          # signature are then put back as published, and both are checked.
+          tool/ssheesh-release manifests --version "$VERSION" --repo "$GH_REPO" --tag "$TAG" --dir up --platforms "$PLATFORMS" --notes notes.txt
+          gh release download "$TAG" --pattern 'update-v1.json*' --dir up --clobber
+          tool/ssheesh-release check --version "$VERSION" --repo "$GH_REPO" --tag "$TAG" --dir up --platforms "$PLATFORMS"
+          gh release upload "$TAG" up/latest.json --clobber
+          gh release edit "$TAG" --latest
+          for i in 1 2 3 4 5 6; do curl -fsSL "https://github.com/$GH_REPO/releases/latest/download/latest.json" | cmp -s - up/latest.json && break; sleep 10; done
+          curl -fsSL "https://github.com/$GH_REPO/releases/latest/download/latest.json" | cmp - up/latest.json
+          echo "0.10.x now see $VERSION"
+
+  # The stop switch: 0.10's own release becomes "latest" again, with its untouched latest.json.
+  stop:
+    name: Stop moving 0.10 users
+    needs: prepare
+    if: needs.prepare.outputs.action == 'stop-moving-0.10-users'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Make the 0.10 release latest again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STOP_TO: ${{ inputs.stop_to }}
+        run: |
+          set -e
+          case "$STOP_TO" in v0.*) ;; *) echo "::error::$STOP_TO isn't a 0.x release"; exit 1 ;; esac
+          gh release view "$STOP_TO" --json assets --jq '.assets[].name' | grep -qx latest.json \
+            || { echo "::error::$STOP_TO has no latest.json"; exit 1; }
+          gh release edit "$STOP_TO" --latest
+          for i in 1 2 3 4 5 6; do
+            version=$(curl -fsSL "https://github.com/$GH_REPO/releases/latest/download/latest.json" | jq -r .version)
+            case "$version" in 0.*) echo "0.10.x now see $version"; exit 0 ;; esac
+            sleep 10
+          done
+          echo "::error::latest.json still says $version"; exit 1
