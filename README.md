@@ -25,7 +25,7 @@ A dropped connection doesn't end anything. When SSHeesh reconnects, the terminal
 
 ## Made for AI agents on your servers
 
-Claude Code, Codex, OpenCode and OMP show up by name on their tab, and the tab says “Needs you” when one waits for an answer, with a notification if SSHeesh is in the background. Point at that tab to read the question and answer it with a click, as in the picture at the top. Click any path an agent prints and the file opens beside it, at the lines it names (`app.ts:12-40`), Markdown nicely formatted.
+An agent you start in SSHeesh runs on the server, not on your computer. Close the laptop, lose the Wi-Fi, quit SSHeesh: it keeps working, and when you come back its whole session is there, history included, with nothing to restart. Claude Code, Codex, OpenCode and OMP show up by name on their tab, and the tab says “Needs you” when one waits for an answer, with a notification if SSHeesh is in the background. Point at that tab to read the question and answer it with a click, as in the picture at the top. Click any path an agent prints and the file opens beside it, at the lines it names (`app.ts:12-40`), Markdown nicely formatted.
 
 ## Connect through Tor, in one click
 
@@ -89,15 +89,15 @@ No account and no cloud: hosts, keys and passwords stay on your computer, and pa
 
 ## Install
 
-Download the archive for your computer from the [Releases page](https://github.com/footprintsntrails/ssheesh/releases/latest), unpack it and run the program inside. There's no installer yet.
+Download SSHeesh for your computer from the [Releases page](https://github.com/footprintsntrails/ssheesh/releases/latest).
 
 | | Download | Then |
 | --- | --- | --- |
-| **macOS** (Apple Silicon) | `ssheesh-<version>-macos-arm64.tar.gz` | In Terminal: `tar xzf ssheesh-*-macos-arm64.tar.gz`, then `xattr -d com.apple.quarantine ssheesh-preview` and `./ssheesh-preview` |
-| **Windows** (x64) | `ssheesh-<version>-windows-x64.zip` | Unzip it and run `ssheesh-preview.exe`. On the blue SmartScreen window choose “More info”, then “Run anyway”. |
-| **Linux** (x64) | `ssheesh-<version>-linux-x64.tar.gz` | `tar xzf ssheesh-*-linux-x64.tar.gz && ./ssheesh-preview`. It draws with Vulkan, which Mesa's graphics drivers provide. |
+| **Windows** (x64) | `SSHeesh_<version>_x64-setup.exe` | Run it: it installs SSHeesh for you, with a Start menu entry. Prefer no install? `SSHeesh.exe` runs from any folder. On the blue SmartScreen window choose “More info”, then “Run anyway”. |
+| **macOS** (Apple Silicon) | `ssheesh-<version>-macos-arm64.tar.gz` | Double-click it and drag `SSHeesh.app` to Applications. The first time, right-click the app and choose Open. |
+| **Linux** (x64) | `ssheesh-<version>-linux-x64.tar.gz` | `tar xzf ssheesh-*-linux-x64.tar.gz && ./ssheesh`. It draws with Vulkan, which Mesa's graphics drivers provide. |
 
-SSHeesh updates itself, or only tells you, as Settings → Updates says. Builds aren't signed by Apple or Microsoft yet, which is why the first launch needs those extra steps. Try it without any real server: start it with `--demo`.
+SSHeesh updates itself from GitHub, the installed and the portable kind alike, or only tells you, as Settings → Updates says; SSHeesh 0.10 offers the update to 1.0 by itself. Builds aren't signed by Apple or Microsoft yet, which is why the first launch needs those extra steps. Try it without any real server: start it with `--demo`.
 
 **On your servers:** any Linux works. Install `tmux` for sessions that survive disconnects.
 
