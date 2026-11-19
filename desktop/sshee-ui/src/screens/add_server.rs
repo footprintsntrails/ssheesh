@@ -38,6 +38,7 @@ use crate::kit::list::{list_row, ListRow};
 use crate::kit::popover::popover;
 use crate::kit::push::{check_box, choice, choices, icon_button, push_button, Push};
 use crate::shell::{Confirm, Shell, Toast};
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// The dialog's width.
@@ -783,7 +784,7 @@ fn list_page(state: &State, t: &Theme, source: Source, streaming: bool) -> El {
         .gap(14.0)
         .child(link("add-all", "Select all").on_press_tx(move |s: &mut Shell, _| s.screens.add_server.picks = all.clone()))
         .child(link("add-none", "Select none").on_press_tx(|s: &mut Shell, _| s.screens.add_server.picks.clear()));
-    let mut page = col().w_full().px(20.0).pt(18.0).pb(4.0).gap(12.0).child(head).child(list).child(ticks);
+    let mut page = col().w_full().px(20.0).pt(18.0).pb(4.0).gap(12.0).child(head).child(list.scroll_bars(t)).child(ticks);
     let notes = sources.notes(source);
     if !notes.is_empty() {
         page = page.child(col().w_full().gap(3.0).children(notes.into_iter().map(|n| text(n).font(theme::SMALL).color(t.l2).w_full().wrap())));
@@ -819,7 +820,7 @@ pub fn view(s: &Shell, t: &'static Theme, cx: &mut rune::Cx<Shell>) -> Option<El
             let head = text("Add a server").font(theme::TITLE).color(t.l1).single_line();
             let body_max = (dialog_max - 56.0 - 68.0 - if state.error.is_some() { 40.0 } else { 0.0 }).max(80.0);
             let page = col().w_full().child(rune::el().w_full().px(20.0).pt(18.0).pb(12.0).child(head)).child(
-                col().key("add-body").w_full().max_h(body_max).scroll(ScrollSpec { stick_bottom: false }).child(form_page(s, state, t)),
+                col().key("add-body").w_full().max_h(body_max).scroll(ScrollSpec { stick_bottom: false }).child(form_page(s, state, t)).scroll_bars(t),
             );
             // What is wrong stays in sight, over the buttons, however far the body scrolled.
             let page = match &state.error {

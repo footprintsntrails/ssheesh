@@ -30,6 +30,7 @@ use crate::kit::chip::chip;
 use crate::kit::list::{list_row, ListRow};
 use crate::kit::popover::popover;
 use crate::kit::push::{push_button, Push};
+use crate::kit::scroll_bar::ScrollBars;
 use crate::shell::Shell;
 use crate::theme::{self, Theme};
 
@@ -267,7 +268,7 @@ pub(crate) fn headed(t: &Theme, head: El, body: El, gap: f32) -> El {
         .shrink()
         .min_h(0.0)
         .child(col().w_full().px(20.0).pt(18.0).pb(14.0).border_sides([0.0, 0.0, 1.0, 0.0], t.hair).child(head))
-        .child(body.pt(gap).pb(0.0).child(el().key("dialog-end").w_full().h((20.0 - gap).max(0.0)).a11y_hidden()))
+        .child(body.pt(gap).pb(0.0).child(el().key("dialog-end").w_full().h((20.0 - gap).max(0.0)).a11y_hidden()).scroll_bars(t))
 }
 
 /// The question a fix asks before it runs: inside its card, so the command it is about stays
@@ -321,7 +322,7 @@ fn outcome(t: &Theme, s: &Shell, outcome: &Outcome, i: usize, id: &str) -> El {
             out = out.child(
                 el().w_full().max_h(140.0).px(10.0).py(8.0).radius(theme::RADIUS_ROW).fill(t.hov2).scroll(ScrollSpec { stick_bottom: true }).child(
                     text(s.text_shown(output).into_owned()).font(theme::CODE).color(t.l2on).wrap().selectable(true).w_full(),
-                ),
+                ).scroll_bars(t),
             );
         }
         Outcome::NeedsYou { ask } => {

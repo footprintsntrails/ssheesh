@@ -39,6 +39,7 @@ use crate::kit::list::{list_row, ListRow};
 use crate::kit::push::{push_button, Push};
 use crate::kit::segmented::segmented;
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// The dialog's width.
@@ -355,7 +356,7 @@ fn outcome(t: &Theme, s: &Shell, run: &Run, command: &str, i: usize) -> Option<E
             out = out.child(
                 el().w_full().max_h(120.0).px(10.0).py(8.0).radius(theme::RADIUS_ROW).fill(t.hov2).scroll(ScrollSpec { stick_bottom: true }).child(
                     text(s.text_shown(output).into_owned()).font(theme::CODE).color(t.l2on).wrap().selectable(true).w_full(),
-                ),
+                ).scroll_bars(t),
             );
         }
         Outcome::NeedsYou { ask } => {

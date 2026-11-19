@@ -41,6 +41,8 @@ pub fn view(s: &Shell, cx: &mut Cx<Shell>) -> El {
     if !s.settings.get().animations {
         cx.reduced_motion(true);
     }
+    // Scroll bars show and hide without a fade under Reduce Motion.
+    crate::kit::scroll_bar::set_calm(cx.is_reduced_motion());
     // Settings → Appearance → Interface size (the terminal keeps its own: `apply_settings`).
     cx.zoom(s.ui_zoom());
     // The keyboard's focus ring, for every control that takes focus.

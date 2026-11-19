@@ -27,6 +27,7 @@ use sshee_app::workbench::{Open, Tab, TabId, TabKind};
 use crate::icons::{icon, Icon};
 use crate::kit::push::{icon_button, push_button, Push};
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 const TOOLBAR: f32 = 40.0;
@@ -368,7 +369,7 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
         }
         out = out.child(col().w_full().items_center().child(empty));
     }
-    out
+    out.scroll_bars(t)
 }
 
 /// The empty list's short guide, in a box like a Settings group: one container, or a Compose

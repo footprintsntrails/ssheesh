@@ -32,6 +32,7 @@ use crate::kit::list::{list_heading, list_row, ListRow};
 use crate::kit::menu::{key_cap, RowState};
 use crate::kit::popover::{popover, popover_foot};
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// The palette's width, the design's.
@@ -423,7 +424,7 @@ pub fn view(s: &Shell, t: &'static Theme, _cx: &mut Cx<Shell>) -> Option<El> {
         .max_h(520.0)
         .modal_tx(true, |s: &mut Shell, tx| s.close_palette(tx))
         .child(field)
-        .child(list)
+        .child(list.scroll_bars(t))
         .child(foot.key("palette-foot"));
     Some(if s.bench.showing_home() {
         // Over the main menu's own field, so the field you clicked is the one you type in.

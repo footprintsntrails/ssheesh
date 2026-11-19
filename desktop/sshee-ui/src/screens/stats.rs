@@ -30,6 +30,7 @@ use crate::icons::{icon, Icon};
 use crate::kit::graph::{graph, meter, Series};
 use crate::kit::push::{push_button, Push};
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 const TOOLBAR: f32 = 40.0;
@@ -272,7 +273,7 @@ pub fn view(s: &Shell, tab: &Tab, t: &'static Theme, _cx: &mut Cx<Shell>) -> El 
         );
     }
     let body = body.child(programs(s, id, t));
-    page.child(body)
+    page.child(body.scroll_bars(t))
 }
 
 /// The load on a server's card in the sidebar: CPU, memory and the fullest disk as meters, a

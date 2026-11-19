@@ -42,6 +42,7 @@ use crate::kit::push::{push_button, Push};
 use crate::kit::menu::{menu, menu_row, menu_row_destructive, menu_row_more, RowState};
 use crate::kit::popover::popover;
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 /// A row of the list, the header above it and the line under it.
@@ -1565,7 +1566,7 @@ fn list(s: &Shell, id: TabId, t: &'static Theme) -> El {
             rows = rows.child(said);
         }
     }
-    pane = pane.child(rows);
+    pane = pane.child(rows.scroll_bars(t));
     if let Some(lines) = super::edit::strip(s, id, t) {
         pane = pane.child(lines);
     }
@@ -1750,7 +1751,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
         // Markdown, formatted: from what's typed, so an edit in Source shows here.
         Body::Text { .. } if markdown && !state.ui.source => {
             let source = if editor.can_edit() { state.ui.draft.text.as_str() } else { editor.text().unwrap_or_default() };
-            super::markdown_view::view(s, source, marked, &format!("md-band-{}", id.0), t).key("preview-markdown")
+            super::markdown_view::view(s, source, marked, &format!("md-band-{}", id.0), t)
         }
         // Long lines run on to the right and scroll there, with their own bar, as in an editor.
         Body::Text { .. } if editor.can_edit() => col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).scroll_xy().child(
@@ -1784,7 +1785,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                     false
                 }),
             ),
-        ),
+        ).scroll_bars(t),
         Body::Text { .. } => {
             let style = code_style();
             // As wide as the longest line, so a long one scrolls into view sideways (only the
@@ -1805,7 +1806,7 @@ fn preview(s: &Shell, id: TabId, t: &'static Theme, width: Option<f32>) -> Optio
                         _ => row,
                     }
                 }),
-            )
+            ).scroll_bars(t)
         }
         Body::Image(_) => picture(),
         _ => {
@@ -2483,7 +2484,7 @@ fn peek(s: &Shell, id: TabId, t: &'static Theme) -> Option<El> {
             tx.instant();
         }));
     }
-    Some(card.child(list).modal_tx(true, close))
+    Some(card.child(list.scroll_bars(t)).modal_tx(true, close))
 }
 
 /// Return in the copy's path field: a path typed there is looked into first; once the dialog
@@ -2625,7 +2626,7 @@ fn copy_dialog(s: &Shell, id: TabId, t: &'static Theme) -> El {
             }
             _ => {}
         }
-        card = card.child(folders);
+        card = card.child(folders.scroll_bars(t));
     }
     let ready = copy_ready(s, id);
     let card = card.child(

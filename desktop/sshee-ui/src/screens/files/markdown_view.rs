@@ -9,6 +9,7 @@ use rune::{col, el, rich, row, text, El, ScrollSpec, Span, Tx};
 use sshee_app::files::markdown::{self, Block, Bullet, Style, Styled};
 
 use crate::shell::Shell;
+use crate::kit::scroll_bar::ScrollBars;
 use crate::theme::{self, Theme};
 
 const BODY: rune::tok::TextStyle = rune::tok::TextStyle::new(13.0, 400.0).lh(20.0);
@@ -90,7 +91,7 @@ pub fn view(s: &Shell, source: &str, lines: Option<(u32, u32)>, band_key: &str, 
                 row().key(key).w_full().pl(4.0 + f32::from(*depth) * 18.0).gap(6.0).child(el().w(18.0).child(text(mark).font(BODY).color(t.l2).single_line())).child(col().grow(1.0).min_w(0.0).child(styled(s, words, BODY, t)))
             }
             Block::Quote(words) => row().key(key).w_full().gap(10.0).child(el().w(3.0).h_full().radius(1.5).fill(t.hair)).child(col().grow(1.0).min_w(0.0).child(styled(s, words, BODY, t))),
-            Block::Code { text: code, .. } => col().key(key).w_full().padding(12.0).radius(8.0).fill(t.code).scroll_x().child(text(s.text_shown(code).into_owned()).font(theme::CODE.lh(19.0)).color(t.l1)),
+            Block::Code { text: code, .. } => col().key(key).w_full().padding(12.0).radius(8.0).fill(t.code).scroll_x().child(text(s.text_shown(code).into_owned()).font(theme::CODE.lh(19.0)).color(t.l1)).scroll_bars(t),
             Block::Rule => el().key(key).w_full().h(1.0).my(8.0).fill(t.hair),
             Block::Table { head, rows } => {
                 let cell = |words: &Styled, bold: bool| {
@@ -101,7 +102,7 @@ pub fn view(s: &Shell, source: &str, lines: Option<(u32, u32)>, band_key: &str, 
                 for r in rows {
                     table = table.child(row().children(r.iter().map(|c| cell(c, false)).collect::<Vec<_>>()));
                 }
-                table
+                table.scroll_bars(t)
             }
         };
         if marked.contains(&i) {
@@ -115,5 +116,5 @@ pub fn view(s: &Shell, source: &str, lines: Option<(u32, u32)>, band_key: &str, 
         }
     }
     doc = doc.children(band);
-    col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(doc)
+    col().key("preview-markdown").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(doc).scroll_bars(t)
 }

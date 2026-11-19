@@ -29,6 +29,7 @@ pub mod popover;
 pub mod popup;
 pub mod push;
 pub mod rail;
+pub mod scroll_bar;
 pub mod segmented;
 pub mod slider;
 pub mod status;
