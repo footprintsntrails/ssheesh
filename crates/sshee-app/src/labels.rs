@@ -220,6 +220,9 @@ pub struct Looks {
     pub labels: Labels,
     /// Names given here, by host id. A host without one keeps the list's name.
     pub names: IndexMap<String, String>,
+    /// The sidebar's order you dragged the servers into, by their keys there (`local`,
+    /// `host:<id>`). Empty: the list's own order. A server not in it goes after the others.
+    pub order: Vec<ServerKey>,
 }
 
 impl Looks {
@@ -390,6 +393,8 @@ impl Looks {
         self.labels.auto_looks.shift_remove(host_id);
         self.labels.hidden.retain(|h| h != host_id);
         self.labels.config_seen.retain(|h| h != host_id);
+        let key = format!("host:{host_id}");
+        self.order.retain(|k| *k != key);
     }
 
     /// Brings over what 0.10 kept. `moved` pairs a host's id there with its id here (a saved
@@ -424,7 +429,7 @@ impl Looks {
 
     /// The sidebar's servers: the hosts that show, named, labelled and with their icons.
     pub fn servers(&self, hosts: &[Listed]) -> Vec<Server> {
-        hosts
+        let mut servers: Vec<Server> = hosts
             .iter()
             .filter(|h| self.shown(h))
             .map(|h| {
@@ -432,7 +437,20 @@ impl Looks {
                 server.env = self.env(&h.id).cloned();
                 server
             })
-            .collect()
+            .collect();
+        if self.order.is_empty() {
+            return servers;
+        }
+        // This computer is first unless you dragged it elsewhere.
+        servers.insert(0, Server::this_computer());
+        let place = |s: &Server| self.order.iter().position(|k| *k == s.key()).unwrap_or(usize::MAX);
+        servers.sort_by_key(place);
+        servers
+    }
+
+    /// Keeps the order the servers were dragged into.
+    pub fn reorder(&mut self, order: &[ServerKey]) {
+        self.order = order.to_vec();
     }
 
     /// Each shown server's colour, by its key in the sidebar.
@@ -665,5 +683,22 @@ mod tests {
         // As a file and back.
         let json = serde_json::to_string(&looks).unwrap();
         assert_eq!(serde_json::from_str::<Looks>(&json).unwrap(), looks);
+    }
+
+    #[test]
+    fn the_order_you_dragged_is_kept_and_a_new_server_goes_last() {
+        let (web, db, lab) = (saved("web", "web-7731"), saved("db1", "db-main"), saved("lab12", "lab-7731"));
+        let mut looks = Looks::default();
+        let names = |l: &Looks, hosts: &[Listed]| l.servers(hosts).iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        // Untouched: the list's own order, without this computer (the workbench puts it first).
+        assert_eq!(names(&looks, &[web.clone(), db.clone()]), ["web-7731", "db-main"]);
+        looks.reorder(&[format!("host:{}", db.id), "local".into(), format!("host:{}", web.id)]);
+        assert_eq!(names(&looks, &[web.clone(), db.clone(), lab.clone()]), ["db-main", "This computer", "web-7731", "lab-7731"]);
+        // Removed for good: its key goes from the order too.
+        looks.forget(&db.id);
+        assert!(!looks.order.iter().any(|k| k.contains(&db.id)));
+        // A looks.json from before the order reads as no order.
+        let old: Looks = serde_json::from_str(r#"{"names":{}}"#).unwrap();
+        assert!(old.order.is_empty());
     }
 }

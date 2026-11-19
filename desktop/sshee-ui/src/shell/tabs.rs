@@ -11,8 +11,9 @@
 //! ```
 //!
 //! "+" opens a menu, as 0.10's did (`newTabItems` in `Tabs.tsx`); the new-terminal shortcut
-//! still opens a terminal at once. The arrows move one highlight, Return picks, → goes into a
-//! machine and ← or Esc comes back out:
+//! still opens a terminal at once. Under the pointer another machine's row slides out what
+//! to open there, beside it, as a system menu's submenu does. By keys: the arrows move one
+//! highlight, Return or → opens a machine's, ← or Esc closes it again:
 //!
 //! ```text
 //! new-tab-menu
@@ -20,9 +21,9 @@
 //! ├── nt-files     Files          ⌃⇧O
 //! ├── ──────
 //! └── nt-server-N  db-main  ›             every other machine, in the sidebar's order
-//!     ├── nt-back      ‹ Back
-//!     ├── nt-terminal  New terminal on db-main
-//!     └── nt-files     Files on db-main
+//! new-tab-side                            beside the machine's row
+//! ├── nt-on-terminal  New terminal        on db-main
+//! └── nt-on-files     Files
 //! ```
 //!
 //! Three rules keep the row still under the pointer, as a browser's is:
@@ -87,6 +88,9 @@ const TEAR_OFF: f32 = 40.0;
 const MENU_WIDTH: f32 = 248.0;
 const LIST_WIDTH: f32 = 300.0;
 const NEW_WIDTH: f32 = 260.0;
+
+/// What a machine's row slides out in the "+" menu.
+const SIDE_WIDTH: f32 = 200.0;
 
 /// How the row was when the pointer came over it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -174,12 +178,15 @@ impl Row {
     }
 }
 
-/// The "+" menu, open: on its first page, or on one machine's (`on`).
+/// The "+" menu, open; `on`: the machine whose row has slid out what to open there.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct NewTabMenu {
     pub(crate) on: Option<ServerKey>,
     /// The highlighted row, among the rows that can be picked.
     pub(crate) hot: Option<usize>,
+    /// The highlighted row beside, when the keys went into it (`None`: the keys move along
+    /// the menu itself).
+    pub(crate) side_hot: Option<usize>,
 }
 
 /// A row of the "+" menu.
@@ -187,9 +194,8 @@ pub(crate) struct NewTabMenu {
 enum NewPick {
     Terminal(ServerKey),
     Files(ServerKey),
-    /// Another machine: its own page, with these two for it.
+    /// Another machine: these two for it, beside its row.
     Machine(ServerKey),
-    Back,
 }
 
 /// What a row of a tab's menu does.
@@ -399,11 +405,10 @@ impl Shell {
         self.bench.current_key().unwrap_or("local").to_owned()
     }
 
-    /// The "+" menu's rows as it is now, in groups (a rule between two).
+    /// The "+" menu's rows, in groups (a rule between two).
     fn new_tab_groups(&self) -> Vec<Vec<NewPick>> {
-        let Some(menu) = &self.row.new_tab else { return Vec::new() };
-        if let Some(on) = menu.on.clone().filter(|on| self.bench.server(on).is_some()) {
-            return vec![vec![NewPick::Back], vec![NewPick::Terminal(on.clone()), NewPick::Files(on)]];
+        if self.row.new_tab.is_none() {
+            return Vec::new();
         }
         let here = self.new_tab_here();
         let others: Vec<NewPick> = self.bench.servers().iter().map(|sv| sv.key()).filter(|k| *k != here).map(NewPick::Machine).collect();
@@ -414,18 +419,50 @@ impl Shell {
         groups
     }
 
+    /// What the row of machine `on` slides out: a terminal or Files there.
+    fn new_tab_side(&self) -> Vec<NewPick> {
+        match self.row.new_tab.as_ref().and_then(|m| m.on.clone()).filter(|on| self.bench.server(on).is_some()) {
+            Some(on) => vec![NewPick::Terminal(on.clone()), NewPick::Files(on)],
+            None => Vec::new(),
+        }
+    }
+
     /// A key while the "+" menu is open. Every key is the menu's: none reaches a terminal.
     fn new_tab_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if self.streamer_key(ev, tx) {
             return true;
         }
         let items = self.new_tab_groups().concat();
+        let side = self.new_tab_side();
         let Some(menu) = self.row.new_tab.as_mut() else { return false };
+        let up_down = matches!(ev.key, Key::Down | Key::Up);
+        let by = if ev.key == Key::Down { 1 } else { -1 };
+        if let Some(at) = menu.side_hot.filter(|_| !side.is_empty()) {
+            // In the rows beside a machine.
+            match ev.key {
+                _ if up_down => {
+                    menu.side_hot = sshee_app::palette::step(side.len(), Some(at), by);
+                    tx.instant();
+                }
+                Key::Enter | Key::Right => {
+                    if let Some(pick) = side.get(at).cloned() {
+                        self.new_tab_pick(pick, true, tx);
+                    }
+                }
+                Key::Left | Key::Backspace | Key::Escape => {
+                    (menu.on, menu.side_hot) = (None, None);
+                    tx.instant();
+                }
+                _ => {}
+            }
+            return true;
+        }
         let hot = menu.hot.and_then(|h| items.get(h)).cloned();
-        let inside = menu.on.is_some();
         match ev.key {
-            Key::Down | Key::Up => {
-                menu.hot = sshee_app::palette::step(items.len(), menu.hot, if ev.key == Key::Down { 1 } else { -1 });
+            _ if up_down => {
+                menu.hot = sshee_app::palette::step(items.len(), menu.hot, by);
+                // Moving off a machine closes what it slid out.
+                menu.on = None;
                 tx.instant();
             }
             Key::Enter => {
@@ -438,17 +475,30 @@ impl Shell {
                     self.new_tab_pick(pick, true, tx);
                 }
             }
-            Key::Left | Key::Backspace | Key::Escape if inside => self.new_tab_pick(NewPick::Back, true, tx),
+            Key::Left | Key::Backspace if menu.on.is_some() => {
+                menu.on = None;
+                tx.instant();
+            }
             Key::Escape => self.close_tab_overlays(tx),
             _ => {}
         }
         true
     }
 
-    /// A row of the "+" menu, picked. `by_key`: from the keyboard, so the page it turns to
-    /// starts with a row highlighted (by the pointer, none is until it moves).
+    /// The pointer over a row of the "+" menu: it lights up, and a machine's slides out what
+    /// to open there (another row closes it).
+    fn new_tab_point(&mut self, row: usize, machine: Option<ServerKey>, tx: &mut Tx) {
+        let Some(menu) = self.row.new_tab.as_mut() else { return };
+        if menu.hot == Some(row) && menu.on == machine && menu.side_hot.is_none() {
+            return tx.live_only();
+        }
+        (menu.hot, menu.on, menu.side_hot) = (Some(row), machine, None);
+        tx.instant();
+    }
+
+    /// A row of the "+" menu, picked. `by_key`: from the keyboard, so what a machine slides
+    /// out starts with its first row highlighted (by the pointer, none is until it moves).
     fn new_tab_pick(&mut self, pick: NewPick, by_key: bool, tx: &mut Tx) {
-        let came_from = self.row.new_tab.as_ref().and_then(|m| m.on.clone());
         match pick {
             NewPick::Terminal(server) => {
                 self.row.close_overlays();
@@ -460,16 +510,10 @@ impl Shell {
                 self.open_files_on(&server, None, tx);
             }
             NewPick::Machine(server) => {
-                // By key, "New terminal on …" is the one Return picks next.
-                self.row.new_tab = Some(NewTabMenu { on: Some(server), hot: by_key.then_some(1) });
-                tx.instant();
-            }
-            NewPick::Back => {
-                self.row.new_tab = Some(NewTabMenu::default());
-                // By key, back on the machine it came from.
-                let at = self.new_tab_groups().concat().iter().position(|p| matches!(p, NewPick::Machine(k) if Some(k) == came_from.as_ref()));
+                // By key, "New terminal" beside it is the one Return picks next.
                 if let Some(menu) = self.row.new_tab.as_mut() {
-                    menu.hot = at.filter(|_| by_key);
+                    menu.on = Some(server);
+                    menu.side_hot = by_key.then_some(0);
                 }
                 tx.instant();
             }
@@ -1014,6 +1058,7 @@ pub(crate) fn overlays(s: &Shell, t: &'static Theme) -> Vec<El> {
     }
     if let Some(menu) = &s.row.new_tab {
         out.push(new_tab_menu(s, t, menu));
+        out.extend(new_tab_side(s, t, menu));
     }
     out.extend(super::title::title_menu(s, t));
     out
@@ -1024,7 +1069,6 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
     let named = |key: &str| s.bench.server(key).map(|sv| s.server_shown(key, &sv.name).into_owned()).unwrap_or_default();
     let keys = shortcut_label(Shortcut::NewTerminal, s.options.mac_keys, &s.options.shortcuts);
     let files_keys = shortcut_label(Shortcut::OpenFiles, s.options.mac_keys, &s.options.shortcuts);
-    let on = menu.on.as_deref().map(named);
     let mut rows = rune::col().w_full().padding(crate::kit::menu::PAD).role("menu");
     let mut n = 0;
     for (g, group) in s.new_tab_groups().into_iter().enumerate() {
@@ -1032,37 +1076,32 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
             rows = rows.child(list_rule(t).key(format!("nt-rule-{g}")));
         }
         for pick in group {
-            let state = if menu.hot == Some(n) { RowState::Hot } else { RowState::Rest };
+            // A machine stays lit while what it slid out shows.
+            let open = matches!(&pick, NewPick::Machine(k) if menu.on.as_ref() == Some(k));
+            let state = if menu.hot == Some(n) || open { RowState::Hot } else { RowState::Rest };
             let tint = match &pick {
                 NewPick::Machine(server) => crate::screens::server_menu::own_color(s, server),
                 _ => None,
             };
             let (key, label, glyph, tail, caps) = match &pick {
-                NewPick::Terminal(_) => match &on {
-                    Some(name) => ("nt-terminal".to_owned(), format!("New terminal on {name}"), Icon::Terminal, "", None),
-                    None => ("nt-terminal".to_owned(), "New terminal".to_owned(), Icon::Terminal, "", keys.clone()),
-                },
-                NewPick::Files(_) => match &on {
-                    Some(name) => ("nt-files".to_owned(), format!("Files on {name}"), Icon::Folder, "", None),
-                    None => ("nt-files".to_owned(), "Files".to_owned(), Icon::Folder, "", files_keys.clone()),
-                },
+                NewPick::Terminal(_) => ("nt-terminal".to_owned(), "New terminal".to_owned(), Icon::Terminal, "", keys.clone()),
+                NewPick::Files(_) => ("nt-files".to_owned(), "Files".to_owned(), Icon::Folder, "", files_keys.clone()),
                 NewPick::Machine(server) => {
                     let at = s.bench.servers().iter().position(|sv| sv.key() == *server).unwrap_or_default();
                     let glyph = s.bench.server(server).map_or(Icon::Server, |sv| Icon::for_server(&sv.icon));
                     (format!("nt-server-{at}"), named(server), glyph, "›", None)
                 }
-                NewPick::Back => ("nt-back".to_owned(), "Back".to_owned(), Icon::Back, "", None),
             };
             let spec = ListRow { icon: Some(glyph), tint, label: &label, tail, keys: caps.as_deref(), state, ..ListRow::default() };
             let i = n;
+            let machine = match &pick {
+                NewPick::Machine(server) => Some(server.clone()),
+                _ => None,
+            };
             let mut row = list_row(t, &spec)
                 .key(key)
                 .role("menuitem")
-                .on_pointer_move(move |s: &mut Shell, _| {
-                    if let Some(menu) = s.row.new_tab.as_mut() {
-                        menu.hot = Some(i);
-                    }
-                })
+                .on_pointer_move_local(move |s: &mut Shell, _, tx| s.new_tab_point(i, machine.clone(), tx))
                 .on_press_tx(move |s: &mut Shell, tx| s.new_tab_pick(pick.clone(), false, tx));
             if state == RowState::Rest {
                 row = row.hover(t.hov2);
@@ -1071,13 +1110,9 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
             n += 1;
         }
     }
-    let label = match &on {
-        Some(name) => format!("New tab on {name}"),
-        None => "New tab".to_owned(),
-    };
     popover(t, NEW_WIDTH)
         .key("new-tab-menu")
-        .label(label)
+        .label_static("New tab")
         .anchored_fit("new-tab", Side::Bottom, Align::Start, 6.0)
         .role("menu")
         .focusable(true)
@@ -1086,6 +1121,43 @@ fn new_tab_menu(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> El {
         // A long list of servers scrolls inside the room the window leaves it.
         .child(crate::kit::scroll_bar::ScrollBars::scroll_bars(rune::col().key("new-tab-rows").w_full().shrink().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(rows), t))
         .modal_tx(true, |s: &mut Shell, tx| s.close_tab_overlays(tx))
+}
+
+/// What a machine's row in the "+" menu slides out beside it: a terminal or Files there.
+fn new_tab_side(s: &Shell, t: &'static Theme, menu: &NewTabMenu) -> Option<El> {
+    let picks = s.new_tab_side();
+    let on = menu.on.as_deref().filter(|_| !picks.is_empty())?;
+    let at = s.bench.servers().iter().position(|sv| sv.key() == on)?;
+    let name = s.bench.server(on).map(|sv| s.server_shown(on, &sv.name).into_owned()).unwrap_or_default();
+    let mut rows = rune::col().w_full().padding(crate::kit::menu::PAD).role("menu");
+    for (j, pick) in picks.into_iter().enumerate() {
+        let state = if menu.side_hot == Some(j) { RowState::Hot } else { RowState::Rest };
+        let (key, label, glyph, said) = match &pick {
+            NewPick::Files(_) => ("nt-on-files", "Files", Icon::Folder, format!("Files on {name}")),
+            _ => ("nt-on-terminal", "New terminal", Icon::Terminal, format!("New terminal on {name}")),
+        };
+        let spec = ListRow { icon: Some(glyph), label, state, ..ListRow::default() };
+        let mut row = list_row(t, &spec)
+            .key(key)
+            .role("menuitem")
+            .label(said)
+            .on_pointer_move_local(move |s: &mut Shell, _, tx| {
+                if let Some(menu) = s.row.new_tab.as_mut() {
+                    if menu.side_hot != Some(j) {
+                        menu.side_hot = Some(j);
+                        return tx.instant();
+                    }
+                }
+                tx.live_only();
+            })
+            .on_press_tx(move |s: &mut Shell, tx| s.new_tab_pick(pick.clone(), false, tx));
+        if state == RowState::Rest {
+            row = row.hover(t.hov2);
+        }
+        rows = rows.child(row);
+    }
+    // Beside the machine's row, its first row level with it.
+    Some(popover(t, SIDE_WIDTH).key("new-tab-side").label(format!("New tab on {name}")).role("menu").anchored_fit(format!("nt-server-{at}"), Side::Right, Align::Start, crate::kit::menu::PAD + 2.0).offset(0.0, -crate::kit::menu::PAD).child(rows))
 }
 
 /// A tab's menu: side by side, a new terminal or Files on its machine, duplicate, and the

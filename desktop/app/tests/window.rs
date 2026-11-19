@@ -606,9 +606,9 @@ fn a_tab_has_a_menu_and_a_crowded_row_has_a_list() {
     });
 }
 
-/// "+" and its menu: a terminal or Files here, then the other machines; one of them opened.
+/// "+" and its menu: a terminal or Files here, then the other machines; one slides out its own.
 #[test]
-fn plus_opens_its_menu_under_it_and_a_machines_page() {
+fn plus_opens_its_menu_under_it_and_a_machine_slides_out_beside_it() {
     let first = || json!([tap(0.3, STAGING), tap(0.8, "new-tab"), end(1.4)]);
     in_both("plus", first, |run, _| {
         let (menu, plus, window) = (run.rect("new-tab-menu"), run.rect("new-tab"), run.rect("window"));
@@ -620,7 +620,13 @@ fn plus_opens_its_menu_under_it_and_a_machines_page() {
     });
     let inside = || json!([tap(0.3, STAGING), tap(0.8, "new-tab"), tap(1.3, "nt-server-0"), end(1.8)]);
     in_both("plus-machine", inside, |run, _| {
-        assert!(run.element("nt-back").is_some());
+        // What to open there slides out beside its row, level with it, inside the window: by
+        // "+" at the window's right edge there's no room to the right, so to the left.
+        let (side, row, window) = (run.rect("new-tab-side"), run.rect("nt-server-0"), run.rect("window"));
+        let beside = side[0] >= row[0] + row[2] - 1.0 || side[0] + side[2] <= row[0] + 1.0;
+        assert!(beside && side[0] >= 0.0 && side[0] + side[2] <= window[2], "beside the row, inside the window: {side:?} {row:?}");
+        assert!((side[1] - row[1]).abs() < 12.0, "level with the row: {side:?} {row:?}");
+        assert!(run.element("nt-on-terminal").is_some() && run.element("new-tab-menu").is_some());
         assert!(run.tree_text.contains("Files on This computer"));
     });
 }

@@ -19,13 +19,18 @@
 //! ├── check, tor, settings-gear   at the foot (a row in the list)
 //! └── rail-edge    drag to resize, double-click for the first width
 //! ```
+//!
+//! A server held and dragged up or down goes to another place in the list (`server-drop`
+//! marks where); the order is kept (`Ask::Reorder`, `looks.json`).
+
+use std::collections::HashMap;
 
 use rune::{col, el, row, spacer, text, Drag, El, Phase, Side, Tx};
 use sshee_app::model::SidebarMode;
 use sshee_app::palette::shortcut_label;
 use sshee_app::workbench::layout::sidebar;
 use sshee_app::workbench::shortcuts::Shortcut;
-use sshee_app::workbench::{Server, TabKind, Tor};
+use sshee_app::workbench::{Server, ServerKey, TabKind, Tor};
 
 use super::rail_load::{self, Load};
 use super::state::Shell;
@@ -42,13 +47,33 @@ const EDGE: f32 = 6.0;
 /// A row of the list.
 const LIST_ROW: f32 = 30.0;
 
-/// A drag of the sidebar's edge, while it lasts.
+/// How far a held server moves before it's dragged (a shorter move is still a click).
+const DRAG_START: f32 = 4.0;
+
+/// A drag of the sidebar's edge, or of a server in it, while it lasts.
 #[derive(Default)]
 pub struct RailDrag {
     /// The width when the drag began.
     from: f32,
     /// What the pointer asks for now: the list this wide, or `None`, the rail.
     now: Option<Option<f32>>,
+    /// A server being dragged to another place.
+    pub(crate) server: Option<ServerDrag>,
+    /// Where each server is drawn, `[x, y, w, h]` in window points, for where a dragged one
+    /// would land.
+    pub(crate) rects: HashMap<ServerKey, [f32; 4]>,
+}
+
+/// A server held down in the sidebar.
+#[derive(Clone)]
+pub(crate) struct ServerDrag {
+    pub(crate) key: ServerKey,
+    /// Past `DRAG_START`: it follows the pointer (before, a release is a click).
+    pub(crate) moved: bool,
+    /// How far the pointer went up or down.
+    pub(crate) dy: f32,
+    /// Its place in the list counted without it, where a release would put it.
+    pub(crate) to: Option<usize>,
 }
 
 impl Shell {
@@ -75,7 +100,7 @@ impl Shell {
     pub(crate) fn rail_drag(&mut self, d: &Drag, tx: &mut Tx) {
         match d.phase {
             Phase::Down if d.clicks >= 2 => {
-                self.rail = RailDrag::default();
+                self.rail.now = None;
                 self.change_settings(tx, |st| {
                     st.set(|s| {
                         s.sidebar_mode = SidebarMode::Wide;
@@ -83,7 +108,7 @@ impl Shell {
                     })
                 });
             }
-            Phase::Down => self.rail = RailDrag { from: self.sidebar_width(), now: None },
+            Phase::Down => (self.rail.from, self.rail.now) = (self.sidebar_width(), None),
             Phase::Move => {
                 // Toward the page widens it, from either side of the window.
                 let dx = if self.sidebar_at_right() { -d.dx } else { d.dx };
@@ -106,6 +131,63 @@ impl Shell {
         }
         tx.instant();
     }
+
+    /// A server held and dragged up or down the sidebar: it follows the pointer, a mark shows
+    /// where it would go, and a release puts it there and keeps the order.
+    pub(crate) fn server_drag(&mut self, key: &str, d: &Drag, tx: &mut Tx) {
+        match d.phase {
+            Phase::Down => {
+                self.rail.server = Some(ServerDrag { key: key.to_owned(), moved: false, dy: 0.0, to: None });
+                tx.live_only();
+            }
+            Phase::Move => {
+                let Some(mut drag) = self.rail.server.clone().filter(|g| g.key == key) else { return };
+                if !drag.moved && d.dx.abs() < DRAG_START && d.dy.abs() < DRAG_START {
+                    tx.live_only();
+                    return;
+                }
+                if !drag.moved {
+                    self.screens.server_card.hide();
+                }
+                (drag.moved, drag.dy) = (true, d.dy);
+                drag.to = Some(self.server_slot(key, d.window_point()[1]));
+                self.rail.server = Some(drag);
+                tx.animated();
+            }
+            Phase::Up => {
+                let Some(drag) = self.rail.server.take().filter(|g| g.key == key) else { return };
+                tx.instant();
+                let Some(to) = drag.to.filter(|_| drag.moved && !d.cancelled()) else { return };
+                let mut servers = self.bench.servers().to_vec();
+                let Some(from) = servers.iter().position(|s| s.key() == key) else { return };
+                if from == to {
+                    return;
+                }
+                let moved = servers.remove(from);
+                servers.insert(to.min(servers.len()), moved);
+                let order = servers.iter().map(Server::key).collect();
+                self.bench.set_servers(servers);
+                self.backend_mut().servers(sshee_app::servers::Ask::Reorder { order });
+            }
+        }
+    }
+
+    /// Where server `key` would land with the pointer at `y`: after every other server whose
+    /// middle is above it.
+    fn server_slot(&self, key: &str, y: f32) -> usize {
+        self.bench.servers().iter().filter(|s| s.key() != key).filter_map(|s| self.rail.rects.get(&s.key())).filter(|r| r[1] + r[3] / 2.0 < y).count()
+    }
+
+    /// A server is being dragged (past a click's wobble).
+    fn dragging_server(&self) -> bool {
+        self.rail.server.as_ref().is_some_and(|g| g.moved)
+    }
+}
+
+/// Where a dragged server would land: a line between two servers, taking no room.
+fn drop_mark(t: &Theme, width: f32) -> El {
+    // The column's gap, given back, so nothing moves while the mark shows.
+    el().key("server-drop").w(width).h(0.0).mb(-3.0).a11y_hidden().child(el().absolute(0.0, -2.5).size(width, 2.0).radius(1.0).fill(t.blue))
 }
 
 /// The logo: the main menu.
@@ -203,12 +285,24 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         rail.child(el().key("rule").size(20.0, 1.0).mt(5.0).mb(5.0).fill(t.hair))
     };
     let current = s.bench.current_key();
+    let dragged = s.rail.server.as_ref().filter(|g| g.moved);
+    let mark_width = if wide { width - 16.0 } else { theme::RAIL_BUTTON };
+    let mut others = 0;
     for (i, server) in s.bench.servers().iter().enumerate() {
         let key = server.key();
         let selected = current == Some(key.as_str());
         let menu = key.clone();
+        let held = key.clone();
+        let placed = key.clone();
+        let mine = dragged.is_some_and(|g| g.key == key);
+        if !mine {
+            if dragged.is_some_and(|g| g.to == Some(others)) {
+                rail = rail.child(drop_mark(t, mark_width));
+            }
+            others += 1;
+        }
         let b = if wide { list_server(s, t, i, server, selected) } else { rail_server(s, t, server, selected) };
-        let b = b
+        let mut b = b
             .key(format!("server-{i}"))
             .on_press_tx(move |s: &mut Shell, tx| {
                 s.screens.server_card.hide();
@@ -222,8 +316,24 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
             // Its card (`screens::server_card`) says more than a tooltip; a right click
             // opens its menu (`screens::server_menu`).
             .help("")
-            .on_hover_change(move |s: &mut Shell, inside, tx| s.hover_server(i, inside, tx))
-            .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx));
+            .on_hover_change(move |s: &mut Shell, inside, tx| {
+                // A server dragged past it opens no card.
+                if !s.dragging_server() {
+                    s.hover_server(i, inside, tx);
+                }
+            })
+            .on_secondary_press(move |s: &mut Shell, at, tx| s.open_server_menu(&menu, (at.x, at.y), tx))
+            // Held and dragged: to another place in the list.
+            .on_drag(move |s: &mut Shell, d, tx| s.server_drag(&held, d, tx))
+            .on_layout_tx(move |s: &mut Shell, rect, tx| {
+                s.rail.rects.insert(placed.clone(), rect);
+                // Only noted: nothing is drawn from it.
+                tx.live_only();
+            });
+        if let Some(drag) = dragged.filter(|_| mine) {
+            // Lifted off the list, under the pointer exactly, over everything.
+            b = b.offset(0.0, drag.dy).offset_motion(rune::Anim::INSTANT).raise().fill(t.pop).shadow(6.0, 18.0, rune::Color::BLACK.alpha(if t.dark { 0.45 } else { 0.2 }));
+        }
         rail = rail.child(b);
         // Its tabs, when they go under each server; then its containers, when its tree is open.
         if wide {
@@ -232,6 +342,9 @@ pub(crate) fn rail(s: &Shell, t: &'static Theme) -> El {
         } else {
             rail = rail.children(rail_tree::rail_tabs(s, t, i, &server.key()));
         }
+    }
+    if dragged.is_some_and(|g| g.to == Some(others)) {
+        rail = rail.child(drop_mark(t, mark_width));
     }
     if !wide {
         rail = rail.child(rail_button(t, Icon::Plus, "Add a server", RailState::Plain, false).key("add-server").help_side(side).on_press_tx(|s: &mut Shell, tx| s.open_add_server(tx)));

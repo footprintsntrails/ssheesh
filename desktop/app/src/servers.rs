@@ -531,6 +531,10 @@ impl ServerStore {
                 }
                 Answer::Note(old_passwords_note(copied, &failed))
             }
+            Ask::Reorder { ref order } => {
+                self.looks.reorder(order);
+                self.save_looks().map_or_else(|why| Answer::failed(&ask, why), |()| Answer::Changed)
+            }
             Ask::Rename { ref server, ref name } => {
                 if let Some(host) = host_id(server).and_then(|id| self.hosts.get(id)) {
                     self.looks.rename(&listed(&host), name);
@@ -1124,6 +1128,19 @@ mod tests {
         assert!(w.keychain.kept.lock().unwrap().is_empty());
         assert!(!w.copy_file(LOOKS_FILE).contains("Shop"));
         assert!(matches!(again.handle(Ask::Remove { server }), Answer::Refused { .. }));
+    }
+
+    #[test]
+    fn the_servers_order_is_kept_after_a_restart() {
+        let w = World::new("order");
+        let mut store = w.store();
+        let Answer::Added { server: first, .. } = store.handle(by_hand("deploy@203.0.113.17", None, false)) else { panic!() };
+        let Answer::Added { server: second, .. } = store.handle(by_hand("dev@198.51.100.12", None, false)) else { panic!() };
+        let order = vec![second.clone(), "local".to_owned(), first.clone()];
+        assert_eq!(store.handle(Ask::Reorder { order: order.clone() }), Answer::Changed);
+        let mut again = w.store();
+        let keys: Vec<String> = again.shown().servers.iter().map(Server::key).collect();
+        assert_eq!(keys, order);
     }
 
     #[test]

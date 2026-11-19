@@ -820,6 +820,8 @@ pub enum Ask {
     /// Take a server out of the list: a saved one is removed and its password forgotten, one
     /// from `~/.ssh/config` is hidden.
     Remove { server: ServerKey },
+    /// The sidebar's servers, in the order they were dragged into.
+    Reorder { order: Vec<ServerKey> },
 }
 
 impl Ask {
@@ -839,6 +841,7 @@ impl Ask {
             Ask::ForgetPassword { .. } => "Couldn't forget the password",
             Ask::SavePassword { .. } => "Couldn't save the password",
             Ask::Remove { .. } => "Couldn't remove the server",
+            Ask::Reorder { .. } => "Couldn't keep the servers' order",
         }
     }
 
@@ -1063,6 +1066,10 @@ impl Book {
             Ask::UseOldPasswords => {
                 let n = std::mem::take(&mut self.sources.old_passwords);
                 Answer::Note(old_passwords_note(n, &[]))
+            }
+            Ask::Reorder { order } => {
+                self.looks.reorder(&order);
+                Answer::Changed
             }
             Ask::Rename { server, name } => {
                 if let Some(host) = self.listed(&server).cloned() {

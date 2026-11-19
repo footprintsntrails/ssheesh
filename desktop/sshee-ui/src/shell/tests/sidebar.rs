@@ -266,3 +266,68 @@ fn server_icons_can_be_pixels() {
     assert_eq!(w.rect("server-1").unwrap(), before);
     assert!(w.tree().contains("web-7731") && w.tree().contains("This computer"));
 }
+
+/// The servers' names in the sidebar's order.
+fn order(w: &mut Window) -> Vec<String> {
+    let mut names = Vec::new();
+    w.rt.update(|s, _| names = s.bench.servers().iter().map(|s| s.name.clone()).collect());
+    names
+}
+
+#[test]
+fn a_server_held_and_dragged_goes_to_another_place_in_the_list() {
+    for wide in [false, true] {
+        let mut w = linux();
+        w.rt.update(|s, _| {
+            s.bench.set_servers(vec![
+                Server::host("web", "web-7731", "deploy@203.0.113.17"),
+                Server::host("db", "db-main", "postgres@203.0.113.31"),
+                Server::host("lab", "lab-7731", "dev@198.51.100.12"),
+            ]);
+        });
+        // The new servers slide in: let them land.
+        for _ in 0..40 {
+            w.rt.frame(0.05);
+        }
+        w.settle();
+        if wide {
+            w.wide();
+        }
+        assert_eq!(order(&mut w), ["This computer", "web-7731", "db-main", "lab-7731"]);
+        // lab-7731, the last, held and dragged above web-7731.
+        let (x, y) = w.rt.find("server-3").unwrap();
+        let (_, to) = w.rt.find("server-1").unwrap();
+        w.rt.pointer_down(x, y);
+        w.rt.frame(1.0 / 60.0);
+        for step in 1..=6 {
+            w.rt.pointer_move(x, y + (to - 6.0 - y) * step as f32 / 6.0);
+            w.rt.frame(1.0 / 60.0);
+        }
+        for _ in 0..20 {
+            w.rt.frame(0.05);
+        }
+        // A line shows where it would go, and the list hasn't changed yet.
+        let mark = w.rt.find("server-drop").expect("the mark where it lands");
+        assert!(mark.1 < to, "the mark is above web-7731: {mark:?}, {to}");
+        assert_eq!(order(&mut w).last().unwrap(), "lab-7731");
+        w.rt.pointer_up(x, to - 6.0);
+        w.settle();
+        assert_eq!(order(&mut w), ["This computer", "lab-7731", "web-7731", "db-main"], "wide: {wide}");
+        assert!(w.rt.find("server-drop").is_none());
+        // A click is still a click: no move.
+        w.click("server-2");
+        assert_eq!(order(&mut w), ["This computer", "lab-7731", "web-7731", "db-main"]);
+        // Escape mid-drag puts nothing anywhere.
+        let (x, y) = w.rt.find("server-0").unwrap();
+        w.rt.pointer_down(x, y);
+        w.rt.frame(1.0 / 60.0);
+        for step in 1..=4 {
+            w.rt.pointer_move(x, y + 30.0 * step as f32);
+            w.rt.frame(1.0 / 60.0);
+        }
+        w.key(Key::Escape, "");
+        w.rt.pointer_up(x, y + 120.0);
+        w.settle();
+        assert_eq!(order(&mut w)[0], "This computer", "wide: {wide}");
+    }
+}

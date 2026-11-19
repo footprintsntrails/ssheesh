@@ -341,19 +341,28 @@ fn plus_opens_terminals_and_files_here_or_on_another_machine() {
     w.click("nt-files");
     assert_eq!(w.row(), "Terminal@web-7731 *Files@web-7731");
 
-    // Another machine: its page, then its Files.
+    // Another machine: the pointer on its row slides out what to open there, beside it.
     w.click("new-tab");
-    w.click("nt-server-2");
+    assert!(w.rt.find("new-tab-side").is_none());
+    let (x, y) = w.rt.find("nt-server-2").unwrap();
+    w.rt.pointer_move(x, y);
+    w.settle();
     let tree = w.tree();
     assert!(tree.contains("Files on db-main") && tree.contains("New terminal on db-main"), "{tree}");
-    w.click("nt-back");
-    assert!(w.rt.find("nt-server-2").is_some(), "back on the first page");
+    let (side, row) = (w.rect("new-tab-side").unwrap(), w.rect("nt-server-2").unwrap());
+    assert!(side[0] >= row[0] + row[2] - 1.0, "beside the row: {side:?} {row:?}");
+    // Onto another row: it goes.
+    let (x, y) = w.rt.find("nt-terminal").unwrap();
+    w.rt.pointer_move(x, y);
+    w.settle();
+    assert!(w.rt.find("new-tab-side").is_none());
     w.click("nt-server-2");
-    w.click("nt-files");
+    w.click("nt-on-files");
     assert_eq!(w.row(), "Terminal@web-7731 Files@web-7731 *Files@db-main");
 
     // By keys alone, from db-main's Files: down to the first other machine (This computer),
-    // into it, and back out with Esc onto the same row; in again, and a terminal there.
+    // into what it slides out, and back out with Esc onto the same row; in again, and a
+    // terminal there.
     w.click("new-tab");
     for _ in 0..3 {
         w.key(Key::Down, "");
@@ -361,7 +370,7 @@ fn plus_opens_terminals_and_files_here_or_on_another_machine() {
     w.key(Key::Right, "");
     assert!(w.tree().contains("New terminal on This computer"), "{}", w.tree());
     w.key(Key::Escape, "");
-    assert!(w.rt.find("nt-server-0").is_some(), "back on the first page");
+    assert!(w.rt.find("new-tab-side").is_none() && w.rt.find("new-tab-menu").is_some(), "only what it slid out closed");
     assert_eq!(w.rt.state.row.new_tab.as_ref().and_then(|m| m.hot), Some(2), "on the machine it came from");
     w.key(Key::Enter, "");
     w.key(Key::Enter, "");
