@@ -337,7 +337,8 @@ impl Theme {
         if self.dark {
             self.code
         } else {
-            self.on_color
+            // White, whatever is drawn on the accent: a field is never the accent's colour.
+            Color::WHITE
         }
     }
 
@@ -379,6 +380,14 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fields_words_read_on_it_in_both_appearances() {
+        for dark in [true, false] {
+            let t = Theme::of(dark);
+            assert!(contrast(t.l1, t.field()) >= 4.5, "dark {dark}: the field's text doesn't read on it");
+        }
+    }
 
     #[test]
     fn both_appearances_are_the_designs() {
