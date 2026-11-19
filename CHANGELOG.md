@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2 — Check now checks
+
+- **Check now in Settings → Updates works.** It looks for a newer version at once and says what it found: you have the newest, a new one is ready at the top of the window, or why it couldn't look.
+- **New versions show up sooner.** SSHeesh looks every hour instead of every four, so a window left open hears about an update the same day.
+
 ## 1.0.1 — every server comes along
 
 - **All your servers from 0.10 are here.** The first time 1.0.1 starts, every server 0.10 had moves over by itself, nothing to pick: saved passwords, labels, icons and colours with them, and the servers from your SSH config that 0.10 showed. One you brought over by hand already isn't doubled.
