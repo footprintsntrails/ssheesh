@@ -420,9 +420,10 @@ pub struct StripTab<'a> {
     pub active: bool,
     /// The tab before it is another machine's: a divider goes between them.
     pub starts_group: bool,
-    /// The red "Prod" goes on this tab: one label per machine, on its first tab in the row,
-    /// unless it's the machine on screen, whose label is in the window's title.
-    pub prod: bool,
+    /// The label that goes on this tab ("Prod" red, "Staging" amber, "Dev" green): one per
+    /// machine, on its first tab in the row, unless it's the machine on screen, whose label is
+    /// in the window's title.
+    pub env: Option<&'a EnvLabel>,
 }
 
 /// The servers, the tabs and where you are.
@@ -590,7 +591,7 @@ impl Workbench {
                     server_name: server.map_or(UNKNOWN_SERVER, |s| s.name.as_str()),
                     active: active == Some(tab.id),
                     starts_group: i > 0 && self.tabs[i - 1].server != tab.server,
-                    prod: first_of_its_machine && current != Some(tab.server.as_str()) && server.is_some_and(Server::is_prod),
+                    env: server.and_then(|s| s.env.as_ref()).filter(|_| first_of_its_machine && current != Some(tab.server.as_str())),
                 }
             })
             .collect()
@@ -1587,21 +1588,22 @@ mod tests {
     }
 
     #[test]
-    fn one_prod_label_per_machine_and_the_current_machines_is_in_the_title() {
+    fn one_label_per_machine_and_the_current_machines_is_in_the_title() {
         let mut w = bench();
         w.go_to(WEB);
         w.open(TabKind::Files, WEB);
         let db = w.go_to(DB);
         w.new_terminal();
         w.go_to(STAGING);
-        // On staging: web and db each carry the label on their first tab.
-        let prod: Vec<bool> = w.strip().iter().map(|s| s.prod).collect();
-        assert_eq!(prod, [true, false, true, false, false]);
+        // On staging: web and db each carry their label on their first tab; staging's is in
+        // the title.
+        let env: Vec<Option<&EnvLabel>> = w.strip().iter().map(|s| s.env).collect();
+        assert_eq!(env, [Some(&EnvLabel::Prod), None, Some(&EnvLabel::Prod), None, None]);
         assert_eq!(w.window_title(), ("web-staging", false));
-        // On db: its label moves to the title.
+        // On db: its label moves to the title, and staging's "Staging" goes on its tab.
         w.focus(db);
-        let prod: Vec<bool> = w.strip().iter().map(|s| s.prod).collect();
-        assert_eq!(prod, [true, false, false, false, false]);
+        let env: Vec<Option<&EnvLabel>> = w.strip().iter().map(|s| s.env).collect();
+        assert_eq!(env, [Some(&EnvLabel::Prod), None, None, None, Some(&EnvLabel::Staging)]);
         assert_eq!(w.window_title(), ("db-main", true));
         let groups: Vec<bool> = w.strip().iter().map(|s| s.starts_group).collect();
         assert_eq!(groups, [false, false, true, false, true]);

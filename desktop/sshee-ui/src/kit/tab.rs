@@ -1,23 +1,24 @@
 //! A tab in the top row: its kind's icon, its name, its server's name in a quieter tone, then
-//! what it has to say ("Prod", "Needs you", "Reconnecting…").
+//! what it has to say ("Prod", "Staging", "Dev", "Needs you", "Reconnecting…").
 //!
 //! - Every tab ends with the same close cross, after its status mark: always on the tab
 //!   you're on, under the pointer on the others (its room is kept, so the tab keeps its width).
 //!   In a crowded row only the tab you're on has one, as in a browser: the others give its
 //!   room to their names, and close with the middle button or their menu.
 //! - The tab you're on is a rounded lighter fill; under the pointer any other gets a fainter one.
-//! - In a window that isn't in front, the tab you're on goes quiet; "Prod" stays red.
+//! - In a window that isn't in front, the tab you're on goes quiet; its label keeps its colour.
 //! - A program's progress (OSC 9;4) is a small ring after the name, filling as it goes
 //!   (0.10 spun one); a terminal asleep is a quiet moon, not a warning.
 //! - When the row is crowded (`Tab::compact`), the server is named once before its group
 //!   instead of in every tab, and a long name fades out at its end.
 
 use rune::{text, Color, El, Tx};
+use sshee_app::model::EnvLabel;
 use sshee_app::workbench::Badge;
 use sshee_term::osc::{Progress, ProgressState};
 
 use crate::icons::{icon, Icon};
-use crate::kit::chip::prod_chip;
+use crate::kit::chip::env_chip_on;
 use crate::kit::{dot, hollow_dot, progress_arc, progress_ring};
 use crate::theme::{self, Theme};
 
@@ -28,8 +29,8 @@ pub struct Tab<'a> {
     pub name: &'a str,
     /// The server's name; `None` when the row is crowded and the group is named instead.
     pub server: Option<&'a str>,
-    /// The red "Prod" chip goes on this tab.
-    pub prod: bool,
+    /// The label chip that goes on this tab: "Prod" red, "Staging" amber, "Dev" green.
+    pub env: Option<&'a EnvLabel>,
     pub badge: Option<Badge>,
     /// An agent is at work in it: a quiet ring after its name, when it has nothing else to say.
     pub working: bool,
@@ -159,8 +160,8 @@ pub fn tab<S: 'static>(t: &Theme, spec: &Tab, on_close: impl Fn(&mut S, &mut Tx)
     if let Some(server) = spec.server {
         e = e.child(text(server).key("server").font(theme::TAB_SERVER).color(server_ink).single_line().pt(1.0));
     }
-    if spec.prod {
-        e = e.child(prod_chip(t, active));
+    if let Some(env) = spec.env {
+        e = e.child(env_chip_on(t, env, active));
     }
     e = e.children(state_mark(t, spec, compact));
     if cross {
@@ -226,11 +227,11 @@ fn progress_mark(t: &Theme, p: Progress) -> El {
 }
 
 /// A group's name when the row is crowded: the server, once, before its tabs. `current`: the
-/// server on screen, in primary text.
-pub fn group_name(t: &Theme, server: &str, prod: bool, current: bool) -> El {
+/// server on screen, in primary text. `env`: its label, after its name.
+pub fn group_name(t: &Theme, server: &str, env: Option<&EnvLabel>, current: bool) -> El {
     let mut e = rune::row().items_center().gap(0.0).pl(5.0).pr(7.0).child(text(server).font(theme::GROUP).color(if current { t.l1 } else { t.l2 }).single_line());
-    if prod {
-        e = e.child(prod_chip(t, false).ml(7.0));
+    if let Some(env) = env {
+        e = e.child(env_chip_on(t, env, false).ml(7.0));
     }
     e
 }

@@ -53,7 +53,7 @@ pub fn book() -> Book {
         host("cfg:build-box", "build-box", "ci@203.0.113.52:2222", true),
     ];
     let mut looks = Looks::default();
-    for (id, icon, env) in [("demo-web", "globe", Some(EnvLabel::Prod)), ("demo-staging", "flask", Some(EnvLabel::Staging)), ("demo-backups", "backup", None), ("demo-db", "database", Some(EnvLabel::Prod))] {
+    for (id, icon, env) in [("demo-web", "globe", Some(EnvLabel::Prod)), ("demo-staging", "flask", Some(EnvLabel::Staging)), ("demo-backups", "backup", Some(EnvLabel::Dev)), ("demo-db", "database", Some(EnvLabel::Prod))] {
         looks.set_icon(id, icon);
         looks.set_env(id, env);
     }

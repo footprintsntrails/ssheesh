@@ -1,6 +1,7 @@
 //! The sidebar's servers as 0.10 had them: a mark while one connects or when it's in trouble,
 //! the "+" and the chevron on the row under the pointer, every label (Prod, Staging, Dev) in
-//! the list, under the icon, in the title and a split's header, the shortcuts in the tooltips,
+//! the list, under the icon, in the title, on tabs, the card and a split's header, the page's
+//! frame and the line along the top, the shortcuts in the tooltips,
 //! and the title's menu with a server's tunnels and recipes.
 
 use rune::Key;
@@ -8,6 +9,7 @@ use sshee_app::model::{EnvLabel, IconPack, SidebarMode};
 use sshee_app::workbench::{Link, Server, TabKind};
 
 use super::{linux, Window, DB, WEB};
+use crate::kit::chip::env_color;
 
 impl Window {
     fn wide(&mut self) {
@@ -153,6 +155,69 @@ fn staging_and_dev_are_labelled_like_prod() {
     });
     w.settle();
     assert!(w.rt.find("env-dev").is_some(), "Dev in the split's header");
+}
+
+/// The colour some text is drawn in, by its words.
+fn ink_of(w: &Window, words: &str, under: &str) -> Option<String> {
+    w.rt.elements().into_iter().find(|e| !e.exiting && e.text.as_deref() == Some(words) && e.path.contains(under)).and_then(|e| e.text_color).map(|c| c.hex())
+}
+
+#[test]
+fn staging_and_dev_go_on_tabs_cards_and_the_frame_as_prod_does() {
+    let mut w = linux();
+    w.rt.update(|s, _| {
+        s.bench.set_servers(vec![
+            Server::host("web", "web-7731", "deploy@203.0.113.17").env(EnvLabel::Prod).icon("globe"),
+            Server::host("db", "db-main", "postgres@203.0.113.31").env(EnvLabel::Staging).icon("database"),
+            Server::host("lab", "lab-7731", "dev@198.51.100.12").env(EnvLabel::Dev),
+        ]);
+    });
+    w.settle();
+    w.rt.update(|s, tx| {
+        for server in ["host:lab", "host:db", WEB] {
+            let id = s.bench.open(TabKind::Terminal, server);
+            s.focus_tab(id, tx);
+        }
+    });
+    w.settle();
+    let first_on = |w: &Window, server: &str| w.rt.state.bench.tabs_on(server).next().expect("a tab").id;
+    let (web, db, lab) = (first_on(&w, WEB), first_on(&w, "host:db"), first_on(&w, "host:lab"));
+    let t = w.rt.state.theme(true);
+    let orange = t.orange.hex();
+    // Each other machine's first tab carries its label, in its colour; the machine on screen
+    // has its own in the title.
+    assert!(w.rt.find(&format!("tab-{}/env-staging", db.0)).is_some(), "Staging on db's tab");
+    assert!(w.rt.find(&format!("tab-{}/env-dev", lab.0)).is_some(), "Dev on lab's tab");
+    assert!(w.rt.find(&format!("tab-{}/prod", web.0)).is_none() && w.rt.find("title/prod").is_some());
+    assert_eq!(ink_of(&w, "Staging", &format!("tab-{}", db.0)), Some(env_color(t, &EnvLabel::Staging).hex()));
+    assert_eq!(ink_of(&w, "Dev", &format!("tab-{}", lab.0)), Some(env_color(t, &EnvLabel::Dev).hex()));
+    // On Staging: its frame is orange, and so is the line along the top when it's asked for.
+    w.rt.update(|s, tx| s.focus_tab(db, tx));
+    w.settle();
+    assert!(w.rt.find("title/env-staging").is_some() && w.rt.find(&format!("tab-{}/env-staging", db.0)).is_none());
+    assert!(w.rt.find("env-frame").is_some() && w.rt.find("env-stripe").is_none());
+    w.rt.update(|s, tx| s.change_settings(tx, |st| st.set(|v| v.env_stripe = true)));
+    w.settle();
+    let stripe = w.rt.elements().into_iter().find(|e| e.key.as_deref() == Some("env-stripe")).expect("the line along the top");
+    assert_eq!(stripe.fill.hex(), orange);
+    // On Dev: framed, but no line along the top (as in 0.10: it warns of Production and
+    // Staging only).
+    w.rt.update(|s, tx| s.focus_tab(lab, tx));
+    w.settle();
+    assert!(w.rt.find("title/env-dev").is_some() && w.rt.find("env-frame").is_some() && w.rt.find("env-stripe").is_none());
+    // Tabs that don't name their server: the group's name carries the label.
+    w.rt.update(|s, tx| s.change_settings(tx, |st| st.set_more(|v| v.tabs_name_server = false)));
+    w.settle();
+    assert!(w.rt.find(&format!("group-{}/env-staging", db.0)).is_some(), "Staging after db's name");
+    assert!(w.rt.find(&format!("group-{}/env-dev", lab.0)).is_some(), "Dev after lab's name");
+    // The server's card under the pointer.
+    w.wide();
+    w.rt.help_delay = 0.0;
+    w.hover("server-2");
+    for _ in 0..30 {
+        w.rt.frame(1.0 / 60.0);
+    }
+    assert!(w.rt.find("server-card/env-staging").is_some(), "Staging on db's card");
 }
 
 #[test]

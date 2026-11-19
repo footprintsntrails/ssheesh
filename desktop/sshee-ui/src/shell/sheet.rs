@@ -4,12 +4,13 @@
 //! focus ring show under the pointer and the Tab key; nothing here does anything.
 
 use rune::{col, row, text, El, TextEdit, Tx};
+use sshee_app::model::EnvLabel;
 use sshee_app::workbench::Badge;
 
 use super::state::Shell;
 use crate::icons::{icon, logo, logo_loader, Icon};
 use crate::kit::button::toolbar_button;
-use crate::kit::chip::prod_chip;
+use crate::kit::chip::{env_chip, prod_chip};
 use crate::kit::field::{input, search_field};
 use crate::kit::keycap::{key_cap_button, CapState};
 use crate::kit::menu::{menu, menu_row, RowState};
@@ -43,24 +44,24 @@ fn sample_tab(t: &Theme, key: &'static str, spec: Tab) -> El {
 }
 
 pub fn view(t: &'static Theme) -> El {
-    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), prod: false, badge: None, working: false, connecting: false, went_quiet: false, progress: None, active: false, window_active: true, compact: false };
+    let base = Tab { icon: Icon::Folder, name: "Files", server: Some("web-7731"), env: None, badge: None, working: false, connecting: false, went_quiet: false, progress: None, active: false, window_active: true, compact: false };
     let term = Tab { icon: Icon::Terminal, name: "~/shop", server: Some("web-staging"), ..base.clone() };
     let tabs = vec![
         sample_tab(t, "t-rest", base.clone()),
         sample_tab(t, "t-on", Tab { active: true, ..base.clone() }),
         sample_tab(t, "t-off", Tab { active: true, window_active: false, ..base.clone() }),
-        sample_tab(t, "t-wait", Tab { icon: Icon::Agent, name: "Migration 0042", server: Some("db-main"), prod: true, badge: Some(Badge::NeedsYou), ..base.clone() }),
+        sample_tab(t, "t-wait", Tab { icon: Icon::Agent, name: "Migration 0042", server: Some("db-main"), env: Some(&EnvLabel::Prod), badge: Some(Badge::NeedsYou), ..base.clone() }),
         sample_tab(t, "t-re", Tab { badge: Some(Badge::Reconnecting), ..term.clone() }),
         sample_tab(t, "t-gone", Tab { badge: Some(Badge::Disconnected), ..term.clone() }),
         sample_tab(t, "t-asleep", Tab { badge: Some(Badge::Asleep), ..term.clone() }),
         sample_tab(t, "t-progress", Tab { progress: Some(sshee_term::osc::Progress { state: sshee_term::osc::ProgressState::Normal, value: 62.0 }), ..term.clone() }),
     ];
     let crowded = vec![
-        group_name(t, "web-7731", true, true).key("g-1"),
+        group_name(t, "web-7731", Some(&EnvLabel::Prod), true).key("g-1"),
         sample_tab(t, "c-on", Tab { server: None, compact: true, active: true, ..term.clone() }),
         sample_tab(t, "c-files", Tab { server: None, compact: true, ..base.clone() }),
         divider(t).key("c-sep"),
-        group_name(t, "db-main", true, false).key("g-2"),
+        group_name(t, "db-main", Some(&EnvLabel::Prod), false).key("g-2"),
         sample_tab(t, "c-wait", Tab { icon: Icon::Agent, name: "Migration 0042", server: None, compact: true, badge: Some(Badge::NeedsYou), ..base.clone() }),
     ];
     let rail = vec![
@@ -76,6 +77,8 @@ pub fn view(t: &'static Theme) -> El {
         toolbar_button(t, "b-side", Icon::Sidebar, "Hide sidebar").on_press_tx(|_: &mut Shell, _| {}),
         toolbar_button(t, "b-plus", Icon::Plus, "New terminal").on_press_tx(|_: &mut Shell, _| {}),
         prod_chip(t, false),
+        env_chip(t, &EnvLabel::Staging),
+        env_chip(t, &EnvLabel::Dev),
         logo(24.0),
         logo(32.0),
         logo(56.0),
